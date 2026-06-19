@@ -42,12 +42,14 @@ message FlowEvent {
 }
 
 message GetFlowRequest {
-  string flow_id = 1;
+  string session_id = 1; // flows live in per-session SQLite bundles
+  string flow_id = 2;
 }
 
 message GetBodyRequest {
-  string flow_id = 1;
-  bool response = 2; // false = request body, true = response body
+  string session_id = 1;
+  string flow_id = 2;
+  bool response = 3; // false = request body, true = response body
 }
 
 message BodyChunk {

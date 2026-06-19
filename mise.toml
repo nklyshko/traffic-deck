@@ -14,8 +14,8 @@ buf = "1"
 [env]
 # Keep Go from auto-downloading a different toolchain than the one mise pins.
 GOTOOLCHAIN = "local"
-# Local object-store root used by the gateway in dev (see plan §6.2).
-OBJSTORE_ROOT = "{{config_root}}/data"
+# Data root for the gateway in dev: session bundles + catalog.sqlite (plan §6.2).
+DATA_ROOT = "{{config_root}}/data"
 
 [tasks.gen]
 description = "Generate gRPC stubs (Go via buf; Python via grpcio-tools)"

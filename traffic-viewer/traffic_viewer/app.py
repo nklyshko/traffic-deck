@@ -111,14 +111,15 @@ class FlowsScreen(Screen):
             self.notify(f"stream_flows failed: {exc}", severity="error")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.app.push_screen(FlowDetailScreen(str(event.row_key.value)))
+        self.app.push_screen(FlowDetailScreen(self.session_id, str(event.row_key.value)))
 
 
 class FlowDetailScreen(Screen):
     BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("q", "quit", "Quit")]
 
-    def __init__(self, flow_id: str) -> None:
+    def __init__(self, session_id: str, flow_id: str) -> None:
         super().__init__()
+        self.session_id = session_id
         self.flow_id = flow_id
 
     def compose(self) -> ComposeResult:
@@ -135,7 +136,7 @@ class FlowDetailScreen(Screen):
     @work(exclusive=True)
     async def load_flow(self) -> None:
         try:
-            f = await self.app.client.get_flow(self.flow_id)
+            f = await self.app.client.get_flow(self.session_id, self.flow_id)
         except Exception as exc:  # noqa: BLE001
             self.query_one("#body", Static).update(f"[red]get_flow failed: {exc}[/red]")
             return

@@ -33,7 +33,7 @@ func (v *Viewer) ListSessions(ctx context.Context, req *trafficv1.ListSessionsRe
 }
 
 func (v *Viewer) GetFlow(ctx context.Context, req *trafficv1.GetFlowRequest) (*trafficv1.Flow, error) {
-	f, err := v.st.GetFlow(ctx, req.GetFlowId())
+	f, err := v.st.GetFlow(ctx, req.GetSessionId(), req.GetFlowId())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "flow not found")
 	}

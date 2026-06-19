@@ -52,5 +52,7 @@ class GatewayClient:
             if event.HasField("flow_added"):
                 yield event.flow_added
 
-    async def get_flow(self, flow_id: str):
-        return await self._ensure().GetFlow(viewer_pb2.GetFlowRequest(flow_id=flow_id))
+    async def get_flow(self, session_id: str, flow_id: str):
+        return await self._ensure().GetFlow(
+            viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)
+        )

@@ -2,30 +2,19 @@ package store
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/google/uuid"
 
 	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
 	"github.com/nikitak/parsing/traffic-gateway/internal/decode"
-	"github.com/nikitak/parsing/traffic-gateway/migrations"
 )
 
-// openTestStore connects to TEST_PG_DSN or skips. Migrations are idempotent.
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	dsn := os.Getenv("TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("set TEST_PG_DSN to run store integration tests")
-	}
-	ctx := context.Background()
-	st, err := Open(ctx, dsn)
+	st, err := Open(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatalf("open: %v", err)
-	}
-	if err := st.Migrate(ctx, migrations.FS); err != nil {
-		t.Fatalf("migrate: %v", err)
 	}
 	t.Cleanup(st.Close)
 	return st
@@ -38,18 +27,13 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, NewSession{
 		ID:         sid,
-		Label:      "test-" + sid[:8],
+		Label:      "test",
 		SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC,
 		Status:     trafficv1.SessionStatus_SESSION_STATUS_DECODING,
-		PcapKey:    "sessions/" + sid + "/capture.pcap",
 		PcapBytes:  123,
 	}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	// Cascade-delete the session (and its flows/headers/analyses) when done.
-	t.Cleanup(func() {
-		_, _ = st.pool.Exec(context.Background(), "DELETE FROM sessions WHERE id=$1", sid)
-	})
 
 	aid := uuid.NewString()
 	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark", TLSKeyLogUsed: true}); err != nil {
@@ -68,11 +52,10 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 		t.Fatalf("insert flows: n=%d err=%v", n, err)
 	}
 
-	if err := st.SetSessionStatus(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED); err != nil {
-		t.Fatalf("set status: %v", err)
+	if err := st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n); err != nil {
+		t.Fatalf("finish session: %v", err)
 	}
 
-	// ListSessions must include ours with the right flow_count.
 	sessions, err := st.ListSessions(ctx, 1000, 0)
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
@@ -89,8 +72,10 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	if got.FlowCount != 1 || got.Status != trafficv1.SessionStatus_SESSION_STATUS_CLOSED {
 		t.Fatalf("session flow_count=%d status=%v", got.FlowCount, got.Status)
 	}
+	if got.ClosedAtUnixMs == 0 {
+		t.Fatal("closed_at not set")
+	}
 
-	// ListFlows (summary, no headers).
 	listed, err := st.ListFlows(ctx, sid)
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("list flows: n=%d err=%v", len(listed), err)
@@ -99,8 +84,7 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 		t.Fatalf("flow mismatch: %+v", listed[0])
 	}
 
-	// GetFlow (with headers).
-	full, err := st.GetFlow(ctx, listed[0].Id)
+	full, err := st.GetFlow(ctx, sid, listed[0].Id)
 	if err != nil {
 		t.Fatalf("get flow: %v", err)
 	}
@@ -111,8 +95,7 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 		t.Fatalf("response headers: %+v", full.ResponseHeaders)
 	}
 
-	// Unknown flow -> ErrNotFound.
-	if _, err := st.GetFlow(ctx, uuid.NewString()); err != ErrNotFound {
+	if _, err := st.GetFlow(ctx, sid, uuid.NewString()); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

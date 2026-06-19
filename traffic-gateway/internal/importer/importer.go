@@ -1,6 +1,6 @@
 // Package importer implements the Phase 1 "import a pre-captured pcap + key.log"
-// flow (plan §9): copy the artifacts into the object store, batch-decode them
-// with tshark, and persist sessions/analyses/flows to Postgres.
+// flow (plan §9): copy the artifacts into the session bundle, batch-decode them with
+// tshark, and persist the session/analysis/flows to the per-session SQLite DB.
 package importer
 
 import (
@@ -29,8 +29,8 @@ type Result struct {
 	FlowCount int
 }
 
-// Import copies the capture into the object store, decodes it, and persists the
-// resulting flows. The raw pcap + key.log are the canonical inputs (plan §6.3).
+// Import copies the capture into the session bundle, decodes it, and persists flows.
+// The raw pcap + key.log are the canonical inputs (plan §6).
 func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Options) (*Result, error) {
 	sessionID := uuid.NewString()
 	pcapKey := path.Join("sessions", sessionID, "capture.pcap")
@@ -41,12 +41,11 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 		return nil, fmt.Errorf("store pcap: %w", err)
 	}
 	var keylogBytes int64
-	if opts.KeylogPath != "" {
+	hasKeylog := opts.KeylogPath != ""
+	if hasKeylog {
 		if keylogBytes, err = copyIn(obj, keylogKey, opts.KeylogPath); err != nil {
 			return nil, fmt.Errorf("store key.log: %w", err)
 		}
-	} else {
-		keylogKey = ""
 	}
 
 	if err := st.CreateSession(ctx, store.NewSession{
@@ -54,8 +53,6 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 		Label:       opts.Label,
 		SourceKind:  trafficv1.SourceKind_SOURCE_KIND_GENERIC,
 		Status:      trafficv1.SessionStatus_SESSION_STATUS_DECODING,
-		PcapKey:     pcapKey,
-		KeylogKey:   keylogKey,
 		PcapBytes:   pcapBytes,
 		KeylogBytes: keylogBytes,
 	}); err != nil {
@@ -65,13 +62,13 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 	// Decode from the stored canonical copies (fall back to inputs if non-local).
 	pcapLocal := localOr(obj, pcapKey, opts.PcapPath)
 	keylogLocal := ""
-	if keylogKey != "" {
+	if hasKeylog {
 		keylogLocal = localOr(obj, keylogKey, opts.KeylogPath)
 	}
 
 	ds, err := decode.Decode(ctx, opts.TsharkPath, pcapLocal, keylogLocal)
 	if err != nil {
-		_ = st.SetSessionStatus(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR)
+		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
@@ -87,11 +84,11 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 
 	n, err := st.InsertFlows(ctx, sessionID, analysisID, ds.Flows)
 	if err != nil {
-		_ = st.SetSessionStatus(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR)
+		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
 		return nil, fmt.Errorf("insert flows: %w", err)
 	}
 
-	if err := st.SetSessionStatus(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_CLOSED); err != nil {
+	if err := st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n); err != nil {
 		return nil, err
 	}
 	return &Result{SessionID: sessionID, FlowCount: n}, nil

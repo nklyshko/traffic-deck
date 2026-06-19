@@ -1,9 +1,0 @@
-DROP TABLE IF EXISTS launch_profiles;
-DROP TABLE IF EXISTS group_members;
-DROP TABLE IF EXISTS groups;
-DROP TABLE IF EXISTS bookmarks;
-DROP TABLE IF EXISTS flow_cookies;
-DROP TABLE IF EXISTS flow_headers;
-DROP TABLE IF EXISTS flows;
-DROP TABLE IF EXISTS analyses;
-DROP TABLE IF EXISTS sessions;

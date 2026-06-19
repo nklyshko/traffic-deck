@@ -19,7 +19,6 @@ import (
 	"github.com/nikitak/parsing/traffic-gateway/internal/objstore"
 	"github.com/nikitak/parsing/traffic-gateway/internal/server"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
-	"github.com/nikitak/parsing/traffic-gateway/migrations"
 )
 
 func main() {
@@ -41,18 +40,15 @@ func usage() {
 	os.Exit(2)
 }
 
-// openDeps opens the object store and the (migrated) Postgres store.
+// openDeps opens the object store (session bundles) and the SQLite store.
 func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.Store) {
-	obj, err := objstore.NewFSStore(cfg.ObjStoreRoot)
+	obj, err := objstore.NewFSStore(cfg.DataRoot)
 	if err != nil {
 		log.Fatalf("objstore: %v", err)
 	}
-	st, err := store.Open(ctx, cfg.PGDSN)
+	st, err := store.Open(ctx, cfg.DataRoot)
 	if err != nil {
-		log.Fatalf("postgres: %v", err)
-	}
-	if err := st.Migrate(ctx, migrations.FS); err != nil {
-		log.Fatalf("migrate: %v", err)
+		log.Fatalf("store: %v", err)
 	}
 	return obj, st
 }

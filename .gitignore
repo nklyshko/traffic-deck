@@ -9,8 +9,9 @@
 # Local object-store data (plan §6.2)
 /data/
 
-# Go
+# Go build artifacts
 /traffic-gateway/gateway
+/gateway
 
 # Python
 __pycache__/
