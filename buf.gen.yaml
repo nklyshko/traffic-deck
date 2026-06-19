@@ -1,0 +1,13 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/nikitak/parsing/traffic-gateway/gen
+plugins:
+  - local: protoc-gen-go
+    out: traffic-gateway/gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: traffic-gateway/gen
+    opt: paths=source_relative

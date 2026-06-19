@@ -1,0 +1,17 @@
+[project]
+name = "traffic-viewer"
+version = "0.0.0"
+description = "Textual TUI for browsing decoded traffic (plan §7.3)"
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=0.80",
+    "grpcio>=1.76",
+    "grpcio-tools>=1.76",
+    "protobuf>=5.29",
+]
+
+[project.scripts]
+traffic-viewer = "traffic_viewer.app:main"
+
+[tool.uv]
+package = false

@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package traffic.v1;
+
+// Source that produced a capture.
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_CHROME = 1;
+  SOURCE_KIND_MITMPROXY = 2;
+  SOURCE_KIND_ANDROID_EMULATOR = 3;
+  SOURCE_KIND_ANDROID_DEVICE = 4;
+  SOURCE_KIND_GENERIC = 5;
+}
+
+// Which uploaded artifact a chunk belongs to (see plan §6.3).
+enum FileKind {
+  FILE_KIND_UNSPECIFIED = 0;
+  FILE_KIND_PCAP = 1;
+  FILE_KIND_KEYLOG = 2;
+}
+
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_OPEN = 1;
+  SESSION_STATUS_DECODING = 2;
+  SESSION_STATUS_CLOSED = 3;
+  SESSION_STATUS_ERROR = 4;
+}
+
+// A capture session: one pcap + key.log and the flows decoded from it.
+message Session {
+  string id = 1;
+  string label = 2;
+  SourceKind source_kind = 3;
+  SessionStatus status = 4;
+  int64 created_at_unix_ms = 5;
+  int64 closed_at_unix_ms = 6;
+  uint64 pcap_bytes = 7;
+  uint64 keylog_bytes = 8;
+  uint32 flow_count = 9;
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message Cookie {
+  string name = 1;
+  string value = 2;
+}
+
+// A request or response body: inlined when small, otherwise an object-store ref.
+message Body {
+  uint64 size = 1;
+  string content_type = 2;
+  oneof content {
+    bytes inline = 3;
+    string object_ref = 4; // sha256 key in the object store
+  }
+  bool truncated = 5;
+}
+
+// One decoded HTTP exchange (request + optional response).
+message Flow {
+  string id = 1;
+  string session_id = 2;
+  string analysis_id = 3;
+  uint64 frame_number = 4;
+  int64 ts_unix_micros = 5;
+  string method = 6;
+  string scheme = 7;
+  string authority = 8;
+  string path = 9;
+  string query = 10;
+  string protocol = 11;
+  uint32 status = 12;
+  string src_addr = 13;
+  string dst_addr = 14;
+  string user_agent = 15;
+  string content_type = 16;
+  uint64 request_bytes = 17;
+  bool tls_decrypted = 18;
+  string tcp_stream = 19;
+  string h2_stream_id = 20;
+  repeated Header request_headers = 21;
+  repeated Header response_headers = 22;
+  repeated Cookie request_cookies = 23;
+  Body request_body = 24;
+  Body response_body = 25;
+}
+
+message Bookmark {
+  string id = 1;
+  string flow_id = 2;
+  string note = 3;
+  int64 created_at_unix_ms = 4;
+}
+
+message Group {
+  string id = 1;
+  string label = 2;
+  string color = 3;
+  int64 created_at_unix_ms = 4;
+}
+
+// Progress of a decode run, streamed to viewers.
+message DecodeProgress {
+  string session_id = 1;
+  uint32 percent = 2;
+  string stage = 3;
+  bool done = 4;
+}

@@ -1,0 +1,29 @@
+# External reference material — not part of this repo's history
+/_EXTERNAL/
+
+# Generated gRPC stubs (run `mise run gen`)
+/traffic-gateway/gen/
+/capture-tools/gen/
+/traffic-viewer/gen/
+
+# Local object-store data (plan §6.2)
+/data/
+
+# Go
+/traffic-gateway/gateway
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+/capture-tools/.venv/
+/traffic-viewer/.venv/
+
+# mise local overrides
+mise.local.toml
+
+# Local Claude Code settings
+/.claude/settings.local.json
+
+# The plan is maintained as its own git repository
+/plan/

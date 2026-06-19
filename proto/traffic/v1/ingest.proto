@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package traffic.v1;
+
+import "traffic/v1/common.proto";
+
+// tools -> gateway. Capture upload and live flow push.
+service IngestService {
+  rpc OpenSession(OpenSessionRequest) returns (SessionHandle);
+  rpc UploadCapture(stream CaptureChunk) returns (UploadAck);
+  rpc PushFlows(stream FlowBatch) returns (PushAck);
+  rpc CloseSession(CloseSessionRequest) returns (SessionSummary);
+}
+
+message OpenSessionRequest {
+  string label = 1;
+  SourceKind source_kind = 2;
+  map<string, string> metadata = 3;
+}
+
+message SessionHandle {
+  string session_id = 1;
+  uint32 max_chunk_bytes = 2;
+}
+
+enum CaptureMode {
+  CAPTURE_MODE_UNSPECIFIED = 0;
+  CAPTURE_MODE_STREAMING_LIVE = 1;
+  CAPTURE_MODE_BATCH_ON_CLOSE = 2;
+}
+
+message FileMeta {
+  string name = 1;
+  uint64 expected_size = 2;
+}
+
+// First frame of an UploadCapture stream.
+message UploadBegin {
+  string session_id = 1;
+  string upload_id = 2;
+  FileMeta pcap = 3;
+  FileMeta keylog = 4;
+  CaptureMode mode = 5;
+}
+
+// A run of bytes for one of the two files, at a byte offset (ordering + resume).
+message DataChunk {
+  FileKind kind = 1;
+  uint64 offset = 2;
+  bytes payload = 3;
+}
+
+message UploadEnd {
+  string upload_id = 1;
+}
+
+message CaptureChunk {
+  oneof msg {
+    UploadBegin begin = 1;
+    DataChunk data = 2;
+    UploadEnd end = 3;
+  }
+}
+
+message UploadAck {
+  string upload_id = 1;
+  uint64 pcap_received = 2;
+  uint64 keylog_received = 3;
+}
+
+// Already-decoded flows (mitmproxy path) pushed for live view.
+message FlowBatch {
+  string session_id = 1;
+  repeated Flow flows = 2;
+}
+
+message PushAck {
+  uint32 accepted = 1;
+}
+
+message CloseSessionRequest {
+  string session_id = 1;
+}
+
+message SessionSummary {
+  Session session = 1;
+}

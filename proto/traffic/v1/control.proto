@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package traffic.v1;
+
+import "traffic/v1/common.proto";
+
+// viewer -> gateway -> tools. Capture control, re-decode, annotations.
+service ControlService {
+  rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
+  rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
+  rpc ReDecode(ReDecodeRequest) returns (stream DecodeProgress);
+
+  rpc CreateBookmark(CreateBookmarkRequest) returns (Bookmark);
+  rpc DeleteBookmark(DeleteBookmarkRequest) returns (Empty);
+  rpc CreateGroup(CreateGroupRequest) returns (Group);
+  rpc DeleteGroup(DeleteGroupRequest) returns (Empty);
+  rpc AssignToGroup(AssignToGroupRequest) returns (Empty);
+}
+
+message Empty {}
+
+message StartCaptureRequest {
+  SourceKind source_kind = 1;
+  string label = 2;
+  map<string, string> params = 3;
+}
+
+message StartCaptureResponse {
+  string session_id = 1;
+}
+
+message StopCaptureRequest {
+  string session_id = 1;
+}
+
+message StopCaptureResponse {
+  Session session = 1;
+}
+
+message ReDecodeRequest {
+  string session_id = 1;
+}
+
+message CreateBookmarkRequest {
+  string flow_id = 1;
+  string note = 2;
+}
+
+message DeleteBookmarkRequest {
+  string id = 1;
+}
+
+message CreateGroupRequest {
+  string label = 1;
+  string color = 2;
+}
+
+message DeleteGroupRequest {
+  string id = 1;
+}
+
+message AssignToGroupRequest {
+  string group_id = 1;
+  string flow_id = 2;
+}

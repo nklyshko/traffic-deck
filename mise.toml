@@ -1,0 +1,36 @@
+# Toolchain for the modular traffic analysis system.
+# `mise install` provisions everything below. See plan/ for architecture.
+
+[tools]
+go = "1.25"
+python = "3.12"
+uv = "latest"
+buf = "1"
+
+# protoc plugins for Go codegen (built via the `go:` backend)
+"go:google.golang.org/protobuf/cmd/protoc-gen-go" = "latest"
+"go:google.golang.org/grpc/cmd/protoc-gen-go-grpc" = "latest"
+
+[env]
+# Keep Go from auto-downloading a different toolchain than the one mise pins.
+GOTOOLCHAIN = "local"
+# Local object-store root used by the gateway in dev (see plan §6.2).
+OBJSTORE_ROOT = "{{config_root}}/data"
+
+[tasks.gen]
+description = "Generate gRPC stubs (Go via buf; Python via grpcio-tools)"
+run = [
+  "buf generate proto",
+  "mkdir -p capture-tools/gen traffic-viewer/gen",
+  "uv run --project capture-tools python -m grpc_tools.protoc -Iproto --python_out=capture-tools/gen --grpc_python_out=capture-tools/gen --pyi_out=capture-tools/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "uv run --project traffic-viewer python -m grpc_tools.protoc -Iproto --python_out=traffic-viewer/gen --grpc_python_out=traffic-viewer/gen --pyi_out=traffic-viewer/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+]
+
+[tasks.lint-proto]
+description = "Lint the proto contract"
+run = "buf lint proto"
+
+[tasks."gateway:build"]
+description = "Build the traffic-gateway binary"
+dir = "traffic-gateway"
+run = "go build ./..."

@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package traffic.v1;
+
+import "traffic/v1/common.proto";
+
+// viewer <-> gateway. Read side: list sessions, stream/inspect flows.
+service ViewerService {
+  rpc ListSessions(ListSessionsRequest) returns (SessionList);
+  rpc StreamFlows(StreamFlowsRequest) returns (stream FlowEvent);
+  rpc GetFlow(GetFlowRequest) returns (Flow);
+  rpc GetBody(GetBodyRequest) returns (stream BodyChunk);
+}
+
+message ListSessionsRequest {
+  uint32 limit = 1;
+  uint32 offset = 2;
+}
+
+message SessionList {
+  repeated Session sessions = 1;
+}
+
+message StreamFlowsRequest {
+  string session_id = 1;
+  bool include_backfill = 2; // replay stored flows first
+  bool follow = 3;           // keep streaming live additions (Phase 2)
+}
+
+message SessionEvent {
+  string session_id = 1;
+  SessionStatus status = 2;
+}
+
+message FlowEvent {
+  oneof event {
+    Flow flow_added = 1;
+    Flow flow_updated = 2;
+    SessionEvent session_event = 3;
+    DecodeProgress decode_progress = 4;
+  }
+}
+
+message GetFlowRequest {
+  string flow_id = 1;
+}
+
+message GetBodyRequest {
+  string flow_id = 1;
+  bool response = 2; // false = request body, true = response body
+}
+
+message BodyChunk {
+  bytes payload = 1;
+}
