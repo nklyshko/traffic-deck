@@ -1,10 +1,11 @@
 // Command gateway is the traffic-gateway entry point.
 //
-//	gateway serve                              run the gRPC server
-//	gateway import --pcap f --keylog f --label s   import a capture (Phase 1, stub)
+//	gateway serve                                      run the gRPC server
+//	gateway import --pcap f [--keylog f] [--label s]   import a capture (Phase 1)
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -14,8 +15,11 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/nikitak/parsing/traffic-gateway/internal/config"
+	"github.com/nikitak/parsing/traffic-gateway/internal/importer"
 	"github.com/nikitak/parsing/traffic-gateway/internal/objstore"
 	"github.com/nikitak/parsing/traffic-gateway/internal/server"
+	"github.com/nikitak/parsing/traffic-gateway/internal/store"
+	"github.com/nikitak/parsing/traffic-gateway/migrations"
 )
 
 func main() {
@@ -37,34 +41,63 @@ func usage() {
 	os.Exit(2)
 }
 
-func serve() {
-	cfg := config.Load()
-	store, err := objstore.NewFSStore(cfg.ObjStoreRoot)
+// openDeps opens the object store and the (migrated) Postgres store.
+func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.Store) {
+	obj, err := objstore.NewFSStore(cfg.ObjStoreRoot)
 	if err != nil {
 		log.Fatalf("objstore: %v", err)
 	}
+	st, err := store.Open(ctx, cfg.PGDSN)
+	if err != nil {
+		log.Fatalf("postgres: %v", err)
+	}
+	if err := st.Migrate(ctx, migrations.FS); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+	return obj, st
+}
+
+func serve() {
+	ctx := context.Background()
+	cfg := config.Load()
+	_, st := openDeps(ctx, cfg)
+	defer st.Close()
+
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		log.Fatalf("listen %s: %v", cfg.GRPCAddr, err)
 	}
 	s := grpc.NewServer()
-	server.Register(s, store)
-	log.Printf("traffic-gateway listening on %s (objstore=%s)", cfg.GRPCAddr, store.Root)
+	server.Register(s, st)
+	log.Printf("traffic-gateway listening on %s", cfg.GRPCAddr)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
 }
 
-// importCapture is a Phase 1 stub: batch-decode an existing pcap + key.log.
 func importCapture(args []string) {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	pcap := fs.String("pcap", "", "path to capture .pcap")
-	keylog := fs.String("keylog", "", "path to NSS key.log")
+	keylog := fs.String("keylog", "", "path to NSS key.log (optional)")
 	label := fs.String("label", "", "session label")
 	_ = fs.Parse(args)
 	if *pcap == "" {
 		log.Fatal("import: --pcap is required")
 	}
-	log.Printf("import: pcap=%s keylog=%s label=%q — not yet implemented (Phase 1)", *pcap, *keylog, *label)
-	os.Exit(1)
+
+	ctx := context.Background()
+	cfg := config.Load()
+	obj, st := openDeps(ctx, cfg)
+	defer st.Close()
+
+	res, err := importer.Import(ctx, st, obj, importer.Options{
+		PcapPath:   *pcap,
+		KeylogPath: *keylog,
+		Label:      *label,
+		TsharkPath: cfg.TsharkPath,
+	})
+	if err != nil {
+		log.Fatalf("import: %v", err)
+	}
+	log.Printf("imported session %s: %d flows", res.SessionID, res.FlowCount)
 }

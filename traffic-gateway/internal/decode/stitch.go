@@ -1,0 +1,215 @@
+package decode
+
+import (
+	"strconv"
+	"strings"
+)
+
+// stitcher correlates per-frame EK records into request/response flows.
+type stitcher struct {
+	ds        *Dataset
+	byKey     map[string]*Flow   // HTTP/2: "tcpStream:streamID" -> flow
+	h1pending map[string][]*Flow // HTTP/1.1: tcpStream -> requests awaiting a response (FIFO)
+}
+
+func newStitcher(ds *Dataset) *stitcher {
+	return &stitcher{
+		ds:        ds,
+		byKey:     map[string]*Flow{},
+		h1pending: map[string][]*Flow{},
+	}
+}
+
+func (s *stitcher) add(l layers) {
+	tcp := l.first("tcp.stream")
+	sid := l.first("http2.streamid")
+
+	method := l.first("http2.headers.method")
+	if method == "" {
+		method = l.first("http.request.method")
+	}
+	status := l.first("http2.headers.status")
+	if status == "" {
+		status = l.first("http.response.code")
+	}
+	isReq := method != ""
+	isResp := status != ""
+	if !isReq && !isResp {
+		return // e.g. a DATA-only or continuation frame; nothing to stitch here
+	}
+
+	if sid != "" {
+		key := tcp + ":" + sid
+		f := s.byKey[key]
+		if f == nil {
+			f = s.newFlow(l, tcp, sid)
+			s.byKey[key] = f
+			s.ds.Flows = append(s.ds.Flows, f)
+		}
+		if isReq {
+			s.fillRequest(f, l, method)
+		}
+		if isResp {
+			s.fillResponse(f, l, status)
+		}
+		return
+	}
+
+	// HTTP/1.1: no stream id — pair responses to requests FIFO per TCP stream.
+	if isReq {
+		f := s.newFlow(l, tcp, "")
+		s.fillRequest(f, l, method)
+		s.ds.Flows = append(s.ds.Flows, f)
+		s.h1pending[tcp] = append(s.h1pending[tcp], f)
+		return
+	}
+	if q := s.h1pending[tcp]; len(q) > 0 {
+		f := q[0]
+		s.h1pending[tcp] = q[1:]
+		s.fillResponse(f, l, status)
+	} else {
+		f := s.newFlow(l, tcp, "")
+		s.fillResponse(f, l, status)
+		s.ds.Flows = append(s.ds.Flows, f)
+	}
+}
+
+func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {
+	proto := "HTTP/1.1"
+	if sid != "" {
+		proto = "HTTP/2"
+	}
+	return &Flow{
+		FrameNumber:  parseUint(l.first("frame.number")),
+		TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
+		Protocol:     proto,
+		TCPStream:    tcp,
+		H2StreamID:   sid,
+		SrcAddr:      addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport")),
+		DstAddr:      addr(l.first("ip.dst"), l.first("ipv6.dst"), l.first("tcp.dstport")),
+		TLSDecrypted: s.ds.TLSKeyLogUsed && sid != "",
+	}
+}
+
+func (s *stitcher) fillRequest(f *Flow, l layers, method string) {
+	// Prefer the request frame's timing/number for the flow.
+	f.FrameNumber = parseUint(l.first("frame.number"))
+	f.TSUnixMicros = epochToMicros(l.first("frame.time_epoch"))
+	f.Method = method
+	f.Scheme = l.first("http2.headers.scheme")
+
+	authority := l.first("http2.headers.authority")
+	if authority == "" {
+		authority = l.first("http.host")
+	}
+	f.Authority = authority
+
+	path := l.first("http2.headers.path")
+	if path == "" {
+		path = l.first("http.request.uri")
+	}
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		f.Query = path[i+1:]
+		path = path[:i]
+	}
+	f.Path = path
+
+	f.RequestHeaders = headersFor(l, true)
+	f.UserAgent = pickHeader(l.first("http.user_agent"), f.RequestHeaders, "user-agent")
+	if f.ContentType == "" {
+		f.ContentType = pickHeader(l.first("http.content_type"), f.RequestHeaders, "content-type")
+	}
+}
+
+func (s *stitcher) fillResponse(f *Flow, l layers, status string) {
+	f.Status = uint32(parseUint(status))
+	f.ResponseHeaders = headersFor(l, false)
+	// Response content-type wins for the flow's content-type column.
+	if ct := pickHeader(l.first("http.content_type"), f.ResponseHeaders, "content-type"); ct != "" {
+		f.ContentType = ct
+	}
+}
+
+// headersFor returns the HTTP headers for the current frame. For HTTP/2 it zips
+// http2.header.name/value; for HTTP/1.1 it parses the raw header lines.
+func headersFor(l layers, request bool) []Header {
+	names := l.all("http2.header.name")
+	vals := l.all("http2.header.value")
+	if len(names) > 0 {
+		return zipHeaders(names, vals)
+	}
+	field := "http.response.line"
+	if request {
+		field = "http.request.line"
+	}
+	var out []Header
+	for _, line := range l.all(field) {
+		line = strings.TrimRight(line, "\r\n")
+		if i := strings.IndexByte(line, ':'); i >= 0 {
+			out = append(out, Header{
+				Name:  strings.TrimSpace(line[:i]),
+				Value: strings.TrimSpace(line[i+1:]),
+			})
+		}
+	}
+	return out
+}
+
+func zipHeaders(names, vals []string) []Header {
+	n := len(names)
+	if len(vals) < n {
+		n = len(vals)
+	}
+	out := make([]Header, 0, n)
+	for i := 0; i < n; i++ {
+		if strings.HasPrefix(names[i], ":") {
+			continue // pseudo-headers are surfaced as dedicated fields
+		}
+		out = append(out, Header{Name: names[i], Value: vals[i]})
+	}
+	return out
+}
+
+// pickHeader returns direct if set, else the named header's value (case-insensitive).
+func pickHeader(direct string, headers []Header, name string) string {
+	if direct != "" {
+		return direct
+	}
+	for _, h := range headers {
+		if strings.EqualFold(h.Name, name) {
+			return h.Value
+		}
+	}
+	return ""
+}
+
+func addr(ip4, ip6, port string) string {
+	ip := ip4
+	if ip == "" {
+		ip = ip6
+	}
+	if ip == "" {
+		return ""
+	}
+	if port == "" {
+		return ip
+	}
+	return ip + ":" + port
+}
+
+func parseUint(s string) uint64 {
+	n, _ := strconv.ParseUint(s, 10, 64)
+	return n
+}
+
+// epochToMicros converts a tshark frame.time_epoch ("seconds.fraction") to micros.
+func epochToMicros(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return int64(f * 1e6)
+}
