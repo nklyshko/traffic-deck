@@ -12,6 +12,7 @@ design and roadmap.
 | [`traffic-gateway/`](traffic-gateway/) | Go service: ingest, decode (tshark), per-session SQLite store, serve |
 | [`capture-tools/`](capture-tools/) | Python capture agents (Chrome; mitmproxy/Android later) |
 | [`traffic-viewer/`](traffic-viewer/) | Textual TUI |
+| [`traffic-mcp/`](traffic-mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
 
 Storage is embedded SQLite: a per-session bundle (`data/sessions/<id>/` holding
 `capture.pcap`, `key.log`, `flows.sqlite`) plus a global `data/catalog.sqlite`. No
@@ -57,6 +58,19 @@ select (for bulk), `t` tag, `F` favorite, `m` color-mark, `n` comment, `g` group
 each acts on the selection if any, else the focused row. `M` opens the WebSocket
 message timeline for a `⇅` flow. In a flow detail: `s`/`r` save response/request
 body, `x` export curl, `w` export raw request+response, `M` ws messages. `q` quit.
+
+### MCP server (for LLM/agent clients)
+
+`traffic-mcp` exposes recorded sessions over the Model Context Protocol, backed by the
+gateway's `ViewerService` (it never touches SQLite directly, so it works against a
+local or remote gateway). Tools: `list_sessions`, `search_flows` (same filter DSL as
+the TUI), `get_flow`, `get_body`, `list_ws_messages`, `export_curl`.
+
+Run it over stdio (point your MCP client at this command):
+
+```sh
+GATEWAY_ADDR=127.0.0.1:8080 uv run --directory traffic-mcp python -m traffic_mcp.server
+```
 
 ## Getting traffic in
 

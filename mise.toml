@@ -21,9 +21,10 @@ DATA_ROOT = "{{config_root}}/data"
 description = "Generate gRPC stubs (Go via buf; Python via grpcio-tools)"
 run = [
   "buf generate proto",
-  "mkdir -p capture-tools/gen traffic-viewer/gen",
+  "mkdir -p capture-tools/gen traffic-viewer/gen traffic-mcp/gen",
   "uv run --project capture-tools python -m grpc_tools.protoc -Iproto --python_out=capture-tools/gen --grpc_python_out=capture-tools/gen --pyi_out=capture-tools/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
   "uv run --project traffic-viewer python -m grpc_tools.protoc -Iproto --python_out=traffic-viewer/gen --grpc_python_out=traffic-viewer/gen --pyi_out=traffic-viewer/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "uv run --project traffic-mcp python -m grpc_tools.protoc -Iproto --python_out=traffic-mcp/gen --grpc_python_out=traffic-mcp/gen --pyi_out=traffic-mcp/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
 ]
 
 [tasks.lint-proto]

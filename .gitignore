@@ -5,6 +5,7 @@
 /traffic-gateway/gen/
 /capture-tools/gen/
 /traffic-viewer/gen/
+/traffic-mcp/gen/
 
 # Local object-store data (plan §6.2)
 /data/
@@ -19,6 +20,7 @@ __pycache__/
 .venv/
 /capture-tools/.venv/
 /traffic-viewer/.venv/
+/traffic-mcp/.venv/
 
 # mise local overrides
 mise.local.toml
