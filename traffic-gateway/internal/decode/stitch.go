@@ -121,7 +121,8 @@ func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {
 		H2StreamID:   sid,
 		SrcAddr:      addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport")),
 		DstAddr:      addr(l.first("ip.dst"), l.first("ipv6.dst"), l.first("tcp.dstport")),
-		TLSDecrypted: s.ds.TLSKeyLogUsed && sid != "",
+		// If we can see HTTP inside a TLS stack, the TLS was decrypted (h1 or h2).
+		TLSDecrypted: strings.Contains(l.first("frame.protocols"), "tls"),
 	}
 }
 

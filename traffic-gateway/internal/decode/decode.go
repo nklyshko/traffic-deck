@@ -64,7 +64,7 @@ type Dataset struct {
 
 // tshark -e fields, in request order. EK keys are these with dots -> underscores.
 var ekFields = []string{
-	"frame.number", "frame.time_epoch",
+	"frame.number", "frame.time_epoch", "frame.protocols",
 	"ip.src", "ipv6.src", "tcp.srcport",
 	"ip.dst", "ipv6.dst", "tcp.dstport",
 	"tcp.stream", "http2.streamid",
