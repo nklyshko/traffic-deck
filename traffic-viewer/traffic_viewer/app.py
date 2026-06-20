@@ -75,7 +75,11 @@ class SessionsScreen(Screen):
 
 
 class FlowsScreen(Screen):
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("q", "quit", "Quit")]
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("c", "compare", "Compare A/B"),
+        Binding("q", "quit", "Quit"),
+    ]
 
     def __init__(self, session_id: str) -> None:
         super().__init__()
@@ -138,6 +142,28 @@ class FlowsScreen(Screen):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         fid = str(event.row_key.value)
         self.app.push_screen(FlowDetailScreen(self.session_id, fid, self.flows.get(fid)))
+
+    def _focused_flow_id(self) -> str | None:
+        table = self.query_one("#flows", DataTable)
+        if table.cursor_coordinate is None or table.row_count == 0:
+            return None
+        return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+
+    def action_compare(self) -> None:
+        fid = self._focused_flow_id()
+        if fid is None:
+            return
+        sel = (self.session_id, fid)
+        if self.app.compare_a is None:
+            self.app.compare_a = sel
+            self.notify("marked A — focus a flow in another session and press c")
+        elif self.app.compare_a == sel:
+            self.app.compare_a = None
+            self.notify("cleared compare selection")
+        else:
+            a = self.app.compare_a
+            self.app.compare_a = None
+            self.app.push_screen(CompareScreen(a, sel))
 
 
 class FlowDetailScreen(Screen):
@@ -246,6 +272,117 @@ class FlowDetailScreen(Screen):
         lines.append(escape(text))
 
 
+class CompareScreen(Screen):
+    """Side-by-side diff of two requests from different sessions (plan §7.5).
+
+    Compares (order-sensitively): HTTP version, pseudo-header order, header order +
+    values, cookie order, and request body — the client/parser fingerprint surface.
+    """
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("q", "quit", "Quit")]
+
+    def __init__(self, a: tuple[str, str], b: tuple[str, str]) -> None:
+        super().__init__()
+        self.a, self.b = a, b
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll(id="cmp"):
+            yield Static("loading…", id="diff")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "traffic-viewer"
+        self.sub_title = "compare A ⟷ B"
+        self.load()
+
+    @work(exclusive=True)
+    async def load(self) -> None:
+        try:
+            fa = await self.app.client.get_flow(*self.a)
+            fb = await self.app.client.get_flow(*self.b)
+        except Exception as exc:  # noqa: BLE001
+            self.query_one("#diff", Static).update(
+                f"[red]could not load both flows: {exc}[/red]\n[dim](live/unpersisted "
+                f"sessions can't be compared yet — close them first)[/dim]")
+            return
+        self.query_one("#diff", Static).update(self._render_diff(fa, fb))
+
+    # --- diff helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _pseudo(f) -> list[str]:
+        return [h.name for h in f.request_headers if h.name.startswith(":")]
+
+    @staticmethod
+    def _regular(f) -> list:  # list of (name, value)
+        return [(h.name, h.value) for h in f.request_headers if not h.name.startswith(":")]
+
+    @staticmethod
+    def _cookies(f) -> list:  # ordered (name, value) from the Cookie header
+        for h in f.request_headers:
+            if h.name.lower() == "cookie":
+                out = []
+                for part in h.value.split(";"):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    k, _, v = part.partition("=")
+                    out.append((k.strip(), v))
+                return out
+        return []
+
+    @staticmethod
+    def _mark(equal: bool) -> str:
+        return "[green]✓ match[/green]" if equal else "[red]✗ differ[/red]"
+
+    def _render_diff(self, a, b) -> str:
+        e = escape
+        out: list[str] = []
+        out.append(f"[b]A[/b] [dim]{e(a.method)} {e(a.authority)}{e(a.path)}[/dim]")
+        out.append(f"[b]B[/b] [dim]{e(b.method)} {e(b.authority)}{e(b.path)}[/dim]")
+
+        def section(title, va, vb, equal):
+            out.append("")
+            out.append(f"[b u]{title}[/b u]  {self._mark(equal)}")
+            if not equal:
+                out.append(f"  [cyan]A[/cyan] {e(va)}")
+                out.append(f"  [magenta]B[/magenta] {e(vb)}")
+
+        # HTTP version
+        section("HTTP version", a.protocol, b.protocol, a.protocol == b.protocol)
+        # Pseudo-header order
+        pa, pb = self._pseudo(a), self._pseudo(b)
+        section("Pseudo-header order", " ".join(pa), " ".join(pb), pa == pb)
+        # Header order (names only)
+        na = [n for n, _ in self._regular(a)]
+        nb = [n for n, _ in self._regular(b)]
+        section("Header order", ", ".join(na), ", ".join(nb), na == nb)
+        # Cookie order (names)
+        ca, cb = self._cookies(a), self._cookies(b)
+        section("Cookie order", ", ".join(n for n, _ in ca), ", ".join(n for n, _ in cb),
+                [n for n, _ in ca] == [n for n, _ in cb])
+
+        # Header values (per name present in either side, in A's order then B-only)
+        out.append("")
+        da, db = dict(self._regular(a)), dict(self._regular(b))
+        names = list(dict.fromkeys(na + nb))
+        diffs = [n for n in names if da.get(n) != db.get(n)]
+        out.append(f"[b u]Header values[/b u]  {self._mark(not diffs)}")
+        for n in diffs:
+            out.append(f"  [yellow]{e(n)}[/yellow]")
+            out.append(f"    [cyan]A[/cyan] {e(da.get(n, '∅'))}")
+            out.append(f"    [magenta]B[/magenta] {e(db.get(n, '∅'))}")
+
+        # Request body
+        ba = a.request_body.inline if a.request_body.size else b""
+        bb = b.request_body.inline if b.request_body.size else b""
+        out.append("")
+        out.append(f"[b u]Request body[/b u]  {self._mark(ba == bb)}  "
+                   f"[dim]A={a.request_body.size}B B={b.request_body.size}B[/dim]")
+        return "\n".join(out)
+
+
 class TrafficViewerApp(App):
     CSS = "DataTable { height: 1fr; }"
     BINDINGS = [Binding("q", "quit", "Quit")]
@@ -254,6 +391,7 @@ class TrafficViewerApp(App):
         super().__init__()
         self.address = address
         self.client = GatewayClient(address)
+        self.compare_a: tuple[str, str] | None = None  # (session_id, flow_id) for compare slot A
 
     def get_default_screen(self) -> Screen:
         return SessionsScreen()
