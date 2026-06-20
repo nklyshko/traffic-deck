@@ -44,13 +44,15 @@ class GatewayClient:
         resp = await self._ensure().ListSessions(viewer_pb2.ListSessionsRequest(limit=limit))
         return list(resp.sessions)
 
-    async def stream_flows(self, session_id: str) -> AsyncIterator:
+    async def stream_flows(self, session_id: str, follow: bool = False) -> AsyncIterator:
+        """Yield FlowEvents: backfill of stored flows, then (if follow) live events."""
         call = self._ensure().StreamFlows(
-            viewer_pb2.StreamFlowsRequest(session_id=session_id, include_backfill=True)
+            viewer_pb2.StreamFlowsRequest(
+                session_id=session_id, include_backfill=True, follow=follow
+            )
         )
         async for event in call:
-            if event.HasField("flow_added"):
-                yield event.flow_added
+            yield event
 
     async def get_flow(self, session_id: str, flow_id: str):
         return await self._ensure().GetFlow(

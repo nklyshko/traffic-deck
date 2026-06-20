@@ -80,11 +80,14 @@ class FlowsScreen(Screen):
     def __init__(self, session_id: str) -> None:
         super().__init__()
         self.session_id = session_id
+        self.flows: dict[str, object] = {}  # flow id -> cached Flow (for live detail)
+        self._rows: set[str] = set()
+        self._cols: list = []
 
     def compose(self) -> ComposeResult:
         yield Header()
         table = DataTable(id="flows", cursor_type="row", zebra_stripes=True)
-        table.add_columns("Time", "Method", "Status", "Proto", "Authority", "Path")
+        self._cols = table.add_columns("Time", "Method", "Status", "Proto", "Authority", "Path")
         yield table
         yield Footer()
 
@@ -93,26 +96,48 @@ class FlowsScreen(Screen):
         self.sub_title = f"flows · {self.session_id[:8]}"
         self.load_flows()
 
+    @staticmethod
+    def _cells(f) -> tuple:
+        return (
+            _fmt_time(f.ts_unix_micros),
+            f.method or "",
+            str(f.status) if f.status else "",
+            f.protocol or "",
+            f.authority or "",
+            (f.path or "")[:80],
+        )
+
+    def _upsert(self, f) -> None:
+        table = self.query_one("#flows", DataTable)
+        self.flows[f.id] = f
+        cells = self._cells(f)
+        if f.id in self._rows:
+            for col, val in zip(self._cols, cells):
+                table.update_cell(f.id, col, val)
+        else:
+            table.add_row(*cells, key=f.id)
+            self._rows.add(f.id)
+
     @work(exclusive=True)
     async def load_flows(self) -> None:
-        table = self.query_one("#flows", DataTable)
-        table.clear()
+        self.query_one("#flows", DataTable).clear()
+        self.flows.clear()
+        self._rows.clear()
         try:
-            async for f in self.app.client.stream_flows(self.session_id):
-                table.add_row(
-                    _fmt_time(f.ts_unix_micros),
-                    f.method or "",
-                    str(f.status) if f.status else "",
-                    f.protocol or "",
-                    f.authority or "",
-                    (f.path or "")[:80],
-                    key=f.id,
-                )
+            async for ev in self.app.client.stream_flows(self.session_id, follow=True):
+                kind = ev.WhichOneof("event")
+                if kind == "flow_added":
+                    self._upsert(ev.flow_added)
+                elif kind == "flow_updated":
+                    self._upsert(ev.flow_updated)
+                elif kind == "session_event":
+                    self.notify("session closed — live capture ended")
         except Exception as exc:  # noqa: BLE001
             self.notify(f"stream_flows failed: {exc}", severity="error")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.app.push_screen(FlowDetailScreen(self.session_id, str(event.row_key.value)))
+        fid = str(event.row_key.value)
+        self.app.push_screen(FlowDetailScreen(self.session_id, fid, self.flows.get(fid)))
 
 
 class FlowDetailScreen(Screen):
@@ -123,10 +148,11 @@ class FlowDetailScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, session_id: str, flow_id: str) -> None:
+    def __init__(self, session_id: str, flow_id: str, cached=None) -> None:
         super().__init__()
         self.session_id = session_id
         self.flow_id = flow_id
+        self.cached = cached  # full Flow from a live event, used if not yet persisted
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -141,10 +167,15 @@ class FlowDetailScreen(Screen):
 
     @work(exclusive=True)
     async def load_flow(self) -> None:
+        # Persisted flows come from GetFlow (full headers+bodies); live flows aren't
+        # persisted yet, so fall back to the cached flow from the live stream.
+        f = None
         try:
             f = await self.app.client.get_flow(self.session_id, self.flow_id)
-        except Exception as exc:  # noqa: BLE001
-            self.query_one("#body", Static).update(f"[red]get_flow failed: {exc}[/red]")
+        except Exception:  # noqa: BLE001
+            f = self.cached
+        if f is None:
+            self.query_one("#body", Static).update("[red]flow unavailable[/red]")
             return
         self.query_one("#body", Static).update(self._format_flow(f))
 
