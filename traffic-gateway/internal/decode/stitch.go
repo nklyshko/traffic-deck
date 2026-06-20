@@ -197,9 +197,9 @@ func zipHeaders(names, vals []string) []Header {
 	}
 	out := make([]Header, 0, n)
 	for i := 0; i < n; i++ {
-		if strings.HasPrefix(names[i], ":") {
-			continue // pseudo-headers are surfaced as dedicated fields
-		}
+		// Keep HTTP/2 pseudo-headers (:method/:authority/:scheme/:path/:status) in
+		// their wire order — their ordering is a client fingerprint (compare, §7.5).
+		// The dedicated Method/Path/… fields are still populated separately for display.
 		out = append(out, Header{Name: names[i], Value: vals[i]})
 	}
 	return out
