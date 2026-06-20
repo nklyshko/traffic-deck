@@ -50,7 +50,10 @@ uv run --directory traffic-viewer python -m traffic_viewer.app
 ```
 
 TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
-refresh sessions, `s`/`r` save response/request body, `q` quit.
+refresh sessions. In a flow list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`,
+naked = URL, `!` negate), `c` mark/compare two requests across sessions. In a flow
+detail: `s`/`r` save response/request body, `x` export curl, `w` export raw
+request+response. `q` quit.
 
 ## Getting traffic in
 

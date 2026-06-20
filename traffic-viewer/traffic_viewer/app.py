@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from datetime import datetime, timezone
 
 from textual import work
@@ -91,6 +92,39 @@ def compile_filter(expr: str):
             i += 1
         preds.append(lambda f, b=base, n=neg: (not b(f)) if n else b(f))
     return lambda f: all(p(f) for p in preds)
+
+
+def _curl(flow, idprefix: str, body: bytes):
+    """Build a curl command reproducing the request. Returns (command, bodyfile|None);
+    a non-empty body is referenced as `--data-binary @<bodyfile>`."""
+    parts = [f"curl -X {flow.method or 'GET'} {shlex.quote(_url(flow))}"]
+    if flow.protocol == "HTTP/2":
+        parts.append("--http2")
+    elif flow.protocol == "HTTP/1.1":
+        parts.append("--http1.1")
+    for h in flow.request_headers:
+        if h.name.startswith(":") or h.name.lower() == "host":
+            continue  # pseudo-headers / Host are implied by -X and the URL
+        parts.append(f"-H {shlex.quote(f'{h.name}: {h.value}')}")
+    bodyfile = None
+    if body:
+        bodyfile = os.path.abspath(f"{idprefix}-request.body")
+        parts.append(f"--data-binary @{shlex.quote(bodyfile)}")
+    return " \\\n  ".join(parts), bodyfile
+
+
+def _raw_message(flow, body: bytes, response: bool) -> bytes:
+    """Reconstruct a raw HTTP message (start line + headers in wire order + body).
+    For HTTP/2 the pseudo-headers are kept as-is, preserving order for fingerprinting."""
+    if response:
+        start = f"{flow.protocol or 'HTTP/1.1'} {flow.status}"
+        headers = flow.response_headers
+    else:
+        target = flow.path + (f"?{flow.query}" if flow.query else "")
+        start = f"{flow.method} {target} {flow.protocol or 'HTTP/1.1'}"
+        headers = flow.request_headers
+    lines = [start] + [f"{h.name}: {h.value}" for h in headers]
+    return ("\n".join(lines) + "\n\n").encode() + (body or b"")
 
 
 class SessionsScreen(Screen):
@@ -283,6 +317,8 @@ class FlowDetailScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("r", "save_request", "Save req body"),
         Binding("s", "save_response", "Save resp body"),
+        Binding("x", "export_curl", "Export curl"),
+        Binding("w", "export_raw", "Export raw"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -291,6 +327,7 @@ class FlowDetailScreen(Screen):
         self.session_id = session_id
         self.flow_id = flow_id
         self.cached = cached  # full Flow from a live event, used if not yet persisted
+        self._flow = None     # the loaded Flow (for export)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -315,7 +352,42 @@ class FlowDetailScreen(Screen):
         if f is None:
             self.query_one("#body", Static).update("[red]flow unavailable[/red]")
             return
+        self._flow = f
         self.query_one("#body", Static).update(self._format_flow(f))
+
+    async def _full_body(self, response: bool) -> bytes:
+        try:
+            return await self.app.client.get_body(self.session_id, self.flow_id, response)
+        except Exception:  # noqa: BLE001 (no body)
+            return b""
+
+    @work(exclusive=True)
+    async def action_export_curl(self) -> None:
+        if self._flow is None:
+            return
+        body = await self._full_body(response=False)
+        cmd, bodyfile = _curl(self._flow, self.flow_id[:8], body)
+        if bodyfile:
+            with open(bodyfile, "wb") as fp:
+                fp.write(body)
+        path = os.path.abspath(f"{self.flow_id[:8]}.curl")
+        with open(path, "w") as fp:
+            fp.write(cmd + "\n")
+        self.notify(f"wrote {path}" + (f" (+ {bodyfile})" if bodyfile else ""))
+
+    @work(exclusive=True)
+    async def action_export_raw(self) -> None:
+        if self._flow is None:
+            return
+        req = _raw_message(self._flow, await self._full_body(response=False), response=False)
+        resp = _raw_message(self._flow, await self._full_body(response=True), response=True)
+        rp = os.path.abspath(f"{self.flow_id[:8]}-request.http")
+        sp = os.path.abspath(f"{self.flow_id[:8]}-response.http")
+        with open(rp, "wb") as fp:
+            fp.write(req)
+        with open(sp, "wb") as fp:
+            fp.write(resp)
+        self.notify(f"wrote {rp} and {sp}")
 
     @work(exclusive=True)
     async def action_save_request(self) -> None:
