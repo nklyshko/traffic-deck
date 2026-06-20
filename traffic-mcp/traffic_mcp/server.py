@@ -17,7 +17,8 @@ from mcp.server.fastmcp import FastMCP
 from traffic_mcp.client import GatewayClient
 from traffic_mcp.filter import compile_filter, flow_url
 
-mcp = FastMCP("traffic-mcp")
+mcp = FastMCP("traffic-mcp", host=os.environ.get("MCP_HOST", "127.0.0.1"),
+              port=int(os.environ.get("MCP_PORT", "8765")))
 
 _SOURCE_KIND = {0: "unspecified", 1: "chrome", 2: "mitmproxy",
                 3: "android_emulator", 4: "android_device", 5: "generic"}
@@ -227,7 +228,10 @@ async def export_curl(session_id: str, flow_id: str) -> str:
 
 
 def main() -> None:
-    mcp.run()
+    # MCP_TRANSPORT: stdio (default), streamable-http, or sse. HTTP transports bind
+    # MCP_HOST:MCP_PORT (default 127.0.0.1:8765).
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

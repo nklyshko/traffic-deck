@@ -72,6 +72,14 @@ Run it over stdio (point your MCP client at this command):
 GATEWAY_ADDR=127.0.0.1:8080 uv run --directory traffic-mcp python -m traffic_mcp.server
 ```
 
+Or over HTTP — set `MCP_TRANSPORT` to `streamable-http` (or `sse`); it binds
+`MCP_HOST:MCP_PORT` (default `127.0.0.1:8765`) and serves the MCP endpoint at `/mcp`:
+
+```sh
+MCP_TRANSPORT=streamable-http MCP_PORT=8765 GATEWAY_ADDR=127.0.0.1:8080 \
+    uv run --directory traffic-mcp python -m traffic_mcp.server
+```
+
 ## Getting traffic in
 
 ### A) Import a pre-captured pcap + key.log
