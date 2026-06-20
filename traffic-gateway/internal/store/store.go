@@ -352,14 +352,22 @@ func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.F
 	defer rows.Close()
 
 	var out []*trafficv1.Flow
+	byID := map[string]*trafficv1.Flow{}
 	for rows.Next() {
 		f, err := scanFlow(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, f)
+		byID[f.Id] = f
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachAnnotations(ctx, db, byID); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GetFlow returns a single flow (with headers) from the given session's bundle.
@@ -405,6 +413,9 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		Scan(&reqRef, &respRef); err == nil {
 		f.RequestBody = s.loadBody(ctx, db, reqRef.String)
 		f.ResponseBody = s.loadBody(ctx, db, respRef.String)
+	}
+	if err := s.attachAnnotations(ctx, db, map[string]*trafficv1.Flow{f.Id: f}); err != nil {
+		return nil, err
 	}
 	return f, nil
 }

@@ -15,19 +15,25 @@ if str(_GEN) not in sys.path:
     sys.path.insert(0, str(_GEN))
 
 import grpc  # noqa: E402
-from traffic.v1 import viewer_pb2, viewer_pb2_grpc  # noqa: E402
+from traffic.v1 import (  # noqa: E402
+    control_pb2,
+    control_pb2_grpc,
+    viewer_pb2,
+    viewer_pb2_grpc,
+)
 
 Session = viewer_pb2  # re-exported module for callers that need message types
 Flow = viewer_pb2
 
 
 class GatewayClient:
-    """Thin async wrapper over ViewerServiceStub."""
+    """Thin async wrapper over ViewerServiceStub + ControlServiceStub."""
 
     def __init__(self, address: str) -> None:
         self._address = address
         self._channel: grpc.aio.Channel | None = None
         self._stub: viewer_pb2_grpc.ViewerServiceStub | None = None
+        self._control: control_pb2_grpc.ControlServiceStub | None = None
 
     def _ensure(self) -> viewer_pb2_grpc.ViewerServiceStub:
         # Lazily create the aio channel/stub on first use (inside the event loop).
@@ -35,6 +41,12 @@ class GatewayClient:
             self._channel = grpc.aio.insecure_channel(self._address)
             self._stub = viewer_pb2_grpc.ViewerServiceStub(self._channel)
         return self._stub
+
+    def _ctrl(self) -> control_pb2_grpc.ControlServiceStub:
+        if self._control is None:
+            self._ensure()  # shares the channel
+            self._control = control_pb2_grpc.ControlServiceStub(self._channel)
+        return self._control
 
     async def close(self) -> None:
         if self._channel is not None:
@@ -66,3 +78,57 @@ class GatewayClient:
         )
         chunks = [c.payload async for c in call]
         return b"".join(chunks)
+
+    # --- annotations (ControlService, plan §12) ---------------------------
+
+    async def list_tags(self):
+        resp = await self._ctrl().ListTags(control_pb2.ListTagsRequest())
+        return list(resp.tags)
+
+    async def create_tag(self, name: str, color: str):
+        return await self._ctrl().CreateTag(control_pb2.CreateTagRequest(name=name, color=color))
+
+    async def delete_tag(self, tag_id: str) -> None:
+        await self._ctrl().DeleteTag(control_pb2.DeleteTagRequest(id=tag_id))
+
+    async def set_tags(self, session_id: str, record_ids, add=(), remove=()) -> None:
+        await self._ctrl().SetTags(control_pb2.SetTagsRequest(
+            session_id=session_id, record_ids=list(record_ids),
+            add_tag_ids=list(add), remove_tag_ids=list(remove)))
+
+    async def toggle_favorite(self, session_id: str, record_ids) -> None:
+        await self._ctrl().ToggleFavorite(control_pb2.ToggleFavoriteRequest(
+            session_id=session_id, record_ids=list(record_ids)))
+
+    async def add_comment(self, session_id: str, record_id: str, body: str):
+        return await self._ctrl().AddComment(control_pb2.AddCommentRequest(
+            session_id=session_id, record_id=record_id, body=body))
+
+    async def edit_comment(self, session_id: str, comment_id: str, body: str):
+        return await self._ctrl().EditComment(control_pb2.EditCommentRequest(
+            session_id=session_id, id=comment_id, body=body))
+
+    async def delete_comment(self, session_id: str, comment_id: str) -> None:
+        await self._ctrl().DeleteComment(control_pb2.DeleteCommentRequest(
+            session_id=session_id, id=comment_id))
+
+    async def set_mark(self, session_id: str, record_ids, color: str) -> None:
+        await self._ctrl().SetMark(control_pb2.SetMarkRequest(
+            session_id=session_id, record_ids=list(record_ids), color=color))
+
+    async def clear_mark(self, session_id: str, record_ids) -> None:
+        await self._ctrl().ClearMark(control_pb2.ClearMarkRequest(
+            session_id=session_id, record_ids=list(record_ids)))
+
+    async def list_groups(self):
+        resp = await self._ctrl().ListGroups(control_pb2.ListGroupsRequest())
+        return list(resp.groups)
+
+    async def create_group(self, name: str, color: str, parent_id: str = ""):
+        return await self._ctrl().CreateGroup(control_pb2.CreateGroupRequest(
+            name=name, color=color, parent_id=parent_id))
+
+    async def set_groups(self, session_id: str, record_ids, add=(), remove=()) -> None:
+        await self._ctrl().SetGroups(control_pb2.SetGroupsRequest(
+            session_id=session_id, record_ids=list(record_ids),
+            add_group_ids=list(add), remove_group_ids=list(remove)))

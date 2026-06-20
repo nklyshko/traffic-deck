@@ -55,3 +55,51 @@ CREATE TABLE IF NOT EXISTS blobs (
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
 CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
+
+-- Annotations (plan §12). A "record" is a flow today (a WebSocket message later).
+-- tags/groups here mirror the catalog defs so the bundle stays self-contained;
+-- assignments, comments, and marks are authoritative here.
+CREATE TABLE IF NOT EXISTS tags (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    color       TEXT NOT NULL DEFAULT '',
+    is_favorite INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS record_tags (
+    record_id TEXT NOT NULL,
+    tag_id    TEXT NOT NULL,
+    PRIMARY KEY (record_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS comments (
+    id         TEXT PRIMARY KEY,
+    record_id  TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS record_marks (
+    record_id TEXT PRIMARY KEY,
+    color     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS groups (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    color      TEXT NOT NULL DEFAULT '',
+    parent_id  TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id  TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, record_id)
+);
+
+CREATE INDEX IF NOT EXISTS record_tags_rec_idx   ON record_tags (record_id);
+CREATE INDEX IF NOT EXISTS comments_rec_idx      ON comments (record_id);
+CREATE INDEX IF NOT EXISTS group_members_rec_idx ON group_members (record_id);

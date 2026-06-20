@@ -14,14 +14,20 @@ from datetime import datetime, timezone
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Input, Static
+from textual.containers import Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import DataTable, Footer, Header, Input, Label, OptionList, Static
+from textual.widgets.option_list import Option
 from rich.markup import escape
+from rich.text import Text
 
 from traffic_viewer.client import GatewayClient
 
 SESSION_STATUS = {0: "?", 1: "open", 2: "decoding", 3: "closed", 4: "error"}
+
+# Color-mark / tag palette (plan §12) — standard Rich color names so they render
+# both as the row's ● marker and as tag/text styling.
+MARK_COLORS = ["red", "yellow", "green", "blue", "magenta", "cyan"]
 
 
 def _fmt_time(ts_micros: int) -> str:
@@ -48,13 +54,28 @@ _FILTER_FIELDS = {
 }
 
 
-def compile_filter(expr: str):
+def _comment_text(f) -> str:
+    return " ".join(c.body for c in f.comments)
+
+
+def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | None = None):
     """Compile a filter expression to a predicate(flow)->bool, or None if empty.
 
     Terms (space-separated, ANDed): `~m/~d/~u/~c/~t <regex>`, `~s`/`~q`
-    (has/no response), a naked regex (matches the URL), and a leading `!` negates a
-    term. Raises ValueError on a bad regex. (Full `& | ()` grammar is future.)
+    (has/no response), `~fav` (favorited), annotation fields `~mark/~tag/~group/
+    ~comment <regex>` (plan §12), a naked regex (matches the URL), and a leading `!`
+    negates a term. Raises ValueError on a bad regex. (Full `& | ()` grammar is future.)
     """
+    tagnames = tagnames or {}
+    groupnames = groupnames or {}
+    fields = {
+        **_FILTER_FIELDS,
+        "~mark": lambda f: f.mark_color,
+        "~tag": lambda f: " ".join(tagnames.get(t, t) for t in f.tag_ids),
+        "~group": lambda f: " ".join(groupnames.get(g, g) for g in f.group_ids),
+        "~comment": _comment_text,
+    }
+
     def _rx(s: str):
         try:
             return re.compile(s, re.IGNORECASE)
@@ -80,11 +101,14 @@ def compile_filter(expr: str):
         if t in ("~s", "~q"):
             base = (lambda f: bool(f.status)) if t == "~s" else (lambda f: not f.status)
             i += 1
-        elif t in _FILTER_FIELDS:
+        elif t == "~fav":
+            base = lambda f: f.favorite
+            i += 1
+        elif t in fields:
             i += 1
             if i >= len(toks):
                 raise ValueError(f"{t} needs an argument")
-            rx, getter, i = _rx(toks[i]), _FILTER_FIELDS[t], i + 1
+            rx, getter, i = _rx(toks[i]), fields[t], i + 1
             base = lambda f, rx=rx, g=getter: bool(rx.search(g(f) or ""))
         else:
             rx = _rx(t)
@@ -92,6 +116,25 @@ def compile_filter(expr: str):
             i += 1
         preds.append(lambda f, b=base, n=neg: (not b(f)) if n else b(f))
     return lambda f: all(p(f) for p in preds)
+
+
+def _flags_cell(f, selected: bool) -> Text:
+    """Compact annotation indicators for the flow table (plan §12): selection ✓,
+    favorite ★, color mark ●, tag count #N, comment 💬."""
+    t = Text()
+    if selected:
+        t.append("✓ ", style="bold green")
+    if f.favorite:
+        t.append("★ ", style="yellow")
+    if f.mark_color:
+        t.append("● ", style=f.mark_color if f.mark_color in MARK_COLORS else "white")
+    if f.tag_ids:
+        t.append(f"#{len(f.tag_ids)} ", style="cyan")
+    if f.comments:
+        t.append("💬 ", style="dim")
+    if f.group_ids:
+        t.append("⬡ ", style="blue")
+    return t
 
 
 def _curl(flow, idprefix: str, body: bytes):
@@ -125,6 +168,56 @@ def _raw_message(flow, body: bytes, response: bool) -> bytes:
         headers = flow.request_headers
     lines = [start] + [f"{h.name}: {h.value}" for h in headers]
     return ("\n".join(lines) + "\n\n").encode() + (body or b"")
+
+
+class TextPrompt(ModalScreen[str | None]):
+    """Modal single-line text input; dismisses with the entered text, or None on Esc."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, label: str, value: str = "") -> None:
+        super().__init__()
+        self._label = label
+        self._value = value
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="prompt"):
+            yield Label(self._label)
+            yield Input(value=self._value, id="prompt-input")
+
+    def on_mount(self) -> None:
+        self.query_one("#prompt-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SelectPrompt(ModalScreen[str | None]):
+    """Modal pick-one list; dismisses with the chosen option id, or None on Esc."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, label: str, options: list[tuple[str, object]]) -> None:
+        super().__init__()
+        self._label = label
+        self._options = options  # (id, renderable-label)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="prompt"):
+            yield Label(self._label)
+            yield OptionList(*[Option(lbl, id=val) for val, lbl in self._options])
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class SessionsScreen(Screen):
@@ -177,6 +270,12 @@ class FlowsScreen(Screen):
         Binding("escape", "app.pop_screen", "Back"),
         Binding("f", "filter", "Filter"),
         Binding("c", "compare", "Compare A/B"),
+        Binding("space", "select", "Select"),
+        Binding("m", "mark", "Mark"),
+        Binding("t", "tag", "Tag"),
+        Binding("F", "favorite", "Favorite"),
+        Binding("n", "comment", "Comment"),
+        Binding("g", "group", "Group"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -187,12 +286,17 @@ class FlowsScreen(Screen):
         self._rows: set[str] = set()
         self._cols: list = []
         self._predicate = None  # active filter
+        self._selected: set[str] = set()       # multi-selection for bulk annotation
+        self._tags: list = []                  # tag defs (catalog)
+        self._groups: list = []                # group defs (catalog)
+        self._tagnames: dict[str, str] = {}
+        self._groupnames: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Input(id="filter", placeholder="filter: ~m GET  ~d example.com  ~c 2..  !~t json  (f focus, Enter apply)")
+        yield Input(id="filter", placeholder="filter: ~m GET  ~d example.com  ~fav  ~tag auth  ~mark red  (f focus, Enter apply)")
         table = DataTable(id="flows", cursor_type="row", zebra_stripes=True)
-        self._cols = table.add_columns("Time", "Method", "Status", "Proto", "Authority", "Path")
+        self._cols = table.add_columns("", "Time", "Method", "Status", "Proto", "Authority", "Path")
         yield table
         yield Footer()
 
@@ -200,10 +304,25 @@ class FlowsScreen(Screen):
         self.title = "traffic-viewer"
         self._update_subtitle()
         self.query_one("#flows", DataTable).focus()
+        self.load_defs()
         self.load_flows()
+
+    @work(exclusive=True, group="defs")
+    async def load_defs(self) -> None:
+        """Load tag/group definitions for the palette + filter name resolution."""
+        try:
+            self._tags = await self.app.client.list_tags()
+            self._groups = await self.app.client.list_groups()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"load annotations failed: {exc}", severity="warning")
+            return
+        self._tagnames = {t.id: t.name for t in self._tags}
+        self._groupnames = {g.id: g.name for g in self._groups}
 
     def _update_subtitle(self) -> None:
         base = f"flows · {self.session_id[:8]}"
+        if self._selected:
+            base += f" · {len(self._selected)} selected"
         if self._predicate is not None:
             base += f" · {len(self._rows)}/{len(self.flows)} shown"
         self.sub_title = base
@@ -216,7 +335,7 @@ class FlowsScreen(Screen):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         try:
-            self._predicate = compile_filter(event.value)
+            self._predicate = compile_filter(event.value, self._tagnames, self._groupnames)
         except Exception as exc:  # noqa: BLE001 (bad regex / syntax)
             self.notify(f"bad filter: {exc}", severity="error")
             return
@@ -239,9 +358,9 @@ class FlowsScreen(Screen):
             self.query_one("#flows", DataTable).focus()
             event.stop()
 
-    @staticmethod
-    def _cells(f) -> tuple:
+    def _cells(self, f) -> tuple:
         return (
+            _flags_cell(f, f.id in self._selected),
             _fmt_time(f.ts_unix_micros),
             f.method or "",
             str(f.status) if f.status else "",
@@ -287,7 +406,9 @@ class FlowsScreen(Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         fid = str(event.row_key.value)
-        self.app.push_screen(FlowDetailScreen(self.session_id, fid, self.flows.get(fid)))
+        self.app.push_screen(
+            FlowDetailScreen(self.session_id, fid, self.flows.get(fid),
+                             self._tagnames, self._groupnames))
 
     def _focused_flow_id(self) -> str | None:
         table = self.query_one("#flows", DataTable)
@@ -311,6 +432,163 @@ class FlowsScreen(Screen):
             self.app.compare_a = None
             self.app.push_screen(CompareScreen(a, sel))
 
+    # --- annotations (plan §12) ----------------------------------------------
+
+    def action_select(self) -> None:
+        """Toggle the focused row's membership in the bulk-annotation selection."""
+        fid = self._focused_flow_id()
+        if fid is None:
+            return
+        if fid in self._selected:
+            self._selected.discard(fid)
+        else:
+            self._selected.add(fid)
+        f = self.flows.get(fid)
+        if f is not None:
+            self._upsert(f)  # re-render the flags cell
+        self._update_subtitle()
+
+    def _targets(self) -> list[str]:
+        """Records an annotation applies to: the selection if any, else the focus."""
+        if self._selected:
+            return list(self._selected)
+        fid = self._focused_flow_id()
+        return [fid] if fid else []
+
+    async def _refresh(self, ids: list[str]) -> None:
+        """Re-fetch annotated flows so their row/cache reflect the change."""
+        for rid in ids:
+            try:
+                f = await self.app.client.get_flow(self.session_id, rid)
+            except Exception:  # noqa: BLE001 (live/unpersisted record — best effort)
+                continue
+            self._upsert(f)
+
+    @work(exclusive=True, group="annotate")
+    async def action_mark(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        opts = [(c, Text("● " + c, style=c)) for c in MARK_COLORS] + [("__clear__", "✕ clear")]
+        choice = await self.app.push_screen_wait(SelectPrompt("Color mark", opts))
+        if choice is None:
+            return
+        try:
+            if choice == "__clear__":
+                await self.app.client.clear_mark(self.session_id, targets)
+            else:
+                await self.app.client.set_mark(self.session_id, targets, choice)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"mark failed: {exc}", severity="error")
+            return
+        await self._refresh(targets)
+
+    @work(exclusive=True, group="annotate")
+    async def action_tag(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        opts = [(t.id, Text(("★ " if t.is_favorite else "") + t.name, style=t.color or "white"))
+                for t in self._tags]
+        opts.append(("__new__", "＋ new tag…"))
+        choice = await self.app.push_screen_wait(SelectPrompt("Toggle tag", opts))
+        if choice is None:
+            return
+        if choice == "__new__":
+            name = await self.app.push_screen_wait(TextPrompt("New tag name"))
+            if not name:
+                return
+            color = await self.app.push_screen_wait(
+                SelectPrompt("Tag color", [(c, Text("● " + c, style=c)) for c in MARK_COLORS]))
+            try:
+                tag = await self.app.client.create_tag(name, color or "")
+                await self.app.client.set_tags(self.session_id, targets, add=[tag.id])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"tag failed: {exc}", severity="error")
+                return
+            self.load_defs()
+        else:
+            present = all(choice in (self.flows[r].tag_ids if r in self.flows else []) for r in targets)
+            try:
+                if present:
+                    await self.app.client.set_tags(self.session_id, targets, remove=[choice])
+                else:
+                    await self.app.client.set_tags(self.session_id, targets, add=[choice])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"tag failed: {exc}", severity="error")
+                return
+        await self._refresh(targets)
+
+    @work(exclusive=True, group="annotate")
+    async def action_favorite(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        try:
+            await self.app.client.toggle_favorite(self.session_id, targets)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"favorite failed: {exc}", severity="error")
+            return
+        await self._refresh(targets)
+
+    @work(exclusive=True, group="annotate")
+    async def action_comment(self) -> None:
+        fid = self._focused_flow_id()  # comments target a single record
+        if fid is None:
+            return
+        f = self.flows.get(fid)
+        existing = f.comments[0] if (f and f.comments) else None
+        body = await self.app.push_screen_wait(
+            TextPrompt("Comment (empty to delete)", existing.body if existing else ""))
+        if body is None:
+            return
+        try:
+            if existing and body == "":
+                await self.app.client.delete_comment(self.session_id, existing.id)
+            elif existing:
+                await self.app.client.edit_comment(self.session_id, existing.id, body)
+            elif body:
+                await self.app.client.add_comment(self.session_id, fid, body)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"comment failed: {exc}", severity="error")
+            return
+        await self._refresh([fid])
+
+    @work(exclusive=True, group="annotate")
+    async def action_group(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        opts = [(g.id, Text(g.name, style=g.color or "white")) for g in self._groups]
+        opts.append(("__new__", "＋ new group…"))
+        choice = await self.app.push_screen_wait(SelectPrompt("Toggle group", opts))
+        if choice is None:
+            return
+        if choice == "__new__":
+            name = await self.app.push_screen_wait(TextPrompt("New group name"))
+            if not name:
+                return
+            color = await self.app.push_screen_wait(
+                SelectPrompt("Group color", [(c, Text("● " + c, style=c)) for c in MARK_COLORS]))
+            try:
+                grp = await self.app.client.create_group(name, color or "")
+                await self.app.client.set_groups(self.session_id, targets, add=[grp.id])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"group failed: {exc}", severity="error")
+                return
+            self.load_defs()
+        else:
+            present = all(choice in (self.flows[r].group_ids if r in self.flows else []) for r in targets)
+            try:
+                if present:
+                    await self.app.client.set_groups(self.session_id, targets, remove=[choice])
+                else:
+                    await self.app.client.set_groups(self.session_id, targets, add=[choice])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"group failed: {exc}", severity="error")
+                return
+        await self._refresh(targets)
+
 
 class FlowDetailScreen(Screen):
     BINDINGS = [
@@ -322,12 +600,15 @@ class FlowDetailScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, session_id: str, flow_id: str, cached=None) -> None:
+    def __init__(self, session_id: str, flow_id: str, cached=None,
+                 tagnames: dict | None = None, groupnames: dict | None = None) -> None:
         super().__init__()
         self.session_id = session_id
         self.flow_id = flow_id
         self.cached = cached  # full Flow from a live event, used if not yet persisted
         self._flow = None     # the loaded Flow (for export)
+        self._tagnames = tagnames or {}
+        self._groupnames = groupnames or {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -411,8 +692,8 @@ class FlowDetailScreen(Screen):
     # Cap body rendering so a large body doesn't choke the TUI.
     _BODY_RENDER_LIMIT = 20000
 
-    @classmethod
-    def _format_flow(cls, f) -> str:
+    def _format_flow(self, f) -> str:
+        cls = type(self)
         e = escape
         lines: list[str] = []
         url = f"{f.scheme or 'https'}://{f.authority}{f.path}"
@@ -423,6 +704,7 @@ class FlowDetailScreen(Screen):
             f"[dim]{f.protocol}  status={f.status}  tls={'yes' if f.tls_decrypted else 'no'}  "
             f"{e(f.src_addr)} → {e(f.dst_addr)}[/dim]"
         )
+        self._append_annotations(lines, f)
         lines.append("")
         lines.append("[b u]Request headers[/b u]")
         for h in f.request_headers:
@@ -434,6 +716,27 @@ class FlowDetailScreen(Screen):
             lines.append(f"  [green]{e(h.name)}[/green]: {e(h.value)}")
         cls._append_body(lines, "Response body", f.response_body, "s")
         return "\n".join(lines)
+
+    def _append_annotations(self, lines: list[str], f) -> None:
+        """Render the record's annotations (plan §12): mark, favorite, tags, groups,
+        comments. Names resolve via the maps passed from the flow list."""
+        e = escape
+        bits: list[str] = []
+        if f.favorite:
+            bits.append("[yellow]★ favorite[/yellow]")
+        if f.mark_color:
+            color = f.mark_color if f.mark_color in MARK_COLORS else "white"
+            bits.append(f"[{color}]● {e(f.mark_color)}[/{color}]")
+        if f.tag_ids:
+            names = ", ".join(e(self._tagnames.get(t, t)) for t in f.tag_ids)
+            bits.append(f"[cyan]tags:[/cyan] {names}")
+        if f.group_ids:
+            names = ", ".join(e(self._groupnames.get(g, g)) for g in f.group_ids)
+            bits.append(f"[blue]groups:[/blue] {names}")
+        if bits:
+            lines.append("[dim]│[/dim] " + "   ".join(bits))
+        for c in f.comments:
+            lines.append(f"  [dim]💬[/dim] {e(c.body)}")
 
     @classmethod
     def _append_body(cls, lines: list[str], title: str, body, save_key: str) -> None:
@@ -568,7 +871,16 @@ class CompareScreen(Screen):
 
 
 class TrafficViewerApp(App):
-    CSS = "DataTable { height: 1fr; }"
+    CSS = """
+    DataTable { height: 1fr; }
+    TextPrompt, SelectPrompt { align: center middle; }
+    #prompt {
+        width: 60; height: auto; max-height: 80%;
+        padding: 1 2; border: thick $accent; background: $surface;
+    }
+    #prompt Label { margin-bottom: 1; }
+    #prompt OptionList { height: auto; max-height: 16; }
+    """
     BINDINGS = [Binding("q", "quit", "Quit")]
 
     def __init__(self, address: str) -> None:

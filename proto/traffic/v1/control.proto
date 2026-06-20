@@ -4,17 +4,36 @@ package traffic.v1;
 
 import "traffic/v1/common.proto";
 
-// viewer -> gateway -> tools. Capture control, re-decode, annotations.
+// viewer -> gateway -> tools. Capture control, re-decode, annotations (plan §12).
 service ControlService {
   rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
   rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
   rpc ReDecode(ReDecodeRequest) returns (stream DecodeProgress);
 
-  rpc CreateBookmark(CreateBookmarkRequest) returns (Bookmark);
-  rpc DeleteBookmark(DeleteBookmarkRequest) returns (Empty);
+  // --- Annotations (plan §12). Bulk ops take repeated record_ids. ---
+
+  // Tags (defs are global; assignments per-session).
+  rpc CreateTag(CreateTagRequest) returns (Tag);
+  rpc DeleteTag(DeleteTagRequest) returns (Empty);
+  rpc ListTags(ListTagsRequest) returns (TagList);
+  rpc SetTags(SetTagsRequest) returns (Empty);
+  rpc ToggleFavorite(ToggleFavoriteRequest) returns (Empty);
+
+  // Comments (per-session).
+  rpc AddComment(AddCommentRequest) returns (Comment);
+  rpc EditComment(EditCommentRequest) returns (Comment);
+  rpc DeleteComment(DeleteCommentRequest) returns (Empty);
+
+  // Color marks (per-session, single per record).
+  rpc SetMark(SetMarkRequest) returns (Empty);
+  rpc ClearMark(ClearMarkRequest) returns (Empty);
+
+  // Groups (defs global; membership per-session).
   rpc CreateGroup(CreateGroupRequest) returns (Group);
+  rpc UpdateGroup(UpdateGroupRequest) returns (Group);
   rpc DeleteGroup(DeleteGroupRequest) returns (Empty);
-  rpc AssignToGroup(AssignToGroupRequest) returns (Empty);
+  rpc ListGroups(ListGroupsRequest) returns (GroupList);
+  rpc SetGroups(SetGroupsRequest) returns (Empty);
 }
 
 message Empty {}
@@ -41,25 +60,95 @@ message ReDecodeRequest {
   string session_id = 1;
 }
 
-message CreateBookmarkRequest {
-  string flow_id = 1;
-  string note = 2;
+// --- Tags ---
+
+message CreateTagRequest {
+  string name = 1;
+  string color = 2;
 }
 
-message DeleteBookmarkRequest {
+message DeleteTagRequest {
   string id = 1;
 }
 
+message ListTagsRequest {}
+
+message TagList {
+  repeated Tag tags = 1;
+}
+
+message SetTagsRequest {
+  string session_id = 1;
+  repeated string record_ids = 2;
+  repeated string add_tag_ids = 3;
+  repeated string remove_tag_ids = 4;
+}
+
+message ToggleFavoriteRequest {
+  string session_id = 1;
+  repeated string record_ids = 2;
+}
+
+// --- Comments ---
+
+message AddCommentRequest {
+  string session_id = 1;
+  string record_id = 2;
+  string body = 3;
+}
+
+message EditCommentRequest {
+  string session_id = 1;
+  string id = 2;
+  string body = 3;
+}
+
+message DeleteCommentRequest {
+  string session_id = 1;
+  string id = 2;
+}
+
+// --- Color marks ---
+
+message SetMarkRequest {
+  string session_id = 1;
+  repeated string record_ids = 2;
+  string color = 3;
+}
+
+message ClearMarkRequest {
+  string session_id = 1;
+  repeated string record_ids = 2;
+}
+
+// --- Groups ---
+
 message CreateGroupRequest {
-  string label = 1;
+  string name = 1;
   string color = 2;
+  string parent_id = 3;
+}
+
+message UpdateGroupRequest {
+  string id = 1;
+  string name = 2;
+  string color = 3;
+  string parent_id = 4;
 }
 
 message DeleteGroupRequest {
   string id = 1;
 }
 
-message AssignToGroupRequest {
-  string group_id = 1;
-  string flow_id = 2;
+message ListGroupsRequest {}
+
+message GroupList {
+  repeated Group groups = 1;
+}
+
+message SetGroupsRequest {
+  string session_id = 1;
+  repeated string record_ids = 2;
+  repeated string add_group_ids = 3;
+  repeated string remove_group_ids = 4;
 }

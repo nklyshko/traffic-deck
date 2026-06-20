@@ -110,4 +110,5 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string
 	hub := newLiveHub(tshark)
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub))
+	trafficv1.RegisterControlServiceServer(s, NewControl(st))
 }

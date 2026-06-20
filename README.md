@@ -51,9 +51,12 @@ uv run --directory traffic-viewer python -m traffic_viewer.app
 
 TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
 refresh sessions. In a flow list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`,
-naked = URL, `!` negate), `c` mark/compare two requests across sessions. In a flow
-detail: `s`/`r` save response/request body, `x` export curl, `w` export raw
-request+response. `q` quit.
+plus annotations `~fav ~mark ~tag ~group ~comment`, naked = URL, `!` negate), `c`
+mark/compare two requests across sessions. Annotate (plan §12): `space` toggle
+select (for bulk), `t` tag, `F` favorite, `m` color-mark, `n` comment, `g` group —
+each acts on the selection if any, else the focused row. In a flow detail: `s`/`r`
+save response/request body, `x` export curl, `w` export raw request+response.
+`q` quit.
 
 ## Getting traffic in
 
@@ -125,6 +128,9 @@ Useful flags / env:
   bodies) → per-session SQLite → `ViewerService` → Textual TUI. HTTP/1.1 + HTTP/2.
 - **Phase 2** — live Chrome capture: `dumpcap` + `SSLKEYLOGFILE` → streamed ingest →
   live `tshark -r -` decode → live-following TUI.
+- **Phase 3** (in progress) — mitmproxy-like TUI: filter DSL, cross-session compare,
+  curl/raw export, and **annotations** (tags + Favorite, comments, color marks,
+  groups; `ControlService` + per-session SQLite, plan §12).
 
-Next: annotations (bookmarks/groups) + on-demand re-decode. See
+Next: WebSocket support, then the `traffic-mcp` server. See
 [`plan/09-roadmap.md`](plan/09-roadmap.md).

@@ -88,20 +88,43 @@ message Flow {
   repeated Cookie request_cookies = 23;
   Body request_body = 24;
   Body response_body = 25;
+
+  // Annotations (plan §12). Summaries (ListFlows/StreamFlows) carry mark_color,
+  // favorite, tag_ids, group_ids so rows render/filter without a second call;
+  // GetFlow additionally fills comments.
+  string mark_color = 26;        // single color marker ("" = none)
+  bool favorite = 27;            // has the built-in Favorite tag
+  repeated string tag_ids = 28;
+  repeated string group_ids = 29;
+  repeated Comment comments = 30;
 }
 
-message Bookmark {
+// A named, colored label (plan §12). Definitions are global (catalog) and mirrored
+// into each session bundle that uses them; assignments live in the bundle.
+message Tag {
   string id = 1;
-  string flow_id = 2;
-  string note = 3;
-  int64 created_at_unix_ms = 4;
+  string name = 2;
+  string color = 3;
+  bool is_favorite = 4;          // the seeded built-in Favorite tag
+  int64 created_at_unix_ms = 5;
 }
 
+// A free-form note attached to a record (plan §12).
+message Comment {
+  string id = 1;
+  string record_id = 2;
+  string body = 3;
+  int64 created_at_unix_ms = 4;
+  int64 updated_at_unix_ms = 5;
+}
+
+// A user-defined, optionally hierarchical group (plan §12).
 message Group {
   string id = 1;
-  string label = 2;
+  string name = 2;
   string color = 3;
-  int64 created_at_unix_ms = 4;
+  string parent_id = 4;          // "" = top-level
+  int64 created_at_unix_ms = 5;
 }
 
 // Progress of a decode run, streamed to viewers.
