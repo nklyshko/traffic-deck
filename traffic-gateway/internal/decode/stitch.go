@@ -10,19 +10,21 @@ import (
 
 // stitcher correlates per-frame EK records into request/response flows.
 type stitcher struct {
-	ds        *Dataset
-	byKey     map[string]*Flow   // HTTP/2: "tcpStream:streamID" -> flow
-	h1pending map[string][]*Flow // HTTP/1.1: tcpStream -> requests awaiting a response (FIFO)
+	ds         *Dataset
+	byKey      map[string]*Flow   // HTTP/2: "tcpStream:streamID" -> flow
+	h1pending  map[string][]*Flow // HTTP/1.1: tcpStream -> requests awaiting a response (FIFO)
+	streamFlow map[string]*Flow   // tcpStream -> its HTTP/1.1 flow (the WebSocket Upgrade)
 	// onChange, if set, fires after each flow is created (isNew=true) or updated.
 	onChange func(f *Flow, isNew bool)
 }
 
 func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
 	return &stitcher{
-		ds:        ds,
-		byKey:     map[string]*Flow{},
-		h1pending: map[string][]*Flow{},
-		onChange:  onChange,
+		ds:         ds,
+		byKey:      map[string]*Flow{},
+		h1pending:  map[string][]*Flow{},
+		streamFlow: map[string]*Flow{},
+		onChange:   onChange,
 	}
 }
 
@@ -34,6 +36,12 @@ func (s *stitcher) emit(f *Flow, isNew bool) {
 
 func (s *stitcher) add(l layers) {
 	tcp := l.first("tcp.stream")
+
+	if op := l.first("websocket.opcode"); op != "" {
+		s.addWebsocket(l, tcp, op)
+		return
+	}
+
 	sid := l.first("http2.streamid")
 
 	method := l.first("http2.headers.method")
@@ -82,6 +90,7 @@ func (s *stitcher) add(l layers) {
 		}
 		s.ds.Flows = append(s.ds.Flows, f)
 		s.h1pending[tcp] = append(s.h1pending[tcp], f)
+		s.streamFlow[tcp] = f // a later WebSocket Upgrade rides this stream
 		s.emit(f, true)
 		return
 	}
@@ -105,6 +114,50 @@ func (s *stitcher) add(l layers) {
 		attachBody(f, l, isReq, true, body, reassembled)
 	}
 	s.emit(f, created)
+}
+
+// addWebsocket records one WebSocket frame as a WsMessage on the Upgrade flow that
+// owns this TCP stream. Frames whose stream has no known HTTP flow (e.g. the Upgrade
+// handshake wasn't captured) are dropped.
+func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
+	f := s.streamFlow[tcp]
+	if f == nil {
+		return
+	}
+	f.Websocket = true
+	src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport"))
+	msg := &WsMessage{
+		ID:           uuid.NewString(),
+		FlowID:       f.ID,
+		FrameNumber:  parseUint(l.first("frame.number")),
+		TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
+		FromClient:   src != "" && src == f.SrcAddr,
+		Opcode:       wsOpcodeName(opcode),
+		Payload:      hexBytes(l.first("websocket.payload")),
+	}
+	s.ds.Messages = append(s.ds.Messages, msg)
+	s.emit(f, false) // surface the ws flag/count change on the parent flow
+}
+
+// wsOpcodeName maps a WebSocket opcode number (tshark `websocket.opcode` show value)
+// to a human name (RFC 6455 §5.2).
+func wsOpcodeName(op string) string {
+	switch op {
+	case "0":
+		return "continuation"
+	case "1":
+		return "text"
+	case "2":
+		return "binary"
+	case "8":
+		return "close"
+	case "9":
+		return "ping"
+	case "10":
+		return "pong"
+	default:
+		return "opcode " + op
+	}
 }
 
 func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {

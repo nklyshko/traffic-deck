@@ -79,6 +79,21 @@ class GatewayClient:
         chunks = [c.payload async for c in call]
         return b"".join(chunks)
 
+    async def list_messages(self, session_id: str, flow_id: str):
+        """WebSocket frames for an Upgrade flow, in timeline order."""
+        resp = await self._ensure().ListMessages(
+            viewer_pb2.ListMessagesRequest(session_id=session_id, flow_id=flow_id)
+        )
+        return list(resp.messages)
+
+    async def get_message_body(self, session_id: str, message_id: str) -> bytes:
+        """Fetch a full WebSocket payload (any size) via streaming GetMessageBody."""
+        call = self._ensure().GetMessageBody(
+            viewer_pb2.GetMessageBodyRequest(session_id=session_id, message_id=message_id)
+        )
+        chunks = [c.payload async for c in call]
+        return b"".join(chunks)
+
     # --- annotations (ControlService, plan §12) ---------------------------
 
     async def list_tags(self):

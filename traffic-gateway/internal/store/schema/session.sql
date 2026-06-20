@@ -52,9 +52,22 @@ CREATE TABLE IF NOT EXISTS blobs (
     external_path TEXT            -- set when spilled; relative to the data root
 );
 
+-- WebSocket frames (plan §8.6): message-shaped records belonging to an Upgrade flow.
+CREATE TABLE IF NOT EXISTS ws_messages (
+    id           TEXT PRIMARY KEY,
+    flow_id      TEXT NOT NULL,        -- parent Upgrade flow
+    frame_number INTEGER,
+    ts_micros    INTEGER,
+    from_client  INTEGER NOT NULL DEFAULT 0,
+    opcode       TEXT,
+    payload_len  INTEGER NOT NULL DEFAULT 0,
+    payload_ref  TEXT                  -- -> blobs.sha256 (NULL when empty)
+);
+
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
 CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
+CREATE INDEX IF NOT EXISTS ws_messages_flow_idx  ON ws_messages (flow_id, ts_micros, frame_number);
 
 -- Annotations (plan §12). A "record" is a flow today (a WebSocket message later).
 -- tags/groups here mirror the catalog defs so the bundle stays self-contained;

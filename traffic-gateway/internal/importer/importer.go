@@ -94,6 +94,11 @@ func Finalize(ctx context.Context, st *store.Store, tsharkPath, sessionID, pcapP
 		return nil, fmt.Errorf("insert flows: %w", err)
 	}
 
+	if _, err := st.InsertWsMessages(ctx, sessionID, ds.Messages); err != nil {
+		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
+		return nil, fmt.Errorf("insert ws messages: %w", err)
+	}
+
 	if err := st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n); err != nil {
 		return nil, err
 	}

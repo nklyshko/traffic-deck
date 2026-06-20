@@ -58,6 +58,29 @@ def _comment_text(f) -> str:
     return " ".join(c.body for c in f.comments)
 
 
+def _bytes_preview(data: bytes, limit: int = 64) -> str:
+    """One-line preview: UTF-8 text if decodable, else hex."""
+    if not data:
+        return ""
+    try:
+        s = data.decode("utf-8")
+        s = s.replace("\n", "⏎").replace("\r", "")
+        return s[:limit] + ("…" if len(s) > limit else "")
+    except UnicodeDecodeError:
+        return data[:limit].hex() + ("…" if len(data) > limit else "")
+
+
+def _hexdump(data: bytes, width: int = 16) -> str:
+    """Classic offset / hex / ascii dump."""
+    lines = []
+    for off in range(0, len(data), width):
+        chunk = data[off : off + width]
+        hexpart = " ".join(f"{b:02x}" for b in chunk).ljust(width * 3 - 1)
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append(f"{off:08x}  {hexpart}  {asc}")
+    return "\n".join(lines)
+
+
 def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | None = None):
     """Compile a filter expression to a predicate(flow)->bool, or None if empty.
 
@@ -134,6 +157,8 @@ def _flags_cell(f, selected: bool) -> Text:
         t.append("💬 ", style="dim")
     if f.group_ids:
         t.append("⬡ ", style="blue")
+    if f.websocket:
+        t.append(f"⇅{f.ws_message_count} ", style="bold magenta")
     return t
 
 
@@ -276,6 +301,7 @@ class FlowsScreen(Screen):
         Binding("F", "favorite", "Favorite"),
         Binding("n", "comment", "Comment"),
         Binding("g", "group", "Group"),
+        Binding("M", "messages", "WS msgs"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -431,6 +457,16 @@ class FlowsScreen(Screen):
             a = self.app.compare_a
             self.app.compare_a = None
             self.app.push_screen(CompareScreen(a, sel))
+
+    def action_messages(self) -> None:
+        fid = self._focused_flow_id()
+        if fid is None:
+            return
+        f = self.flows.get(fid)
+        if not (f and f.websocket):
+            self.notify("not a WebSocket flow", severity="warning")
+            return
+        self.app.push_screen(WsMessagesScreen(self.session_id, fid))
 
     # --- annotations (plan §12) ----------------------------------------------
 
@@ -597,6 +633,7 @@ class FlowDetailScreen(Screen):
         Binding("s", "save_response", "Save resp body"),
         Binding("x", "export_curl", "Export curl"),
         Binding("w", "export_raw", "Export raw"),
+        Binding("M", "messages", "WS msgs"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -635,6 +672,12 @@ class FlowDetailScreen(Screen):
             return
         self._flow = f
         self.query_one("#body", Static).update(self._format_flow(f))
+
+    def action_messages(self) -> None:
+        if not (self._flow and self._flow.websocket):
+            self.notify("not a WebSocket flow", severity="warning")
+            return
+        self.app.push_screen(WsMessagesScreen(self.session_id, self.flow_id))
 
     async def _full_body(self, response: bool) -> bytes:
         try:
@@ -757,6 +800,108 @@ class FlowDetailScreen(Screen):
         if len(text) > cls._BODY_RENDER_LIMIT:
             text = text[: cls._BODY_RENDER_LIMIT] + f"\n[dim]… ({body.size} bytes total — press {save_key} to save full)[/dim]"
         lines.append(escape(text))
+
+
+class WsMessagesScreen(Screen):
+    """WebSocket message timeline for an Upgrade flow (plan §8.6) — directional
+    frames in time order, distinct from the request/response view."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, session_id: str, flow_id: str) -> None:
+        super().__init__()
+        self.session_id = session_id
+        self.flow_id = flow_id
+        self._msgs: dict[str, object] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        table = DataTable(id="msgs", cursor_type="row", zebra_stripes=True)
+        table.add_columns("Time", "Dir", "Opcode", "Len", "Preview")
+        yield table
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "traffic-viewer"
+        self.sub_title = f"websocket · {self.flow_id[:8]}"
+        self.query_one("#msgs", DataTable).focus()
+        self.load()
+
+    @work(exclusive=True)
+    async def load(self) -> None:
+        table = self.query_one("#msgs", DataTable)
+        try:
+            msgs = await self.app.client.list_messages(self.session_id, self.flow_id)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"list_messages failed: {exc}", severity="error")
+            return
+        for m in msgs:
+            self._msgs[m.id] = m
+            arrow = "[cyan]C→S[/cyan]" if m.from_client else "[magenta]S→C[/magenta]"
+            size = m.payload.size if m.payload else 0
+            inline = m.payload.inline if (m.payload and m.payload.WhichOneof("content") == "inline") else b""
+            preview = _bytes_preview(inline) if inline else (f"[dim]{size} bytes[/dim]" if size else "")
+            table.add_row(_fmt_time(m.ts_unix_micros), arrow, m.opcode, str(size),
+                          Text.from_markup(preview), key=m.id)
+        if not msgs:
+            self.notify("no websocket frames recorded for this flow")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        mid = str(event.row_key.value)
+        self.app.push_screen(WsPayloadScreen(self.session_id, self._msgs[mid]))
+
+
+class WsPayloadScreen(Screen):
+    """Full payload of a single WebSocket frame (UTF-8 text or a hex dump)."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("s", "save", "Save"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, session_id: str, msg) -> None:
+        super().__init__()
+        self.session_id = session_id
+        self.msg = msg
+        self._data = b""
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll(id="payload"):
+            yield Static("loading…", id="pbody")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "traffic-viewer"
+        self.sub_title = f"{self.msg.opcode} · {'C→S' if self.msg.from_client else 'S→C'}"
+        self.load()
+
+    @work(exclusive=True)
+    async def load(self) -> None:
+        try:
+            self._data = await self.app.client.get_message_body(self.session_id, self.msg.id)
+        except Exception:  # noqa: BLE001 (empty payload — e.g. a bare close/ping frame)
+            self._data = self.msg.payload.inline if self.msg.payload else b""
+        self.query_one("#pbody", Static).update(self._render_payload())
+
+    def _render_payload(self) -> str:
+        if not self._data:
+            return "[dim]empty payload[/dim]"
+        try:
+            return escape(self._data.decode("utf-8"))
+        except UnicodeDecodeError:
+            return f"[dim]binary {len(self._data)} bytes — press s to save[/dim]\n\n" + escape(_hexdump(self._data))
+
+    @work(exclusive=True)
+    async def action_save(self) -> None:
+        path = os.path.abspath(f"{self.msg.id[:8]}.ws.bin")
+        with open(path, "wb") as fp:
+            fp.write(self._data)
+        self.notify(f"saved {len(self._data)} bytes → {path}")
 
 
 class CompareScreen(Screen):

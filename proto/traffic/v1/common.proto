@@ -97,6 +97,24 @@ message Flow {
   repeated string tag_ids = 28;
   repeated string group_ids = 29;
   repeated Comment comments = 30;
+
+  // WebSocket (plan §8.6): set when this flow is an HTTP Upgrade that carries
+  // WebSocket frames; the frames are WsMessages fetched via ListMessages.
+  bool websocket = 31;
+  uint32 ws_message_count = 32;
+}
+
+// One decoded WebSocket frame — a message-shaped record (plan §8.6), distinct from
+// the request/response Flow. Belongs to the Upgrade flow (flow_id) on its connection.
+message WsMessage {
+  string id = 1;
+  string session_id = 2;
+  string flow_id = 3;            // parent Upgrade flow
+  uint64 frame_number = 4;
+  int64 ts_unix_micros = 5;
+  bool from_client = 6;          // direction: true = client→server
+  string opcode = 7;             // text|binary|close|ping|pong|continuation
+  Body payload = 8;              // inline (small) or object_ref (large)
 }
 
 // A named, colored label (plan §12). Definitions are global (catalog) and mirrored

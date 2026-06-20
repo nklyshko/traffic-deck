@@ -165,3 +165,43 @@ func TestAnnotations(t *testing.T) {
 		t.Fatalf("delete favorite err = %v, want ErrProtected", err)
 	}
 }
+
+func TestWsMessagesRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sid, ids := seedFlows(t, st, 2)
+	fid := ids[0]
+
+	msgs := []*decode.WsMessage{
+		{ID: uuid.NewString(), FlowID: fid, FrameNumber: 10, TSUnixMicros: 100, FromClient: true, Opcode: "text", Payload: []byte("hello")},
+		{ID: uuid.NewString(), FlowID: fid, FrameNumber: 11, TSUnixMicros: 200, FromClient: false, Opcode: "binary", Payload: []byte("world")},
+	}
+	if n, err := st.InsertWsMessages(ctx, sid, msgs); err != nil || n != 2 {
+		t.Fatalf("insert ws: n=%d err=%v", n, err)
+	}
+
+	got, err := st.ListMessages(ctx, sid, fid)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("list ws: n=%d err=%v", len(got), err)
+	}
+	if got[0].Opcode != "text" || !got[0].FromClient || string(got[0].Payload.GetInline()) != "hello" {
+		t.Fatalf("msg0 = %+v", got[0])
+	}
+	if got[1].Opcode != "binary" || got[1].FromClient {
+		t.Fatalf("msg1 = %+v", got[1])
+	}
+
+	body, err := st.GetWsMessageBody(ctx, sid, msgs[1].ID)
+	if err != nil || string(body) != "world" {
+		t.Fatalf("get ws body = %q err=%v", body, err)
+	}
+
+	// Flow summaries carry the websocket flag + count.
+	f, err := st.GetFlow(ctx, sid, fid)
+	if err != nil {
+		t.Fatalf("get flow: %v", err)
+	}
+	if !f.Websocket || f.WsMessageCount != 2 {
+		t.Fatalf("flow ws=%v count=%d", f.Websocket, f.WsMessageCount)
+	}
+}

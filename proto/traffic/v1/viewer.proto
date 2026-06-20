@@ -10,6 +10,10 @@ service ViewerService {
   rpc StreamFlows(StreamFlowsRequest) returns (stream FlowEvent);
   rpc GetFlow(GetFlowRequest) returns (Flow);
   rpc GetBody(GetBodyRequest) returns (stream BodyChunk);
+
+  // WebSocket message timeline for an Upgrade flow (plan §8.6).
+  rpc ListMessages(ListMessagesRequest) returns (MessageList);
+  rpc GetMessageBody(GetMessageBodyRequest) returns (stream BodyChunk);
 }
 
 message ListSessionsRequest {
@@ -54,4 +58,18 @@ message GetBodyRequest {
 
 message BodyChunk {
   bytes payload = 1;
+}
+
+message ListMessagesRequest {
+  string session_id = 1;
+  string flow_id = 2; // the Upgrade flow whose frames to list
+}
+
+message MessageList {
+  repeated WsMessage messages = 1;
+}
+
+message GetMessageBodyRequest {
+  string session_id = 1;
+  string message_id = 2;
 }

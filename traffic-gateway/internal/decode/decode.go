@@ -49,10 +49,27 @@ type Flow struct {
 	RequestBody  []byte
 	ResponseBody []byte
 
+	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
+	// frames; the frames themselves are WsMessages keyed by this flow's ID (§8.6).
+	Websocket bool
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool
 	respBodyFinal bool
+}
+
+// WsMessage is one decoded WebSocket frame, a message-shaped record distinct from
+// the request/response Flow model (plan §8.6). It belongs to the Upgrade flow on its
+// TCP stream (FlowID).
+type WsMessage struct {
+	ID           string
+	FlowID       string // parent Upgrade flow
+	FrameNumber  uint64
+	TSUnixMicros int64
+	FromClient   bool   // direction: true = client→server
+	Opcode       string // text|binary|close|ping|pong|continuation
+	Payload      []byte
 }
 
 // Dataset is the result of decoding one capture.
@@ -60,21 +77,25 @@ type Dataset struct {
 	Engine        string
 	TLSKeyLogUsed bool
 	Flows         []*Flow
+	Messages      []*WsMessage
 	Warnings      []string
 }
 
 // metaProtos contribute packet-level fields (merged into every PDU of the packet).
 var metaProtos = map[string]bool{"frame": true, "ip": true, "ipv6": true, "tcp": true, "udp": true}
 
-// pduProtos each become one stitcher record: one per HTTP/2 frame, or the HTTP/1.1
-// message. This per-<proto> separation is what fixes HTTP/2 multiplexing (§8.6).
-var pduProtos = map[string]bool{"http2": true, "http": true}
+// pduProtos each become one stitcher record: one per HTTP/2 frame, the HTTP/1.1
+// message, or one WebSocket frame. This per-<proto> separation is what fixes HTTP/2
+// multiplexing (§8.6) and likewise keeps each WebSocket frame distinct.
+var pduProtos = map[string]bool{"http2": true, "http": true, "websocket": true}
 
 // bodyFields are byte fields whose raw hex lives in the `value` attribute (the
-// `show` attribute is truncated for bytes).
+// `show` attribute is truncated for bytes). websocket.payload is the unmasked frame
+// payload.
 var bodyFields = map[string]bool{
 	"http2.data.data": true, "http2.body.reassembled.data": true,
 	"http.file_data": true, "http.body.reassembled.data": true,
+	"websocket.payload": true,
 }
 
 // tsharkArgs builds the common tshark PDML invocation. input selects the source
@@ -93,9 +114,10 @@ func tsharkArgs(input []string, keylogPath string, live bool) []string {
 		args = append(args, "-l") // flush output per packet
 	}
 	// -O bounds PDML detail to the protocols we parse (tls excluded — frame.protocols
-	// still reports it); -Y keeps only HTTP-bearing packets.
-	args = append(args, "-Y", "http or http2", "-T", "pdml",
-		"-O", "frame,ip,ipv6,tcp,udp,http,http2")
+	// still reports it); -Y keeps HTTP-bearing and WebSocket packets (the latter carry
+	// no http layer after the Upgrade).
+	args = append(args, "-Y", "http or http2 or websocket", "-T", "pdml",
+		"-O", "frame,ip,ipv6,tcp,udp,http,http2,websocket")
 	return args
 }
 

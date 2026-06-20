@@ -94,6 +94,30 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 	if err != nil {
 		return status.Errorf(codes.Internal, "get body: %v", err)
 	}
+	return streamBytes(srv, body)
+}
+
+func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRequest) (*trafficv1.MessageList, error) {
+	msgs, err := v.st.ListMessages(ctx, req.GetSessionId(), req.GetFlowId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list messages: %v", err)
+	}
+	return &trafficv1.MessageList{Messages: msgs}, nil
+}
+
+func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
+	body, err := v.st.GetWsMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId())
+	if errors.Is(err, store.ErrNotFound) {
+		return status.Error(codes.NotFound, "message body not found")
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "get message body: %v", err)
+	}
+	return streamBytes(srv, body)
+}
+
+// streamBytes sends a byte slice as BodyChunks over a server stream.
+func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byte) error {
 	const chunk = 64 << 10
 	for off := 0; off < len(body); off += chunk {
 		end := min(off+chunk, len(body))
