@@ -1,6 +1,7 @@
 package decode
 
 import (
+	"encoding/hex"
 	"strconv"
 	"strings"
 )
@@ -34,8 +35,9 @@ func (s *stitcher) add(l layers) {
 	}
 	isReq := method != ""
 	isResp := status != ""
-	if !isReq && !isResp {
-		return // e.g. a DATA-only or continuation frame; nothing to stitch here
+	body, reassembled := bodyBytes(l)
+	if !isReq && !isResp && body == nil {
+		return // a frame with neither headers nor body data; nothing to do
 	}
 
 	if sid != "" {
@@ -52,6 +54,9 @@ func (s *stitcher) add(l layers) {
 		if isResp {
 			s.fillResponse(f, l, status)
 		}
+		if body != nil {
+			attachBody(f, l, isReq, isResp, body, reassembled)
+		}
 		return
 	}
 
@@ -59,18 +64,29 @@ func (s *stitcher) add(l layers) {
 	if isReq {
 		f := s.newFlow(l, tcp, "")
 		s.fillRequest(f, l, method)
+		if body != nil {
+			attachBody(f, l, true, false, body, reassembled)
+		}
 		s.ds.Flows = append(s.ds.Flows, f)
 		s.h1pending[tcp] = append(s.h1pending[tcp], f)
 		return
 	}
+	// response or body-only frame on an HTTP/1.1 connection -> oldest pending req.
+	var f *Flow
 	if q := s.h1pending[tcp]; len(q) > 0 {
-		f := q[0]
-		s.h1pending[tcp] = q[1:]
-		s.fillResponse(f, l, status)
+		f = q[0]
+		if isResp {
+			s.h1pending[tcp] = q[1:]
+		}
 	} else {
-		f := s.newFlow(l, tcp, "")
-		s.fillResponse(f, l, status)
+		f = s.newFlow(l, tcp, "")
 		s.ds.Flows = append(s.ds.Flows, f)
+	}
+	if isResp {
+		s.fillResponse(f, l, status)
+	}
+	if body != nil {
+		attachBody(f, l, isReq, true, body, reassembled)
 	}
 }
 
@@ -212,4 +228,75 @@ func epochToMicros(s string) int64 {
 		return 0
 	}
 	return int64(f * 1e6)
+}
+
+// bodyBytes extracts a frame's body bytes, preferring the reassembled (complete)
+// form over per-frame chunks. Returns (bytes, isReassembled). Full body, no cap —
+// large bodies are spilled to files by the store (plan §6.4).
+func bodyBytes(l layers) ([]byte, bool) {
+	for _, c := range []struct {
+		field string
+		reass bool
+	}{
+		{"http2.body.reassembled.data", true},
+		{"http.body.reassembled.data", true},
+		{"http2.data.data", false},
+		{"http.file_data", false},
+	} {
+		if v := l.first(c.field); v != "" {
+			if b := hexBytes(v); b != nil {
+				return b, c.reass
+			}
+		}
+	}
+	return nil, false
+}
+
+// hexBytes decodes tshark's hex byte field (continuous or colon-separated).
+func hexBytes(s string) []byte {
+	if strings.IndexByte(s, ':') >= 0 {
+		s = strings.ReplaceAll(s, ":", "")
+	}
+	if len(s)%2 == 1 {
+		s = s[:len(s)-1]
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// attachBody attaches body bytes to the request or response side of f. Direction
+// is taken from the frame's role (method/status) or, for body-only HTTP/2 DATA
+// frames, from the source address vs the flow's client. The reassembled form
+// (complete body) wins over accumulated per-frame chunks.
+func attachBody(f *Flow, l layers, isReq, isResp bool, body []byte, reassembled bool) {
+	toRequest := isReq
+	if !isReq && !isResp {
+		src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport"))
+		toRequest = src != "" && src == f.SrcAddr
+	}
+
+	if toRequest {
+		if f.reqBodyFinal {
+			return
+		}
+		if reassembled {
+			f.RequestBody = body
+			f.reqBodyFinal = true
+		} else {
+			f.RequestBody = append(f.RequestBody, body...)
+		}
+		return
+	}
+	if f.respBodyFinal {
+		return
+	}
+	if reassembled {
+		f.ResponseBody = body
+		f.respBodyFinal = true
+	} else {
+		f.ResponseBody = append(f.ResponseBody, body...)
+	}
 }

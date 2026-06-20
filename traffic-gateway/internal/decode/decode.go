@@ -42,6 +42,14 @@ type Flow struct {
 	H2StreamID      string
 	RequestHeaders  []Header
 	ResponseHeaders []Header
+
+	RequestBody  []byte
+	ResponseBody []byte
+
+	// internal: set once a reassembled (complete) body has been captured, so raw
+	// per-frame chunks no longer append.
+	reqBodyFinal  bool
+	respBodyFinal bool
 }
 
 // Dataset is the result of decoding one capture.
@@ -64,6 +72,9 @@ var ekFields = []string{
 	"http.request.method", "http.host", "http.request.uri", "http.response.code",
 	"http.user_agent", "http.content_type",
 	"http.request.line", "http.response.line",
+	// body data (prefer reassembled). Direction is derived from src vs the flow's client.
+	"http.file_data", "http.body.reassembled.data",
+	"http2.data.data", "http2.body.reassembled.data",
 }
 
 // Decode runs tshark over pcapPath (decrypting with keylogPath if non-empty) and
@@ -73,6 +84,8 @@ func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Data
 	if keylogPath != "" {
 		args = append(args, "-o", "tls.keylog_file:"+keylogPath)
 	}
+	// Decompress bodies and tolerate out-of-order TCP for better reassembly.
+	args = append(args, "-o", "http.decompress_body:TRUE", "-o", "tcp.reassemble_out_of_order:TRUE")
 	args = append(args, "-Y", "http or http2", "-T", "ek")
 	for _, f := range ekFields {
 		args = append(args, "-e", f)

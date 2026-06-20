@@ -58,8 +58,22 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	return nil
 }
 
-func (v *Viewer) GetBody(_ *trafficv1.GetBodyRequest, _ grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
-	return status.Error(codes.Unimplemented, "GetBody: body extraction pending")
+func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
+	body, _, err := v.st.GetBodyBytes(srv.Context(), req.GetSessionId(), req.GetFlowId(), req.GetResponse())
+	if errors.Is(err, store.ErrNotFound) {
+		return status.Error(codes.NotFound, "body not found")
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "get body: %v", err)
+	}
+	const chunk = 64 << 10
+	for off := 0; off < len(body); off += chunk {
+		end := min(off+chunk, len(body))
+		if err := srv.Send(&trafficv1.BodyChunk{Payload: body[off:end]}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Register attaches all implemented services to s.

@@ -44,8 +44,10 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 		FrameNumber: 7, TSUnixMicros: 1700000000000000,
 		Method: "GET", Scheme: "https", Authority: "example.com", Path: "/a", Query: "x=1",
 		Protocol: "HTTP/2", Status: 200, TLSDecrypted: true, TCPStream: "3", H2StreamID: "1",
-		RequestHeaders:  []decode.Header{{Name: "user-agent", Value: "probe"}},
+		RequestHeaders:  []decode.Header{{Name: "user-agent", Value: "probe"}, {Name: "content-type", Value: "application/json"}},
 		ResponseHeaders: []decode.Header{{Name: "content-type", Value: "text/html"}},
+		RequestBody:     []byte(`{"q":1}`),
+		ResponseBody:    []byte("<html>hi</html>"),
 	}}
 	n, err := st.InsertFlows(ctx, sid, aid, flows)
 	if err != nil || n != 1 {
@@ -88,7 +90,7 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get flow: %v", err)
 	}
-	if len(full.RequestHeaders) != 1 || full.RequestHeaders[0].Name != "user-agent" {
+	if len(full.RequestHeaders) != 2 || full.RequestHeaders[0].Name != "user-agent" {
 		t.Fatalf("request headers: %+v", full.RequestHeaders)
 	}
 	if len(full.ResponseHeaders) != 1 || full.ResponseHeaders[0].Value != "text/html" {
@@ -97,5 +99,66 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 
 	if _, err := st.GetFlow(ctx, sid, uuid.NewString()); err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+
+	// Bodies: GetFlow inlines them; GetBodyBytes streams the raw content.
+	if full.ResponseBody.GetSize() != 15 || string(full.ResponseBody.GetInline()) != "<html>hi</html>" {
+		t.Fatalf("response body: %+v", full.ResponseBody)
+	}
+	if full.RequestBody.GetContentType() != "application/json" || string(full.RequestBody.GetInline()) != `{"q":1}` {
+		t.Fatalf("request body: %+v", full.RequestBody)
+	}
+	rb, ct, err := st.GetBodyBytes(ctx, sid, listed[0].Id, true)
+	if err != nil || string(rb) != "<html>hi</html>" || ct != "text/html" {
+		t.Fatalf("GetBodyBytes resp: b=%q ct=%q err=%v", rb, ct, err)
+	}
+}
+
+// TestLargeBodySpill covers the >InlineBlobMax path: body stored as a file,
+// GetFlow returns an object_ref (not inline), and GetBody returns the full bytes.
+func TestLargeBodySpill(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
+		t.Fatal(err)
+	}
+	aid := uuid.NewString()
+	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
+		t.Fatal(err)
+	}
+
+	big := make([]byte, InlineBlobMax+1024)
+	for i := range big {
+		big[i] = byte(i)
+	}
+	flows := []*decode.Flow{{Method: "POST", Authority: "x", Path: "/big", Protocol: "HTTP/2",
+		ResponseHeaders: []decode.Header{{Name: "content-type", Value: "application/octet-stream"}},
+		ResponseBody:    big}}
+	if _, err := st.InsertFlows(ctx, sid, aid, flows); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := st.ListFlows(ctx, sid)
+
+	full, err := st.GetFlow(ctx, sid, listed[0].Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.ResponseBody.GetSize() != uint64(len(big)) {
+		t.Fatalf("size = %d", full.ResponseBody.GetSize())
+	}
+	if full.ResponseBody.GetObjectRef() == "" {
+		t.Fatalf("large body should be an object_ref, got %+v", full.ResponseBody)
+	}
+	if len(full.ResponseBody.GetInline()) != 0 {
+		t.Fatal("large body must not be inlined in GetFlow")
+	}
+	got, _, err := st.GetBodyBytes(ctx, sid, listed[0].Id, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(big) || got[1024] != big[1024] {
+		t.Fatalf("GetBodyBytes returned %d bytes", len(got))
 	}
 }

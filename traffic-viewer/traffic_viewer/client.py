@@ -56,3 +56,11 @@ class GatewayClient:
         return await self._ensure().GetFlow(
             viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)
         )
+
+    async def get_body(self, session_id: str, flow_id: str, response: bool) -> bytes:
+        """Fetch a full body (any size) via the streaming GetBody RPC."""
+        call = self._ensure().GetBody(
+            viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=response)
+        )
+        chunks = [c.payload async for c in call]
+        return b"".join(chunks)

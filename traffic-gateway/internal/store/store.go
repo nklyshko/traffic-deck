@@ -7,10 +7,13 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,16 +166,25 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 
 	for _, f := range flows {
 		id := uuid.NewString()
+		reqRef, err := s.storeBlob(ctx, tx, sessionID, f.RequestBody, ctFromHeaders(f.RequestHeaders))
+		if err != nil {
+			return 0, err
+		}
+		respRef, err := s.storeBlob(ctx, tx, sessionID, f.ResponseBody, ctFromHeaders(f.ResponseHeaders))
+		if err != nil {
+			return 0, err
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO flows (id, session_id, analysis_id, frame_number, ts_micros,
 			    method, scheme, authority, path, query, protocol, status,
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
-			    tls_decrypted, tcp_stream, h2_stream_id)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
-			boolToInt(f.TLSDecrypted), f.TCPStream, f.H2StreamID); err != nil {
+			boolToInt(f.TLSDecrypted), f.TCPStream, f.H2StreamID,
+			nullIfEmpty(reqRef), nullIfEmpty(respRef)); err != nil {
 			return 0, err
 		}
 		if err := insertHeaders(ctx, tx, id, 0, f.RequestHeaders); err != nil {
@@ -197,6 +209,56 @@ func insertHeaders(ctx context.Context, tx *sql.Tx, flowID string, dir int, hs [
 		}
 	}
 	return nil
+}
+
+// InlineBlobMax is the size threshold (plan §6.4): bodies at or below it are stored
+// inline in SQLite; larger bodies spill to a file under the session bundle.
+const InlineBlobMax = 1 << 20 // 1 MiB
+
+// storeBlob content-addresses a body and returns its sha256 ("" if empty). Small
+// bodies go inline; large bodies spill to sessions/<id>/blobs/<sha256>.
+func (s *Store) storeBlob(ctx context.Context, tx *sql.Tx, sessionID string, body []byte, contentType string) (string, error) {
+	if len(body) == 0 {
+		return "", nil
+	}
+	sum := sha256.Sum256(body)
+	sha := hex.EncodeToString(sum[:])
+
+	if len(body) <= InlineBlobMax {
+		_, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO blobs (sha256, size, content_type, bytes) VALUES (?,?,?,?)`,
+			sha, len(body), contentType, body)
+		return sha, err
+	}
+
+	rel := filepath.Join("sessions", sessionID, "blobs", sha)
+	abs := filepath.Join(s.dataRoot, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(abs, body, 0o644); err != nil {
+		return "", err
+	}
+	_, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO blobs (sha256, size, content_type, external_path) VALUES (?,?,?,?)`,
+		sha, len(body), contentType, rel)
+	return sha, err
+}
+
+func ctFromHeaders(hs []decode.Header) string {
+	for _, h := range hs {
+		if strings.EqualFold(h.Name, "content-type") {
+			return h.Value
+		}
+	}
+	return ""
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // --- reads ----------------------------------------------------------------
@@ -303,7 +365,80 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 			f.ResponseHeaders = append(f.ResponseHeaders, h)
 		}
 	}
-	return f, hrows.Err()
+	if err := hrows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Attach bodies (inlined; capped at decode.MaxBodyBytes).
+	var reqRef, respRef sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT req_body_ref, resp_body_ref FROM flows WHERE id=?`, flowID).
+		Scan(&reqRef, &respRef); err == nil {
+		f.RequestBody = s.loadBody(ctx, db, reqRef.String)
+		f.ResponseBody = s.loadBody(ctx, db, respRef.String)
+	}
+	return f, nil
+}
+
+// loadBody returns body metadata for GetFlow: small bodies inline, large bodies
+// as an object_ref (sha256) to be fetched in full via GetBody.
+func (s *Store) loadBody(ctx context.Context, db *sql.DB, sha string) *trafficv1.Body {
+	if sha == "" {
+		return nil
+	}
+	var size int64
+	var ct string
+	var b []byte
+	var ext sql.NullString
+	if err := db.QueryRowContext(ctx,
+		`SELECT size, content_type, bytes, external_path FROM blobs WHERE sha256=?`, sha).
+		Scan(&size, &ct, &b, &ext); err != nil {
+		return nil
+	}
+	body := &trafficv1.Body{Size: uint64(size), ContentType: ct}
+	if ext.Valid && ext.String != "" {
+		body.Content = &trafficv1.Body_ObjectRef{ObjectRef: sha}
+	} else {
+		body.Content = &trafficv1.Body_Inline{Inline: b}
+	}
+	return body
+}
+
+// GetBodyBytes returns the raw body bytes + content-type for a flow direction.
+func (s *Store) GetBodyBytes(ctx context.Context, sessionID, flowID string, response bool) ([]byte, string, error) {
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	col := "req_body_ref"
+	if response {
+		col = "resp_body_ref"
+	}
+	var ref sql.NullString
+	switch err := db.QueryRowContext(ctx, `SELECT `+col+` FROM flows WHERE id=?`, flowID).Scan(&ref); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, "", ErrNotFound
+	case err != nil:
+		return nil, "", err
+	}
+	if !ref.Valid || ref.String == "" {
+		return nil, "", ErrNotFound
+	}
+	var b []byte
+	var ct string
+	var ext sql.NullString
+	if err := db.QueryRowContext(ctx,
+		`SELECT bytes, content_type, external_path FROM blobs WHERE sha256=?`, ref.String).
+		Scan(&b, &ct, &ext); err != nil {
+		return nil, "", err
+	}
+	if ext.Valid && ext.String != "" {
+		data, err := os.ReadFile(filepath.Join(s.dataRoot, ext.String))
+		if err != nil {
+			return nil, "", err
+		}
+		return data, ct, nil
+	}
+	return b, ct, nil
 }
 
 type scannable interface {

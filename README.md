@@ -44,9 +44,9 @@ uv run --directory traffic-viewer python -m traffic_viewer.app
 
 ## Status
 
-Phases 0–1 complete: import a pcap + key.log → tshark decode → per-session SQLite →
-gRPC `ViewerService` → Textual TUI (sessions → flows → headers). HTTP/1.1 + HTTP/2,
-headers only (bodies pending). See [`plan/09-roadmap.md`](plan/09-roadmap.md).
+Phase 1 complete: import a pcap + key.log → tshark decode (incl. request/response
+bodies) → per-session SQLite → gRPC `ViewerService` → Textual TUI (sessions → flows →
+headers + bodies). HTTP/1.1 + HTTP/2. See [`plan/09-roadmap.md`](plan/09-roadmap.md).
 
 External dependency: the gateway requires the **`tshark`** binary at runtime for
 decode (not provisioned by mise; install Wireshark CLI tools).

@@ -50,15 +50,15 @@ message Cookie {
   string value = 2;
 }
 
-// A request or response body: inlined when small, otherwise an object-store ref.
+// A request or response body. Small bodies are inlined; large bodies carry only
+// an object_ref (sha256) and are fetched in full via ViewerService.GetBody.
 message Body {
   uint64 size = 1;
   string content_type = 2;
   oneof content {
     bytes inline = 3;
-    string object_ref = 4; // sha256 key in the object store
+    string object_ref = 4; // sha256 key; fetch full bytes via GetBody
   }
-  bool truncated = 5;
 }
 
 // One decoded HTTP exchange (request + optional response).

@@ -86,4 +86,16 @@ func TestDecodeSample(t *testing.T) {
 	if !stitched {
 		t.Error("expected at least one tiktok.com GET stitched with its response")
 	}
+
+	// Bodies: the fixture has decrypted response bodies (e.g. the tiktok HTML).
+	var withRespBody int
+	for _, f := range ds.Flows {
+		if len(f.ResponseBody) > 0 {
+			withRespBody++
+		}
+	}
+	if withRespBody == 0 {
+		t.Error("no response bodies extracted")
+	}
+	t.Logf("flows with response body: %d", withRespBody)
 }

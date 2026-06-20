@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS flow_headers (
     value     TEXT NOT NULL
 );
 
+-- Content-addressed bodies (plan §6.4): small bodies inline (bytes set), large
+-- bodies spilled to sessions/<id>/blobs/<sha256> (external_path set, bytes NULL).
+CREATE TABLE IF NOT EXISTS blobs (
+    sha256        TEXT PRIMARY KEY,
+    size          INTEGER NOT NULL,
+    content_type  TEXT,
+    bytes         BLOB,           -- NULL when spilled to a file
+    external_path TEXT            -- set when spilled; relative to the data root
+);
+
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
 CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
