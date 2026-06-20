@@ -278,30 +278,57 @@ func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]*traffic
 
 	var out []*trafficv1.Session
 	for rows.Next() {
-		var (
-			id, label, srcKind, status string
-			createdAt                  int64
-			closedAt                   sql.NullInt64
-			pcapBytes, keylogBytes     int64
-			flowCount                  int64
-		)
-		if err := rows.Scan(&id, &label, &srcKind, &status, &createdAt, &closedAt,
-			&pcapBytes, &keylogBytes, &flowCount); err != nil {
+		s, err := scanSession(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &trafficv1.Session{
-			Id:              id,
-			Label:           label,
-			SourceKind:      trafficv1.SourceKind(trafficv1.SourceKind_value[srcKind]),
-			Status:          trafficv1.SessionStatus(trafficv1.SessionStatus_value[status]),
-			CreatedAtUnixMs: createdAt,
-			ClosedAtUnixMs:  closedAt.Int64,
-			PcapBytes:       uint64(pcapBytes),
-			KeylogBytes:     uint64(keylogBytes),
-			FlowCount:       uint32(flowCount),
-		})
+		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+const sessionCols = `id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count`
+
+func scanSession(row scannable) (*trafficv1.Session, error) {
+	var (
+		id, label, srcKind, status string
+		createdAt                  int64
+		closedAt                   sql.NullInt64
+		pcapBytes, keylogBytes     int64
+		flowCount                  int64
+	)
+	if err := row.Scan(&id, &label, &srcKind, &status, &createdAt, &closedAt,
+		&pcapBytes, &keylogBytes, &flowCount); err != nil {
+		return nil, err
+	}
+	return &trafficv1.Session{
+		Id:              id,
+		Label:           label,
+		SourceKind:      trafficv1.SourceKind(trafficv1.SourceKind_value[srcKind]),
+		Status:          trafficv1.SessionStatus(trafficv1.SessionStatus_value[status]),
+		CreatedAtUnixMs: createdAt,
+		ClosedAtUnixMs:  closedAt.Int64,
+		PcapBytes:       uint64(pcapBytes),
+		KeylogBytes:     uint64(keylogBytes),
+		FlowCount:       uint32(flowCount),
+	}, nil
+}
+
+// GetSession returns a single session from the catalog.
+func (s *Store) GetSession(ctx context.Context, id string) (*trafficv1.Session, error) {
+	sess, err := scanSession(s.catalog.QueryRowContext(ctx,
+		`SELECT `+sessionCols+` FROM sessions WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return sess, err
+}
+
+// SetSessionBytes records the captured pcap/key.log sizes in the catalog.
+func (s *Store) SetSessionBytes(ctx context.Context, id string, pcapBytes, keylogBytes int64) error {
+	_, err := s.catalog.ExecContext(ctx,
+		`UPDATE sessions SET pcap_bytes=?, keylog_bytes=? WHERE id=?`, pcapBytes, keylogBytes, id)
+	return err
 }
 
 const flowCols = `id, session_id, analysis_id, frame_number, ts_micros, method, scheme,

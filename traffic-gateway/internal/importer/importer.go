@@ -65,8 +65,14 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 	if hasKeylog {
 		keylogLocal = localOr(obj, keylogKey, opts.KeylogPath)
 	}
+	return Finalize(ctx, st, opts.TsharkPath, sessionID, pcapLocal, keylogLocal)
+}
 
-	ds, err := decode.Decode(ctx, opts.TsharkPath, pcapLocal, keylogLocal)
+// Finalize batch-decodes a session's already-stored pcap (+ optional key.log),
+// persists the analysis + flows, and marks the session closed. Shared by the
+// `import` CLI and IngestService.CloseSession.
+func Finalize(ctx context.Context, st *store.Store, tsharkPath, sessionID, pcapPath, keylogPath string) (*Result, error) {
+	ds, err := decode.Decode(ctx, tsharkPath, pcapPath, keylogPath)
 	if err != nil {
 		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
 		return nil, fmt.Errorf("decode: %w", err)

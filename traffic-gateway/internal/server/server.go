@@ -1,7 +1,5 @@
-// Package server wires the gRPC services onto the gateway's dependencies.
-//
-// Phase 1: the read-side ViewerService serves stored sessions and flows
-// (backfill). Live follow, bodies, and the Ingest/Control services come later.
+// Package server wires the gRPC services onto the gateway's dependencies:
+// the read-side ViewerService and the IngestService (capture upload).
 package server
 
 import (
@@ -13,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
+	"github.com/nikitak/parsing/traffic-gateway/internal/objstore"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
 )
 
@@ -77,6 +76,7 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 }
 
 // Register attaches all implemented services to s.
-func Register(s *grpc.Server, st *store.Store) {
+func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string) {
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st))
+	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark))
 }

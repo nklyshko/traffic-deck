@@ -56,7 +56,7 @@ func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.St
 func serve() {
 	ctx := context.Background()
 	cfg := config.Load()
-	_, st := openDeps(ctx, cfg)
+	obj, st := openDeps(ctx, cfg)
 	defer st.Close()
 
 	lis, err := net.Listen("tcp", cfg.GRPCAddr)
@@ -64,7 +64,7 @@ func serve() {
 		log.Fatalf("listen %s: %v", cfg.GRPCAddr, err)
 	}
 	s := grpc.NewServer()
-	server.Register(s, st)
+	server.Register(s, st, obj, cfg.TsharkPath)
 	log.Printf("traffic-gateway listening on %s", cfg.GRPCAddr)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
