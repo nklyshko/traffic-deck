@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // stitcher correlates per-frame EK records into request/response flows.
@@ -11,13 +13,22 @@ type stitcher struct {
 	ds        *Dataset
 	byKey     map[string]*Flow   // HTTP/2: "tcpStream:streamID" -> flow
 	h1pending map[string][]*Flow // HTTP/1.1: tcpStream -> requests awaiting a response (FIFO)
+	// onChange, if set, fires after each flow is created (isNew=true) or updated.
+	onChange func(f *Flow, isNew bool)
 }
 
-func newStitcher(ds *Dataset) *stitcher {
+func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
 	return &stitcher{
 		ds:        ds,
 		byKey:     map[string]*Flow{},
 		h1pending: map[string][]*Flow{},
+		onChange:  onChange,
+	}
+}
+
+func (s *stitcher) emit(f *Flow, isNew bool) {
+	if s.onChange != nil {
+		s.onChange(f, isNew)
 	}
 }
 
@@ -43,7 +54,8 @@ func (s *stitcher) add(l layers) {
 	if sid != "" {
 		key := tcp + ":" + sid
 		f := s.byKey[key]
-		if f == nil {
+		created := f == nil
+		if created {
 			f = s.newFlow(l, tcp, sid)
 			s.byKey[key] = f
 			s.ds.Flows = append(s.ds.Flows, f)
@@ -57,6 +69,7 @@ func (s *stitcher) add(l layers) {
 		if body != nil {
 			attachBody(f, l, isReq, isResp, body, reassembled)
 		}
+		s.emit(f, created)
 		return
 	}
 
@@ -69,10 +82,12 @@ func (s *stitcher) add(l layers) {
 		}
 		s.ds.Flows = append(s.ds.Flows, f)
 		s.h1pending[tcp] = append(s.h1pending[tcp], f)
+		s.emit(f, true)
 		return
 	}
 	// response or body-only frame on an HTTP/1.1 connection -> oldest pending req.
 	var f *Flow
+	created := false
 	if q := s.h1pending[tcp]; len(q) > 0 {
 		f = q[0]
 		if isResp {
@@ -80,6 +95,7 @@ func (s *stitcher) add(l layers) {
 		}
 	} else {
 		f = s.newFlow(l, tcp, "")
+		created = true
 		s.ds.Flows = append(s.ds.Flows, f)
 	}
 	if isResp {
@@ -88,6 +104,7 @@ func (s *stitcher) add(l layers) {
 	if body != nil {
 		attachBody(f, l, isReq, true, body, reassembled)
 	}
+	s.emit(f, created)
 }
 
 func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {
@@ -96,6 +113,7 @@ func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {
 		proto = "HTTP/2"
 	}
 	return &Flow{
+		ID:           uuid.NewString(),
 		FrameNumber:  parseUint(l.first("frame.number")),
 		TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
 		Protocol:     proto,

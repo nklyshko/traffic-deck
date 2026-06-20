@@ -165,7 +165,10 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
 	for _, f := range flows {
-		id := uuid.NewString()
+		id := f.ID
+		if id == "" {
+			id = uuid.NewString()
+		}
 		reqRef, err := s.storeBlob(ctx, tx, sessionID, f.RequestBody, ctFromHeaders(f.RequestHeaders))
 		if err != nil {
 			return 0, err

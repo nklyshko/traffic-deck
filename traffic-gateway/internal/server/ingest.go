@@ -28,10 +28,11 @@ type Ingest struct {
 	st     *store.Store
 	obj    objstore.Store
 	tshark string
+	hub    *liveHub
 }
 
-func NewIngest(st *store.Store, obj objstore.Store, tshark string) *Ingest {
-	return &Ingest{st: st, obj: obj, tshark: tshark}
+func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub) *Ingest {
+	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub}
 }
 
 func pcapKey(sid string) string   { return path.Join("sessions", sid, "capture.pcap") }
@@ -55,6 +56,7 @@ func (i *Ingest) OpenSession(ctx context.Context, req *trafficv1.OpenSessionRequ
 func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.CaptureChunk, trafficv1.UploadAck]) error {
 	var sid, uploadID string
 	var pcapN, keylogN uint64
+	var live bool
 
 	for {
 		msg, err := stream.Recv()
@@ -68,6 +70,13 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 		case *trafficv1.CaptureChunk_Begin:
 			sid = m.Begin.GetSessionId()
 			uploadID = m.Begin.GetUploadId()
+			if m.Begin.GetMode() == trafficv1.CaptureMode_CAPTURE_MODE_STREAMING_LIVE {
+				live = true
+				// Ensure the key.log exists so tshark can watch it, then start live decode.
+				_ = i.obj.WriteAt(keylogKey(sid), nil, 0)
+				keylogLocal, _ := i.obj.LocalPath(keylogKey(sid))
+				i.hub.start(sid, keylogLocal)
+			}
 		case *trafficv1.CaptureChunk_Data:
 			if sid == "" {
 				return status.Error(codes.InvalidArgument, "UploadBegin must precede data chunks")
@@ -84,6 +93,9 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 				keylogN += n
 			} else {
 				pcapN += n
+				if live { // tee the pcap bytes to the live decoder
+					i.hub.write(sid, m.Data.GetPayload())
+				}
 			}
 		case *trafficv1.CaptureChunk_End:
 			// terminal frame; loop will exit on EOF
@@ -98,6 +110,9 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 // return the closed session summary.
 func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRequest) (*trafficv1.SessionSummary, error) {
 	sid := req.GetSessionId()
+
+	// Stop live decode (if any) before the authoritative batch decode.
+	i.hub.stop(sid)
 
 	var pcapBytes, keylogBytes int64
 	if fi, err := i.obj.Stat(pcapKey(sid)); err == nil {

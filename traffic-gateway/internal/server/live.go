@@ -1,0 +1,208 @@
+package server
+
+import (
+	"context"
+	"io"
+	"strings"
+	"sync"
+
+	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
+	"github.com/nikitak/parsing/traffic-gateway/internal/decode"
+	"github.com/nikitak/parsing/traffic-gateway/internal/store"
+)
+
+const liveEventBuffer = 256
+
+// liveHub tracks in-progress streaming sessions and fans decoded flows out to
+// viewer subscribers (plan §8.2). Persistence is authoritative on close (batch
+// decode); the live path is for responsiveness only.
+type liveHub struct {
+	mu       sync.Mutex
+	sessions map[string]*liveSession
+	tshark   string
+}
+
+func newLiveHub(tshark string) *liveHub {
+	return &liveHub{sessions: map[string]*liveSession{}, tshark: tshark}
+}
+
+type liveSession struct {
+	pw   *io.PipeWriter
+	done chan struct{} // closed when the decode goroutine exits
+
+	mu     sync.Mutex
+	flows  map[string]*trafficv1.Flow
+	order  []string
+	subs   map[int]chan *trafficv1.FlowEvent
+	nextID int
+	closed bool
+}
+
+func (h *liveHub) get(sessionID string) *liveSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sessions[sessionID]
+}
+
+// start spins up a persistent tshark for sessionID, fed by the returned pipe via
+// write(). keylogPath must already exist (it may be empty and grow).
+func (h *liveHub) start(sessionID, keylogPath string) {
+	pr, pw := io.Pipe()
+	ls := &liveSession{
+		pw:    pw,
+		done:  make(chan struct{}),
+		flows: map[string]*trafficv1.Flow{},
+		subs:  map[int]chan *trafficv1.FlowEvent{},
+	}
+	h.mu.Lock()
+	h.sessions[sessionID] = ls
+	h.mu.Unlock()
+
+	go func() {
+		defer close(ls.done)
+		// Close the read end when decode exits so writes can't block forever if
+		// tshark dies early (they get ErrClosedPipe instead).
+		defer pr.Close()
+		// Background context: the decode lives until the pipe is closed by stop(),
+		// independent of any single upload stream's lifetime.
+		_ = decode.LiveDecode(context.Background(), h.tshark, keylogPath, pr, ls.onFlow)
+	}()
+}
+
+func (h *liveHub) write(sessionID string, b []byte) {
+	if ls := h.get(sessionID); ls != nil {
+		_, _ = ls.pw.Write(b)
+	}
+}
+
+// stop ends a session's live decode: close the pipe (EOF tshark), wait for all
+// flows to be emitted, publish a closed session_event, and close subscribers.
+func (h *liveHub) stop(sessionID string) {
+	h.mu.Lock()
+	ls := h.sessions[sessionID]
+	delete(h.sessions, sessionID)
+	h.mu.Unlock()
+	if ls == nil {
+		return
+	}
+	_ = ls.pw.Close()
+	<-ls.done
+
+	ls.mu.Lock()
+	closedEv := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
+		SessionEvent: &trafficv1.SessionEvent{SessionId: sessionID, Status: trafficv1.SessionStatus_SESSION_STATUS_CLOSED},
+	}}
+	for _, ch := range ls.subs {
+		select {
+		case ch <- closedEv:
+		default:
+		}
+		close(ch)
+	}
+	ls.closed = true
+	ls.subs = nil
+	ls.mu.Unlock()
+}
+
+func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
+	pf := flowToProto(f)
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if ls.closed {
+		return
+	}
+	ls.flows[f.ID] = pf
+	var ev *trafficv1.FlowEvent
+	if isNew {
+		ls.order = append(ls.order, f.ID)
+		ev = &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: pf}}
+	} else {
+		ev = &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: pf}}
+	}
+	for _, ch := range ls.subs {
+		select {
+		case ch <- ev:
+		default: // slow subscriber: drop (it can re-backfill after close)
+		}
+	}
+}
+
+// subscribe returns a snapshot of current flows (as flow_added events), a channel
+// of subsequent events, and a cancel func. ch is nil if the session already closed.
+func (ls *liveSession) subscribe() (snapshot []*trafficv1.FlowEvent, ch chan *trafficv1.FlowEvent, cancel func()) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if ls.closed {
+		return nil, nil, func() {}
+	}
+	for _, id := range ls.order {
+		snapshot = append(snapshot, &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: ls.flows[id]}})
+	}
+	ch = make(chan *trafficv1.FlowEvent, liveEventBuffer)
+	id := ls.nextID
+	ls.nextID++
+	ls.subs[id] = ch
+	cancel = func() {
+		ls.mu.Lock()
+		defer ls.mu.Unlock()
+		if c, ok := ls.subs[id]; ok {
+			delete(ls.subs, id)
+			close(c)
+		}
+	}
+	return snapshot, ch, cancel
+}
+
+// flowToProto converts a decoded flow to the proto type for live events, inlining
+// small bodies (large bodies are available in full after the session is persisted).
+func flowToProto(f *decode.Flow) *trafficv1.Flow {
+	pf := &trafficv1.Flow{
+		Id:           f.ID,
+		FrameNumber:  f.FrameNumber,
+		TsUnixMicros: f.TSUnixMicros,
+		Method:       f.Method,
+		Scheme:       f.Scheme,
+		Authority:    f.Authority,
+		Path:         f.Path,
+		Query:        f.Query,
+		Protocol:     f.Protocol,
+		Status:       f.Status,
+		SrcAddr:      f.SrcAddr,
+		DstAddr:      f.DstAddr,
+		UserAgent:    f.UserAgent,
+		ContentType:  f.ContentType,
+		RequestBytes: f.RequestBytes,
+		TlsDecrypted: f.TLSDecrypted,
+		TcpStream:    f.TCPStream,
+		H2StreamId:   f.H2StreamID,
+	}
+	for _, h := range f.RequestHeaders {
+		pf.RequestHeaders = append(pf.RequestHeaders, &trafficv1.Header{Name: h.Name, Value: h.Value})
+	}
+	for _, h := range f.ResponseHeaders {
+		pf.ResponseHeaders = append(pf.ResponseHeaders, &trafficv1.Header{Name: h.Name, Value: h.Value})
+	}
+	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders))
+	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders))
+	return pf
+}
+
+func liveBody(b []byte, ct string) *trafficv1.Body {
+	if len(b) == 0 {
+		return nil
+	}
+	body := &trafficv1.Body{Size: uint64(len(b)), ContentType: ct}
+	if len(b) <= store.InlineBlobMax {
+		body.Content = &trafficv1.Body_Inline{Inline: b}
+	}
+	return body
+}
+
+func contentType(hs []decode.Header) string {
+	for _, h := range hs {
+		if strings.EqualFold(h.Name, "content-type") {
+			return h.Value
+		}
+	}
+	return ""
+}

@@ -15,13 +15,14 @@ import (
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
 )
 
-// Viewer implements trafficv1.ViewerServiceServer backed by the store.
+// Viewer implements trafficv1.ViewerServiceServer backed by the store + live hub.
 type Viewer struct {
 	trafficv1.UnimplementedViewerServiceServer
-	st *store.Store
+	st  *store.Store
+	hub *liveHub
 }
 
-func NewViewer(st *store.Store) *Viewer { return &Viewer{st: st} }
+func NewViewer(st *store.Store, hub *liveHub) *Viewer { return &Viewer{st: st, hub: hub} }
 
 func (v *Viewer) ListSessions(ctx context.Context, req *trafficv1.ListSessionsRequest) (*trafficv1.SessionList, error) {
 	sessions, err := v.st.ListSessions(ctx, int(req.GetLimit()), int(req.GetOffset()))
@@ -42,8 +43,9 @@ func (v *Viewer) GetFlow(ctx context.Context, req *trafficv1.GetFlowRequest) (*t
 	return f, nil
 }
 
-// StreamFlows replays stored flows as flow_added events (backfill). Live follow
-// is Phase 2.
+// StreamFlows replays stored flows (backfill), then — if follow is set and the
+// session is live — streams a snapshot + subsequent live flow events until the
+// session closes or the client disconnects (plan §8.2).
 func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerStreamingServer[trafficv1.FlowEvent]) error {
 	flows, err := v.st.ListFlows(srv.Context(), req.GetSessionId())
 	if err != nil {
@@ -54,7 +56,34 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 			return err
 		}
 	}
-	return nil
+
+	if !req.GetFollow() {
+		return nil
+	}
+	ls := v.hub.get(req.GetSessionId())
+	if ls == nil {
+		return nil // not a live session; backfill is all there is
+	}
+	snapshot, ch, cancel := ls.subscribe()
+	defer cancel()
+	for _, ev := range snapshot {
+		if err := srv.Send(ev); err != nil {
+			return err
+		}
+	}
+	for {
+		select {
+		case <-srv.Context().Done():
+			return nil
+		case ev, ok := <-ch:
+			if !ok {
+				return nil // session closed
+			}
+			if err := srv.Send(ev); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
@@ -75,8 +104,10 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 	return nil
 }
 
-// Register attaches all implemented services to s.
+// Register attaches all implemented services to s, sharing one live hub between
+// the ingest (producer) and viewer (subscriber) sides.
 func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string) {
-	trafficv1.RegisterViewerServiceServer(s, NewViewer(st))
-	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark))
+	hub := newLiveHub(tshark)
+	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
+	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub))
 }

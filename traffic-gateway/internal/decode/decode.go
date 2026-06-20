@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -23,6 +24,7 @@ type Header struct {
 
 // Flow is one decoded HTTP exchange (request + optional response).
 type Flow struct {
+	ID              string // stable per-flow id (assigned by the stitcher)
 	FrameNumber     uint64
 	TSUnixMicros    int64
 	Method          string
@@ -77,33 +79,40 @@ var ekFields = []string{
 	"http2.data.data", "http2.body.reassembled.data",
 }
 
-// Decode runs tshark over pcapPath (decrypting with keylogPath if non-empty) and
-// returns the decoded flows in first-seen order.
-func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Dataset, error) {
-	args := []string{"-r", pcapPath}
+// tsharkArgs builds the common tshark EK invocation. input selects the source
+// (["-r", path] for a file, ["-i", "-"] for a live stdin stream).
+func tsharkArgs(input []string, keylogPath string, live bool) []string {
+	args := append([]string{}, input...)
 	if keylogPath != "" {
 		args = append(args, "-o", "tls.keylog_file:"+keylogPath)
 	}
 	// Decompress bodies and tolerate out-of-order TCP for better reassembly.
 	args = append(args, "-o", "http.decompress_body:TRUE", "-o", "tcp.reassemble_out_of_order:TRUE")
+	if live {
+		args = append(args, "-l") // flush output per packet
+	}
 	args = append(args, "-Y", "http or http2", "-T", "ek")
 	for _, f := range ekFields {
 		args = append(args, "-e", f)
 	}
+	return args
+}
 
+// runTshark spawns tshark, feeds each EK record to the stitcher, and waits.
+func runTshark(ctx context.Context, tsharkPath string, args []string, stdin io.Reader, st *stitcher) error {
 	cmd := exec.CommandContext(ctx, tsharkPath, args...)
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start tshark: %w", err)
+		return fmt.Errorf("start tshark: %w", err)
 	}
-
-	ds := &Dataset{Engine: "tshark", TLSKeyLogUsed: keylogPath != ""}
-	st := newStitcher(ds)
 
 	// EK emits two JSON objects per packet (an index line and the source line);
 	// json.Decoder reads the concatenated stream regardless of newlines.
@@ -111,16 +120,25 @@ func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Data
 	for dec.More() {
 		var rec ekRecord
 		if err := dec.Decode(&rec); err != nil {
-			return nil, fmt.Errorf("parse tshark ek: %w", err)
+			return fmt.Errorf("parse tshark ek: %w", err)
 		}
-		if rec.Layers == nil {
-			continue // index action line
+		if rec.Layers != nil {
+			st.add(rec.Layers)
 		}
-		st.add(rec.Layers)
 	}
-
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("tshark: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("tshark: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// Decode runs tshark over pcapPath (decrypting with keylogPath if non-empty) and
+// returns the decoded flows in first-seen order.
+func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Dataset, error) {
+	ds := &Dataset{Engine: "tshark", TLSKeyLogUsed: keylogPath != ""}
+	st := newStitcher(ds, nil)
+	if err := runTshark(ctx, tsharkPath, tsharkArgs([]string{"-r", pcapPath}, keylogPath, false), nil, st); err != nil {
+		return nil, err
 	}
 	return ds, nil
 }
