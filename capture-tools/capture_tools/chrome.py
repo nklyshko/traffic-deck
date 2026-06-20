@@ -99,6 +99,10 @@ def main(argv=None) -> None:
     ap.add_argument("--filter", default="tcp port 80 or tcp port 443",
                     help="dumpcap capture filter (BPF)")
     ap.add_argument("--url", default=None, help="URL to open")
+    ap.add_argument("--profile-dir", default=None,
+                    help="Chrome user-data-dir (default: a fresh temp profile). "
+                         "Quit any running Chrome on this profile first, or the "
+                         "launch attaches to it and no TLS keys are logged.")
     ap.add_argument("--duration", type=float, default=None,
                     help="auto-stop after N seconds (default: run until Chrome is closed)")
     ap.add_argument("chrome_args", nargs=argparse.REMAINDER,
@@ -108,8 +112,10 @@ def main(argv=None) -> None:
     iface = args.iface or platform.default_interface()
     chrome = platform.chrome_binary()
     dumpcap = platform.dumpcap_binary()
-    profile = tempfile.mkdtemp(prefix="chrome-capture-")
-    keylog = os.path.join(profile, "key.log")
+    profile = args.profile_dir or tempfile.mkdtemp(prefix="chrome-capture-")
+    # Keep the keylog out of the profile dir so an existing user profile isn't
+    # polluted (and stays valid even when --profile-dir points at a real one).
+    keylog = os.path.join(tempfile.mkdtemp(prefix="chrome-keylog-"), "key.log")
 
     chan = grpc.insecure_channel(args.gateway)
     ing = ig.IngestServiceStub(chan)
