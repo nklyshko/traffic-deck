@@ -199,9 +199,10 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 > decrypted by the `libssl.so` hook — Chrome has its own `--ssl-key-log-file` for that.
 > The agent hooks the main process **and** matching `<pkg>:child` processes.
 >
-> On retail devices the per-app capture (UID→NFLOG + tcpdump via `su`) works, but
-> Frida key extraction can be blocked by the device's environment (Enforcing SELinux
-> and/or an existing MagiskFrida server) — the emulator path is unaffected.
+> Verified end-to-end on both an emulator and a Magisk-rooted retail device (decrypted
+> HTTPS flows). frida-server is matched to the installed `frida` (pinned to 16.7.x,
+> which still supports older Android — frida 17 fails to spawn on e.g. Android 10) and
+> started as a root daemon in its own session.
 
 ## Configuration (gateway)
 
