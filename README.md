@@ -258,6 +258,9 @@ on `ru.oneme`.
 - **Phase 8** — **custom protocol decoders**: compiled-in Go modules
   (`traffic-gateway/decoders/`) decode non-HTTP raw-TCP protocols from the TLS-decrypted
   stream + `gateway redecode`. First decoder: **MAX** (`ru.oneme`), verified on-device.
+- **Phase 9** — **HTTP/3 + QUIC**: `quic`/`http3` frames decode into the `Flow` model
+  (req/resp per stream, like HTTP/2), keyed by QUIC connection + stream id; one
+  `SSLKEYLOGFILE` covers TLS *and* QUIC. The Chrome capture filter includes `udp port
+  443`. Verified against a decryptable QUIC sample.
 
-Next: HTTP/3 + QUIC. See
-[`plan/09-roadmap.md`](plan/09-roadmap.md).
+See [`plan/09-roadmap.md`](plan/09-roadmap.md) for what's next (hardening / polish).

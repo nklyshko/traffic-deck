@@ -86,22 +86,22 @@ type Dataset struct {
 // hand to custom raw-TCP decoders (plan §8).
 var metaProtos = map[string]bool{
 	"frame": true, "ip": true, "ipv6": true, "tcp": true, "udp": true,
-	"tls": true,
+	"tls": true, "quic": true,
 }
 
 // pduProtos each become one stitcher record: one per HTTP/2 frame, the HTTP/1.1
-// message, or one WebSocket frame. This per-<proto> separation is what fixes HTTP/2
-// multiplexing (§8.6) and likewise keeps each WebSocket frame distinct.
-var pduProtos = map[string]bool{"http2": true, "http": true, "websocket": true}
+// message, one WebSocket frame, or one HTTP/3 frame. This per-<proto> separation is
+// what fixes HTTP/2 multiplexing (§8.6) and likewise keeps each HTTP/3/WebSocket frame
+// distinct (HTTP/3 frames nest under one `quic` proto per UDP packet).
+var pduProtos = map[string]bool{"http2": true, "http": true, "websocket": true, "http3": true}
 
 // bodyFields are byte fields whose raw hex lives in the `value` attribute (the
 // `show` attribute is truncated for bytes). websocket.payload is the unmasked frame
-// payload; data.data is the decrypted payload of a TLS stream tshark didn't dissect
-// (the raw-TCP custom-decoder input, plan §8).
+// payload; http3.data is the HTTP/3 DATA-frame body.
 var bodyFields = map[string]bool{
 	"http2.data.data": true, "http2.body.reassembled.data": true,
 	"http.file_data": true, "http.body.reassembled.data": true,
-	"websocket.payload": true,
+	"websocket.payload": true, "http3.data": true,
 }
 
 // tsharkArgs builds the common tshark PDML invocation. input selects the source
@@ -119,13 +119,13 @@ func tsharkArgs(input []string, keylogPath string, live bool) []string {
 	if live {
 		args = append(args, "-l") // flush output per packet
 	}
-	// -O bounds PDML detail to the protocols we parse; -Y keeps HTTP/WebSocket packets
-	// plus all TLS packets. With the keylog, tshark decrypts TLS and emits the decrypted
-	// bytes of any protocol it doesn't dissect (e.g. MAX) as `data.data` — the input for
-	// custom raw-TCP decoders (plan §8). HTTP/WS streams are consumed by their dissectors,
-	// so `data.data` appears only on undissected streams.
-	args = append(args, "-Y", "http or http2 or websocket or tls", "-T", "pdml",
-		"-O", "frame,ip,ipv6,tcp,udp,tls,http,http2,websocket")
+	// -O bounds PDML detail to the protocols we parse; -Y keeps HTTP/HTTP3/WebSocket
+	// packets plus all TLS/QUIC packets. TLS packets carry the per-stream ClientHello
+	// SNI + tls.stream index used to pick streams for custom raw-TCP decoders, which run
+	// in a separate `-z follow,tls,raw` pass (tshark only exposes decrypted undissected
+	// bytes through follow, not as a PDML field; plan §8).
+	args = append(args, "-Y", "http or http2 or websocket or tls or http3", "-T", "pdml",
+		"-O", "frame,ip,ipv6,tcp,udp,tls,quic,http,http2,websocket,http3")
 	return args
 }
 

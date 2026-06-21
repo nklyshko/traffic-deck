@@ -86,6 +86,13 @@ func (s *stitcher) add(l layers) {
 		return
 	}
 
+	// HTTP/3 frames carry a quic.connection.number (merged from the quic layer) and a
+	// per-frame http3.frame_streamid; key by (connection, stream) like HTTP/2.
+	if conn := l.first("quic.connection.number"); conn != "" && l.first("http3.frame_streamid") != "" {
+		s.addHTTP3(l, conn)
+		return
+	}
+
 	sid := l.first("http2.streamid")
 
 	method := l.first("http2.headers.method")
@@ -195,6 +202,80 @@ func wsPayload(l layers) []byte {
 		return []byte(txt)
 	}
 	return hexBytes(l.first("websocket.payload"))
+}
+
+// addHTTP3 correlates HTTP/3 frames into flows, keyed by QUIC connection + stream id.
+// A HEADERS frame sets request (method) or response (status); a DATA frame's http3.data
+// appends to the matching side. Mirrors the HTTP/2 path but over QUIC/UDP (§8.6).
+func (s *stitcher) addHTTP3(l layers, conn string) {
+	sid := l.first("http3.frame_streamid")
+	if sid == "" {
+		return
+	}
+	method := l.first("http3.headers.method")
+	status := l.first("http3.headers.status")
+	body := hexBytes(l.first("http3.data"))
+	if method == "" && status == "" && len(body) == 0 {
+		return // control/QPACK frame — nothing to record
+	}
+
+	key := "quic:" + conn + ":" + sid
+	f := s.byKey[key]
+	created := f == nil
+	if created {
+		f = &Flow{
+			ID:           uuid.NewString(),
+			FrameNumber:  parseUint(l.first("frame.number")),
+			TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
+			Protocol:     "HTTP/3",
+			TCPStream:    "quic:" + conn, // reuse the column for the QUIC connection id
+			H2StreamID:   sid,
+			SrcAddr:      addr(l.first("ip.src"), l.first("ipv6.src"), l.first("udp.srcport")),
+			DstAddr:      addr(l.first("ip.dst"), l.first("ipv6.dst"), l.first("udp.dstport")),
+			TLSDecrypted: true, // decoded h3 means QUIC/TLS was decrypted
+		}
+		s.byKey[key] = f
+		s.ds.Flows = append(s.ds.Flows, f)
+	}
+
+	if method != "" {
+		f.FrameNumber = parseUint(l.first("frame.number"))
+		f.TSUnixMicros = epochToMicros(l.first("frame.time_epoch"))
+		f.Method = method
+		f.Scheme = l.first("http3.headers.scheme")
+		f.Authority = l.first("http3.headers.authority")
+		path := l.first("http3.headers.path")
+		if i := strings.IndexByte(path, '?'); i >= 0 {
+			f.Query = path[i+1:]
+			path = path[:i]
+		}
+		f.Path = path
+		f.RequestHeaders = zipHeaders(l.all("http3.header.header.name"), l.all("http3.headers.header.value"))
+		f.UserAgent = pickHeader("", f.RequestHeaders, "user-agent")
+		if f.ContentType == "" {
+			f.ContentType = pickHeader("", f.RequestHeaders, "content-type")
+		}
+	}
+	if status != "" {
+		f.Status = uint32(parseUint(status))
+		f.ResponseHeaders = zipHeaders(l.all("http3.header.header.name"), l.all("http3.headers.header.value"))
+		if ct := pickHeader("", f.ResponseHeaders, "content-type"); ct != "" {
+			f.ContentType = ct
+		}
+	}
+	if len(body) > 0 {
+		toRequest := method != ""
+		if method == "" && status == "" { // DATA-only frame: direction by source
+			src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("udp.srcport"))
+			toRequest = src != "" && src == f.SrcAddr
+		}
+		if toRequest {
+			f.RequestBody = append(f.RequestBody, body...)
+		} else {
+			f.ResponseBody = append(f.ResponseBody, body...)
+		}
+	}
+	s.emit(f, created)
 }
 
 // wsOpcodeName maps a WebSocket opcode number (tshark `websocket.opcode` show value)

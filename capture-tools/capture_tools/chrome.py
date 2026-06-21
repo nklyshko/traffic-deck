@@ -96,8 +96,8 @@ def main(argv=None) -> None:
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
     ap.add_argument("--label", default="chrome")
     ap.add_argument("--iface", default=None, help="capture interface (default: auto)")
-    ap.add_argument("--filter", default="tcp port 80 or tcp port 443",
-                    help="dumpcap capture filter (BPF)")
+    ap.add_argument("--filter", default="tcp port 80 or tcp port 443 or udp port 443",
+                    help="dumpcap capture filter (BPF; udp port 443 captures HTTP/3 + QUIC)")
     ap.add_argument("--url", default=None, help="URL to open")
     ap.add_argument("--profile-dir", default=None,
                     help="Chrome user-data-dir (default: a fresh temp profile). "
