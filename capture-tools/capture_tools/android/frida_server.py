@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import lzma
 import os
-import subprocess
 import time
 import urllib.request
 from pathlib import Path
@@ -19,7 +18,9 @@ from capture_tools.android.adb import AdbClient, frida_arch
 
 REMOTE = "/data/local/tmp/frida-server"
 _CACHE = Path(os.path.expanduser("~/.cache/traffic-android"))
-_servers: list[subprocess.Popen] = []  # keep started frida-servers alive (avoid GC)
+# Hold started frida-servers' adb clients alive for the process lifetime: a server
+# whose `su` session exits is orphaned and Frida treats it as "jailed".
+_servers: list = []
 
 
 def frida_device(serial: str | None = None, timeout: int = 5):
@@ -50,26 +51,32 @@ def fetch_frida_server(version: str, arch: str, log: Callable[[str], None] = pri
     return local
 
 
+def _device_server_running(adb: AdbClient) -> bool:
+    return bool(adb.sh_root("pgrep -x frida-server", check=False).strip())
+
+
 def ensure_frida_server(adb: AdbClient, abi: str, log: Callable[[str], None] = print) -> None:
-    """Make frida-server reachable on the device (fetch+push+start if needed)."""
-    if server_reachable(adb.serial):
-        return
-    # A stale/mismatched frida-server (e.g. a v16 from another setup) would hold the
-    # port and fail our client's version check, so clear any existing one first.
-    adb.sh_root("pkill -f frida-server", check=False)
-    time.sleep(0.5)
+    """Ensure frida-server is running on the device (fetch+push+start if needed).
+
+    IMPORTANT: this uses only device-side checks (adb/su), never a Frida connection.
+    Connecting Frida to a not-yet-ready server latches frida-python into "jailed" mode
+    for the whole process, so the *first* Frida op must be the real spawn (in capture).
+    """
+    if _device_server_running(adb):
+        return  # reuse a server that's already up (assume usable)
     local = fetch_frida_server(frida.__version__, frida_arch(abi), log)
     adb.push(str(local), REMOTE)
     adb.shell("chmod", "755", REMOTE)
-    # Start it as root, detached: keep the Popen alive so the adb session (and thus
-    # the foreground frida-server) persists for the life of the agent.
-    _servers.append(subprocess.Popen(
-        adb.root_persistent_argv(REMOTE), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+    # Start as root and KEEP the adb client alive (see start_root_held): setsid + a
+    # live su session are both needed or Frida reports "jailed".
+    _servers.append(adb.start_root_held(REMOTE))
     for _ in range(20):
-        if server_reachable(adb.serial, timeout=1):
-            return
-        time.sleep(0.5)
-    raise RuntimeError("frida-server did not become reachable")
+        if _device_server_running(adb):
+            break
+        time.sleep(0.3)
+    else:
+        raise RuntimeError("frida-server did not start")
+    time.sleep(3.0)  # let it finish initializing as root before the first Frida op
 
 
 def ensure_target_ready(adb: AdbClient, log: Callable[[str], None] = print) -> str:

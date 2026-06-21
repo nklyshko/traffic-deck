@@ -8,7 +8,10 @@ dependencies = [
     "grpcio-tools>=1.76",
     "protobuf>=5.29",
     "mitmproxy>=11",
-    "frida>=16",
+    # frida 17 dropped support for older Android (e.g. Android 10 → "unable to pick a
+    # payload base" on spawn); 16.7.x covers Android 10–15. Client+server versions must
+    # match, and the agent fetches the matching frida-server.
+    "frida>=16.7,<17",
 ]
 
 [tool.uv]

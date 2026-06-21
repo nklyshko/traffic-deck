@@ -168,6 +168,8 @@ def run_capture(
             time.sleep(0.3)
     except KeyboardInterrupt:
         pass
+    except Exception as exc:  # noqa: BLE001 — surface (don't swallow) e.g. a Frida spawn failure
+        log(f"capture error: {type(exc).__name__}: {exc}")
     finally:
         if pid is not None:
             try:
@@ -196,4 +198,5 @@ def run_capture(
             log(f"uploaded pcap={a.pcap_received}B keylog={a.keylog_received}B ({keys['n']} secrets)")
         summary = ing.CloseSession(ip.CloseSessionRequest(session_id=sid))
         log(f"closed session {sid}: {summary.session.flow_count} flows")
-        return CaptureResult(sid, summary.session.flow_count, keys["n"], pcap_bytes)
+        result = CaptureResult(sid, summary.session.flow_count, keys["n"], pcap_bytes)
+    return result

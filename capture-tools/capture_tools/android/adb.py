@@ -131,9 +131,18 @@ class AdbClient:
         """argv to stream a root shell script's raw stdout (binary) via exec-out."""
         return self._base() + ["exec-out", self._root_wrap(script)]
 
-    def root_persistent_argv(self, script: str) -> list[str]:
-        """argv to start a long-running root process (hold the Popen to keep it alive)."""
-        return self._base() + ["shell", self._root_wrap(script)]
+    def start_root_held(self, cmd: str) -> subprocess.Popen:
+        """Start a long-running root process; the CALLER MUST KEEP the returned Popen
+        alive for as long as the process is needed.
+
+        Two things are required for Frida not to treat frida-server as "jailed":
+          * `setsid` — run it in a new session, and
+          * keep the `su` session alive — i.e. hold this foreground adb client open
+            (backgrounding it on-device with `&`, or letting the Popen be GC'd, makes
+            su exit and the orphaned server loses its root capability → "jailed").
+        """
+        argv = self._base() + ["shell", self._root_wrap(f"setsid {cmd} </dev/null >/dev/null 2>&1")]
+        return subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def abi(self) -> str:
         return self.shell("getprop", "ro.product.cpu.abi").strip()
