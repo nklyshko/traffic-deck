@@ -133,10 +133,24 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 		TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
 		FromClient:   src != "" && src == f.SrcAddr,
 		Opcode:       wsOpcodeName(opcode),
-		Payload:      hexBytes(l.first("websocket.payload")),
+		Payload:      wsPayload(l),
 	}
 	s.ds.Messages = append(s.ds.Messages, msg)
 	s.emit(f, false) // surface the ws flag/count change on the parent flow
+}
+
+// wsPayload returns a frame's application payload. With permessage-deflate
+// (websocket.pmc=True) websocket.payload holds the still-compressed bytes, which
+// render as undecodable binary; tshark inflates text frames into
+// websocket.payload.text, so prefer that — making compressed text decode the way
+// mitmproxy shows it. Uncompressed frames have no .text and fall back to the raw
+// payload. (Compressed *binary* frames aren't inflated here — tshark exposes no
+// text for them; that needs Go-side inflate with per-stream context-takeover.)
+func wsPayload(l layers) []byte {
+	if txt := l.first("websocket.payload.text"); txt != "" {
+		return []byte(txt)
+	}
+	return hexBytes(l.first("websocket.payload"))
 }
 
 // wsOpcodeName maps a WebSocket opcode number (tshark `websocket.opcode` show value)
