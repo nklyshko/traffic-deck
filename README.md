@@ -255,9 +255,9 @@ on `ru.oneme`.
   (any device, incl. WireGuard mode); live-followed and persisted with no pcap.
 - **Phase 7** — **Android**: per-app capture from a rooted emulator/device — Frida
   `libssl.so` keylog + UID→NFLOG `tcpdump`, streamed and decoded to HTTPS flows.
-- **Phase 8** (first slice) — **custom protocol decoders**: compiled-in Go modules
+- **Phase 8** — **custom protocol decoders**: compiled-in Go modules
   (`traffic-gateway/decoders/`) decode non-HTTP raw-TCP protocols from the TLS-decrypted
   stream + `gateway redecode`. First decoder: **MAX** (`ru.oneme`), verified on-device.
 
-Next: HTTP/3 + QUIC; the generic records/decode_runs model. See
+Next: HTTP/3 + QUIC. See
 [`plan/09-roadmap.md`](plan/09-roadmap.md).
