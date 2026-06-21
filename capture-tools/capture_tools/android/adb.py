@@ -111,5 +111,12 @@ class AdbClient:
     def app_uid(self, package: str) -> int:
         return parse_app_uid(self.shell("pm", "list", "packages", "-U"), package)
 
+    def list_packages(self, third_party: bool = True) -> list[str]:
+        """Installed package names (third-party only by default), sorted."""
+        args = ["pm", "list", "packages"] + (["-3"] if third_party else [])
+        pkgs = [l.strip()[8:] for l in self.shell(*args).splitlines()
+                if l.strip().startswith("package:")]
+        return sorted(pkgs)
+
     def push(self, local: str, remote: str) -> None:
         self.run("push", local, remote, capture=False)

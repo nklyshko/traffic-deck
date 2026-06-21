@@ -31,3 +31,15 @@ def test_nflog_rules():
     # both directions NFLOG'd by connmark
     assert any("INPUT" in r and "NFLOG" in r for r in add)
     assert any("OUTPUT" in r and "NFLOG" in r for r in add)
+
+
+def test_parse_devices():
+    from capture_tools.android.emulator import parse_devices
+    out = ("List of devices attached\n"
+           "emulator-5554          device product:sdk_gphone64_x86_64\n"
+           "2ccc4268251d7ece       unauthorized usb:1-7 transport_id:1\n")
+    ds = parse_devices(out)
+    assert [(d.serial, d.state, d.emulator) for d in ds] == [
+        ("emulator-5554", "device", True),
+        ("2ccc4268251d7ece", "unauthorized", False),
+    ]

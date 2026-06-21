@@ -165,18 +165,32 @@ are isolated by UID via `iptables … NFLOG` + on-device `tcpdump -i nflog:<grou
 Both stream to the gateway over the same pipeline as Chrome and decode to decrypted
 flows.
 
-Prereqs: a rooted target (`adb root` works — e.g. a `google_apis` AVD), `adb` on
-PATH. The agent auto-fetches a matching `frida-server` (GitHub) and pushes it; the
-emulator already ships `tcpdump` + `iptables`.
+Prereqs: the Android SDK (so `adb`/`emulator` are available), and for a real device a
+rooted one (`adb root`). The agent auto-fetches a matching `frida-server` (GitHub) and
+pushes it; the emulator already ships `tcpdump` + `iptables`.
+
+**Interactive (recommended)** — guided flow: pick target (emulator/device), set up or
+boot an emulator if needed, ensure root + frida-server, pick the app, optionally add
+Frida scripts (SSL-unpinning/bypass):
+
+```sh
+uv run --project capture-tools python -m capture_tools.android.cli
+```
+
+It can create + boot a rootable `google_apis` AVD (installing the system image on
+first use) and drop extra Frida scripts from `~/.config/traffic/frida-scripts` (or a
+path you enter). The CLI is a thin front-end over the capture library.
+
+**Non-interactive** — for scripting/known targets:
 
 ```sh
 uv run --project capture-tools python -m capture_tools.android \
-    --package com.example.app --url https://example.com --duration 30
+    --package com.example.app --url https://example.com --duration 30 --script unpin.js
 ```
 
-Flags: `--package` (target, required), `--url` (open after launch), `--duration`,
-`--attach` (hook the already-running app instead of spawning), `--serial`,
-`--nflog-group`, `--gateway`.
+Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatable),
+`--attach` (hook the running app instead of spawning), `--serial`, `--nflog-group`,
+`--gateway`.
 
 > Works for apps using the **system** TLS stack (OkHttp/`HttpURLConnection`→Conscrypt).
 > Apps that **bundle their own BoringSSL** (Chrome, most Flutter apps) won't be
