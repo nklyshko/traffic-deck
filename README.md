@@ -51,13 +51,15 @@ uv run --directory traffic-viewer python -m traffic_viewer.app
 ```
 
 TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
-refresh sessions. In a flow list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`,
-plus annotations `~fav ~mark ~tag ~group ~comment`, naked = URL, `!` negate), `c`
-mark/compare two requests across sessions. Annotate (plan §12): `space` toggle
-select (for bulk), `t` tag, `F` favorite, `m` color-mark, `n` comment, `g` group —
-each acts on the selection if any, else the focused row. `M` opens the WebSocket
-message timeline for a `⇅` flow. In a flow detail: `s`/`r` save response/request
-body, `x` export curl, `w` export raw request+response, `M` ws messages. `q` quit.
+refresh sessions, `e` export the focused session as a `.tar.gz` bundle. In a flow
+list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`, plus annotations `~fav ~mark
+~tag ~group ~comment`, naked = URL, `!` negate), `c` mark/compare two requests across
+sessions. Annotate (plan §12): `space` toggle select (for bulk), `t` tag, `F`
+favorite, `m` color-mark, `n` comment, `g` group — each acts on the selection if any,
+else the focused row. `M` opens the WebSocket message timeline for a `⇅` flow. In a
+flow detail: bodies are pretty-printed (JSON reindented + syntax-colored, form fields
+as key/value); `s`/`r` save response/request body, `x` export curl, `w` export raw
+request+response, `M` ws messages. `q` quit.
 
 ### MCP server (for LLM/agent clients)
 
@@ -230,6 +232,21 @@ Decoding needs the connection's TLS to be decryptable from the capture's `key.lo
 (i.e. the app uses the system `libssl` the Android Frida hook logs) — verified working
 on `ru.oneme`.
 
+## Sharing sessions (export / import)
+
+A session is self-contained — its bundle holds the flows DB, the capture, the key.log,
+spilled bodies, and the tags/groups it uses — so it can be exported as a single
+`.tar.gz` and imported into another gateway (plan §10).
+
+```sh
+# export (CLI). In the TUI, press `e` on the sessions list to export the focused one.
+mise exec -- go -C traffic-gateway run ./cmd/gateway export <session-id> -o session.tar.gz
+
+# import into this gateway's data root + catalog. --new-id imports a copy when the
+# original id already exists; --label overrides the session label.
+mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.gz [--new-id] [--label name]
+```
+
 ## Configuration (gateway)
 
 | Env | Default | Meaning |
@@ -262,5 +279,8 @@ on `ru.oneme`.
   (req/resp per stream, like HTTP/2), keyed by QUIC connection + stream id; one
   `SSLKEYLOGFILE` covers TLS *and* QUIC. The Chrome capture filter includes `udp port
   443`. Verified against a decryptable QUIC sample.
+- **Phase 10** (in progress) — **hardening / polish**: pretty-printed request/response
+  bodies in the TUI (JSON, form-urlencoded), and session **export/import** as portable
+  `.tar.gz` bundles (`gateway export` / `import-session`, TUI `e`).
 
 See [`plan/09-roadmap.md`](plan/09-roadmap.md) for what's next (hardening / polish).

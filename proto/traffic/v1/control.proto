@@ -10,6 +10,10 @@ service ControlService {
   rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
   rpc ReDecode(ReDecodeRequest) returns (stream DecodeProgress);
 
+  // Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
+  // spilled blobs) as a self-contained .tar.gz, streamed in chunks (plan §10).
+  rpc ExportSession(ExportSessionRequest) returns (stream ExportChunk);
+
   // --- Annotations (plan §12). Bulk ops take repeated record_ids. ---
 
   // Tags (defs are global; assignments per-session).
@@ -54,6 +58,15 @@ message StopCaptureRequest {
 
 message StopCaptureResponse {
   Session session = 1;
+}
+
+message ExportSessionRequest {
+  string session_id = 1;
+}
+
+// One chunk of the streamed .tar.gz session bundle.
+message ExportChunk {
+  bytes data = 1;
 }
 
 message ReDecodeRequest {

@@ -132,7 +132,8 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 // the ingest (producer) and viewer (subscriber) sides.
 func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string) {
 	hub := newLiveHub(tshark)
+	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub))
-	trafficv1.RegisterControlServiceServer(s, NewControl(st))
+	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot))
 }

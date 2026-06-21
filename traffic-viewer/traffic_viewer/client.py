@@ -94,6 +94,19 @@ class GatewayClient:
         chunks = [c.payload async for c in call]
         return b"".join(chunks)
 
+    async def export_session(self, session_id: str, dest_path: str) -> int:
+        """Stream a session bundle (.tar.gz) from the gateway to dest_path.
+        Returns the number of bytes written."""
+        call = self._ctrl().ExportSession(
+            control_pb2.ExportSessionRequest(session_id=session_id)
+        )
+        total = 0
+        with open(dest_path, "wb") as fp:
+            async for chunk in call:
+                fp.write(chunk.data)
+                total += len(chunk.data)
+        return total
+
     # --- annotations (ControlService, plan §12) ---------------------------
 
     async def list_tags(self):

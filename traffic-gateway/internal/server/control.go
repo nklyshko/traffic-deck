@@ -4,22 +4,58 @@ import (
 	"context"
 	"errors"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
+	"github.com/nikitak/parsing/traffic-gateway/internal/bundle"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
 )
 
-// Control implements trafficv1.ControlServiceServer — annotations (plan §12).
-// Capture control / re-decode (StartCapture/StopCapture/ReDecode) are not wired yet
-// and fall through to the Unimplemented base.
+// Control implements trafficv1.ControlServiceServer — annotations (plan §12) and
+// session export (plan §10). Capture control / re-decode (StartCapture/StopCapture/
+// ReDecode) are not wired yet and fall through to the Unimplemented base.
 type Control struct {
 	trafficv1.UnimplementedControlServiceServer
-	st *store.Store
+	st       *store.Store
+	dataRoot string
 }
 
-func NewControl(st *store.Store) *Control { return &Control{st: st} }
+func NewControl(st *store.Store, dataRoot string) *Control {
+	return &Control{st: st, dataRoot: dataRoot}
+}
+
+// ExportSession streams a session's bundle as a .tar.gz (plan §10). The archive is
+// produced on the fly and chunked over the stream.
+func (c *Control) ExportSession(req *trafficv1.ExportSessionRequest, srv grpc.ServerStreamingServer[trafficv1.ExportChunk]) error {
+	w := &exportChunkWriter{srv: srv}
+	err := bundle.Export(srv.Context(), c.st, c.dataRoot, req.GetSessionId(), w)
+	if errors.Is(err, store.ErrNotFound) {
+		return status.Errorf(codes.NotFound, "export session: session %s not found", req.GetSessionId())
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "export session: %v", err)
+	}
+	return nil
+}
+
+// exportChunkWriter adapts the export stream to io.Writer, splitting writes into
+// bounded gRPC messages.
+type exportChunkWriter struct {
+	srv grpc.ServerStreamingServer[trafficv1.ExportChunk]
+}
+
+func (w *exportChunkWriter) Write(p []byte) (int, error) {
+	const max = 64 << 10
+	for off := 0; off < len(p); off += max {
+		end := min(off+max, len(p))
+		if err := w.srv.Send(&trafficv1.ExportChunk{Data: p[off:end]}); err != nil {
+			return off, err
+		}
+	}
+	return len(p), nil
+}
 
 func ctrlErr(what string, err error) error {
 	switch {

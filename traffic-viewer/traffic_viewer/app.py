@@ -6,9 +6,11 @@ ViewerService. HTTP/1.1 + HTTP/2.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
+import urllib.parse
 from datetime import datetime, timezone
 
 from textual import work
@@ -19,6 +21,8 @@ from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
+from rich.console import Console
+from rich.json import JSON
 from rich.text import Text
 
 from traffic_viewer.client import GatewayClient
@@ -79,6 +83,57 @@ def _hexdump(data: bytes, width: int = 16) -> str:
         asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
         lines.append(f"{off:08x}  {hexpart}  {asc}")
     return "\n".join(lines)
+
+
+_UNSET = object()
+
+# A plain Rich console resolves the JSON highlighter's named theme styles
+# (json.brace, json.str, …) to concrete styles so the result can be wrapped as
+# Textual Content without an active app/theme.
+_RICH_CONSOLE = Console()
+
+
+def _plain_truncated(text: str, limit: int, nbytes: int) -> Content:
+    """Plain text body, truncated to `limit` chars with a size note (literal text)."""
+    if len(text) <= limit:
+        return Content(text)
+    return Content(text[:limit]).append(
+        Content.from_markup("\n[dim]… ($n bytes total — save to see all)[/dim]", n=str(nbytes)))
+
+
+def _format_body(content_type: str, data: bytes, limit: int) -> Content:
+    """Pretty-print a decoded body for the detail view: JSON is reindented with
+    light syntax color, form-urlencoded becomes key/value lines, everything else is
+    shown as-is. Truncated to `limit` chars. All values are inserted literally and
+    never reparsed as Textual markup (a stray '[' must not raise MarkupError)."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return Content(_hexdump(data[:limit]))
+    ct = (content_type or "").lower()
+    stripped = text.lstrip()
+
+    if "json" in ct or stripped[:1] in "{[":
+        obj = _UNSET
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            pass
+        if obj is not _UNSET:
+            pretty = json.dumps(obj, indent=2, ensure_ascii=False)
+            if len(pretty) <= limit:
+                # JSON.from_data returns a syntax-highlighted rich Text (styled
+                # spans, not markup) — safe to wrap as Content.
+                return Content.from_rich_text(JSON.from_data(obj, indent=2).text, _RICH_CONSOLE)
+            return _plain_truncated(pretty, limit, len(data))
+
+    if "x-www-form-urlencoded" in ct and "=" in text:
+        pairs = urllib.parse.parse_qsl(text, keep_blank_values=True)
+        if pairs:
+            return Content("\n").join(
+                Content.from_markup("[cyan]$k[/cyan] = $v", k=k, v=v) for k, v in pairs)
+
+    return _plain_truncated(text, limit, len(data))
 
 
 def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | None = None):
@@ -246,7 +301,11 @@ class SelectPrompt(ModalScreen[str | None]):
 
 
 class SessionsScreen(Screen):
-    BINDINGS = [Binding("r", "refresh", "Refresh"), Binding("q", "quit", "Quit")]
+    BINDINGS = [
+        Binding("r", "refresh", "Refresh"),
+        Binding("e", "export", "Export"),
+        Binding("q", "quit", "Quit"),
+    ]
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -288,6 +347,27 @@ class SessionsScreen(Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.app.push_screen(FlowsScreen(str(event.row_key.value)))
+
+    def _focused_session_id(self) -> str | None:
+        table = self.query_one("#sessions", DataTable)
+        if table.cursor_coordinate is None or table.row_count == 0:
+            return None
+        return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+
+    @work(exclusive=True)
+    async def action_export(self) -> None:
+        """Export the focused session as a .tar.gz bundle in the current directory."""
+        sid = self._focused_session_id()
+        if sid is None:
+            return
+        dest = os.path.abspath(f"{sid}.tar.gz")
+        self.notify(f"exporting {sid[:8]} …")
+        try:
+            n = await self.app.client.export_session(sid, dest)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"export failed: {exc}", severity="error")
+            return
+        self.notify(f"exported {n/1_048_576:.1f}M → {dest}")
 
 
 class FlowsScreen(Screen):
@@ -798,18 +878,12 @@ class FlowDetailScreen(Screen):
             return
         data = body.inline
         try:
-            text = data.decode("utf-8")
+            data.decode("utf-8")
         except UnicodeDecodeError:
             lines.append(Content.from_markup(
                 "  [dim]$txt[/dim]", txt=f"[binary {len(data)} bytes — press {save_key} to save]"))
             return
-        if len(text) > cls._BODY_RENDER_LIMIT:
-            lines.append(Content(text[: cls._BODY_RENDER_LIMIT]))
-            lines.append(Content.from_markup(
-                "[dim]… ($size bytes total — press $key to save full)[/dim]",
-                size=str(body.size), key=save_key))
-        else:
-            lines.append(Content(text))
+        lines.append(_format_body(body.content_type, data, cls._BODY_RENDER_LIMIT))
 
 
 class WsMessagesScreen(Screen):
