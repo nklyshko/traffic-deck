@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import lzma
 import os
+import subprocess
 import time
 import urllib.request
 from pathlib import Path
@@ -18,6 +19,7 @@ from capture_tools.android.adb import AdbClient, frida_arch
 
 REMOTE = "/data/local/tmp/frida-server"
 _CACHE = Path(os.path.expanduser("~/.cache/traffic-android"))
+_servers: list[subprocess.Popen] = []  # keep started frida-servers alive (avoid GC)
 
 
 def frida_device(serial: str | None = None, timeout: int = 5):
@@ -52,10 +54,17 @@ def ensure_frida_server(adb: AdbClient, abi: str, log: Callable[[str], None] = p
     """Make frida-server reachable on the device (fetch+push+start if needed)."""
     if server_reachable(adb.serial):
         return
+    # A stale/mismatched frida-server (e.g. a v16 from another setup) would hold the
+    # port and fail our client's version check, so clear any existing one first.
+    adb.sh_root("pkill -f frida-server", check=False)
+    time.sleep(0.5)
     local = fetch_frida_server(frida.__version__, frida_arch(abi), log)
     adb.push(str(local), REMOTE)
     adb.shell("chmod", "755", REMOTE)
-    adb.run("shell", REMOTE, check=False, capture=False)  # detached by adb
+    # Start it as root, detached: keep the Popen alive so the adb session (and thus
+    # the foreground frida-server) persists for the life of the agent.
+    _servers.append(subprocess.Popen(
+        adb.root_persistent_argv(REMOTE), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     for _ in range(20):
         if server_reachable(adb.serial, timeout=1):
             return

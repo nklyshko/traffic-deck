@@ -83,6 +83,7 @@ class AdbClient:
     def __init__(self, serial: str | None = None, adb: str | None = None) -> None:
         self.adb = adb or find_adb()
         self.serial = serial
+        self.root_mode: str | None = None  # set by root(): "adb" | "su"
 
     def _base(self) -> list[str]:
         return [self.adb] + (["-s", self.serial] if self.serial else [])
@@ -94,16 +95,45 @@ class AdbClient:
     def shell(self, *args: str, check: bool = True) -> str:
         return self.run("shell", *args, check=check).stdout
 
-    def su(self, cmd: str, check: bool = True) -> str:
-        """Run a shell command as root (adb root has been gained, so shell is root)."""
-        return self.run("shell", cmd, check=check).stdout
-
     def wait_for_device(self) -> None:
         self.run("wait-for-device", capture=False)
 
+    def _uid(self) -> int:
+        out = self.run("shell", "id", "-u", check=False).stdout.strip()
+        return int(out) if out.isdigit() else -1
+
+    def _has_su(self) -> bool:
+        return bool(self.run("shell", "command", "-v", "su", check=False).stdout.strip())
+
     def root(self) -> None:
-        self.run("root", check=False)
+        """Elevate the device: prefer `adb root` (userdebug/emulator), else Magisk su.
+
+        Sets root_mode; later commands run as root via sh_root/execout_root_argv.
+        """
+        self.run("root", check=False)  # no-op on production builds
         self.wait_for_device()
+        if self._uid() == 0:
+            self.root_mode = "adb"
+        elif self._has_su():
+            self.root_mode = "su"
+        else:
+            raise RuntimeError("device not rooted: need `adb root` (userdebug) or Magisk su")
+
+    def _root_wrap(self, script: str) -> str:
+        """Wrap a shell command string so it runs as root in the current mode."""
+        return f"su 0 -c '{script}'" if self.root_mode == "su" else script
+
+    def sh_root(self, script: str, check: bool = True) -> str:
+        """Run a shell command string as root (one arg → device shell parses it)."""
+        return self.run("shell", self._root_wrap(script), check=check).stdout
+
+    def execout_root_argv(self, script: str) -> list[str]:
+        """argv to stream a root shell script's raw stdout (binary) via exec-out."""
+        return self._base() + ["exec-out", self._root_wrap(script)]
+
+    def root_persistent_argv(self, script: str) -> list[str]:
+        """argv to start a long-running root process (hold the Popen to keep it alive)."""
+        return self._base() + ["shell", self._root_wrap(script)]
 
     def abi(self) -> str:
         return self.shell("getprop", "ro.product.cpu.abi").strip()

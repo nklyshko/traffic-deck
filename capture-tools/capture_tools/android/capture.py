@@ -85,79 +85,80 @@ def run_capture(
     stop = threading.Event()
 
     add_rules, teardown_rules = nflog_rules(uid, mark, nflog_group)
-    for rule in add_rules:
-        adb.shell(*rule)
-
-    # On-device tcpdump on the app's NFLOG group; exec-out keeps stdout raw and the
-    # device-side 2>/dev/null drops the "listening on …" banner (it would corrupt the pcap).
-    tcpdump = subprocess.Popen(
-        adb._base() + ["exec-out", "sh", "-c",
-                       f"tcpdump -i nflog:{nflog_group} -U -s 0 -w - 2>/dev/null"],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    rt = threading.Thread(target=_tcpdump_reader, args=(tcpdump.stdout, q, stop), daemon=True)
-    rt.start()
-
-    ack: dict = {}
-    def upload():
-        ack["ack"] = ing.UploadCapture(capture_chunks(sid, q, max_chunk, upload_id="android"))
-    ut = threading.Thread(target=upload, daemon=True)
-    ut.start()
-
-    # Frida: hook the app's (and its <pkg>:child processes') TLS for the key.log.
-    device = frida_device(adb.serial)
     keys = {"n": 0}
-    hooked: set[int] = set()
-    sessions: list = []
-
-    def on_message(message, _data):
-        if message.get("type") == "send":
-            p = message.get("payload") or {}
-            if p.get("type") == "keylog":
-                q.put(("keylog", (p["line"] + "\n").encode()))
-                keys["n"] += 1
-            elif p.get("type") == "log":
-                log(f"[frida] {p.get('message')}")
-        elif message.get("type") == "error":
-            log(f"[frida-error] {message.get('description')}")
-
-    def hook(pid: int) -> None:
-        if pid in hooked:
-            return
-        hooked.add(pid)
-        s = device.attach(pid)
-        for src in scripts:
-            sc = s.create_script(src)
-            sc.on("message", on_message)
-            sc.load()
-            sessions.append((s, sc))
-
-    def belongs(name: str) -> bool:
-        return name == package or name.startswith(package + ":")
-
-    pid = None
-    if attach:
-        hook(device.get_process(package).pid)
-    else:
-        pid = device.spawn([package])
-        hook(pid)  # hook the main process before it runs
-        device.resume(pid)
-    if url:
-        time.sleep(1.0)
-        adb.shell("am", "start", "-a", "android.intent.action.VIEW", "-d", url, package)
-
-    def watch_children() -> None:
-        while not stop.is_set():
-            try:
-                for p in device.enumerate_processes():
-                    if belongs(p.name):
-                        hook(p.pid)
-            except Exception:  # noqa: BLE001
-                pass
-            time.sleep(0.5)
-    threading.Thread(target=watch_children, daemon=True).start()
-
-    log(f"capturing {package}" + (f" (auto-stop in {duration:g}s)" if duration else " (Ctrl-C to stop)"))
+    tcpdump = rt = ut = pid = None
+    ack: dict = {}
+    # Everything after the NFLOG rules go in: a try/finally so the rules + tcpdump are
+    # always torn down — even if Frida fails to spawn (common on locked-down devices).
+    for rule in add_rules:
+        adb.sh_root(" ".join(rule))
     try:
+        # On-device tcpdump on the app's NFLOG group (as root). exec-out keeps stdout
+        # raw; the device-side 2>/dev/null drops tcpdump's "listening on …" banner (it
+        # would corrupt the first pcap record).
+        tcpdump = subprocess.Popen(
+            adb.execout_root_argv(f"tcpdump -i nflog:{nflog_group} -U -s 0 -w - 2>/dev/null"),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        rt = threading.Thread(target=_tcpdump_reader, args=(tcpdump.stdout, q, stop), daemon=True)
+        rt.start()
+
+        def upload():
+            ack["ack"] = ing.UploadCapture(capture_chunks(sid, q, max_chunk, upload_id="android"))
+        ut = threading.Thread(target=upload, daemon=True)
+        ut.start()
+
+        # Frida: hook the app's (and its <pkg>:child processes') TLS for the key.log.
+        device = frida_device(adb.serial)
+        hooked: set[int] = set()
+        sessions: list = []
+
+        def on_message(message, _data):
+            if message.get("type") == "send":
+                p = message.get("payload") or {}
+                if p.get("type") == "keylog":
+                    q.put(("keylog", (p["line"] + "\n").encode()))
+                    keys["n"] += 1
+                elif p.get("type") == "log":
+                    log(f"[frida] {p.get('message')}")
+            elif message.get("type") == "error":
+                log(f"[frida-error] {message.get('description')}")
+
+        def hook(target_pid: int) -> None:
+            if target_pid in hooked:
+                return
+            hooked.add(target_pid)
+            s = device.attach(target_pid)
+            for src in scripts:
+                sc = s.create_script(src)
+                sc.on("message", on_message)
+                sc.load()
+                sessions.append((s, sc))
+
+        def belongs(name: str) -> bool:
+            return name == package or name.startswith(package + ":")
+
+        if attach:
+            hook(device.get_process(package).pid)
+        else:
+            pid = device.spawn([package])
+            hook(pid)  # hook the main process before it runs
+            device.resume(pid)
+        if url:
+            time.sleep(1.0)
+            adb.shell("am", "start", "-a", "android.intent.action.VIEW", "-d", url, package)
+
+        def watch_children() -> None:
+            while not stop.is_set():
+                try:
+                    for p in device.enumerate_processes():
+                        if belongs(p.name):
+                            hook(p.pid)
+                except Exception:  # noqa: BLE001
+                    pass
+                time.sleep(0.5)
+        threading.Thread(target=watch_children, daemon=True).start()
+
+        log(f"capturing {package}" + (f" (auto-stop in {duration:g}s)" if duration else " (Ctrl-C to stop)"))
         deadline = (time.monotonic() + duration) if duration else None
         while True:
             if deadline and time.monotonic() >= deadline:
@@ -168,23 +169,27 @@ def run_capture(
     except KeyboardInterrupt:
         pass
     finally:
-        try:
-            if pid is not None:
-                device.kill(pid)
-        except Exception:  # noqa: BLE001
-            pass
+        if pid is not None:
+            try:
+                frida_device(adb.serial).kill(pid)
+            except Exception:  # noqa: BLE001
+                pass
         stop.set()
-        tcpdump.terminate()
-        adb.run("shell", "pkill", "tcpdump", check=False)
-        for rule in teardown_rules:
-            adb.run("shell", *rule, check=False)
-        try:
-            tcpdump.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            tcpdump.kill()
-        rt.join(timeout=5)
+        if tcpdump is not None:
+            tcpdump.terminate()
+        adb.sh_root("pkill tcpdump", check=False)
+        for rule in teardown_rules:  # always remove our NFLOG rules
+            adb.sh_root(" ".join(rule), check=False)
+        if tcpdump is not None:
+            try:
+                tcpdump.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                tcpdump.kill()
+        if rt is not None:
+            rt.join(timeout=5)
         q.put(SENTINEL)
-        ut.join(timeout=30)
+        if ut is not None:
+            ut.join(timeout=30)
         a = ack.get("ack")
         pcap_bytes = a.pcap_received if a else 0
         if a:

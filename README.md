@@ -165,9 +165,11 @@ are isolated by UID via `iptables … NFLOG` + on-device `tcpdump -i nflog:<grou
 Both stream to the gateway over the same pipeline as Chrome and decode to decrypted
 flows.
 
-Prereqs: the Android SDK (so `adb`/`emulator` are available), and for a real device a
-rooted one (`adb root`). The agent auto-fetches a matching `frida-server` (GitHub) and
-pushes it; the emulator already ships `tcpdump` + `iptables`.
+Prereqs: the Android SDK (so `adb`/`emulator` are available) and a **rooted** target.
+Root is auto-detected: `adb root` (emulator / `userdebug` builds) or **Magisk `su`**
+(retail devices) — capture commands elevate accordingly. The agent auto-fetches a
+matching `frida-server` (GitHub) and pushes it; both the emulator and typical
+Magisk devices already ship `tcpdump` + `iptables`.
 
 **Interactive (recommended)** — guided flow: pick target (emulator/device), set up or
 boot an emulator if needed, ensure root + frida-server, pick the app, optionally add
@@ -196,6 +198,10 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 > Apps that **bundle their own BoringSSL** (Chrome, most Flutter apps) won't be
 > decrypted by the `libssl.so` hook — Chrome has its own `--ssl-key-log-file` for that.
 > The agent hooks the main process **and** matching `<pkg>:child` processes.
+>
+> On retail devices the per-app capture (UID→NFLOG + tcpdump via `su`) works, but
+> Frida key extraction can be blocked by the device's environment (Enforcing SELinux
+> and/or an existing MagiskFrida server) — the emulator path is unaffected.
 
 ## Configuration (gateway)
 
