@@ -157,6 +157,32 @@ Flows appear live in the TUI as they complete; stop mitmdump (`q`/Ctrl-C) to clo
 session. Args after `--` pass through to `mitmdump`. Flags: `--mode` (regular |
 wireguard | transparent | …), `--label`, `--listen-port`, `--gateway ADDR`.
 
+### D) Android (rooted emulator/device, per-app)
+
+Captures **one app's** traffic from a rooted emulator/device: Frida hooks the system
+`libssl.so` to dump TLS secrets (NSS `key.log`, no proxy/CA), and the app's packets
+are isolated by UID via `iptables … NFLOG` + on-device `tcpdump -i nflog:<group>`.
+Both stream to the gateway over the same pipeline as Chrome and decode to decrypted
+flows.
+
+Prereqs: a rooted target (`adb root` works — e.g. a `google_apis` AVD), `adb` on
+PATH. The agent auto-fetches a matching `frida-server` (GitHub) and pushes it; the
+emulator already ships `tcpdump` + `iptables`.
+
+```sh
+uv run --project capture-tools python -m capture_tools.android \
+    --package com.example.app --url https://example.com --duration 30
+```
+
+Flags: `--package` (target, required), `--url` (open after launch), `--duration`,
+`--attach` (hook the already-running app instead of spawning), `--serial`,
+`--nflog-group`, `--gateway`.
+
+> Works for apps using the **system** TLS stack (OkHttp/`HttpURLConnection`→Conscrypt).
+> Apps that **bundle their own BoringSSL** (Chrome, most Flutter apps) won't be
+> decrypted by the `libssl.so` hook — Chrome has its own `--ssl-key-log-file` for that.
+> The agent hooks the main process **and** matching `<pkg>:child` processes.
+
 ## Configuration (gateway)
 
 | Env | Default | Meaning |
@@ -180,5 +206,8 @@ wireguard | transparent | …), `--label`, `--listen-port`, `--gateway ADDR`.
 - **Phase 5** — `traffic-mcp`: an MCP server (stdio or HTTP) over `ViewerService`.
 - **Phase 6** — **mitmproxy source**: an addon streams decoded flows via `PushFlows`
   (any device, incl. WireGuard mode); live-followed and persisted with no pcap.
+- **Phase 7** — **Android**: per-app capture from a rooted emulator/device — Frida
+  `libssl.so` keylog + UID→NFLOG `tcpdump`, streamed and decoded to HTTPS flows.
 
-Next: Android capture. See [`plan/09-roadmap.md`](plan/09-roadmap.md).
+Next: Kaitai custom decoders + on-demand re-decode. See
+[`plan/09-roadmap.md`](plan/09-roadmap.md).
