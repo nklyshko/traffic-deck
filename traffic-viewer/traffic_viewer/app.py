@@ -15,10 +15,10 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
-from rich.markup import escape
 from rich.text import Text
 
 from traffic_viewer.client import GatewayClient
@@ -735,71 +735,81 @@ class FlowDetailScreen(Screen):
     # Cap body rendering so a large body doesn't choke the TUI.
     _BODY_RENDER_LIMIT = 20000
 
-    def _format_flow(self, f) -> str:
+    def _format_flow(self, f) -> Content:
+        # Build a Textual Content with $-substitution for all flow-derived text:
+        # values are inserted literally, never reparsed as markup (a stray '[' / byte
+        # sequence in a header or body must not raise MarkupError — see _render_payload).
         cls = type(self)
-        e = escape
-        lines: list[str] = []
+        lines: list[Content] = []
         url = f"{f.scheme or 'https'}://{f.authority}{f.path}"
         if f.query:
             url += f"?{f.query}"
-        lines.append(f"[b]{e(f.method + ' ' + url)}[/b]")
-        lines.append(
-            f"[dim]{f.protocol}  status={f.status}  tls={'yes' if f.tls_decrypted else 'no'}  "
-            f"{e(f.src_addr)} → {e(f.dst_addr)}[/dim]"
-        )
+        lines.append(Content.from_markup("[b]$v[/b]", v=f.method + " " + url))
+        lines.append(Content.from_markup(
+            "[dim]$proto  status=$status  tls=$tls  $src → $dst[/dim]",
+            proto=f.protocol, status=str(f.status),
+            tls="yes" if f.tls_decrypted else "no", src=f.src_addr, dst=f.dst_addr))
         self._append_annotations(lines, f)
-        lines.append("")
-        lines.append("[b u]Request headers[/b u]")
+        lines.append(Content(""))
+        lines.append(Content.from_markup("[b u]Request headers[/b u]"))
         for h in f.request_headers:
-            lines.append(f"  [cyan]{e(h.name)}[/cyan]: {e(h.value)}")
+            lines.append(Content.from_markup("  [cyan]$n[/cyan]: $val", n=h.name, val=h.value))
         cls._append_body(lines, "Request body", f.request_body, "r")
-        lines.append("")
-        lines.append("[b u]Response headers[/b u]")
+        lines.append(Content(""))
+        lines.append(Content.from_markup("[b u]Response headers[/b u]"))
         for h in f.response_headers:
-            lines.append(f"  [green]{e(h.name)}[/green]: {e(h.value)}")
+            lines.append(Content.from_markup("  [green]$n[/green]: $val", n=h.name, val=h.value))
         cls._append_body(lines, "Response body", f.response_body, "s")
-        return "\n".join(lines)
+        return Content("\n").join(lines)
 
-    def _append_annotations(self, lines: list[str], f) -> None:
+    def _append_annotations(self, lines: list[Content], f) -> None:
         """Render the record's annotations (plan §12): mark, favorite, tags, groups,
         comments. Names resolve via the maps passed from the flow list."""
-        e = escape
-        bits: list[str] = []
+        bits: list[Content] = []
         if f.favorite:
-            bits.append("[yellow]★ favorite[/yellow]")
+            bits.append(Content.from_markup("[yellow]★ favorite[/yellow]"))
         if f.mark_color:
             color = f.mark_color if f.mark_color in MARK_COLORS else "white"
-            bits.append(f"[{color}]● {e(f.mark_color)}[/{color}]")
+            bits.append(Content.from_markup(f"[{color}]● $c[/{color}]", c=f.mark_color))
         if f.tag_ids:
-            names = ", ".join(e(self._tagnames.get(t, t)) for t in f.tag_ids)
-            bits.append(f"[cyan]tags:[/cyan] {names}")
+            names = ", ".join(self._tagnames.get(t, t) for t in f.tag_ids)
+            bits.append(Content.from_markup("[cyan]tags:[/cyan] $names", names=names))
         if f.group_ids:
-            names = ", ".join(e(self._groupnames.get(g, g)) for g in f.group_ids)
-            bits.append(f"[blue]groups:[/blue] {names}")
+            names = ", ".join(self._groupnames.get(g, g) for g in f.group_ids)
+            bits.append(Content.from_markup("[blue]groups:[/blue] $names", names=names))
         if bits:
-            lines.append("[dim]│[/dim] " + "   ".join(bits))
+            lines.append(Content.from_markup("[dim]│[/dim] ").append(Content("   ").join(bits)))
         for c in f.comments:
-            lines.append(f"  [dim]💬[/dim] {e(c.body)}")
+            lines.append(Content.from_markup("  [dim]💬[/dim] $body", body=c.body))
 
     @classmethod
-    def _append_body(cls, lines: list[str], title: str, body, save_key: str) -> None:
+    def _append_body(cls, lines: list[Content], title: str, body, save_key: str) -> None:
         if body is None or body.size == 0:
             return
         meta = f"{body.content_type or '?'} · {body.size} bytes"
-        lines.append("")
-        lines.append(f"[b u]{title}[/b u] [dim]{escape(meta)} · press {save_key} to save[/dim]")
+        lines.append(Content(""))
+        lines.append(Content.from_markup(
+            "[b u]$title[/b u] [dim]$meta · press $key to save[/dim]",
+            title=title, meta=meta, key=save_key))
         if body.WhichOneof("content") != "inline":
-            lines.append(f"  [dim]large body — press {save_key} to save the full {body.size} bytes[/dim]")
+            lines.append(Content.from_markup(
+                "  [dim]large body — press $key to save the full $size bytes[/dim]",
+                key=save_key, size=str(body.size)))
             return
         data = body.inline
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
-            lines.append(f"  [dim]\\[binary {len(data)} bytes — press {save_key} to save][/dim]")
+            lines.append(Content.from_markup(
+                "  [dim]$txt[/dim]", txt=f"[binary {len(data)} bytes — press {save_key} to save]"))
             return
         if len(text) > cls._BODY_RENDER_LIMIT:
-            text = text[: cls._BODY_RENDER_LIMIT] + f"\n[dim]… ({body.size} bytes total — press {save_key} to save full)[/dim]"
-        lines.append(escape(text))
+            lines.append(Content(text[: cls._BODY_RENDER_LIMIT]))
+            lines.append(Content.from_markup(
+                "[dim]… ($size bytes total — press $key to save full)[/dim]",
+                size=str(body.size), key=save_key))
+        else:
+            lines.append(Content(text))
 
 
 class WsMessagesScreen(Screen):
@@ -888,13 +898,18 @@ class WsPayloadScreen(Screen):
             self._data = self.msg.payload.inline if self.msg.payload else b""
         self.query_one("#pbody", Static).update(self._render_payload())
 
-    def _render_payload(self) -> str:
+    def _render_payload(self) -> Text:
+        # Build a Rich Text (not a markup string): payload bytes are arbitrary and
+        # must never be parsed as Textual markup (a stray '[' or '<' raises MarkupError).
         if not self._data:
-            return "[dim]empty payload[/dim]"
+            return Text("empty payload", style="dim")
         try:
-            return escape(self._data.decode("utf-8"))
+            return Text(self._data.decode("utf-8"))
         except UnicodeDecodeError:
-            return f"[dim]binary {len(self._data)} bytes — press s to save[/dim]\n\n" + escape(_hexdump(self._data))
+            out = Text(f"binary {len(self._data)} bytes — press s to save", style="dim")
+            out.append("\n\n")
+            out.append(_hexdump(self._data))
+            return out
 
     @work(exclusive=True)
     async def action_save(self) -> None:
@@ -965,21 +980,25 @@ class CompareScreen(Screen):
         return []
 
     @staticmethod
-    def _mark(equal: bool) -> str:
-        return "[green]✓ match[/green]" if equal else "[red]✗ differ[/red]"
+    def _mark(equal: bool) -> Content:
+        return Content.from_markup(
+            "[green]✓ match[/green]" if equal else "[red]✗ differ[/red]")
 
-    def _render_diff(self, a, b) -> str:
-        e = escape
-        out: list[str] = []
-        out.append(f"[b]A[/b] [dim]{e(a.method)} {e(a.authority)}{e(a.path)}[/dim]")
-        out.append(f"[b]B[/b] [dim]{e(b.method)} {e(b.authority)}{e(b.path)}[/dim]")
+    def _render_diff(self, a, b) -> Content:
+        # Content with $-substitution: header/cookie/body-derived text is inserted
+        # literally, never reparsed as markup (see _format_flow / _render_payload).
+        out: list[Content] = []
+        out.append(Content.from_markup(
+            "[b]A[/b] [dim]$m $auth$path[/dim]", m=a.method, auth=a.authority, path=a.path))
+        out.append(Content.from_markup(
+            "[b]B[/b] [dim]$m $auth$path[/dim]", m=b.method, auth=b.authority, path=b.path))
 
         def section(title, va, vb, equal):
-            out.append("")
-            out.append(f"[b u]{title}[/b u]  {self._mark(equal)}")
+            out.append(Content(""))
+            out.append(Content.from_markup("[b u]$t[/b u]  ", t=title).append(self._mark(equal)))
             if not equal:
-                out.append(f"  [cyan]A[/cyan] {e(va)}")
-                out.append(f"  [magenta]B[/magenta] {e(vb)}")
+                out.append(Content.from_markup("  [cyan]A[/cyan] $v", v=va))
+                out.append(Content.from_markup("  [magenta]B[/magenta] $v", v=vb))
 
         # HTTP version
         section("HTTP version", a.protocol, b.protocol, a.protocol == b.protocol)
@@ -996,23 +1015,26 @@ class CompareScreen(Screen):
                 [n for n, _ in ca] == [n for n, _ in cb])
 
         # Header values (per name present in either side, in A's order then B-only)
-        out.append("")
+        out.append(Content(""))
         da, db = dict(self._regular(a)), dict(self._regular(b))
         names = list(dict.fromkeys(na + nb))
         diffs = [n for n in names if da.get(n) != db.get(n)]
-        out.append(f"[b u]Header values[/b u]  {self._mark(not diffs)}")
+        out.append(Content.from_markup("[b u]Header values[/b u]  ").append(self._mark(not diffs)))
         for n in diffs:
-            out.append(f"  [yellow]{e(n)}[/yellow]")
-            out.append(f"    [cyan]A[/cyan] {e(da.get(n, '∅'))}")
-            out.append(f"    [magenta]B[/magenta] {e(db.get(n, '∅'))}")
+            out.append(Content.from_markup("  [yellow]$n[/yellow]", n=n))
+            out.append(Content.from_markup("    [cyan]A[/cyan] $v", v=da.get(n, "∅")))
+            out.append(Content.from_markup("    [magenta]B[/magenta] $v", v=db.get(n, "∅")))
 
         # Request body
         ba = a.request_body.inline if a.request_body.size else b""
         bb = b.request_body.inline if b.request_body.size else b""
-        out.append("")
-        out.append(f"[b u]Request body[/b u]  {self._mark(ba == bb)}  "
-                   f"[dim]A={a.request_body.size}B B={b.request_body.size}B[/dim]")
-        return "\n".join(out)
+        out.append(Content(""))
+        sizes = f"A={a.request_body.size}B B={b.request_body.size}B"
+        out.append(
+            Content.from_markup("[b u]Request body[/b u]  ")
+            .append(self._mark(ba == bb))
+            .append(Content.from_markup("  [dim]$s[/dim]", s=sizes)))
+        return Content("\n").join(out)
 
 
 class TrafficViewerApp(App):
