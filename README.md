@@ -9,7 +9,7 @@ design and roadmap.
 | Dir | What |
 |-----|------|
 | [`proto/`](proto/) | gRPC contract (source of truth) |
-| [`traffic-gateway/`](traffic-gateway/) | Go service: ingest, decode (tshark), per-session SQLite store, serve |
+| [`traffic-gateway/`](traffic-gateway/) | Go service: ingest, decode (tshark + pluggable [`decoders/`](traffic-gateway/decoders/)), per-session SQLite store, serve |
 | [`capture-tools/`](capture-tools/) | Python capture agents (Chrome, mitmproxy; Android later) |
 | [`traffic-viewer/`](traffic-viewer/) | Textual TUI |
 | [`traffic-mcp/`](traffic-mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
@@ -206,6 +206,30 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 > which still supports older Android — frida 17 fails to spawn on e.g. Android 10) and
 > started as a root daemon in its own session.
 
+## Custom protocol decoders
+
+Non-HTTP binary protocols carried over TCP (e.g. MAX messenger, `ru.oneme`) are decoded
+by **compiled-in Go modules** under [`traffic-gateway/decoders/`](traffic-gateway/decoders/).
+Each decoder is its own package that self-registers via `init()`; the gateway
+blank-imports it in `cmd/gateway`. During decode (one tshark PDML pass for HTTP/WS, then
+`tshark -z follow,tls,raw` over the TLS-decrypted bytes of any **matched** stream), a
+decoder turns a connection's directional byte stream into message frames, surfaced as a
+synthetic flow with the WebSocket-style `M` message timeline. HTTP and custom-protocol
+flows coexist in one session.
+
+A decoder implements `decoders.Decoder` (`Name`, `Matches(StreamMeta)`,
+`Decode([]Turn) ([]Message, error)`); see `decoders/max` (MAX framing → LZ4 →
+MessagePack → JSON). Add one = add a package + a blank import + rebuild.
+
+```sh
+# re-run custom decoders over an already-captured session (e.g. after adding a decoder)
+mise exec -- go -C traffic-gateway run ./cmd/gateway redecode <session-id>
+```
+
+Decoding needs the connection's TLS to be decryptable from the capture's `key.log`
+(i.e. the app uses the system `libssl` the Android Frida hook logs) — verified working
+on `ru.oneme`.
+
 ## Configuration (gateway)
 
 | Env | Default | Meaning |
@@ -231,6 +255,9 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
   (any device, incl. WireGuard mode); live-followed and persisted with no pcap.
 - **Phase 7** — **Android**: per-app capture from a rooted emulator/device — Frida
   `libssl.so` keylog + UID→NFLOG `tcpdump`, streamed and decoded to HTTPS flows.
+- **Phase 8** (first slice) — **custom protocol decoders**: compiled-in Go modules
+  (`traffic-gateway/decoders/`) decode non-HTTP raw-TCP protocols from the TLS-decrypted
+  stream + `gateway redecode`. First decoder: **MAX** (`ru.oneme`), verified on-device.
 
-Next: Kaitai custom decoders + on-demand re-decode. See
+Next: HTTP/3 + QUIC; the generic records/decode_runs model. See
 [`plan/09-roadmap.md`](plan/09-roadmap.md).

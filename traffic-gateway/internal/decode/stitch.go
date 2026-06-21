@@ -14,8 +14,24 @@ type stitcher struct {
 	byKey      map[string]*Flow   // HTTP/2: "tcpStream:streamID" -> flow
 	h1pending  map[string][]*Flow // HTTP/1.1: tcpStream -> requests awaiting a response (FIFO)
 	streamFlow map[string]*Flow   // tcpStream -> its HTTP/1.1 flow (the WebSocket Upgrade)
+
+	// Per-TLS-stream metadata captured during the PDML pass, keyed by tcp.stream —
+	// used to pick which streams to hand to custom raw-TCP decoders (plan §8). The
+	// decoded bytes themselves are pulled via tshark `follow,tls,raw` (see streams.go),
+	// since tshark only exposes decrypted undissected payloads through follow.
+	streamMeta map[string]*tlsStream
+
 	// onChange, if set, fires after each flow is created (isNew=true) or updated.
 	onChange func(f *Flow, isNew bool)
+}
+
+// tlsStream is the per-connection metadata captured from the ClientHello.
+type tlsStream struct {
+	tlsStreamIdx string // tls.stream index (the id `follow,tls,raw` uses)
+	sni          string
+	clientAddr   string // client ip:port
+	serverHost   string // server ip
+	serverPort   string
 }
 
 func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
@@ -24,8 +40,36 @@ func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
 		byKey:      map[string]*Flow{},
 		h1pending:  map[string][]*Flow{},
 		streamFlow: map[string]*Flow{},
+		streamMeta: map[string]*tlsStream{},
 		onChange:   onChange,
 	}
+}
+
+// addPacket records each TLS stream's ClientHello SNI + tls.stream index + endpoints,
+// so decodeCustomStreams can decide which streams to decrypt-and-decode.
+func (s *stitcher) addPacket(l layers) {
+	tcp := l.first("tcp.stream")
+	if tcp == "" {
+		return
+	}
+	sni := l.first("tls.handshake.extensions_server_name")
+	if sni == "" {
+		return // only ClientHello packets carry the metadata we need
+	}
+	s.streamMeta[tcp] = &tlsStream{
+		tlsStreamIdx: l.first("tls.stream"),
+		sni:          sni,
+		clientAddr:   addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport")),
+		serverHost:   firstNonEmpty(l.first("ip.dst"), l.first("ipv6.dst")),
+		serverPort:   l.first("tcp.dstport"),
+	}
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 func (s *stitcher) emit(f *Flow, isNew bool) {

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path"
 
 	"google.golang.org/grpc"
 
@@ -19,6 +20,10 @@ import (
 	"github.com/nikitak/parsing/traffic-gateway/internal/objstore"
 	"github.com/nikitak/parsing/traffic-gateway/internal/server"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
+
+	// Custom protocol decoders self-register via init() (plan §8). Add a blank import
+	// here to compile a decoder into the gateway.
+	_ "github.com/nikitak/parsing/traffic-gateway/decoders/max"
 )
 
 func main() {
@@ -30,13 +35,15 @@ func main() {
 		serve()
 	case "import":
 		importCapture(os.Args[2:])
+	case "redecode":
+		redecode(os.Args[2:])
 	default:
 		usage()
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: gateway <serve|import> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: gateway <serve|import|redecode> [flags]")
 	os.Exit(2)
 }
 
@@ -96,4 +103,37 @@ func importCapture(args []string) {
 		log.Fatalf("import: %v", err)
 	}
 	log.Printf("imported session %s: %d flows", res.SessionID, res.FlowCount)
+}
+
+// redecode re-runs the custom (non-HTTP) decoders over an already-captured session's
+// stored pcap + key.log and inserts the decoded protocol flows (e.g. MAX).
+func redecode(args []string) {
+	fs := flag.NewFlagSet("redecode", flag.ExitOnError)
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		log.Fatal("usage: gateway redecode <session-id>")
+	}
+	sid := fs.Arg(0)
+
+	ctx := context.Background()
+	cfg := config.Load()
+	obj, st := openDeps(ctx, cfg)
+	defer st.Close()
+
+	pcapLocal, ok := obj.LocalPath(path.Join("sessions", sid, "capture.pcap"))
+	if !ok {
+		log.Fatalf("redecode: no capture.pcap for session %s", sid)
+	}
+	keylogLocal := ""
+	if p, ok := obj.LocalPath(path.Join("sessions", sid, "key.log")); ok {
+		if fi, err := os.Stat(p); err == nil && fi.Size() > 0 {
+			keylogLocal = p
+		}
+	}
+
+	n, err := importer.RedecodeCustom(ctx, st, cfg.TsharkPath, sid, pcapLocal, keylogLocal)
+	if err != nil {
+		log.Fatalf("redecode: %v", err)
+	}
+	log.Printf("redecoded session %s: %d custom-protocol flows", sid, n)
 }

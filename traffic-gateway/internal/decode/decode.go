@@ -82,7 +82,12 @@ type Dataset struct {
 }
 
 // metaProtos contribute packet-level fields (merged into every PDU of the packet).
-var metaProtos = map[string]bool{"frame": true, "ip": true, "ipv6": true, "tcp": true, "udp": true}
+// `tls` carries the ClientHello SNI + tls.stream index, used to pick which streams to
+// hand to custom raw-TCP decoders (plan §8).
+var metaProtos = map[string]bool{
+	"frame": true, "ip": true, "ipv6": true, "tcp": true, "udp": true,
+	"tls": true,
+}
 
 // pduProtos each become one stitcher record: one per HTTP/2 frame, the HTTP/1.1
 // message, or one WebSocket frame. This per-<proto> separation is what fixes HTTP/2
@@ -91,7 +96,8 @@ var pduProtos = map[string]bool{"http2": true, "http": true, "websocket": true}
 
 // bodyFields are byte fields whose raw hex lives in the `value` attribute (the
 // `show` attribute is truncated for bytes). websocket.payload is the unmasked frame
-// payload.
+// payload; data.data is the decrypted payload of a TLS stream tshark didn't dissect
+// (the raw-TCP custom-decoder input, plan §8).
 var bodyFields = map[string]bool{
 	"http2.data.data": true, "http2.body.reassembled.data": true,
 	"http.file_data": true, "http.body.reassembled.data": true,
@@ -113,11 +119,13 @@ func tsharkArgs(input []string, keylogPath string, live bool) []string {
 	if live {
 		args = append(args, "-l") // flush output per packet
 	}
-	// -O bounds PDML detail to the protocols we parse (tls excluded — frame.protocols
-	// still reports it); -Y keeps HTTP-bearing and WebSocket packets (the latter carry
-	// no http layer after the Upgrade).
-	args = append(args, "-Y", "http or http2 or websocket", "-T", "pdml",
-		"-O", "frame,ip,ipv6,tcp,udp,http,http2,websocket")
+	// -O bounds PDML detail to the protocols we parse; -Y keeps HTTP/WebSocket packets
+	// plus all TLS packets. With the keylog, tshark decrypts TLS and emits the decrypted
+	// bytes of any protocol it doesn't dissect (e.g. MAX) as `data.data` — the input for
+	// custom raw-TCP decoders (plan §8). HTTP/WS streams are consumed by their dissectors,
+	// so `data.data` appears only on undissected streams.
+	args = append(args, "-Y", "http or http2 or websocket or tls", "-T", "pdml",
+		"-O", "frame,ip,ipv6,tcp,udp,tls,http,http2,websocket")
 	return args
 }
 
@@ -184,7 +192,8 @@ func runTshark(ctx context.Context, tsharkPath string, args []string, stdin io.R
 				cur[name] = append(cur[name], val)
 			}
 		case xml.EndElement:
-			if se.Name.Local == "proto" {
+			switch se.Name.Local {
+			case "proto":
 				if pduName != "" { // emit one record per HTTP PDU
 					rec := make(layers, len(meta)+len(cur))
 					for k, v := range meta {
@@ -196,6 +205,10 @@ func runTshark(ctx context.Context, tsharkPath string, args []string, stdin io.R
 					st.add(rec)
 				}
 				cur, pduName = nil, ""
+			case "packet":
+				// Per-packet: collect each TLS stream's ClientHello SNI + tls.stream
+				// index + client/server addrs, to pick streams for custom decoders.
+				st.addPacket(meta)
 			}
 		}
 	}
@@ -215,13 +228,16 @@ func attrVal(se xml.StartElement, name string) string {
 }
 
 // Decode runs tshark over pcapPath (decrypting with keylogPath if non-empty) and
-// returns the decoded flows in first-seen order.
+// returns the decoded flows in first-seen order. The PDML pass yields HTTP/WebSocket
+// flows + per-stream TLS metadata; custom raw-TCP decoders then run over the decrypted
+// bytes of matched streams (plan §8).
 func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Dataset, error) {
 	ds := &Dataset{Engine: "tshark", TLSKeyLogUsed: keylogPath != ""}
 	st := newStitcher(ds, nil)
 	if err := runTshark(ctx, tsharkPath, tsharkArgs([]string{"-r", pcapPath}, keylogPath, false), nil, st); err != nil {
 		return nil, err
 	}
+	decodeCustomStreams(ctx, tsharkPath, pcapPath, keylogPath, st)
 	return ds, nil
 }
 

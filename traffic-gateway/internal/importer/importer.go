@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/google/uuid"
 
 	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
+	"github.com/nikitak/parsing/traffic-gateway/decoders"
 	"github.com/nikitak/parsing/traffic-gateway/internal/decode"
 	"github.com/nikitak/parsing/traffic-gateway/internal/objstore"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
@@ -103,6 +105,50 @@ func Finalize(ctx context.Context, st *store.Store, tsharkPath, sessionID, pcapP
 		return nil, err
 	}
 	return &Result{SessionID: sessionID, FlowCount: n}, nil
+}
+
+// RedecodeCustom re-runs decode over a stored capture and inserts ONLY the custom
+// (non-HTTP) decoder output — synthetic protocol flows + their messages — as a new
+// analysis. Lets an already-captured session be decoded by a newly added decoder
+// without re-importing (and without duplicating the HTTP flows). Re-running appends
+// again, so it's a one-shot per added decoder.
+func RedecodeCustom(ctx context.Context, st *store.Store, tsharkPath, sessionID, pcapPath, keylogPath string) (int, error) {
+	ds, err := decode.Decode(ctx, tsharkPath, pcapPath, keylogPath)
+	if err != nil {
+		return 0, fmt.Errorf("decode: %w", err)
+	}
+	custom := map[string]bool{}
+	for _, d := range decoders.All() {
+		custom[strings.ToUpper(d.Name())] = true
+	}
+	var flows []*decode.Flow
+	keep := map[string]bool{}
+	for _, f := range ds.Flows {
+		if custom[f.Protocol] {
+			flows = append(flows, f)
+			keep[f.ID] = true
+		}
+	}
+	var msgs []*decode.WsMessage
+	for _, m := range ds.Messages {
+		if keep[m.FlowID] {
+			msgs = append(msgs, m)
+		}
+	}
+	if len(flows) == 0 {
+		return 0, nil
+	}
+	analysisID := uuid.NewString()
+	if err := st.CreateAnalysis(ctx, store.NewAnalysis{ID: analysisID, SessionID: sessionID, Engine: "decoders"}); err != nil {
+		return 0, fmt.Errorf("create analysis: %w", err)
+	}
+	if _, err := st.InsertFlows(ctx, sessionID, analysisID, flows); err != nil {
+		return 0, fmt.Errorf("insert flows: %w", err)
+	}
+	if _, err := st.InsertWsMessages(ctx, sessionID, msgs); err != nil {
+		return 0, fmt.Errorf("insert ws messages: %w", err)
+	}
+	return len(flows), nil
 }
 
 func copyIn(obj objstore.Store, key, srcPath string) (int64, error) {
