@@ -10,7 +10,7 @@ design and roadmap.
 |-----|------|
 | [`proto/`](proto/) | gRPC contract (source of truth) |
 | [`traffic-gateway/`](traffic-gateway/) | Go service: ingest, decode (tshark), per-session SQLite store, serve |
-| [`capture-tools/`](capture-tools/) | Python capture agents (Chrome; mitmproxy/Android later) |
+| [`capture-tools/`](capture-tools/) | Python capture agents (Chrome, mitmproxy; Android later) |
 | [`traffic-viewer/`](traffic-viewer/) | Textual TUI |
 | [`traffic-mcp/`](traffic-mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
 
@@ -136,6 +136,27 @@ Useful flags / env:
 > `wireshark` group. If your shell is already in that group, you can drop the `sg`
 > wrapper. The keylog is written to a temp dir, never into your real profile.
 
+### C) mitmproxy (any device, incl. WireGuard)
+
+Runs `mitmdump` with an addon that streams **already-decoded** flows to the gateway
+(`PushFlows`) — no pcap/keylog, since mitmproxy terminates TLS. Unlike the Chrome path
+this is an active **MITM**: the device must trust mitmproxy's CA (visit `mitm.it` once
+connected, or install `~/.mitmproxy/mitmproxy-ca-cert.*`); cert-pinned apps still need
+a Frida bypass.
+
+```sh
+# regular HTTP proxy on :8080 — set the device/app proxy to <this-host>:8080
+uv run --project capture-tools python -m capture_tools.mitm --label "api poke"
+
+# WireGuard server — any device that can be a WireGuard client routes through it
+# (mitmproxy prints the peer config / QR on startup)
+uv run --project capture-tools python -m capture_tools.mitm --mode wireguard --label phone
+```
+
+Flows appear live in the TUI as they complete; stop mitmdump (`q`/Ctrl-C) to close the
+session. Args after `--` pass through to `mitmdump`. Flags: `--mode` (regular |
+wireguard | transparent | …), `--label`, `--listen-port`, `--gateway ADDR`.
+
 ## Configuration (gateway)
 
 | Env | Default | Meaning |
@@ -156,5 +177,8 @@ Useful flags / env:
 - **Phase 4** — **WebSocket**: `websocket` frames (HTTP/1.1 Upgrade) decode into
   message records bound to the Upgrade flow; the TUI marks ws flows with `⇅` and shows
   a directional message timeline (`M`).
+- **Phase 5** — `traffic-mcp`: an MCP server (stdio or HTTP) over `ViewerService`.
+- **Phase 6** — **mitmproxy source**: an addon streams decoded flows via `PushFlows`
+  (any device, incl. WireGuard mode); live-followed and persisted with no pcap.
 
-Next: the `traffic-mcp` server. See [`plan/09-roadmap.md`](plan/09-roadmap.md).
+Next: Android capture. See [`plan/09-roadmap.md`](plan/09-roadmap.md).

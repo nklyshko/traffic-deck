@@ -7,6 +7,7 @@ dependencies = [
     "grpcio>=1.76",
     "grpcio-tools>=1.76",
     "protobuf>=5.29",
+    "mitmproxy>=11",
 ]
 
 [tool.uv]

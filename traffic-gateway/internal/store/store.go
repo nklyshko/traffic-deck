@@ -373,6 +373,18 @@ func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.F
 	return out, nil
 }
 
+// CountFlows returns the number of flows stored in a session's bundle. Used to
+// finalize supplied (pushed) sessions that have no pcap to re-decode.
+func (s *Store) CountFlows(ctx context.Context, sessionID string) (int, error) {
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flows`).Scan(&n)
+	return n, err
+}
+
 // GetFlow returns a single flow (with headers) from the given session's bundle.
 func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*trafficv1.Flow, error) {
 	db, err := s.sessionDB(ctx, sessionID)

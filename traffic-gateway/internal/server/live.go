@@ -69,6 +69,23 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 	}()
 }
 
+// startPassive registers a tshark-less live session for a *pushed* source
+// (PushFlows / mitmproxy): no pipe, no decode goroutine — flows are published
+// directly via publish(). Idempotent: returns the existing session if present.
+func (h *liveHub) startPassive(sessionID string) *liveSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ls, ok := h.sessions[sessionID]; ok {
+		return ls
+	}
+	ls := &liveSession{
+		flows: map[string]*trafficv1.Flow{},
+		subs:  map[int]chan *trafficv1.FlowEvent{},
+	}
+	h.sessions[sessionID] = ls
+	return ls
+}
+
 func (h *liveHub) write(sessionID string, b []byte) {
 	if ls := h.get(sessionID); ls != nil {
 		_, _ = ls.pw.Write(b)
@@ -85,8 +102,10 @@ func (h *liveHub) stop(sessionID string) {
 	if ls == nil {
 		return
 	}
-	_ = ls.pw.Close()
-	<-ls.done
+	if ls.pw != nil { // tshark-fed session: close the pipe (EOF) and wait for decode
+		_ = ls.pw.Close()
+		<-ls.done
+	}
 
 	ls.mu.Lock()
 	closedEv := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
@@ -105,16 +124,23 @@ func (h *liveHub) stop(sessionID string) {
 }
 
 func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
-	pf := flowToProto(f)
+	ls.publish(flowToProto(f), isNew)
+}
+
+// publish records a (proto) flow and fans an added/updated event to subscribers.
+// Shared by the tshark live path (onFlow) and the PushFlows path. A flow id seen
+// before is an update even if isNew is set.
+func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if ls.closed {
 		return
 	}
-	ls.flows[f.ID] = pf
+	_, existed := ls.flows[pf.Id]
+	ls.flows[pf.Id] = pf
 	var ev *trafficv1.FlowEvent
-	if isNew {
-		ls.order = append(ls.order, f.ID)
+	if isNew && !existed {
+		ls.order = append(ls.order, pf.Id)
 		ev = &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: pf}}
 	} else {
 		ev = &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: pf}}
