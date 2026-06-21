@@ -1,13 +1,17 @@
 """Interactive Android capture CLI (plan §7).
 
-A thin front-end over the capture library (adb / emulator / frida_server / capture).
-Guided flow:
+A frida-free front-end over the capture library. Guided flow:
   1. pick a target — emulator or a connected real device
   2. for an emulator: use a running one, boot an existing AVD, or create one (installing
      a rootable system image if needed)
-  3. ensure the target has root + frida-server
-  4. pick the app to capture from the installed list
-  5. optionally add Frida scripts (SSL-unpinning / bypass) to load alongside the keylog
+  3. ensure the target is rooted
+  4. pick the frida version — recommended for the device's Android release, picked from
+     the latest available (auto-checked on GitHub); v16 and v17 are always offered
+  5. pick the app to capture from the installed list
+  6. optionally add Frida scripts (SSL-unpinning / bypass) to load alongside the keylog
+
+It then launches the capture under the chosen frida via `uv run --with frida==<ver>`
+(client and server must match), so the CLI itself never imports frida.
 
   uv run --project capture-tools python -m capture_tools.android.cli
 """
@@ -18,12 +22,12 @@ import argparse
 import os
 from pathlib import Path
 
+from capture_tools.android import frida_versions
 from capture_tools.android.adb import AdbClient
-from capture_tools.android.capture import run_capture
 from capture_tools.android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
-from capture_tools.android.frida_server import ensure_target_ready
 
 _DEFAULT_SCRIPTS_DIR = os.path.expanduser("~/.config/traffic/frida-scripts")
+_PROJECT = str(Path(__file__).resolve().parents[2])  # the capture-tools dir
 
 
 # --- prompt helpers ------------------------------------------------------
@@ -104,8 +108,19 @@ def pick_device(sdk: Sdk) -> str:
     return _choose("Device:", [d.serial for d in ready])
 
 
-def pick_scripts(scripts_dir: str) -> list[Path]:
-    """Step 5: pick extra Frida scripts from a directory and/or a custom path."""
+def pick_frida_version(adb: AdbClient) -> str:
+    """Step 4: pick a frida version compatible with the device's Android release."""
+    release = adb.shell("getprop", "ro.build.version.release").strip()
+    rec = frida_versions.recommended(release)
+    opts = frida_versions.choices(rec)
+    print(f"\nAndroid {release or '?'} detected — recommended frida {rec}"
+          " (frida 17 can't spawn on Android ≤ 11)")
+    return _choose("frida version (client + server must match):", opts,
+                   render=lambda v: v + ("  (recommended)" if v == rec else ""))
+
+
+def pick_scripts(scripts_dir: str) -> list[str]:
+    """Step 6: pick extra Frida scripts from a directory and/or a custom path."""
     d = Path(scripts_dir)
     found = sorted(str(p) for p in d.glob("*.js")) if d.is_dir() else []
     chosen = _multi_choose(f"Extra Frida scripts (from {scripts_dir}):", found) if found else []
@@ -114,7 +129,7 @@ def pick_scripts(scripts_dir: str) -> list[Path]:
     custom = _ask("extra script path (optional)", "")
     if custom:
         chosen.append(custom)
-    return [Path(c) for c in chosen]
+    return chosen
 
 
 def main(argv=None) -> None:
@@ -128,26 +143,42 @@ def main(argv=None) -> None:
 
     sdk = Sdk(args.sdk)
 
-    # Step 1: target.
+    # Step 1–2: target.
     target = _choose("Capture target:", ["emulator", "device"])
     serial = pick_emulator(sdk) if target == "emulator" else pick_device(sdk)
     adb = AdbClient(serial=serial, adb=sdk.adb)
 
-    # Step 3: root + frida-server.
-    ensure_target_ready(adb)
+    # Step 3: ensure rooted (fail fast; the capture re-checks too).
+    try:
+        adb.root()
+    except RuntimeError as e:
+        raise SystemExit(str(e))
 
-    # Step 4: pick the app.
+    # Step 4: frida version (Android-compat recommendation + manual override).
+    fver = pick_frida_version(adb)
+
+    # Step 5: pick the app.
     pkgs = adb.list_packages(third_party=not args.all_apps)
     if not pkgs:
         pkgs = adb.list_packages(third_party=False)
     package = _choose(f"App to capture ({len(pkgs)} installed):", pkgs)
 
-    # Step 5: extra scripts + optional URL.
+    # Step 6: extra scripts + optional URL.
     scripts = pick_scripts(args.scripts_dir)
-    url = _ask("URL to open in the app (optional)", "") or None
+    url = _ask("URL to open in the app (optional)", "")
 
-    run_capture(adb, package, gateway=args.gateway, url=url,
-                duration=args.duration, extra_scripts=scripts)
+    # Launch the capture under the chosen frida (client+server must match).
+    cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
+           "python", "-m", "capture_tools.android",
+           "--serial", serial, "--package", package, "--gateway", args.gateway]
+    if url:
+        cmd += ["--url", url]
+    if args.duration is not None:
+        cmd += ["--duration", str(args.duration)]
+    for s in scripts:
+        cmd += ["--script", s]
+    print(f"\nlaunching capture: {package} under frida {fver}\n")
+    os.execvp("uv", cmd)
 
 
 if __name__ == "__main__":

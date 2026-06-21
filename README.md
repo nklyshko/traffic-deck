@@ -172,8 +172,9 @@ matching `frida-server` (GitHub) and pushes it; both the emulator and typical
 Magisk devices already ship `tcpdump` + `iptables`.
 
 **Interactive (recommended)** — guided flow: pick target (emulator/device), set up or
-boot an emulator if needed, ensure root + frida-server, pick the app, optionally add
-Frida scripts (SSL-unpinning/bypass):
+boot an emulator if needed, ensure root, pick the **frida version** (v16/v17, defaulting
+to the one recommended for the device's Android release — frida 17 can't spawn on
+Android ≤ 11), pick the app, optionally add Frida scripts (SSL-unpinning/bypass):
 
 ```sh
 uv run --project capture-tools python -m capture_tools.android.cli
@@ -181,7 +182,8 @@ uv run --project capture-tools python -m capture_tools.android.cli
 
 It can create + boot a rootable `google_apis` AVD (installing the system image on
 first use) and drop extra Frida scripts from `~/.config/traffic/frida-scripts` (or a
-path you enter). The CLI is a thin front-end over the capture library.
+path you enter). The chosen frida version is applied via `uv run --with frida==<ver>`
+(client and server must match). The CLI is a thin front-end over the capture library.
 
 **Non-interactive** — for scripting/known targets:
 

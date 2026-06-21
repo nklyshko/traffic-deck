@@ -216,7 +216,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "frida", specifier = ">=16.7,<17" },
+    { name = "frida", specifier = ">=16.7,<18" },
     { name = "grpcio", specifier = ">=1.76" },
     { name = "grpcio-tools", specifier = ">=1.76" },
     { name = "mitmproxy", specifier = ">=11" },
