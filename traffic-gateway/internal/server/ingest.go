@@ -103,7 +103,6 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 				}
 			}
 		case *trafficv1.CaptureChunk_End:
-			// terminal frame; loop will exit on EOF
 		}
 	}
 	return stream.SendAndClose(&trafficv1.UploadAck{

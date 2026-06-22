@@ -1,10 +1,7 @@
-// Package decode turns a captured pcap + TLS key.log into HTTP flows by
-// orchestrating tshark. tshark does the heavy lifting (TCP reassembly,
-// TLS decryption, HPACK); we parse its PDML and stitch per-frame records into flows.
-//
-// PDML (per-protocol XML tree) rather than `-T ek` flat fields: a single packet can
-// carry many multiplexed HTTP/2 frames, and the flat format can't keep each frame's
-// stream id associated with its own fields.
+// Package decode turns a captured pcap + TLS key.log into HTTP flows by orchestrating
+// tshark. tshark does the heavy lifting (TCP reassembly, TLS decryption, HPACK); we
+// parse its per-frame PDML and stitch the records into flows. PDML (not flat `-T ek`)
+// so multiplexed HTTP/2 frames in one packet each keep their own stream id + fields.
 package decode
 
 import (
