@@ -1,7 +1,7 @@
 [project]
 name = "traffic-mcp"
 version = "0.0.0"
-description = "MCP server exposing recorded traffic sessions to LLM/agent clients (plan §7.4)"
+description = "MCP server exposing recorded traffic sessions to LLM/agent clients"
 requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.2",

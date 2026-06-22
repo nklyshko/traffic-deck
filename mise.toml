@@ -14,7 +14,7 @@ buf = "1"
 [env]
 # Keep Go from auto-downloading a different toolchain than the one mise pins.
 GOTOOLCHAIN = "local"
-# Data root for the gateway in dev: session bundles + catalog.sqlite (plan §6.2).
+# Data root for the gateway in dev: session bundles + catalog.sqlite.
 DATA_ROOT = "{{config_root}}/data"
 
 [tasks.gen]
@@ -35,3 +35,13 @@ run = "buf lint proto"
 description = "Build the traffic-gateway binary"
 dir = "traffic-gateway"
 run = "go build ./..."
+
+[tasks."gateway:test"]
+description = "Run the traffic-gateway tests"
+dir = "traffic-gateway"
+run = "go test ./..."
+
+[tasks."viewer:test"]
+description = "Run the traffic-viewer tests"
+dir = "traffic-viewer"
+run = "uv run --group dev pytest"
