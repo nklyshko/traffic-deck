@@ -1,11 +1,7 @@
 # External reference material — not part of this repo's history
 /_EXTERNAL/
 
-# Generated gRPC stubs (run `mise run gen`)
-/traffic-gateway/gen/
-/capture-tools/capture_sdk/capture_sdk/gen/
-/traffic-viewer/gen/
-/traffic-mcp/gen/
+# Generated gRPC stubs are committed (regenerate with `make gen` after editing proto/).
 
 # Local object-store data (plan §6.2)
 /data/
