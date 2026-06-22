@@ -9,25 +9,20 @@ from __future__ import annotations
 
 import queue
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-_GEN = Path(__file__).resolve().parent.parent.parent / "gen"
-if str(_GEN) not in sys.path:
-    sys.path.insert(0, str(_GEN))
+import grpc
 
-import grpc  # noqa: E402
-from traffic.v1 import common_pb2 as cp  # noqa: E402
-from traffic.v1 import ingest_pb2 as ip  # noqa: E402
-from traffic.v1 import ingest_pb2_grpc as ig  # noqa: E402
-
-from capture_tools.android.adb import AdbClient, nflog_rules  # noqa: E402
-from capture_tools.android.frida_server import frida_device  # noqa: E402
-from capture_tools.common.upload import SENTINEL, capture_chunks  # noqa: E402
+from capture_android.adb import AdbClient, nflog_rules
+from capture_android.frida_server import frida_device
+from capture_sdk.proto import common_pb2 as cp
+from capture_sdk.proto import ingest_pb2 as ip
+from capture_sdk.proto import ingest_pb2_grpc as ig
+from capture_sdk.upload import SENTINEL, capture_chunks
 
 _KEYLOG_SCRIPT = Path(__file__).resolve().parent / "frida_sslkeylog.js"
 

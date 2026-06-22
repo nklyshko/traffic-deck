@@ -1,7 +1,7 @@
 """mitmproxy addon that streams decoded flows to the traffic-gateway (plan §7.2).
 
-Loaded into mitmproxy with `mitmdump -s mitm_addon.py` (see capture_tools.mitm for a
-launcher). mitmproxy terminates TLS, so flows arrive fully decoded; this addon pushes
+Loaded into mitmproxy with `mitmdump -s addon.py` (the `capture-mitmproxy` launcher
+does this). mitmproxy terminates TLS, so flows arrive fully decoded; this addon pushes
 them to the gateway's IngestService.PushFlows for live view + persistence — no pcap,
 no key.log (the supplied RECORD path, plan §6.1).
 
@@ -14,18 +14,13 @@ Config via env (set by the launcher): GATEWAY_ADDR, CAPTURE_LABEL.
 from __future__ import annotations
 
 import os
-import sys
-from pathlib import Path
 
-_GEN = Path(__file__).resolve().parent.parent / "gen"
-if str(_GEN) not in sys.path:
-    sys.path.insert(0, str(_GEN))
+import grpc
+from mitmproxy import ctx, http
 
-import grpc  # noqa: E402
-from mitmproxy import ctx, http  # noqa: E402
-from traffic.v1 import common_pb2 as cp  # noqa: E402
-from traffic.v1 import ingest_pb2 as ip  # noqa: E402
-from traffic.v1 import ingest_pb2_grpc as ig  # noqa: E402
+from capture_sdk.proto import common_pb2 as cp
+from capture_sdk.proto import ingest_pb2 as ip
+from capture_sdk.proto import ingest_pb2_grpc as ig
 
 
 def _s(v) -> str:

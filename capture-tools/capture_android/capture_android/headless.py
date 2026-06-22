@@ -1,9 +1,9 @@
 """Non-interactive Android capture (plan §7, Phase 7).
 
 Thin flag-based entry over the library (adb + frida_server + capture). For a guided
-flow (pick target / emulator setup / app / scripts) use `capture_tools.android.cli`.
+flow (pick target / emulator setup / app / scripts) run `capture-android` instead.
 
-  uv run --project capture-tools python -m capture_tools.android \\
+  uv run --project capture-tools/capture_android python -m capture_android.headless \\
       --package com.example.app --url https://example.com --duration 20 \\
       --script unpinning.js
 """
@@ -13,9 +13,9 @@ from __future__ import annotations
 import argparse
 import os
 
-from capture_tools.android.adb import AdbClient
-from capture_tools.android.capture import run_capture
-from capture_tools.android.frida_server import ensure_target_ready
+from capture_android.adb import AdbClient
+from capture_android.capture import run_capture
+from capture_android.frida_server import ensure_target_ready
 
 
 def main(argv=None) -> None:

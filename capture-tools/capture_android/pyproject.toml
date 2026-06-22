@@ -1,0 +1,27 @@
+[project]
+name = "capture-android"
+version = "0.0.0"
+description = "Per-app Android capture (rooted emulator/device) → traffic-gateway"
+requires-python = ">=3.12"
+dependencies = [
+    "capture-sdk",
+    # Client + server frida versions must match, and the agent fetches the matching
+    # frida-server. frida 17 dropped support for older Android (e.g. Android 10 → spawn
+    # "unable to pick a payload base"); the interactive CLI picks a version per device
+    # and runs the capture under it via `uv run --with frida==<ver>`, so allow 16 & 17.
+    "frida>=16.7,<18",
+]
+
+[project.scripts]
+capture-android = "capture_android.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["capture_android"]
+artifacts = ["capture_android/*.js"]
+
+[tool.uv.sources]
+capture-sdk = { path = "../capture_sdk", editable = true }

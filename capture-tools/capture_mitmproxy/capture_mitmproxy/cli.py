@@ -4,10 +4,10 @@ Runs `mitmdump` with the gateway-push addon loaded. mitmproxy terminates TLS and
 addon streams decoded flows to the gateway (IngestService.PushFlows) — no pcap/keylog.
 
   # regular HTTP proxy on :8080 (set device/app proxy to this host:8080)
-  uv run --project capture-tools python -m capture_tools.mitm --label "api poke"
+  capture-mitmproxy --label "api poke"
 
   # WireGuard server — any device that can be a WireGuard client routes through it
-  uv run --project capture-tools python -m capture_tools.mitm --mode wireguard --label phone
+  capture-mitmproxy --mode wireguard --label phone
 
 mitmproxy prints its own setup hints (proxy address / WireGuard peer config). The
 device must trust mitmproxy's CA to decrypt HTTPS (mitm.it once connected, or install
@@ -22,7 +22,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="capture_tools.mitm")
+    ap = argparse.ArgumentParser(prog="capture-mitmproxy")
     ap.add_argument("--mode", default="regular",
                     help="mitmproxy mode: regular | wireguard | transparent | local | ... (default regular)")
     ap.add_argument("--label", default="mitmproxy", help="session label shown in the viewer")
@@ -33,7 +33,7 @@ def main() -> None:
                     help="extra args forwarded to mitmdump (use `--` to separate)")
     args = ap.parse_args()
 
-    addon = Path(__file__).resolve().parent / "mitm_addon.py"
+    addon = Path(__file__).resolve().parent / "addon.py"
     cmd = ["mitmdump", "-s", str(addon), "--mode", args.mode]
     if args.listen_port:
         cmd += ["--listen-port", str(args.listen_port)]

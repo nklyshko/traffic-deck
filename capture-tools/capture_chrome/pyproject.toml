@@ -1,0 +1,18 @@
+[project]
+name = "capture-chrome"
+version = "0.0.0"
+description = "Chrome live-capture tool → traffic-gateway (dumpcap + SSLKEYLOGFILE)"
+requires-python = ">=3.12"
+dependencies = [
+    "capture-sdk",
+]
+
+[project.scripts]
+capture-chrome = "capture_chrome.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+capture-sdk = { path = "../capture_sdk", editable = true }

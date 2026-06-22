@@ -3,15 +3,9 @@
 from __future__ import annotations
 
 import queue
-import sys
-from pathlib import Path
 
-_GEN = Path(__file__).resolve().parent.parent.parent / "gen"
-if str(_GEN) not in sys.path:
-    sys.path.insert(0, str(_GEN))
-
-from traffic.v1 import common_pb2 as cp  # noqa: E402
-from traffic.v1 import ingest_pb2 as ip  # noqa: E402
+from capture_sdk.proto import common_pb2 as cp
+from capture_sdk.proto import ingest_pb2 as ip
 
 SENTINEL = object()
 

@@ -8,10 +8,9 @@ Capture is interface-wide; only Chrome's TLS sessions have keys, so the decoded
 view is effectively Chrome-only (see plan discussion). Linux + macOS.
 
 Run with capture permission for dumpcap (Linux: be in the `wireshark` group;
-macOS: Wireshark's ChmodBPF). Example:
+macOS: Wireshark's ChmodBPF). Run with no arguments for a default local capture:
 
-    python -m capture_tools.chrome --gateway 127.0.0.1:8080 --label demo \\
-        --url https://example.com
+    capture-chrome --gateway 127.0.0.1:8080 --label demo --url https://example.com
 """
 
 from __future__ import annotations
@@ -20,21 +19,15 @@ import argparse
 import os
 import queue
 import subprocess
-import sys
 import tempfile
 import threading
-from pathlib import Path
 
-_GEN = Path(__file__).resolve().parent.parent / "gen"
-if str(_GEN) not in sys.path:
-    sys.path.insert(0, str(_GEN))
+import grpc
 
-import grpc  # noqa: E402
-from traffic.v1 import common_pb2 as cp  # noqa: E402
-from traffic.v1 import ingest_pb2 as ip  # noqa: E402
-from traffic.v1 import ingest_pb2_grpc as ig  # noqa: E402
-
-from capture_tools.common import platform  # noqa: E402
+from capture_sdk import platform
+from capture_sdk.proto import common_pb2 as cp
+from capture_sdk.proto import ingest_pb2 as ip
+from capture_sdk.proto import ingest_pb2_grpc as ig
 
 _SENTINEL = object()
 

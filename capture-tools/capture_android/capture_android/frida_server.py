@@ -14,7 +14,7 @@ from typing import Callable
 
 import frida
 
-from capture_tools.android.adb import AdbClient, frida_arch
+from capture_android.adb import AdbClient, frida_arch
 
 REMOTE = "/data/local/tmp/frida-server"
 _CACHE = Path(os.path.expanduser("~/.cache/traffic-android"))

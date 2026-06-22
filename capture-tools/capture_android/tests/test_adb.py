@@ -1,6 +1,6 @@
 """Unit tests for the device-independent Android adb helpers (no device needed)."""
 import pytest
-from capture_tools.android.adb import frida_arch, parse_app_uid, nflog_rules
+from capture_android.adb import frida_arch, parse_app_uid, nflog_rules
 
 
 def test_frida_arch():
@@ -34,7 +34,7 @@ def test_nflog_rules():
 
 
 def test_parse_devices():
-    from capture_tools.android.emulator import parse_devices
+    from capture_android.emulator import parse_devices
     out = ("List of devices attached\n"
            "emulator-5554          device product:sdk_gphone64_x86_64\n"
            "2ccc4268251d7ece       unauthorized usb:1-7 transport_id:1\n")

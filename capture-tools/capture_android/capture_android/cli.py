@@ -13,7 +13,7 @@ A frida-free front-end over the capture library. Guided flow:
 It then launches the capture under the chosen frida via `uv run --with frida==<ver>`
 (client and server must match), so the CLI itself never imports frida.
 
-  uv run --project capture-tools python -m capture_tools.android.cli
+  capture-android
 """
 
 from __future__ import annotations
@@ -22,12 +22,12 @@ import argparse
 import os
 from pathlib import Path
 
-from capture_tools.android import frida_versions
-from capture_tools.android.adb import AdbClient
-from capture_tools.android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
+from capture_android import frida_versions
+from capture_android.adb import AdbClient
+from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
 
 _DEFAULT_SCRIPTS_DIR = os.path.expanduser("~/.config/traffic/frida-scripts")
-_PROJECT = str(Path(__file__).resolve().parents[2])  # the capture-tools dir
+_PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
 
 
 # --- prompt helpers ------------------------------------------------------
@@ -169,7 +169,7 @@ def main(argv=None) -> None:
 
     # Launch the capture under the chosen frida (client+server must match).
     cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
-           "python", "-m", "capture_tools.android",
+           "python", "-m", "capture_android.headless",
            "--serial", serial, "--package", package, "--gateway", args.gateway]
     if url:
         cmd += ["--url", url]

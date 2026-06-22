@@ -10,7 +10,7 @@ design and roadmap.
 |-----|------|
 | [`proto/`](proto/) | gRPC contract (source of truth) |
 | [`traffic-gateway/`](traffic-gateway/) | Go service: ingest, decode (tshark + pluggable [`decoders/`](traffic-gateway/decoders/)), per-session SQLite store, serve |
-| [`capture-tools/`](capture-tools/) | Python capture agents (Chrome, mitmproxy; Android later) |
+| [`capture-tools/`](capture-tools/) | Independent Python capture apps — `capture_chrome`, `capture_mitmproxy`, `capture_android` — over a shared `capture_sdk` (each its own project + deps) |
 | [`traffic-viewer/`](traffic-viewer/) | Textual TUI |
 | [`traffic-mcp/`](traffic-mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
 
@@ -104,7 +104,7 @@ browse. Capture is interface-wide, but only Chrome's TLS sessions have keys, so 
 Fresh throwaway profile (recommended for clean captures):
 
 ```sh
-sg wireshark -c 'cd capture-tools && uv run python -m capture_tools.chrome \
+sg wireshark -c 'uv run --project capture-tools/capture_chrome capture-chrome \
     --label "live demo" --url https://example.com'
 ```
 
@@ -113,8 +113,8 @@ extensions, history. Quit any Chrome already running on that profile first, othe
 the launch just attaches to the running instance and no TLS keys are logged:
 
 ```sh
-sg wireshark -c 'cd capture-tools && CHROME_BIN=google-chrome-canary uv run python \
-    -m capture_tools.chrome --label "manual test" \
+sg wireshark -c 'CHROME_BIN=google-chrome-canary uv run \
+    --project capture-tools/capture_chrome capture-chrome --label "manual test" \
     --profile-dir "$HOME/.config/google-chrome-canary"'
 ```
 
@@ -148,11 +148,11 @@ a Frida bypass.
 
 ```sh
 # regular HTTP proxy on :8080 — set the device/app proxy to <this-host>:8080
-uv run --project capture-tools python -m capture_tools.mitm --label "api poke"
+uv run --project capture-tools/capture_mitmproxy capture-mitmproxy --label "api poke"
 
 # WireGuard server — any device that can be a WireGuard client routes through it
 # (mitmproxy prints the peer config / QR on startup)
-uv run --project capture-tools python -m capture_tools.mitm --mode wireguard --label phone
+uv run --project capture-tools/capture_mitmproxy capture-mitmproxy --mode wireguard --label phone
 ```
 
 Flows appear live in the TUI as they complete; stop mitmdump (`q`/Ctrl-C) to close the
@@ -179,7 +179,7 @@ to the one recommended for the device's Android release — frida 17 can't spawn
 Android ≤ 11), pick the app, optionally add Frida scripts (SSL-unpinning/bypass):
 
 ```sh
-uv run --project capture-tools python -m capture_tools.android.cli
+uv run --project capture-tools/capture_android capture-android
 ```
 
 It can create + boot a rootable `google_apis` AVD (installing the system image on
@@ -190,7 +190,7 @@ path you enter). The chosen frida version is applied via `uv run --with frida==<
 **Non-interactive** — for scripting/known targets:
 
 ```sh
-uv run --project capture-tools python -m capture_tools.android \
+uv run --project capture-tools/capture_android python -m capture_android.headless \
     --package com.example.app --url https://example.com --duration 30 --script unpin.js
 ```
 
