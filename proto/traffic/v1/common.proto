@@ -102,6 +102,19 @@ message Flow {
   // WebSocket frames; the frames are WsMessages fetched via ListMessages.
   bool websocket = 31;
   uint32 ws_message_count = 32;
+
+  // Proxy: set when this connection went through an HTTP CONNECT or SOCKS proxy,
+  // detected from the captured handshake.
+  Proxy proxy = 33;
+}
+
+// A proxy a connection was observed to go through, detected from the captured
+// CONNECT/SOCKS handshake. Credentials are included when present in the capture.
+message Proxy {
+  string addr = 1;      // proxy endpoint host:port (the connection's peer)
+  string type = 2;      // "http" (CONNECT) | "socks"
+  string username = 3;  // proxy credentials, if seen on the wire
+  string password = 4;
 }
 
 // One decoded WebSocket frame — a message-shaped record, distinct from

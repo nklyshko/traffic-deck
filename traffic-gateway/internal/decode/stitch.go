@@ -1,12 +1,34 @@
 package decode
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+// parseProxyAuth extracts credentials from a Proxy-Authorization: Basic header
+// (base64 user:pass). Returns empty strings if absent or not decodable.
+func parseProxyAuth(headers []Header) (user, pass string) {
+	for _, h := range headers {
+		if !strings.EqualFold(h.Name, "proxy-authorization") {
+			continue
+		}
+		v := strings.TrimSpace(h.Value)
+		if len(v) < 6 || !strings.EqualFold(v[:6], "Basic ") {
+			return "", ""
+		}
+		dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(v[6:]))
+		if err != nil {
+			return "", ""
+		}
+		u, p, _ := strings.Cut(string(dec), ":")
+		return u, p
+	}
+	return "", ""
+}
 
 // stitcher correlates per-frame EK records into request/response flows.
 type stitcher struct {
@@ -20,6 +42,10 @@ type stitcher struct {
 	// decoded bytes themselves are pulled via tshark `follow,tls,raw` (see streams.go),
 	// since tshark only exposes decrypted undissected payloads through follow.
 	streamMeta map[string]*tlsStream
+
+	// proxyByStream records, per tcp.stream, the proxy a connection went through
+	// (from a CONNECT or SOCKS handshake); attached to every flow on that stream.
+	proxyByStream map[string]*FlowProxy
 
 	// onChange, if set, fires after each flow is created (isNew=true) or updated.
 	onChange func(f *Flow, isNew bool)
@@ -38,32 +64,56 @@ type tlsStream struct {
 
 func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
 	return &stitcher{
-		ds:         ds,
-		byKey:      map[string]*Flow{},
-		h1pending:  map[string][]*Flow{},
-		streamFlow: map[string]*Flow{},
-		streamMeta: map[string]*tlsStream{},
-		onChange:   onChange,
+		ds:            ds,
+		byKey:         map[string]*Flow{},
+		h1pending:     map[string][]*Flow{},
+		streamFlow:    map[string]*Flow{},
+		streamMeta:    map[string]*tlsStream{},
+		proxyByStream: map[string]*FlowProxy{},
+		onChange:      onChange,
 	}
 }
 
-// addPacket records each TLS stream's ClientHello SNI + tls.stream index + endpoints,
-// so decodeCustomStreams can decide which streams to decrypt-and-decode.
+// addPacket records per-connection packet-level metadata: each TLS stream's
+// ClientHello SNI + tls.stream index (to pick streams for custom decoders), and any
+// SOCKS proxy seen on the stream.
 func (s *stitcher) addPacket(l layers) {
 	tcp := l.first(fTCPStream)
 	if tcp == "" {
 		return
 	}
-	sni := l.first(fTLSSNI)
-	if sni == "" {
-		return // only ClientHello packets carry the metadata we need
+	if sni := l.first(fTLSSNI); sni != "" {
+		s.streamMeta[tcp] = &tlsStream{
+			tlsStreamIdx: l.first(fTLSStream),
+			sni:          sni,
+			clientAddr:   addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort)),
+			serverHost:   firstNonEmpty(l.first(fIPDst), l.first(fIP6Dst)),
+			serverPort:   l.first(fTCPDstPort),
+		}
 	}
-	s.streamMeta[tcp] = &tlsStream{
-		tlsStreamIdx: l.first(fTLSStream),
-		sni:          sni,
-		clientAddr:   addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort)),
-		serverHost:   firstNonEmpty(l.first(fIPDst), l.first(fIP6Dst)),
-		serverPort:   l.first(fTCPDstPort),
+	if l.first(fSocksVersion) != "" {
+		s.noteSocksProxy(l, tcp)
+	}
+}
+
+// noteSocksProxy merges SOCKS proxy details for a stream across its handshake packets.
+// The proxy is the connection's server endpoint; client-originated packets (greeting,
+// auth, connect) carry it as the destination, so prefer their dst.
+func (s *stitcher) noteSocksProxy(l layers, tcp string) {
+	p := s.proxyByStream[tcp]
+	if p == nil {
+		p = &FlowProxy{Type: "socks"}
+		s.proxyByStream[tcp] = p
+	}
+	user, pass := l.first(fSocksUsername), l.first(fSocksPassword)
+	if p.Addr == "" || user != "" { // client→proxy packet → dst is the proxy
+		p.Addr = addr(l.first(fIPDst), l.first(fIP6Dst), l.first(fTCPDstPort))
+	}
+	if user != "" {
+		p.Username = user
+	}
+	if pass != "" {
+		p.Password = pass
 	}
 }
 
@@ -75,6 +125,11 @@ func firstNonEmpty(a, b string) string {
 }
 
 func (s *stitcher) emit(f *Flow, isNew bool) {
+	if f.Proxy == nil {
+		if p := s.proxyByStream[f.TCPStream]; p != nil {
+			f.Proxy = p // attach the connection's proxy to every flow on the stream
+		}
+	}
 	if s.onChange != nil {
 		s.onChange(f, isNew)
 	}
@@ -134,6 +189,13 @@ func (s *stitcher) addHTTP1(l layers, tcp string) {
 	if method != "" {
 		f := s.newFlow(l, tcp, "")
 		s.fillRequest(f, l, method)
+		if method == "CONNECT" {
+			// An HTTP proxy tunnel: the connection's peer is the proxy; subsequent
+			// (decrypted) flows on this stream inherit it via emit.
+			p := &FlowProxy{Addr: f.DstAddr, Type: "http"}
+			p.Username, p.Password = parseProxyAuth(f.RequestHeaders)
+			s.proxyByStream[tcp] = p
+		}
 		if body != nil {
 			attachBody(f, l, true, false, body, reassembled)
 		}

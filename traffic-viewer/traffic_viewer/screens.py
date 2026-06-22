@@ -609,6 +609,11 @@ class FlowDetailScreen(Screen):
             "[dim]$proto  status=$status  tls=$tls  $src → $dst[/dim]",
             proto=f.protocol, status=str(f.status),
             tls="yes" if f.tls_decrypted else "no", src=f.src_addr, dst=f.dst_addr))
+        if f.proxy.addr:
+            creds = f"  {f.proxy.username}:{f.proxy.password}" if f.proxy.username else ""
+            lines.append(Content.from_markup(
+                "[yellow]⇄ via $type proxy $addr[/yellow]$creds",
+                type=f.proxy.type, addr=f.proxy.addr, creds=creds))
         self._append_annotations(lines, f)
         lines.append(Content(""))
         lines.append(Content.from_markup("[b u]Request headers[/b u]"))

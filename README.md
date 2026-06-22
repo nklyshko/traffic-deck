@@ -141,7 +141,7 @@ Useful flags / env:
 | `--url URL` | open a URL on launch |
 | `--duration N` | auto-stop after N seconds |
 | `--iface IFACE` | capture interface (default: auto-detected) |
-| `--filter BPF` | dumpcap capture filter (default `tcp port 80 or tcp port 443`) |
+| `--filter BPF` | dumpcap capture filter (default `tcp or udp port 443` — all TCP so proxies/non-standard ports are captured; narrow to e.g. `tcp port 443` for smaller captures) |
 | `--gateway ADDR` | gateway address (default `127.0.0.1:8080`) |
 | `CHROME_BIN` | Chrome/Chromium binary (e.g. `google-chrome-canary`) |
 | `DUMPCAP_BIN` / `CAPTURE_IFACE` | override dumpcap / interface |
@@ -282,6 +282,9 @@ mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.
 
 - **Protocols** — HTTP/1.1, HTTP/2, HTTP/3 + QUIC, WebSocket, and custom binary
   protocols over TLS (compiled-in Go decoders; first decoder: **MAX** / `ru.oneme`).
+- **Proxy detection** — connections through an HTTP `CONNECT` or SOCKS proxy are
+  flagged per flow (proxy address, type, and any credentials seen on the wire),
+  detected from the captured handshake.
 - **Capture sources** — live Chrome (`dumpcap` + `SSLKEYLOGFILE`), mitmproxy (any
   device, incl. WireGuard), and per-app Android from a rooted device/emulator (Frida
   `libssl` key-log + UID→NFLOG `tcpdump`).

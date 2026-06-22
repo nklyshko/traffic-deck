@@ -126,6 +126,8 @@ def flags_cell(f, selected: bool) -> Text:
         t.append("⬡ ", style="blue")
     if f.websocket:
         t.append(f"⇅{f.ws_message_count} ", style="bold magenta")
+    if f.proxy.addr:
+        t.append("⇄ ", style="yellow")  # went through a proxy
     return t
 
 

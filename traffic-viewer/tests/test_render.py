@@ -11,12 +11,16 @@ def header(name, value):
     return types.SimpleNamespace(name=name, value=value)
 
 
+def proxy(addr="", ptype="", username="", password=""):
+    return types.SimpleNamespace(addr=addr, type=ptype, username=username, password=password)
+
+
 def flow(**kw):
     d = dict(
         method="GET", authority="api.example.com", path="/v1", query="", scheme="https",
         status=200, protocol="HTTP/2", request_headers=[], response_headers=[],
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
-        websocket=False, ws_message_count=0,
+        websocket=False, ws_message_count=0, proxy=proxy(),
     )
     d.update(kw)
     return types.SimpleNamespace(**d)
@@ -100,6 +104,7 @@ def test_flags_cell():
     assert "#2" in plain and "💬" in plain and "⬡" in plain and "⇅3" in plain
 
     assert render.flags_cell(flow(), selected=False).plain == ""
+    assert "⇄" in render.flags_cell(flow(proxy=proxy("10.0.0.9:8080", "http")), selected=False).plain
 
 
 # --- export ---------------------------------------------------------------

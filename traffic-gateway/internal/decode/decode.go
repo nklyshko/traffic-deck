@@ -53,10 +53,22 @@ type Flow struct {
 	// path recomputes it from ws_messages via attachWsCounts).
 	WsMessageCount uint32
 
+	// Proxy is set when this connection went through an HTTP CONNECT or SOCKS proxy,
+	// detected from the captured handshake.
+	Proxy *FlowProxy
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool
 	respBodyFinal bool
+}
+
+// FlowProxy describes a proxy a connection went through (detected from the wire).
+type FlowProxy struct {
+	Addr     string // proxy endpoint host:port (the connection's peer)
+	Type     string // "http" (CONNECT) | "socks"
+	Username string // credentials, if present in the capture
+	Password string
 }
 
 // WsMessage is one decoded WebSocket frame, a message-shaped record distinct from
@@ -86,7 +98,7 @@ type Dataset struct {
 // hand to custom raw-TCP decoders.
 var metaProtos = map[string]bool{
 	"frame": true, "ip": true, "ipv6": true, "tcp": true, "udp": true,
-	"tls": true, "quic": true,
+	"tls": true, "quic": true, "socks": true,
 }
 
 // pduProtos each become one stitcher record: one per HTTP/2 frame, the HTTP/1.1
@@ -124,8 +136,8 @@ func tsharkArgs(input []string, keylogPath string, live bool) []string {
 	// SNI + tls.stream index used to pick streams for custom raw-TCP decoders, which run
 	// in a separate `-z follow,tls,raw` pass (tshark only exposes decrypted undissected
 	// bytes through follow, not as a PDML field;).
-	args = append(args, "-Y", "http or http2 or websocket or tls or http3", "-T", "pdml",
-		"-O", "frame,ip,ipv6,tcp,udp,tls,quic,http,http2,websocket,http3")
+	args = append(args, "-Y", "http or http2 or websocket or tls or http3 or socks", "-T", "pdml",
+		"-O", "frame,ip,ipv6,tcp,udp,tls,quic,http,http2,websocket,http3,socks")
 	return args
 }
 

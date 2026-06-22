@@ -63,6 +63,13 @@ const (
 	fWSPayloadText = "websocket.payload.text"
 )
 
+// SOCKS proxy handshake fields (plaintext on the wire).
+const (
+	fSocksVersion  = "socks.version"
+	fSocksUsername = "socks.username"
+	fSocksPassword = "socks.password"
+)
+
 // Body byte-fields: raw hex lives in the `value` attribute. The "reassembled" variants
 // carry the complete body; the others carry a single frame's bytes.
 const (

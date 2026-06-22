@@ -286,6 +286,12 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		Websocket:      f.Websocket,
 		WsMessageCount: f.WsMessageCount,
 	}
+	if f.Proxy != nil {
+		pf.Proxy = &trafficv1.Proxy{
+			Addr: f.Proxy.Addr, Type: f.Proxy.Type,
+			Username: f.Proxy.Username, Password: f.Proxy.Password,
+		}
+	}
 	for _, h := range f.RequestHeaders {
 		pf.RequestHeaders = append(pf.RequestHeaders, &trafficv1.Header{Name: h.Name, Value: h.Value})
 	}

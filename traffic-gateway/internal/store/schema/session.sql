@@ -31,7 +31,11 @@ CREATE TABLE IF NOT EXISTS flows (
     tcp_stream    TEXT,
     h2_stream_id  TEXT,
     req_body_ref  TEXT,
-    resp_body_ref TEXT
+    resp_body_ref TEXT,
+    proxy_addr    TEXT,           -- proxy this connection went through (host:port), if any
+    proxy_type    TEXT,           -- "http" | "socks"
+    proxy_user    TEXT,
+    proxy_pass    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS flow_headers (

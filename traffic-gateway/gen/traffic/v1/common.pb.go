@@ -538,8 +538,11 @@ type Flow struct {
 	// WebSocket frames; the frames are WsMessages fetched via ListMessages.
 	Websocket      bool   `protobuf:"varint,31,opt,name=websocket,proto3" json:"websocket,omitempty"`
 	WsMessageCount uint32 `protobuf:"varint,32,opt,name=ws_message_count,json=wsMessageCount,proto3" json:"ws_message_count,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Proxy: set when this connection went through an HTTP CONNECT or SOCKS proxy,
+	// detected from the captured handshake.
+	Proxy         *Proxy `protobuf:"bytes,33,opt,name=proxy,proto3" json:"proxy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -796,6 +799,83 @@ func (x *Flow) GetWsMessageCount() uint32 {
 	return 0
 }
 
+func (x *Flow) GetProxy() *Proxy {
+	if x != nil {
+		return x.Proxy
+	}
+	return nil
+}
+
+// A proxy a connection was observed to go through, detected from the captured
+// CONNECT/SOCKS handshake. Credentials are included when present in the capture.
+type Proxy struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Addr          string                 `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`         // proxy endpoint host:port (the connection's peer)
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`         // "http" (CONNECT) | "socks"
+	Username      string                 `protobuf:"bytes,3,opt,name=username,proto3" json:"username,omitempty"` // proxy credentials, if seen on the wire
+	Password      string                 `protobuf:"bytes,4,opt,name=password,proto3" json:"password,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Proxy) Reset() {
+	*x = Proxy{}
+	mi := &file_traffic_v1_common_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Proxy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Proxy) ProtoMessage() {}
+
+func (x *Proxy) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_common_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Proxy.ProtoReflect.Descriptor instead.
+func (*Proxy) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_common_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Proxy) GetAddr() string {
+	if x != nil {
+		return x.Addr
+	}
+	return ""
+}
+
+func (x *Proxy) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *Proxy) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *Proxy) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
 // One decoded WebSocket frame — a message-shaped record, distinct from
 // the request/response Flow. Belongs to the Upgrade flow (flow_id) on its connection.
 type WsMessage struct {
@@ -814,7 +894,7 @@ type WsMessage struct {
 
 func (x *WsMessage) Reset() {
 	*x = WsMessage{}
-	mi := &file_traffic_v1_common_proto_msgTypes[5]
+	mi := &file_traffic_v1_common_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -826,7 +906,7 @@ func (x *WsMessage) String() string {
 func (*WsMessage) ProtoMessage() {}
 
 func (x *WsMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_common_proto_msgTypes[5]
+	mi := &file_traffic_v1_common_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -839,7 +919,7 @@ func (x *WsMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WsMessage.ProtoReflect.Descriptor instead.
 func (*WsMessage) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_common_proto_rawDescGZIP(), []int{5}
+	return file_traffic_v1_common_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *WsMessage) GetId() string {
@@ -913,7 +993,7 @@ type Tag struct {
 
 func (x *Tag) Reset() {
 	*x = Tag{}
-	mi := &file_traffic_v1_common_proto_msgTypes[6]
+	mi := &file_traffic_v1_common_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -925,7 +1005,7 @@ func (x *Tag) String() string {
 func (*Tag) ProtoMessage() {}
 
 func (x *Tag) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_common_proto_msgTypes[6]
+	mi := &file_traffic_v1_common_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -938,7 +1018,7 @@ func (x *Tag) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tag.ProtoReflect.Descriptor instead.
 func (*Tag) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_common_proto_rawDescGZIP(), []int{6}
+	return file_traffic_v1_common_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Tag) GetId() string {
@@ -990,7 +1070,7 @@ type Comment struct {
 
 func (x *Comment) Reset() {
 	*x = Comment{}
-	mi := &file_traffic_v1_common_proto_msgTypes[7]
+	mi := &file_traffic_v1_common_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1002,7 +1082,7 @@ func (x *Comment) String() string {
 func (*Comment) ProtoMessage() {}
 
 func (x *Comment) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_common_proto_msgTypes[7]
+	mi := &file_traffic_v1_common_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1015,7 +1095,7 @@ func (x *Comment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Comment.ProtoReflect.Descriptor instead.
 func (*Comment) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_common_proto_rawDescGZIP(), []int{7}
+	return file_traffic_v1_common_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Comment) GetId() string {
@@ -1067,7 +1147,7 @@ type Group struct {
 
 func (x *Group) Reset() {
 	*x = Group{}
-	mi := &file_traffic_v1_common_proto_msgTypes[8]
+	mi := &file_traffic_v1_common_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1079,7 +1159,7 @@ func (x *Group) String() string {
 func (*Group) ProtoMessage() {}
 
 func (x *Group) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_common_proto_msgTypes[8]
+	mi := &file_traffic_v1_common_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1092,7 +1172,7 @@ func (x *Group) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Group.ProtoReflect.Descriptor instead.
 func (*Group) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_common_proto_rawDescGZIP(), []int{8}
+	return file_traffic_v1_common_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Group) GetId() string {
@@ -1143,7 +1223,7 @@ type DecodeProgress struct {
 
 func (x *DecodeProgress) Reset() {
 	*x = DecodeProgress{}
-	mi := &file_traffic_v1_common_proto_msgTypes[9]
+	mi := &file_traffic_v1_common_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1155,7 +1235,7 @@ func (x *DecodeProgress) String() string {
 func (*DecodeProgress) ProtoMessage() {}
 
 func (x *DecodeProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_common_proto_msgTypes[9]
+	mi := &file_traffic_v1_common_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1168,7 +1248,7 @@ func (x *DecodeProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecodeProgress.ProtoReflect.Descriptor instead.
 func (*DecodeProgress) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_common_proto_rawDescGZIP(), []int{9}
+	return file_traffic_v1_common_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DecodeProgress) GetSessionId() string {
@@ -1230,7 +1310,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\xdd\b\n" +
+	"\acontent\"\x86\t\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1270,7 +1350,13 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\tgroup_ids\x18\x1d \x03(\tR\bgroupIds\x12/\n" +
 	"\bcomments\x18\x1e \x03(\v2\x13.traffic.v1.CommentR\bcomments\x12\x1c\n" +
 	"\twebsocket\x18\x1f \x01(\bR\twebsocket\x12(\n" +
-	"\x10ws_message_count\x18  \x01(\rR\x0ewsMessageCount\"\x81\x02\n" +
+	"\x10ws_message_count\x18  \x01(\rR\x0ewsMessageCount\x12'\n" +
+	"\x05proxy\x18! \x01(\v2\x11.traffic.v1.ProxyR\x05proxy\"g\n" +
+	"\x05Proxy\x12\x12\n" +
+	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
+	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\"\x81\x02\n" +
 	"\tWsMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1342,7 +1428,7 @@ func file_traffic_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_traffic_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_traffic_v1_common_proto_goTypes = []any{
 	(SourceKind)(0),        // 0: traffic.v1.SourceKind
 	(FileKind)(0),          // 1: traffic.v1.FileKind
@@ -1352,11 +1438,12 @@ var file_traffic_v1_common_proto_goTypes = []any{
 	(*Cookie)(nil),         // 5: traffic.v1.Cookie
 	(*Body)(nil),           // 6: traffic.v1.Body
 	(*Flow)(nil),           // 7: traffic.v1.Flow
-	(*WsMessage)(nil),      // 8: traffic.v1.WsMessage
-	(*Tag)(nil),            // 9: traffic.v1.Tag
-	(*Comment)(nil),        // 10: traffic.v1.Comment
-	(*Group)(nil),          // 11: traffic.v1.Group
-	(*DecodeProgress)(nil), // 12: traffic.v1.DecodeProgress
+	(*Proxy)(nil),          // 8: traffic.v1.Proxy
+	(*WsMessage)(nil),      // 9: traffic.v1.WsMessage
+	(*Tag)(nil),            // 10: traffic.v1.Tag
+	(*Comment)(nil),        // 11: traffic.v1.Comment
+	(*Group)(nil),          // 12: traffic.v1.Group
+	(*DecodeProgress)(nil), // 13: traffic.v1.DecodeProgress
 }
 var file_traffic_v1_common_proto_depIdxs = []int32{
 	0,  // 0: traffic.v1.Session.source_kind:type_name -> traffic.v1.SourceKind
@@ -1366,13 +1453,14 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	5,  // 4: traffic.v1.Flow.request_cookies:type_name -> traffic.v1.Cookie
 	6,  // 5: traffic.v1.Flow.request_body:type_name -> traffic.v1.Body
 	6,  // 6: traffic.v1.Flow.response_body:type_name -> traffic.v1.Body
-	10, // 7: traffic.v1.Flow.comments:type_name -> traffic.v1.Comment
-	6,  // 8: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	11, // 7: traffic.v1.Flow.comments:type_name -> traffic.v1.Comment
+	8,  // 8: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
+	6,  // 9: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }
@@ -1390,7 +1478,7 @@ func file_traffic_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_common_proto_rawDesc), len(file_traffic_v1_common_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
