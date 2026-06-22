@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
 	"github.com/nikitak/parsing/traffic-gateway/decoders"
+	trafficv1 "github.com/nikitak/parsing/traffic-gateway/gen/traffic/v1"
 	"github.com/nikitak/parsing/traffic-gateway/internal/decode"
 	"github.com/nikitak/parsing/traffic-gateway/internal/objstore"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"

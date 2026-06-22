@@ -187,10 +187,10 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 
 // Register attaches all implemented services to s, sharing one live hub between
 // the ingest (producer) and viewer (subscriber) sides.
-func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string) {
+func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string, liveDecode bool) {
 	hub := newLiveHub(tshark)
 	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
-	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub))
+	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode))
 	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot))
 }

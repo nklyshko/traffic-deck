@@ -27,8 +27,9 @@ func newLiveHub(tshark string) *liveHub {
 }
 
 type liveSession struct {
-	pw   *io.PipeWriter
-	done chan struct{} // closed when the decode goroutine exits
+	pw       *io.PipeWriter // tshark live pipe (HTTP/WS/HTTP3)
+	customPW *io.PipeWriter // second copy of the pcap for the Go custom-TCP decoder (may be nil)
+	done     chan struct{}  // closed when the tshark decode goroutine exits
 
 	mu     sync.Mutex
 	flows  map[string]*trafficv1.Flow
@@ -50,11 +51,11 @@ func (h *liveHub) get(sessionID string) *liveSession {
 	return h.sessions[sessionID]
 }
 
-// start spins up a persistent tshark for sessionID, fed by the returned pipe via
-// write(). keylogPath must already exist (it may be empty and grow); pcapPath is the
-// archive file the gateway tees to — the live custom-decode poller reads it (follow
-// can't read the stdin pipe), and may be empty/not-yet-created.
-func (h *liveHub) start(sessionID, pcapPath, keylogPath string) {
+// start spins up the live decode for sessionID, fed by the pipe(s) via write().
+// keylogPath must already exist (it may be empty and grow). tshark handles HTTP/WS/
+// HTTP3 from the primary pipe; when custom decoders are registered, a second copy of
+// the pcap feeds the in-process Go TLS decryptor for custom raw-TCP protocols (§8.4).
+func (h *liveHub) start(sessionID, keylogPath string) {
 	pr, pw := io.Pipe()
 	ls := &liveSession{
 		pw:      pw,
@@ -63,6 +64,12 @@ func (h *liveHub) start(sessionID, pcapPath, keylogPath string) {
 		subs:    map[int]chan *trafficv1.FlowEvent{},
 		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
+
+	var customPR *io.PipeReader
+	if decode.HasCustomDecoders() {
+		customPR, ls.customPW = io.Pipe()
+	}
+
 	h.mu.Lock()
 	h.sessions[sessionID] = ls
 	h.mu.Unlock()
@@ -74,8 +81,15 @@ func (h *liveHub) start(sessionID, pcapPath, keylogPath string) {
 		defer pr.Close()
 		// Background context: the decode lives until the pipe is closed by stop(),
 		// independent of any single upload stream's lifetime.
-		_ = decode.LiveDecode(context.Background(), h.tshark, pcapPath, keylogPath, pr, ls.onFlow, ls.onMessage)
+		_ = decode.LiveDecode(context.Background(), h.tshark, keylogPath, pr, ls.onFlow, ls.onMessage)
 	}()
+
+	if customPR != nil {
+		go func() {
+			defer customPR.Close()
+			_ = decode.LiveTCPDecode(customPR, keylogPath, ls.onFlow, ls.onMessage)
+		}()
+	}
 }
 
 // startPassive registers a tshark-less live session for a *pushed* source
@@ -99,6 +113,9 @@ func (h *liveHub) startPassive(sessionID string) *liveSession {
 func (h *liveHub) write(sessionID string, b []byte) {
 	if ls := h.get(sessionID); ls != nil {
 		_, _ = ls.pw.Write(b)
+		if ls.customPW != nil {
+			_, _ = ls.customPW.Write(b) // tee to the Go custom-TCP decoder
+		}
 	}
 }
 
@@ -111,6 +128,9 @@ func (h *liveHub) stop(sessionID string) {
 	h.mu.Unlock()
 	if ls == nil {
 		return
+	}
+	if ls.customPW != nil {
+		_ = ls.customPW.Close() // EOF the Go custom-TCP decoder's pcap reader
 	}
 	if ls.pw != nil { // tshark-fed session: close the pipe (EOF) and wait for decode
 		_ = ls.pw.Close()

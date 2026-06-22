@@ -223,13 +223,18 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 Non-HTTP binary protocols carried over TCP (e.g. MAX messenger, `ru.oneme`) are decoded
 by **compiled-in Go modules** under [`traffic-gateway/decoders/`](traffic-gateway/decoders/).
 Each decoder is its own package that self-registers via `init()`; the gateway
-blank-imports it in `cmd/gateway`. The gateway gets a connection's TLS-decrypted bytes
-via `tshark -z follow,tls,raw` over any **matched** stream and the decoder turns them
-into message frames, surfaced as a synthetic flow with the WebSocket-style `M` message
-timeline. HTTP and custom-protocol flows coexist in one session. This runs both on the
-batch pass (whole stream at close) and **live during capture**: the live path re-runs
-`follow` over the growing capture on a short cadence and feeds only the newly-arrived
-bytes to the decoder, so MAX frames stream into the `M` timeline in real time.
+blank-imports it in `cmd/gateway`. The decoder turns a connection's TLS-decrypted
+directional byte stream into message frames, surfaced as a synthetic flow with the
+WebSocket-style `M` message timeline. HTTP and custom-protocol flows coexist in one
+session. Two paths produce the decrypted bytes:
+
+- **Batch** (session close): `tshark -z follow,tls,raw` over each matched stream.
+- **Live** (during capture): fully in-process in Go — the gateway taps the live pcap,
+  reassembles TCP (`gopacket`), and decrypts TLS 1.3 from the key-log
+  ([`internal/tlsdecrypt`](traffic-gateway/internal/tlsdecrypt/)), feeding the decoder
+  as bytes arrive — no `tshark` re-run. So MAX frames stream into the `M` timeline in
+  real time. Streams that aren't TLS 1.3 (or whose link type `gopacket` can't decode,
+  e.g. NFLOG) fall back to the batch pass on close.
 
 A decoder implements `decoders.Decoder` (`Name`, `Matches(StreamMeta)`, `NewSession`);
 the returned `Session` is a stateful framer — `Feed(fromClient, data) []Message` —
@@ -268,6 +273,7 @@ mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.
 | `DATA_ROOT` | `./data` | SQLite bundles + catalog |
 | `GATEWAY_ADDR` | `127.0.0.1:8080` | gRPC listen / viewer + tools connect addr |
 | `TSHARK_PATH` | `tshark` | decode binary |
+| `GATEWAY_LIVE_DECODE` | `true` | live decode during capture (tshark HTTP/WS/HTTP3 + in-process Go TLS decryption for custom raw-TCP). Set `0`/`false` to archive only and decode on close. |
 
 ## Status
 

@@ -78,8 +78,8 @@ func serve() {
 		log.Fatalf("listen %s: %v", cfg.GRPCAddr, err)
 	}
 	s := grpc.NewServer()
-	server.Register(s, st, obj, cfg.TsharkPath)
-	log.Printf("traffic-gateway listening on %s", cfg.GRPCAddr)
+	server.Register(s, st, obj, cfg.TsharkPath, cfg.LiveDecode)
+	log.Printf("traffic-gateway listening on %s (live decode: %v)", cfg.GRPCAddr, cfg.LiveDecode)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}

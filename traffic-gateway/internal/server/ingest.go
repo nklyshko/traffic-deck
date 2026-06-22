@@ -26,14 +26,15 @@ const maxChunkBytes = 1 << 20 // advertised upload chunk size
 // Live streaming decode is a later step.
 type Ingest struct {
 	trafficv1.UnimplementedIngestServiceServer
-	st     *store.Store
-	obj    objstore.Store
-	tshark string
-	hub    *liveHub
+	st         *store.Store
+	obj        objstore.Store
+	tshark     string
+	hub        *liveHub
+	liveDecode bool // when false, streaming uploads are archived and decoded only on close
 }
 
-func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub) *Ingest {
-	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub}
+func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode bool) *Ingest {
+	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub, liveDecode: liveDecode}
 }
 
 func pcapKey(sid string) string   { return path.Join("sessions", sid, "capture.pcap") }
@@ -76,13 +77,12 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 		case *trafficv1.CaptureChunk_Begin:
 			sid = m.Begin.GetSessionId()
 			uploadID = m.Begin.GetUploadId()
-			if m.Begin.GetMode() == trafficv1.CaptureMode_CAPTURE_MODE_STREAMING_LIVE {
+			if m.Begin.GetMode() == trafficv1.CaptureMode_CAPTURE_MODE_STREAMING_LIVE && i.liveDecode {
 				live = true
 				// Ensure the key.log exists so tshark can watch it, then start live decode.
 				_ = i.obj.WriteAt(keylogKey(sid), nil, 0)
 				keylogLocal, _ := i.obj.LocalPath(keylogKey(sid))
-				pcapLocal, _ := i.obj.LocalPath(pcapKey(sid)) // for the live custom-decode poller
-				i.hub.start(sid, pcapLocal, keylogLocal)
+				i.hub.start(sid, keylogLocal)
 			}
 		case *trafficv1.CaptureChunk_Data:
 			if sid == "" {
