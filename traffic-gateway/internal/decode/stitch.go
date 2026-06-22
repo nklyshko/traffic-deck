@@ -80,62 +80,58 @@ func (s *stitcher) emit(f *Flow, isNew bool) {
 	}
 }
 
+// add dispatches one per-frame PDML record to the handler for its protocol.
 func (s *stitcher) add(l layers) {
 	tcp := l.first(fTCPStream)
-
-	if op := l.first(fWSOpcode); op != "" {
-		s.addWebsocket(l, tcp, op)
-		return
+	switch {
+	case l.first(fWSOpcode) != "":
+		s.addWebsocket(l, tcp, l.first(fWSOpcode))
+	case l.first(fQUICConn) != "" && l.first(fH3StreamID) != "":
+		s.addHTTP3(l, l.first(fQUICConn))
+	case l.first(fH2StreamID) != "":
+		s.addHTTP2(l, tcp, l.first(fH2StreamID))
+	default:
+		s.addHTTP1(l, tcp)
 	}
+}
 
-	// HTTP/3 frames carry a quic.connection.number (merged from the quic layer) and a
-	// per-frame http3.frame_streamid; key by (connection, stream) like HTTP/2.
-	if conn := l.first(fQUICConn); conn != "" && l.first(fH3StreamID) != "" {
-		s.addHTTP3(l, conn)
-		return
-	}
-
-	sid := l.first(fH2StreamID)
-
-	method := l.first(fH2Method)
-	if method == "" {
-		method = l.first(fH1Method)
-	}
-	status := l.first(fH2Status)
-	if status == "" {
-		status = l.first(fH1Status)
-	}
-	isReq := method != ""
-	isResp := status != ""
+// addHTTP2 correlates one HTTP/2 frame into its flow, keyed by TCP stream + stream id.
+func (s *stitcher) addHTTP2(l layers, tcp, sid string) {
+	method, status := l.first(fH2Method), l.first(fH2Status)
 	body, reassembled := bodyBytes(l)
-	if !isReq && !isResp && body == nil {
-		return // a frame with neither headers nor body data; nothing to do
+	if method == "" && status == "" && body == nil {
+		return // not HEADERS or DATA — nothing to record
 	}
+	key := tcp + ":" + sid
+	f := s.byKey[key]
+	created := f == nil
+	if created {
+		f = s.newFlow(l, tcp, sid)
+		s.byKey[key] = f
+		s.ds.Flows = append(s.ds.Flows, f)
+	}
+	if method != "" {
+		s.fillRequest(f, l, method)
+	}
+	if status != "" {
+		s.fillResponse(f, l, status)
+	}
+	if body != nil {
+		attachBody(f, l, method != "", status != "", body, reassembled)
+	}
+	s.emit(f, created)
+}
 
-	if sid != "" {
-		key := tcp + ":" + sid
-		f := s.byKey[key]
-		created := f == nil
-		if created {
-			f = s.newFlow(l, tcp, sid)
-			s.byKey[key] = f
-			s.ds.Flows = append(s.ds.Flows, f)
-		}
-		if isReq {
-			s.fillRequest(f, l, method)
-		}
-		if isResp {
-			s.fillResponse(f, l, status)
-		}
-		if body != nil {
-			attachBody(f, l, isReq, isResp, body, reassembled)
-		}
-		s.emit(f, created)
+// addHTTP1 correlates one HTTP/1.1 frame. With no stream id, responses pair to requests
+// FIFO per TCP stream; the request flow also anchors a later WebSocket Upgrade.
+func (s *stitcher) addHTTP1(l layers, tcp string) {
+	method, status := l.first(fH1Method), l.first(fH1Status)
+	body, reassembled := bodyBytes(l)
+	if method == "" && status == "" && body == nil {
 		return
 	}
 
-	// HTTP/1.1: no stream id — pair responses to requests FIFO per TCP stream.
-	if isReq {
+	if method != "" {
 		f := s.newFlow(l, tcp, "")
 		s.fillRequest(f, l, method)
 		if body != nil {
@@ -147,12 +143,13 @@ func (s *stitcher) add(l layers) {
 		s.emit(f, true)
 		return
 	}
-	// response or body-only frame on an HTTP/1.1 connection -> oldest pending req.
+
+	// Response or body-only frame: attach to the oldest pending request on this stream.
 	var f *Flow
 	created := false
 	if q := s.h1pending[tcp]; len(q) > 0 {
 		f = q[0]
-		if isResp {
+		if status != "" {
 			s.h1pending[tcp] = q[1:]
 		}
 	} else {
@@ -160,11 +157,11 @@ func (s *stitcher) add(l layers) {
 		created = true
 		s.ds.Flows = append(s.ds.Flows, f)
 	}
-	if isResp {
+	if status != "" {
 		s.fillResponse(f, l, status)
 	}
 	if body != nil {
-		attachBody(f, l, isReq, true, body, reassembled)
+		attachBody(f, l, false, true, body, reassembled)
 	}
 	s.emit(f, created)
 }
