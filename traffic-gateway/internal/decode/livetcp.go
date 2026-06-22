@@ -9,7 +9,9 @@ package decode
 // unsupported link type) are left to the batch tshark pass on close.
 
 import (
+	"encoding/binary"
 	"io"
+	"log"
 	"net"
 
 	"github.com/google/gopacket"
@@ -21,6 +23,11 @@ import (
 	"github.com/nikitak/parsing/traffic-gateway/decoders"
 	"github.com/nikitak/parsing/traffic-gateway/internal/tlsdecrypt"
 )
+
+// linkTypeNFLOG is LINKTYPE_NFLOG (239), used by the Android per-app capture
+// (`tcpdump -i nflog:<group>`). gopacket has no decoder for it, so we extract the
+// inner IP packet ourselves (nflogIPPayload).
+const linkTypeNFLOG = gplayers.LinkType(239)
 
 // LiveTCPDecode reads a live pcap byte stream from r, reassembles TCP, decrypts TLS 1.3
 // using the (growing) key-log at keylogPath, and emits decoded custom-protocol frames
@@ -45,11 +52,20 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 		if err != nil {
 			continue // truncated trailing packet while the file grows — skip, keep going
 		}
-		pkt := gopacket.NewPacket(data, linkType, gopacket.Lazy)
+		var pkt gopacket.Packet
+		if linkType == linkTypeNFLOG {
+			ipType, ip, ok := nflogIPPayload(data)
+			if !ok {
+				continue
+			}
+			pkt = gopacket.NewPacket(ip, ipType, gopacket.Lazy)
+		} else {
+			pkt = gopacket.NewPacket(data, linkType, gopacket.Lazy)
+		}
 		netLayer := pkt.NetworkLayer()
 		tcpLayer := pkt.Layer(gplayers.LayerTypeTCP)
 		if netLayer == nil || tcpLayer == nil {
-			continue // non-TCP, or a link type gopacket can't decode (e.g. NFLOG)
+			continue // non-TCP, or a link type gopacket can't decode
 		}
 		asm.Assemble(netLayer.NetworkFlow(), tcpLayer.(*gplayers.TCP))
 	}
@@ -143,6 +159,7 @@ func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 		s.sess = m[0].NewSession()
 		s.flow = customFlowMeta(s.conn.SNI(), s.serverHost, s.serverPort, s.clientAddr, m[0].Name())
 		s.matched = true
+		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
 	}
 	if !s.matched {
 		return
@@ -151,6 +168,7 @@ func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 		if !s.flowEmitted {
 			s.lt.onFlow(s.flow, true)
 			s.flowEmitted = true
+			log.Printf("live decode: %s first frame on %s: %s (%d bytes)", s.flow.Protocol, s.conn.SNI(), msg.Opcode, len(msg.Payload))
 		}
 		s.flow.WsMessageCount++
 		s.lt.onMsg(&WsMessage{
@@ -162,4 +180,35 @@ func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 		})
 		s.lt.onFlow(s.flow, false) // refresh the row's ⇅ count
 	}
+}
+
+// nflogIPPayload extracts the inner IP packet from one LINKTYPE_NFLOG record. The
+// record is a 4-byte header (family, version, resource_id) followed by little-endian
+// TLVs (length incl. header, type), 4-byte aligned; NFULA_PAYLOAD (type 9) carries the
+// captured IP packet. family selects IPv4 (AF_INET=2) or IPv6 (AF_INET6=10).
+func nflogIPPayload(data []byte) (gopacket.LayerType, []byte, bool) {
+	if len(data) < 4 {
+		return 0, nil, false
+	}
+	family := data[0]
+	for off := 4; off+4 <= len(data); {
+		l := int(binary.LittleEndian.Uint16(data[off : off+2]))
+		typ := binary.LittleEndian.Uint16(data[off+2 : off+4])
+		if l < 4 || off+l > len(data) {
+			break
+		}
+		if typ == 9 { // NFULA_PAYLOAD
+			payload := data[off+4 : off+l]
+			switch family {
+			case 2: // AF_INET
+				return gplayers.LayerTypeIPv4, payload, true
+			case 10: // AF_INET6
+				return gplayers.LayerTypeIPv6, payload, true
+			default:
+				return 0, nil, false
+			}
+		}
+		off += (l + 3) &^ 3 // advance to the next 4-byte-aligned TLV
+	}
+	return 0, nil, false
 }

@@ -230,11 +230,12 @@ session. Two paths produce the decrypted bytes:
 
 - **Batch** (session close): `tshark -z follow,tls,raw` over each matched stream.
 - **Live** (during capture): fully in-process in Go — the gateway taps the live pcap,
-  reassembles TCP (`gopacket`), and decrypts TLS 1.3 from the key-log
-  ([`internal/tlsdecrypt`](traffic-gateway/internal/tlsdecrypt/)), feeding the decoder
-  as bytes arrive — no `tshark` re-run. So MAX frames stream into the `M` timeline in
-  real time. Streams that aren't TLS 1.3 (or whose link type `gopacket` can't decode,
-  e.g. NFLOG) fall back to the batch pass on close.
+  reassembles TCP (`gopacket`, including the Android `NFLOG` link type), and decrypts
+  TLS 1.3 from the key-log ([`internal/tlsdecrypt`](traffic-gateway/internal/tlsdecrypt/)),
+  feeding the decoder as bytes arrive — no `tshark` re-run. So MAX frames stream into
+  the `M` timeline in real time. Streams that aren't TLS 1.3 fall back to the batch
+  pass on close. **Verified end-to-end** on the Android `ru.oneme` (MAX) app: live
+  TLS-1.3 decryption + decoding of MAX frames during capture.
 
 A decoder implements `decoders.Decoder` (`Name`, `Matches(StreamMeta)`, `NewSession`);
 the returned `Session` is a stateful framer — `Feed(fromClient, data) []Message` —
