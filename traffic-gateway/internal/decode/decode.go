@@ -102,9 +102,9 @@ var pduProtos = map[string]bool{"http2": true, "http": true, "websocket": true, 
 // `show` attribute is truncated for bytes). websocket.payload is the unmasked frame
 // payload; http3.data is the HTTP/3 DATA-frame body.
 var bodyFields = map[string]bool{
-	"http2.data.data": true, "http2.body.reassembled.data": true,
-	"http.file_data": true, "http.body.reassembled.data": true,
-	"websocket.payload": true, "http3.data": true,
+	fH2Data: true, fH2BodyReassembled: true,
+	fH1FileData: true, fH1BodyReassembled: true,
+	fWSPayload: true, fH3Data: true,
 }
 
 // tsharkArgs builds the common tshark PDML invocation. input selects the source

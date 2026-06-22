@@ -50,20 +50,20 @@ func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
 // addPacket records each TLS stream's ClientHello SNI + tls.stream index + endpoints,
 // so decodeCustomStreams can decide which streams to decrypt-and-decode.
 func (s *stitcher) addPacket(l layers) {
-	tcp := l.first("tcp.stream")
+	tcp := l.first(fTCPStream)
 	if tcp == "" {
 		return
 	}
-	sni := l.first("tls.handshake.extensions_server_name")
+	sni := l.first(fTLSSNI)
 	if sni == "" {
 		return // only ClientHello packets carry the metadata we need
 	}
 	s.streamMeta[tcp] = &tlsStream{
-		tlsStreamIdx: l.first("tls.stream"),
+		tlsStreamIdx: l.first(fTLSStream),
 		sni:          sni,
-		clientAddr:   addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport")),
-		serverHost:   firstNonEmpty(l.first("ip.dst"), l.first("ipv6.dst")),
-		serverPort:   l.first("tcp.dstport"),
+		clientAddr:   addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort)),
+		serverHost:   firstNonEmpty(l.first(fIPDst), l.first(fIP6Dst)),
+		serverPort:   l.first(fTCPDstPort),
 	}
 }
 
@@ -81,29 +81,29 @@ func (s *stitcher) emit(f *Flow, isNew bool) {
 }
 
 func (s *stitcher) add(l layers) {
-	tcp := l.first("tcp.stream")
+	tcp := l.first(fTCPStream)
 
-	if op := l.first("websocket.opcode"); op != "" {
+	if op := l.first(fWSOpcode); op != "" {
 		s.addWebsocket(l, tcp, op)
 		return
 	}
 
 	// HTTP/3 frames carry a quic.connection.number (merged from the quic layer) and a
 	// per-frame http3.frame_streamid; key by (connection, stream) like HTTP/2.
-	if conn := l.first("quic.connection.number"); conn != "" && l.first("http3.frame_streamid") != "" {
+	if conn := l.first(fQUICConn); conn != "" && l.first(fH3StreamID) != "" {
 		s.addHTTP3(l, conn)
 		return
 	}
 
-	sid := l.first("http2.streamid")
+	sid := l.first(fH2StreamID)
 
-	method := l.first("http2.headers.method")
+	method := l.first(fH2Method)
 	if method == "" {
-		method = l.first("http.request.method")
+		method = l.first(fH1Method)
 	}
-	status := l.first("http2.headers.status")
+	status := l.first(fH2Status)
 	if status == "" {
-		status = l.first("http.response.code")
+		status = l.first(fH1Status)
 	}
 	isReq := method != ""
 	isResp := status != ""
@@ -179,12 +179,12 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 	}
 	f.Websocket = true
 	f.WsMessageCount++
-	src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport"))
+	src := addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort))
 	msg := &WsMessage{
 		ID:           uuid.NewString(),
 		FlowID:       f.ID,
-		FrameNumber:  parseUint(l.first("frame.number")),
-		TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
+		FrameNumber:  parseUint(l.first(fFrameNum)),
+		TSUnixMicros: epochToMicros(l.first(fFrameTime)),
 		FromClient:   src != "" && src == f.SrcAddr,
 		Opcode:       wsOpcodeName(opcode),
 		Payload:      wsPayload(l),
@@ -204,23 +204,23 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 // payload. (Compressed *binary* frames aren't inflated here — tshark exposes no
 // text for them; that needs Go-side inflate with per-stream context-takeover.)
 func wsPayload(l layers) []byte {
-	if txt := l.first("websocket.payload.text"); txt != "" {
+	if txt := l.first(fWSPayloadText); txt != "" {
 		return []byte(txt)
 	}
-	return hexBytes(l.first("websocket.payload"))
+	return hexBytes(l.first(fWSPayload))
 }
 
 // addHTTP3 correlates HTTP/3 frames into flows, keyed by QUIC connection + stream id.
 // A HEADERS frame sets request (method) or response (status); a DATA frame's http3.data
 // appends to the matching side. Mirrors the HTTP/2 path but over QUIC/UDP.
 func (s *stitcher) addHTTP3(l layers, conn string) {
-	sid := l.first("http3.frame_streamid")
+	sid := l.first(fH3StreamID)
 	if sid == "" {
 		return
 	}
-	method := l.first("http3.headers.method")
-	status := l.first("http3.headers.status")
-	body := hexBytes(l.first("http3.data"))
+	method := l.first(fH3Method)
+	status := l.first(fH3Status)
+	body := hexBytes(l.first(fH3Data))
 	if method == "" && status == "" && len(body) == 0 {
 		return // control/QPACK frame — nothing to record
 	}
@@ -231,13 +231,13 @@ func (s *stitcher) addHTTP3(l layers, conn string) {
 	if created {
 		f = &Flow{
 			ID:           uuid.NewString(),
-			FrameNumber:  parseUint(l.first("frame.number")),
-			TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
+			FrameNumber:  parseUint(l.first(fFrameNum)),
+			TSUnixMicros: epochToMicros(l.first(fFrameTime)),
 			Protocol:     "HTTP/3",
 			TCPStream:    "quic:" + conn, // reuse the column for the QUIC connection id
 			H2StreamID:   sid,
-			SrcAddr:      addr(l.first("ip.src"), l.first("ipv6.src"), l.first("udp.srcport")),
-			DstAddr:      addr(l.first("ip.dst"), l.first("ipv6.dst"), l.first("udp.dstport")),
+			SrcAddr:      addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fUDPSrcPort)),
+			DstAddr:      addr(l.first(fIPDst), l.first(fIP6Dst), l.first(fUDPDstPort)),
 			TLSDecrypted: true, // decoded h3 means QUIC/TLS was decrypted
 		}
 		s.byKey[key] = f
@@ -245,18 +245,18 @@ func (s *stitcher) addHTTP3(l layers, conn string) {
 	}
 
 	if method != "" {
-		f.FrameNumber = parseUint(l.first("frame.number"))
-		f.TSUnixMicros = epochToMicros(l.first("frame.time_epoch"))
+		f.FrameNumber = parseUint(l.first(fFrameNum))
+		f.TSUnixMicros = epochToMicros(l.first(fFrameTime))
 		f.Method = method
-		f.Scheme = l.first("http3.headers.scheme")
-		f.Authority = l.first("http3.headers.authority")
-		path := l.first("http3.headers.path")
+		f.Scheme = l.first(fH3Scheme)
+		f.Authority = l.first(fH3Authority)
+		path := l.first(fH3Path)
 		if i := strings.IndexByte(path, '?'); i >= 0 {
 			f.Query = path[i+1:]
 			path = path[:i]
 		}
 		f.Path = path
-		f.RequestHeaders = zipHeaders(l.all("http3.header.header.name"), l.all("http3.headers.header.value"))
+		f.RequestHeaders = zipHeaders(l.all(fH3HdrName), l.all(fH3HdrValue))
 		f.UserAgent = pickHeader("", f.RequestHeaders, "user-agent")
 		if f.ContentType == "" {
 			f.ContentType = pickHeader("", f.RequestHeaders, "content-type")
@@ -264,7 +264,7 @@ func (s *stitcher) addHTTP3(l layers, conn string) {
 	}
 	if status != "" {
 		f.Status = uint32(parseUint(status))
-		f.ResponseHeaders = zipHeaders(l.all("http3.header.header.name"), l.all("http3.headers.header.value"))
+		f.ResponseHeaders = zipHeaders(l.all(fH3HdrName), l.all(fH3HdrValue))
 		if ct := pickHeader("", f.ResponseHeaders, "content-type"); ct != "" {
 			f.ContentType = ct
 		}
@@ -272,7 +272,7 @@ func (s *stitcher) addHTTP3(l layers, conn string) {
 	if len(body) > 0 {
 		toRequest := method != ""
 		if method == "" && status == "" { // DATA-only frame: direction by source
-			src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("udp.srcport"))
+			src := addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fUDPSrcPort))
 			toRequest = src != "" && src == f.SrcAddr
 		}
 		if toRequest {
@@ -312,34 +312,34 @@ func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {
 	}
 	return &Flow{
 		ID:           uuid.NewString(),
-		FrameNumber:  parseUint(l.first("frame.number")),
-		TSUnixMicros: epochToMicros(l.first("frame.time_epoch")),
+		FrameNumber:  parseUint(l.first(fFrameNum)),
+		TSUnixMicros: epochToMicros(l.first(fFrameTime)),
 		Protocol:     proto,
 		TCPStream:    tcp,
 		H2StreamID:   sid,
-		SrcAddr:      addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport")),
-		DstAddr:      addr(l.first("ip.dst"), l.first("ipv6.dst"), l.first("tcp.dstport")),
+		SrcAddr:      addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort)),
+		DstAddr:      addr(l.first(fIPDst), l.first(fIP6Dst), l.first(fTCPDstPort)),
 		// If we can see HTTP inside a TLS stack, the TLS was decrypted (h1 or h2).
-		TLSDecrypted: strings.Contains(l.first("frame.protocols"), "tls"),
+		TLSDecrypted: strings.Contains(l.first(fFrameProto), "tls"),
 	}
 }
 
 func (s *stitcher) fillRequest(f *Flow, l layers, method string) {
 	// Prefer the request frame's timing/number for the flow.
-	f.FrameNumber = parseUint(l.first("frame.number"))
-	f.TSUnixMicros = epochToMicros(l.first("frame.time_epoch"))
+	f.FrameNumber = parseUint(l.first(fFrameNum))
+	f.TSUnixMicros = epochToMicros(l.first(fFrameTime))
 	f.Method = method
-	f.Scheme = l.first("http2.headers.scheme")
+	f.Scheme = l.first(fH2Scheme)
 
-	authority := l.first("http2.headers.authority")
+	authority := l.first(fH2Authority)
 	if authority == "" {
-		authority = l.first("http.host")
+		authority = l.first(fH1Host)
 	}
 	f.Authority = authority
 
-	path := l.first("http2.headers.path")
+	path := l.first(fH2Path)
 	if path == "" {
-		path = l.first("http.request.uri")
+		path = l.first(fH1URI)
 	}
 	if i := strings.IndexByte(path, '?'); i >= 0 {
 		f.Query = path[i+1:]
@@ -348,9 +348,9 @@ func (s *stitcher) fillRequest(f *Flow, l layers, method string) {
 	f.Path = path
 
 	f.RequestHeaders = headersFor(l, true)
-	f.UserAgent = pickHeader(l.first("http.user_agent"), f.RequestHeaders, "user-agent")
+	f.UserAgent = pickHeader(l.first(fH1UserAgent), f.RequestHeaders, "user-agent")
 	if f.ContentType == "" {
-		f.ContentType = pickHeader(l.first("http.content_type"), f.RequestHeaders, "content-type")
+		f.ContentType = pickHeader(l.first(fH1ContentType), f.RequestHeaders, "content-type")
 	}
 }
 
@@ -358,7 +358,7 @@ func (s *stitcher) fillResponse(f *Flow, l layers, status string) {
 	f.Status = uint32(parseUint(status))
 	f.ResponseHeaders = headersFor(l, false)
 	// Response content-type wins for the flow's content-type column.
-	if ct := pickHeader(l.first("http.content_type"), f.ResponseHeaders, "content-type"); ct != "" {
+	if ct := pickHeader(l.first(fH1ContentType), f.ResponseHeaders, "content-type"); ct != "" {
 		f.ContentType = ct
 	}
 }
@@ -366,8 +366,8 @@ func (s *stitcher) fillResponse(f *Flow, l layers, status string) {
 // headersFor returns the HTTP headers for the current frame. For HTTP/2 it zips
 // http2.header.name/value; for HTTP/1.1 it parses the raw header lines.
 func headersFor(l layers, request bool) []Header {
-	names := l.all("http2.header.name")
-	vals := l.all("http2.header.value")
+	names := l.all(fH2HdrName)
+	vals := l.all(fH2HdrValue)
 	if len(names) > 0 {
 		return zipHeaders(names, vals)
 	}
@@ -455,10 +455,10 @@ func bodyBytes(l layers) ([]byte, bool) {
 		field string
 		reass bool
 	}{
-		{"http2.body.reassembled.data", true},
-		{"http.body.reassembled.data", true},
-		{"http2.data.data", false},
-		{"http.file_data", false},
+		{fH2BodyReassembled, true},
+		{fH1BodyReassembled, true},
+		{fH2Data, false},
+		{fH1FileData, false},
 	} {
 		if v := l.first(c.field); v != "" {
 			if b := hexBytes(v); b != nil {
@@ -491,7 +491,7 @@ func hexBytes(s string) []byte {
 func attachBody(f *Flow, l layers, isReq, isResp bool, body []byte, reassembled bool) {
 	toRequest := isReq
 	if !isReq && !isResp {
-		src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport"))
+		src := addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort))
 		toRequest = src != "" && src == f.SrcAddr
 	}
 
