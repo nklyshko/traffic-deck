@@ -102,8 +102,10 @@ browse. Capture is interface-wide, but only Chrome's TLS sessions have keys, so 
 **decoded view is effectively Chrome-only**.
 
 Interactive (recommended) — the launcher activates the `wireshark` group itself (via
-`sg`), then lets you pick the Chrome binary and the profile (system default / fresh
-temp / a named persistent profile under `~/.capture-chrome/profiles`):
+`sg`), then lets you pick the Chrome binary and the profile: the **browser's own
+default** (launched with no `--user-data-dir`), a fresh temp profile, or a named
+persistent profile (pick an existing one or create a new one) under
+`~/.capture-chrome/profiles`:
 
 ```sh
 capture-tools/capture-chrome.sh

@@ -8,10 +8,12 @@ Capture is interface-wide; only Chrome's TLS sessions have keys, so the decoded
 view is effectively Chrome-only (see plan discussion). Linux + macOS.
 
 Run in a terminal with no arguments for the interactive flow: it lists the
-discovered Chrome/Chromium binaries to pick from, then the profile to use (system
-default / a fresh temp / a named persistent profile under ~/.capture-chrome/profiles).
-Flags override each step; `--no-prompt` (or a non-TTY stdin) skips the pickers and
-uses auto-detected defaults, so it stays scriptable:
+discovered Chrome/Chromium binaries to pick from, then the profile to use — the
+browser's own default (launched with no --user-data-dir, so each binary uses its
+own default path), a fresh temp profile, or a named persistent profile (pick an
+existing one or create a new one) under ~/.capture-chrome/profiles. Flags override
+each step; `--no-prompt` (or a non-TTY stdin) skips the pickers and uses
+auto-detected defaults (fresh temp profile), so it stays scriptable:
 
     capture-chrome --no-prompt --label demo --url https://example.com
 
@@ -38,7 +40,12 @@ from capture_sdk.proto import ingest_pb2_grpc as ig
 
 _SENTINEL = object()
 
-# Persistent custom profiles live here so a capture's logins/state survive across runs.
+# Returned by the profile picker to mean "launch with no --user-data-dir", so the
+# chosen browser uses its own built-in default profile (each binary has its own path).
+_BUILTIN_PROFILE = object()
+
+# Named persistent custom profiles live here so a capture's logins/state survive
+# across runs; the user picks an existing one or creates a new named one.
 _PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
 
 
@@ -74,26 +81,35 @@ def _pick_chrome() -> str:
     return _ask("Chrome binary path") if choice == "custom path…" else choice
 
 
-def _pick_profile(chrome: str) -> str:
-    """Step 2: pick the user-data-dir — system default, a fresh temp, or a named
-    persistent profile under ~/.capture-chrome/profiles."""
+def _pick_profile(chrome: str):
+    """Step 2: pick the user-data-dir. Returns a path, or _BUILTIN_PROFILE to launch
+    with no --user-data-dir (the browser's own default). Options: browser default, a
+    fresh temp, or a named persistent profile under ~/.capture-chrome/profiles."""
     default_dir = platform.chrome_profile_default(chrome)
     choice = _choose("Profile:", [
-        f"system default profile ({default_dir})",
+        f"browser default profile ({default_dir})",
         "temporary new empty profile",
         "custom persistent profile (~/.capture-chrome/profiles)",
     ])
-    if choice.startswith("system default"):
-        print("note: quit any running Chrome on this profile first, or no TLS keys are logged")
-        return default_dir
+    if choice.startswith("browser default"):
+        print(f"note: uses {os.path.basename(chrome)}'s own default profile — quit any "
+              "running instance of it first, or no TLS keys are logged")
+        return _BUILTIN_PROFILE
     if choice.startswith("temporary"):
         return tempfile.mkdtemp(prefix="chrome-capture-")
+    return _pick_persistent_profile()
+
+
+def _pick_persistent_profile() -> str:
+    """Choose one of the saved persistent profiles, or create a new named one."""
     os.makedirs(_PROFILES_DIR, exist_ok=True)
     existing = sorted(d for d in os.listdir(_PROFILES_DIR)
                       if os.path.isdir(os.path.join(_PROFILES_DIR, d)))
-    if existing:
-        print("existing: " + ", ".join(existing))
-    name = _ask("profile name", "default")
+    choice = _choose("Custom persistent profile:", existing + ["＋ create new…"])
+    if choice == "＋ create new…":
+        name = _ask("new profile name", "default")
+    else:
+        name = choice
     path = os.path.join(_PROFILES_DIR, name)
     os.makedirs(path, exist_ok=True)
     return path
@@ -165,6 +181,8 @@ def main(argv=None) -> None:
                     help="Chrome user-data-dir (default: a fresh temp profile, or pick when "
                          "interactive). Quit any running Chrome on this profile first, or the "
                          "launch attaches to it and no TLS keys are logged.")
+    ap.add_argument("--default-profile", action="store_true",
+                    help="use the browser's own default profile (launch with no --user-data-dir)")
     ap.add_argument("--no-prompt", action="store_true",
                     help="skip the interactive Chrome/profile pickers (use defaults)")
     ap.add_argument("--duration", type=float, default=None,
@@ -179,9 +197,15 @@ def main(argv=None) -> None:
     chrome = args.chrome or os.environ.get("CHROME_BIN")
     if not chrome:
         chrome = _pick_chrome() if interactive else platform.chrome_binary()
-    profile = args.profile_dir
-    if not profile:
-        profile = _pick_profile(chrome) if interactive else tempfile.mkdtemp(prefix="chrome-capture-")
+    # profile is either a path (passed as --user-data-dir) or _BUILTIN_PROFILE (no flag).
+    if args.default_profile:
+        profile = _BUILTIN_PROFILE
+    elif args.profile_dir:
+        profile = args.profile_dir
+    elif interactive:
+        profile = _pick_profile(chrome)
+    else:
+        profile = tempfile.mkdtemp(prefix="chrome-capture-")
 
     iface = args.iface or platform.default_interface()
     dumpcap = platform.dumpcap_binary()
@@ -195,7 +219,8 @@ def main(argv=None) -> None:
         label=args.label, source_kind=cp.SOURCE_KIND_CHROME))
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)
-    print(f"session {sid}  iface={iface}  keylog={keylog}", flush=True)
+    prof_desc = "browser default" if profile is _BUILTIN_PROFILE else profile
+    print(f"session {sid}  iface={iface}  profile={prof_desc}  keylog={keylog}", flush=True)
 
     q: queue.Queue = queue.Queue()
     stop = threading.Event()
@@ -217,11 +242,14 @@ def main(argv=None) -> None:
     chrome_cmd = [
         chrome,
         f"--ssl-key-log-file={keylog}",
-        f"--user-data-dir={profile}",
         "--no-first-run",
         "--no-default-browser-check",
         *[a for a in args.chrome_args if a != "--"],
     ]
+    # Only pin a user-data-dir for temp/explicit/persistent profiles; for the browser
+    # default we pass nothing so each binary uses its own default profile path.
+    if profile is not _BUILTIN_PROFILE:
+        chrome_cmd.insert(2, f"--user-data-dir={profile}")
     if args.url:
         chrome_cmd.append(args.url)
 
