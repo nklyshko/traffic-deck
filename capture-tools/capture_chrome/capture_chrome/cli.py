@@ -171,10 +171,11 @@ def main(argv=None) -> None:
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
     ap.add_argument("--label", default="chrome")
     ap.add_argument("--iface", default=None, help="capture interface (default: auto)")
-    ap.add_argument("--filter", default="tcp or udp port 443",
-                    help="dumpcap capture filter (BPF). Default captures all TCP (so "
-                         "proxies and non-standard ports are included) plus UDP/443 for "
-                         "HTTP/3 + QUIC; narrow it (e.g. 'tcp port 443') for smaller captures.")
+    ap.add_argument("--filter", default="",
+                    help="dumpcap capture filter (BPF). Default empty = capture everything "
+                         "(so proxies, non-standard ports, and HTTP/3 are all included; the "
+                         "decode only surfaces Chrome-decryptable + plaintext HTTP flows). "
+                         "Narrow it (e.g. 'tcp port 443') for smaller captures.")
     ap.add_argument("--url", default=None, help="URL to open")
     ap.add_argument("--chrome", default=None,
                     help="Chrome/Chromium binary (default: auto-detect, or pick when interactive)")
@@ -226,9 +227,10 @@ def main(argv=None) -> None:
     q: queue.Queue = queue.Queue()
     stop = threading.Event()
 
-    dump = subprocess.Popen(
-        [dumpcap, "-i", iface, "-P", "-w", "-", "-q", "-f", args.filter],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    dump_cmd = [dumpcap, "-i", iface, "-P", "-w", "-", "-q"]
+    if args.filter:
+        dump_cmd += ["-f", args.filter]  # no filter = capture everything
+    dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     rt = threading.Thread(target=_reader_thread, args=(dump.stdout, q, stop), daemon=True)
     kt = threading.Thread(target=_keylog_thread, args=(keylog, q, stop), daemon=True)
     rt.start()

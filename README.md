@@ -141,7 +141,7 @@ Useful flags / env:
 | `--url URL` | open a URL on launch |
 | `--duration N` | auto-stop after N seconds |
 | `--iface IFACE` | capture interface (default: auto-detected) |
-| `--filter BPF` | dumpcap capture filter (default `tcp or udp port 443` — all TCP so proxies/non-standard ports are captured; narrow to e.g. `tcp port 443` for smaller captures) |
+| `--filter BPF` | dumpcap capture filter (default empty = capture everything, so proxies/non-standard ports/HTTP3 are all included; decode only surfaces Chrome-decryptable + plaintext HTTP. Narrow to e.g. `tcp port 443` for smaller captures) |
 | `--gateway ADDR` | gateway address (default `127.0.0.1:8080`) |
 | `CHROME_BIN` | Chrome/Chromium binary (e.g. `google-chrome-canary`) |
 | `DUMPCAP_BIN` / `CAPTURE_IFACE` | override dumpcap / interface |
