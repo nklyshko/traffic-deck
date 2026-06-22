@@ -101,11 +101,19 @@ to the gateway live (`STREAMING_LIVE`) — decrypted flows appear in the TUI as 
 browse. Capture is interface-wide, but only Chrome's TLS sessions have keys, so the
 **decoded view is effectively Chrome-only**.
 
-Fresh throwaway profile (recommended for clean captures):
+Interactive (recommended) — the launcher activates the `wireshark` group itself (via
+`sg`), then lets you pick the Chrome binary and the profile (system default / fresh
+temp / a named persistent profile under `~/.capture-chrome/profiles`):
+
+```sh
+capture-tools/capture-chrome.sh
+```
+
+Scripted / explicit — flags override each picker; `--no-prompt` skips them:
 
 ```sh
 sg wireshark -c 'uv run --project capture-tools/capture_chrome capture-chrome \
-    --label "live demo" --url https://example.com'
+    --no-prompt --label "live demo" --url https://example.com'
 ```
 
 Against an **existing** Chrome profile (e.g. Chrome Canary) — keeps your logins,
@@ -113,8 +121,8 @@ extensions, history. Quit any Chrome already running on that profile first, othe
 the launch just attaches to the running instance and no TLS keys are logged:
 
 ```sh
-sg wireshark -c 'CHROME_BIN=google-chrome-canary uv run \
-    --project capture-tools/capture_chrome capture-chrome --label "manual test" \
+sg wireshark -c 'uv run --project capture-tools/capture_chrome capture-chrome \
+    --no-prompt --chrome google-chrome-canary --label "manual test" \
     --profile-dir "$HOME/.config/google-chrome-canary"'
 ```
 
