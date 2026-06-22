@@ -9,11 +9,21 @@ import shutil
 import subprocess
 import sys
 
-_MAC_CHROME = [
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+# macOS browsers are .app bundles, not on PATH — each entry is the executable path
+# inside the bundle, searched under every dir in _MAC_APP_DIRS.
+_MAC_CHROME_BUNDLES = [
+    "Google Chrome.app/Contents/MacOS/Google Chrome",
+    "Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
+    "Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev",
+    "Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    "Chromium.app/Contents/MacOS/Chromium",
+    "Brave Browser.app/Contents/MacOS/Brave Browser",
+    "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "Vivaldi.app/Contents/MacOS/Vivaldi",
+    "Arc.app/Contents/MacOS/Arc",
 ]
-_MAC_DUMPCAP = ["/Applications/Wireshark.app/Contents/MacOS/dumpcap"]
+_MAC_APP_DIRS = ["/Applications", os.path.expanduser("~/Applications")]
+_MAC_DUMPCAP = [d + "/Wireshark.app/Contents/MacOS/dumpcap" for d in _MAC_APP_DIRS]
 _LINUX_DUMPCAP = ["/usr/bin/dumpcap", "/usr/sbin/dumpcap", "/usr/local/bin/dumpcap", "/sbin/dumpcap"]
 _CHROME_NAMES = (
     "google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-canary",
@@ -23,7 +33,11 @@ _CHROME_NAMES = (
 
 def chrome_binaries() -> list[str]:
     """All discovered Chrome/Chromium-family binaries, in preference order
-    (CHROME_BIN first), de-duplicated. Used by the interactive picker."""
+    (CHROME_BIN first), de-duplicated. Used by the interactive picker.
+
+    On macOS this scans the common .app bundles (Chrome + channels, Chromium, Brave,
+    Edge, Vivaldi, Arc) under /Applications and ~/Applications; elsewhere it looks up
+    the known binary names on PATH."""
     found: list[str] = []
 
     def add(p: str | None) -> None:
@@ -32,10 +46,12 @@ def chrome_binaries() -> list[str]:
 
     add(os.environ.get("CHROME_BIN"))
     if sys.platform == "darwin":
-        for p in _MAC_CHROME:
-            add(p)
-    for name in _CHROME_NAMES:
-        add(shutil.which(name))
+        for base in _MAC_APP_DIRS:
+            for rel in _MAC_CHROME_BUNDLES:
+                add(os.path.join(base, rel))
+    else:
+        for name in _CHROME_NAMES:
+            add(shutil.which(name))
     return found
 
 
