@@ -55,6 +55,44 @@ func TestStitchWebsocket(t *testing.T) {
 	}
 }
 
+// TestStitchWebsocketLiveEmit checks the live path: onMessage fires per frame as it's
+// decoded, the parent flow's WsMessageCount increments, and the flow is marked ws —
+// the data the live timeline + flow-row indicator rely on (plan §8.2/§8.6).
+func TestStitchWebsocketLiveEmit(t *testing.T) {
+	ds := &Dataset{}
+	var emitted []*WsMessage
+	st := newStitcher(ds, nil)
+	st.onMessage = func(m *WsMessage) { emitted = append(emitted, m) }
+
+	st.add(layers{
+		"tcp.stream": {"7"}, "frame.number": {"1"}, "frame.time_epoch": {"100.0"},
+		"ip.src": {"10.0.0.1"}, "tcp.srcport": {"1234"},
+		"ip.dst": {"10.0.0.2"}, "tcp.dstport": {"443"},
+		"http.request.method": {"GET"}, "http.host": {"ex.com"}, "http.request.uri": {"/ws"},
+	})
+	for i := 0; i < 2; i++ {
+		st.add(layers{
+			"tcp.stream": {"7"}, "frame.number": {string(rune('2' + i))}, "frame.time_epoch": {"101.0"},
+			"ip.src": {"10.0.0.1"}, "tcp.srcport": {"1234"},
+			"ip.dst": {"10.0.0.2"}, "tcp.dstport": {"443"},
+			"websocket.opcode": {"1"}, "websocket.payload": {hexOf("hi")},
+		})
+	}
+
+	if len(emitted) != 2 {
+		t.Fatalf("onMessage fired %d times, want 2", len(emitted))
+	}
+	if got := ds.Flows[0].WsMessageCount; got != 2 {
+		t.Fatalf("WsMessageCount = %d, want 2", got)
+	}
+	if !ds.Flows[0].Websocket {
+		t.Fatal("flow not marked websocket")
+	}
+	if emitted[0].FlowID != ds.Flows[0].ID {
+		t.Fatal("emitted message not bound to the upgrade flow")
+	}
+}
+
 // A WebSocket frame whose stream has no captured Upgrade flow is dropped, not crashed.
 func TestStitchWebsocketOrphan(t *testing.T) {
 	ds := &Dataset{}

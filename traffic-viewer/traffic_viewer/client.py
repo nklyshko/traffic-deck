@@ -86,6 +86,17 @@ class GatewayClient:
         )
         return list(resp.messages)
 
+    async def stream_messages(self, session_id: str, flow_id: str, follow: bool = True):
+        """Yield MessageEvents for an Upgrade flow: backfill of stored frames, then
+        (if follow and the session is live) new frames until the session closes."""
+        call = self._ensure().StreamMessages(
+            viewer_pb2.StreamMessagesRequest(
+                session_id=session_id, flow_id=flow_id, follow=follow
+            )
+        )
+        async for event in call:
+            yield event
+
     async def get_message_body(self, session_id: str, message_id: str) -> bytes:
         """Fetch a full WebSocket payload (any size) via streaming GetMessageBody."""
         call = self._ensure().GetMessageBody(

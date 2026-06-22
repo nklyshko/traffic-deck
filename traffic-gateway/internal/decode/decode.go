@@ -52,6 +52,9 @@ type Flow struct {
 	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
 	// frames; the frames themselves are WsMessages keyed by this flow's ID (§8.6).
 	Websocket bool
+	// WsMessageCount tracks frames seen so far (for the live flow proto; the stored
+	// path recomputes it from ws_messages via attachWsCounts).
+	WsMessageCount uint32
 
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.

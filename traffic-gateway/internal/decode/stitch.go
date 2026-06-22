@@ -23,6 +23,8 @@ type stitcher struct {
 
 	// onChange, if set, fires after each flow is created (isNew=true) or updated.
 	onChange func(f *Flow, isNew bool)
+	// onMessage, if set, fires for each WebSocket frame as it's decoded (live path).
+	onMessage func(m *WsMessage)
 }
 
 // tlsStream is the per-connection metadata captured from the ClientHello.
@@ -176,6 +178,7 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 		return
 	}
 	f.Websocket = true
+	f.WsMessageCount++
 	src := addr(l.first("ip.src"), l.first("ipv6.src"), l.first("tcp.srcport"))
 	msg := &WsMessage{
 		ID:           uuid.NewString(),
@@ -187,6 +190,9 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 		Payload:      wsPayload(l),
 	}
 	s.ds.Messages = append(s.ds.Messages, msg)
+	if s.onMessage != nil {
+		s.onMessage(msg)
+	}
 	s.emit(f, false) // surface the ws flag/count change on the parent flow
 }
 

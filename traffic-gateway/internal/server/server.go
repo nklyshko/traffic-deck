@@ -105,6 +105,63 @@ func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRe
 	return &trafficv1.MessageList{Messages: msgs}, nil
 }
 
+// StreamMessages replays an Upgrade flow's stored frames, then — if follow is set and
+// the session is live — streams newly decoded frames until the session closes or the
+// client disconnects (the live WebSocket timeline, mirroring StreamFlows; plan §8.6).
+func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.ServerStreamingServer[trafficv1.MessageEvent]) error {
+	send := func(m *trafficv1.WsMessage) error {
+		return srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_MessageAdded{MessageAdded: m}})
+	}
+
+	// Backfill from the store (populated once the session is persisted on close).
+	stored, err := v.st.ListMessages(srv.Context(), req.GetSessionId(), req.GetFlowId())
+	if err != nil {
+		return status.Errorf(codes.Internal, "list messages: %v", err)
+	}
+	for _, m := range stored {
+		if err := send(m); err != nil {
+			return err
+		}
+	}
+
+	if !req.GetFollow() {
+		return nil
+	}
+	ls := v.hub.get(req.GetSessionId())
+	if ls == nil {
+		return nil // not live; the backfill is all there is
+	}
+	snapshot, ch, cancel := ls.subscribeMessages(req.GetFlowId())
+	defer cancel()
+	for _, m := range snapshot {
+		if err := send(m); err != nil {
+			return err
+		}
+	}
+	for {
+		select {
+		case <-srv.Context().Done():
+			return nil
+		case m, ok := <-ch:
+			if !ok {
+				// Session closed: signal end of the live stream and finish.
+				_ = srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_SessionEvent{
+					SessionEvent: &trafficv1.SessionEvent{
+						SessionId: req.GetSessionId(),
+						Status:    trafficv1.SessionStatus_SESSION_STATUS_CLOSED,
+					}}})
+				return nil
+			}
+			if m.GetFlowId() != req.GetFlowId() {
+				continue // other flows share the channel; only forward this flow's frames
+			}
+			if err := send(m); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
 	body, err := v.st.GetWsMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId())
 	if errors.Is(err, store.ErrNotFound) {

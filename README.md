@@ -276,7 +276,8 @@ mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.
   `ControlService` + per-session SQLite, plan §12).
 - **Phase 4** — **WebSocket**: `websocket` frames (HTTP/1.1 Upgrade) decode into
   message records bound to the Upgrade flow; the TUI marks ws flows with `⇅` and shows
-  a directional message timeline (`M`).
+  a directional message timeline (`M`) that updates **live** during capture
+  (`StreamMessages`).
 - **Phase 5** — `traffic-mcp`: an MCP server (stdio or HTTP) over `ViewerService`.
 - **Phase 6** — **mitmproxy source**: an addon streams decoded flows via `PushFlows`
   (any device, incl. WireGuard mode); live-followed and persisted with no pcap.

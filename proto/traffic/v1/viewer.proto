@@ -13,6 +13,10 @@ service ViewerService {
 
   // WebSocket message timeline for an Upgrade flow (plan §8.6).
   rpc ListMessages(ListMessagesRequest) returns (MessageList);
+  // StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
+  // and the session is live) streams new frames as they're decoded, until the
+  // session closes or the client disconnects — the live WebSocket timeline.
+  rpc StreamMessages(StreamMessagesRequest) returns (stream MessageEvent);
   rpc GetMessageBody(GetMessageBodyRequest) returns (stream BodyChunk);
 }
 
@@ -67,6 +71,19 @@ message ListMessagesRequest {
 
 message MessageList {
   repeated WsMessage messages = 1;
+}
+
+message StreamMessagesRequest {
+  string session_id = 1;
+  string flow_id = 2; // the Upgrade flow whose frames to stream
+  bool follow = 3;    // keep streaming live frames until the session closes
+}
+
+message MessageEvent {
+  oneof event {
+    WsMessage message_added = 1;
+    SessionEvent session_event = 2; // session closed — live stream ended
+  }
 }
 
 message GetMessageBodyRequest {

@@ -914,23 +914,33 @@ class WsMessagesScreen(Screen):
         self.query_one("#msgs", DataTable).focus()
         self.load()
 
+    def _add_message(self, m) -> None:
+        if m.id in self._msgs:
+            return
+        self._msgs[m.id] = m
+        arrow = "[cyan]C→S[/cyan]" if m.from_client else "[magenta]S→C[/magenta]"
+        size = m.payload.size if m.payload else 0
+        inline = m.payload.inline if (m.payload and m.payload.WhichOneof("content") == "inline") else b""
+        preview = _bytes_preview(inline) if inline else (f"[dim]{size} bytes[/dim]" if size else "")
+        self.query_one("#msgs", DataTable).add_row(
+            _fmt_time(m.ts_unix_micros), arrow, m.opcode, str(size),
+            Text.from_markup(preview), key=m.id)
+
     @work(exclusive=True)
     async def load(self) -> None:
-        table = self.query_one("#msgs", DataTable)
+        # Stream frames: backfill of stored frames, then (for a live session) new
+        # frames as they're decoded — so a live WebSocket timeline updates in place.
         try:
-            msgs = await self.app.client.list_messages(self.session_id, self.flow_id)
+            async for ev in self.app.client.stream_messages(self.session_id, self.flow_id, follow=True):
+                kind = ev.WhichOneof("event")
+                if kind == "message_added":
+                    self._add_message(ev.message_added)
+                elif kind == "session_event":
+                    self.notify("session closed — live capture ended")
         except Exception as exc:  # noqa: BLE001
-            self.notify(f"list_messages failed: {exc}", severity="error")
+            self.notify(f"stream_messages failed: {exc}", severity="error")
             return
-        for m in msgs:
-            self._msgs[m.id] = m
-            arrow = "[cyan]C→S[/cyan]" if m.from_client else "[magenta]S→C[/magenta]"
-            size = m.payload.size if m.payload else 0
-            inline = m.payload.inline if (m.payload and m.payload.WhichOneof("content") == "inline") else b""
-            preview = _bytes_preview(inline) if inline else (f"[dim]{size} bytes[/dim]" if size else "")
-            table.add_row(_fmt_time(m.ts_unix_micros), arrow, m.opcode, str(size),
-                          Text.from_markup(preview), key=m.id)
-        if not msgs:
+        if not self._msgs:
             self.notify("no websocket frames recorded for this flow")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
