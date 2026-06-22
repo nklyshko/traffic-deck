@@ -12,7 +12,18 @@ with its own dependencies, over a shared SDK:
 
 Each app is a separate uv project that depends on `capture_sdk` via an editable path
 source, so they don't share a venv — installing `capture_chrome` pulls neither
-`mitmproxy` nor `frida`. Every command runs with no required arguments:
+`mitmproxy` nor `frida`. Every command runs with no required arguments.
+
+The simplest way to launch is the wrapper scripts (run from anywhere; no arguments
+needed — `capture-android` starts interactively; extra flags pass through):
+
+```sh
+./capture-chrome.sh
+./capture-mitmproxy.sh
+./capture-android.sh
+```
+
+Equivalently, via uv directly:
 
 ```sh
 uv run --project capture-tools/capture_chrome     capture-chrome
