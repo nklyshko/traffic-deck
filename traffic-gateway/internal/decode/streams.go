@@ -1,6 +1,6 @@
 package decode
 
-// Custom raw-TCP decoding (plan §8). After the PDML pass identifies TLS streams (SNI
+// Custom raw-TCP decoding. After the PDML pass identifies TLS streams (SNI
 // + tls.stream index), any stream a registered decoder claims is decrypted via tshark
 // `follow,tls,raw` and handed to the decoder. We use follow because tshark only
 // exposes the decrypted bytes of an *undissected* protocol through the follow output

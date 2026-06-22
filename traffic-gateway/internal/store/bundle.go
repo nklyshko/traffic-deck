@@ -1,6 +1,6 @@
 package store
 
-// Session export/import support (plan §10). A session bundle is already
+// Session export/import support. A session bundle is already
 // self-contained on disk (sessions/<id>/{flows.sqlite,capture.pcap,key.log,blobs/})
 // with tag/group defs mirrored into flows.sqlite; the only external state is the
 // catalog row. These helpers expose that row and let the bundle package snapshot the

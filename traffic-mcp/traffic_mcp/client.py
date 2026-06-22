@@ -1,4 +1,4 @@
-"""Async gRPC client for the traffic-gateway, used by the MCP server (plan §7.4).
+"""Async gRPC client for the traffic-gateway, used by the MCP server.
 
 Read-only: ViewerService (sessions/flows/bodies/ws messages) plus ControlService's
 ListTags/ListGroups so name-based annotation filters resolve. The generated stubs

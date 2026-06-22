@@ -1,4 +1,4 @@
-"""Traffic-viewer TUI (plan §7.3, Phase 1 MVP).
+"""Traffic-viewer TUI.
 
 Session list -> flow table -> flow detail. Read-only, backfill from the gateway's
 ViewerService. HTTP/1.1 + HTTP/2.
@@ -29,7 +29,7 @@ from traffic_viewer.client import GatewayClient
 
 SESSION_STATUS = {0: "?", 1: "open", 2: "decoding", 3: "closed", 4: "error"}
 
-# Color-mark / tag palette (plan §12) — standard Rich color names so they render
+# Color-mark / tag palette — standard Rich color names so they render
 # both as the row's ● marker and as tag/text styling.
 MARK_COLORS = ["red", "yellow", "green", "blue", "magenta", "cyan"]
 
@@ -48,7 +48,7 @@ def _url(f) -> str:
     return u
 
 
-# mitmproxy-style filter fields (subset) over the flow summary (plan §9 Phase 3).
+# mitmproxy-style filter fields (subset) over the flow summary.
 _FILTER_FIELDS = {
     "~m": lambda f: f.method,
     "~d": lambda f: f.authority,
@@ -141,7 +141,7 @@ def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | N
 
     Terms (space-separated, ANDed): `~m/~d/~u/~c/~t <regex>`, `~s`/`~q`
     (has/no response), `~fav` (favorited), annotation fields `~mark/~tag/~group/
-    ~comment <regex>` (plan §12), a naked regex (matches the URL), and a leading `!`
+    ~comment <regex>`, a naked regex (matches the URL), and a leading `!`
     negates a term. Raises ValueError on a bad regex. (Full `& | ()` grammar is future.)
     """
     tagnames = tagnames or {}
@@ -197,7 +197,7 @@ def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | N
 
 
 def _flags_cell(f, selected: bool) -> Text:
-    """Compact annotation indicators for the flow table (plan §12): selection ✓,
+    """Compact annotation indicators for the flow table: selection ✓,
     favorite ★, color mark ●, tag count #N, comment 💬."""
     t = Text()
     if selected:
@@ -548,7 +548,7 @@ class FlowsScreen(Screen):
             return
         self.app.push_screen(WsMessagesScreen(self.session_id, fid))
 
-    # --- annotations (plan §12) ----------------------------------------------
+    # --- annotations ----------------------------------------------
 
     def action_select(self) -> None:
         """Toggle the focused row's membership in the bulk-annotation selection."""
@@ -843,7 +843,7 @@ class FlowDetailScreen(Screen):
         return Content("\n").join(lines)
 
     def _append_annotations(self, lines: list[Content], f) -> None:
-        """Render the record's annotations (plan §12): mark, favorite, tags, groups,
+        """Render the record's annotations: mark, favorite, tags, groups,
         comments. Names resolve via the maps passed from the flow list."""
         bits: list[Content] = []
         if f.favorite:
@@ -887,7 +887,7 @@ class FlowDetailScreen(Screen):
 
 
 class WsMessagesScreen(Screen):
-    """WebSocket message timeline for an Upgrade flow (plan §8.6) — directional
+    """WebSocket message timeline for an Upgrade flow — directional
     frames in time order, distinct from the request/response view."""
 
     BINDINGS = [
@@ -1004,7 +1004,7 @@ class WsPayloadScreen(Screen):
 
 
 class CompareScreen(Screen):
-    """Side-by-side diff of two requests from different sessions (plan §7.5).
+    """Side-by-side diff of two requests from different sessions.
 
     Compares (order-sensitively): HTTP version, pseudo-header order, header order +
     values, cookie order, and request body — the client/parser fingerprint surface.

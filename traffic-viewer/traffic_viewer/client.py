@@ -118,7 +118,7 @@ class GatewayClient:
                 total += len(chunk.data)
         return total
 
-    # --- annotations (ControlService, plan §12) ---------------------------
+    # --- annotations (ControlService) ---------------------------
 
     async def list_tags(self):
         resp = await self._ctrl().ListTags(control_pb2.ListTagsRequest())

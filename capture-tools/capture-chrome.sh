@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Chrome live-capture tool (plan §7.2). Run with no arguments for the
+# Launch the Chrome live-capture tool. Run with no arguments for the
 # interactive flow (pick Chrome binary + profile); any extra flags pass through
 # (e.g. --label, --url, --duration). See capture_chrome/capture_chrome/cli.py.
 #

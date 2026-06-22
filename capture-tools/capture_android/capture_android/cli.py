@@ -1,4 +1,4 @@
-"""Interactive Android capture CLI (plan §7).
+"""Interactive Android capture CLI.
 
 A frida-free front-end over the capture library. Guided flow:
   1. pick a target — emulator or a connected real device

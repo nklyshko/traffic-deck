@@ -1,11 +1,11 @@
-"""Chrome live-capture tool (plan §7.2, Phase 2 step 3).
+"""Chrome live-capture tool.
 
 Launches Chrome with a dedicated SSLKEYLOGFILE + fresh profile, captures packets
 with dumpcap, and streams the pcap + key.log to the gateway over gRPC in
 STREAMING_LIVE mode. Decryptable (Chrome-only) flows appear live in the viewer.
 
 Capture is interface-wide; only Chrome's TLS sessions have keys, so the decoded
-view is effectively Chrome-only (see plan discussion). Linux + macOS.
+view is effectively Chrome-only. Linux + macOS.
 
 Run in a terminal with no arguments for the interactive flow: it lists the
 discovered Chrome/Chromium binaries to pick from, then the profile to use — the

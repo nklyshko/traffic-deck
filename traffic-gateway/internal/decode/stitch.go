@@ -16,7 +16,7 @@ type stitcher struct {
 	streamFlow map[string]*Flow   // tcpStream -> its HTTP/1.1 flow (the WebSocket Upgrade)
 
 	// Per-TLS-stream metadata captured during the PDML pass, keyed by tcp.stream —
-	// used to pick which streams to hand to custom raw-TCP decoders (plan §8). The
+	// used to pick which streams to hand to custom raw-TCP decoders. The
 	// decoded bytes themselves are pulled via tshark `follow,tls,raw` (see streams.go),
 	// since tshark only exposes decrypted undissected payloads through follow.
 	streamMeta map[string]*tlsStream
@@ -212,7 +212,7 @@ func wsPayload(l layers) []byte {
 
 // addHTTP3 correlates HTTP/3 frames into flows, keyed by QUIC connection + stream id.
 // A HEADERS frame sets request (method) or response (status); a DATA frame's http3.data
-// appends to the matching side. Mirrors the HTTP/2 path but over QUIC/UDP (§8.6).
+// appends to the matching side. Mirrors the HTTP/2 path but over QUIC/UDP.
 func (s *stitcher) addHTTP3(l layers, conn string) {
 	sid := l.first("http3.frame_streamid")
 	if sid == "" {
@@ -396,7 +396,7 @@ func zipHeaders(names, vals []string) []Header {
 	out := make([]Header, 0, n)
 	for i := 0; i < n; i++ {
 		// Keep HTTP/2 pseudo-headers (:method/:authority/:scheme/:path/:status) in
-		// their wire order — their ordering is a client fingerprint (compare, §7.5).
+		// their wire order — their ordering is a client fingerprint.
 		// The dedicated Method/Path/… fields are still populated separately for display.
 		out = append(out, Header{Name: names[i], Value: vals[i]})
 	}
@@ -449,7 +449,7 @@ func epochToMicros(s string) int64 {
 
 // bodyBytes extracts a frame's body bytes, preferring the reassembled (complete)
 // form over per-frame chunks. Returns (bytes, isReassembled). Full body, no cap —
-// large bodies are spilled to files by the store (plan §6.4).
+// large bodies are spilled to files by the store.
 func bodyBytes(l layers) ([]byte, bool) {
 	for _, c := range []struct {
 		field string

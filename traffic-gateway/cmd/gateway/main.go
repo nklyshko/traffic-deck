@@ -1,9 +1,9 @@
 // Command gateway is the traffic-gateway entry point.
 //
 //	gateway serve                                      run the gRPC server
-//	gateway import --pcap f [--keylog f] [--label s]   import a capture (Phase 1)
-//	gateway export <session-id> [-o file.tar.gz]       export a session bundle (Phase 10)
-//	gateway import-session <file> [--new-id] [--label s] import a session bundle (Phase 10)
+//	gateway import --pcap f [--keylog f] [--label s]   import a capture
+//	gateway export <session-id> [-o file.tar.gz]       export a session bundle
+//	gateway import-session <file> [--new-id] [--label s] import a session bundle
 package main
 
 import (
@@ -24,7 +24,7 @@ import (
 	"github.com/nikitak/parsing/traffic-gateway/internal/server"
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
 
-	// Custom protocol decoders self-register via init() (plan §8). Add a blank import
+	// Custom protocol decoders self-register via init(). Add a blank import
 	// here to compile a decoder into the gateway.
 	_ "github.com/nikitak/parsing/traffic-gateway/decoders/max"
 )
@@ -161,7 +161,7 @@ func parsePositionalFlags(fs *flag.FlagSet, args []string) (string, bool) {
 }
 
 // exportSession writes a session bundle (catalog row + flows.sqlite + pcap/key.log +
-// blobs) to a self-contained .tar.gz (plan §10).
+// blobs) to a self-contained .tar.gz.
 func exportSession(args []string) {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
 	out := fs.String("o", "", "output file (default: <session-id>.tar.gz)")
@@ -192,7 +192,7 @@ func exportSession(args []string) {
 }
 
 // importSession registers a session bundle (.tar.gz) into this gateway's data root +
-// catalog (plan §10). --new-id imports a copy under a fresh id when the original
+// catalog. --new-id imports a copy under a fresh id when the original
 // collides; --label overrides the bundle's label.
 func importSession(args []string) {
 	fs := flag.NewFlagSet("import-session", flag.ExitOnError)

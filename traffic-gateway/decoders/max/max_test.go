@@ -123,7 +123,7 @@ func TestSkipUndecodable(t *testing.T) {
 // TestSessionIncrementalFeed mimics the live poller: a single frame is delivered in
 // several small byte slices (split inside the header and the payload), and a second
 // direction is interleaved. The session must emit each frame exactly once, only when
-// it's complete — the core of incremental-framing mode (plan §8.2).
+// it's complete — the core of incremental-framing mode.
 func TestSessionIncrementalFeed(t *testing.T) {
 	c := frame(t, 1, 0x1, false, mp(t, map[string]int{"x": 1}))
 	s := frame(t, 2, 0x2, false, mp(t, "srv"))

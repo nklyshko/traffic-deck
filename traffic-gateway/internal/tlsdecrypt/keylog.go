@@ -1,12 +1,12 @@
 // Package tlsdecrypt passively decrypts TLS 1.3 application data from a captured
 // record stream using an NSS key-log (SSLKEYLOGFILE), so the gateway can decode custom
-// raw-TCP protocols live, in-process, without re-running tshark (plan §8.2/§8.4).
+// raw-TCP protocols live, in-process, without re-running tshark.
 //
 // Scope: TLS 1.3 with the standard AEAD suites (AES-128-GCM, AES-256-GCM,
 // CHACHA20-POLY1305). Streams that aren't TLS 1.3 are reported unsupported and left to
 // the batch tshark pass. We never need to decrypt the handshake: application records
 // are tried against the application traffic secret and handshake-phase records simply
-// fail the AEAD and are skipped (§conn).
+// fail the AEAD and are skipped.
 package tlsdecrypt
 
 import (

@@ -9,7 +9,7 @@ import (
 // writes captured bytes to it), decrypting with the growing keylog file, and
 // invokes onFlow for each created (isNew=true) or updated flow, and onMsg for each
 // decoded WebSocket frame, until r reaches EOF or ctx is cancelled. This is the live
-// decode path (plan §8.2). onMsg may be nil.
+// decode path. onMsg may be nil.
 //
 // We use `-r -` (read a capture file from stdin), not `-i -` (live interface):
 // `-i` would invoke dumpcap and require capture privileges even for a pipe, while

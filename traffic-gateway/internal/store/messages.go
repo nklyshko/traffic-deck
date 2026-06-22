@@ -1,7 +1,7 @@
 package store
 
-// WebSocket messages (plan §8.6): message-shaped records belonging to an Upgrade
-// flow. Payloads are content-addressed blobs, reusing the body blob policy (§6.4).
+// WebSocket messages: message-shaped records belonging to an Upgrade
+// flow. Payloads are content-addressed blobs, reusing the body blob policy.
 
 import (
 	"context"

@@ -57,7 +57,7 @@ func TestStitchWebsocket(t *testing.T) {
 
 // TestStitchWebsocketLiveEmit checks the live path: onMessage fires per frame as it's
 // decoded, the parent flow's WsMessageCount increments, and the flow is marked ws —
-// the data the live timeline + flow-row indicator rely on (plan §8.2/§8.6).
+// the data the live timeline + flow-row indicator rely on.
 func TestStitchWebsocketLiveEmit(t *testing.T) {
 	ds := &Dataset{}
 	var emitted []*WsMessage

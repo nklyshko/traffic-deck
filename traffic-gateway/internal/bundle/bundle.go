@@ -1,7 +1,7 @@
 // Package bundle exports and imports whole session bundles as self-contained
-// .tar.gz archives (plan §10). A bundle is portable on its own: tag/group defs are
-// mirrored into flows.sqlite (store §annotations), so the archive carries the
-// catalog row (manifest.json) plus the per-session files.
+// .tar.gz archives. A bundle is portable on its own: tag/group definitions are
+// mirrored into flows.sqlite, so the archive carries the catalog row
+// (manifest.json) plus the per-session files.
 //
 // Archive layout:
 //

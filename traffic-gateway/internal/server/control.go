@@ -13,8 +13,8 @@ import (
 	"github.com/nikitak/parsing/traffic-gateway/internal/store"
 )
 
-// Control implements trafficv1.ControlServiceServer — annotations (plan §12) and
-// session export (plan §10). Capture control / re-decode (StartCapture/StopCapture/
+// Control implements trafficv1.ControlServiceServer — annotations and
+// session export. Capture control / re-decode (StartCapture/StopCapture/
 // ReDecode) are not wired yet and fall through to the Unimplemented base.
 type Control struct {
 	trafficv1.UnimplementedControlServiceServer
@@ -26,7 +26,7 @@ func NewControl(st *store.Store, dataRoot string) *Control {
 	return &Control{st: st, dataRoot: dataRoot}
 }
 
-// ExportSession streams a session's bundle as a .tar.gz (plan §10). The archive is
+// ExportSession streams a session's bundle as a .tar.gz. The archive is
 // produced on the fly and chunked over the stream.
 func (c *Control) ExportSession(req *trafficv1.ExportSessionRequest, srv grpc.ServerStreamingServer[trafficv1.ExportChunk]) error {
 	w := &exportChunkWriter{srv: srv}

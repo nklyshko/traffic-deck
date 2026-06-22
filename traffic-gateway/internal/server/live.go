@@ -14,7 +14,7 @@ import (
 const liveEventBuffer = 256
 
 // liveHub tracks in-progress streaming sessions and fans decoded flows out to
-// viewer subscribers (plan §8.2). Persistence is authoritative on close (batch
+// viewer subscribers. Persistence is authoritative on close (batch
 // decode); the live path is for responsiveness only.
 type liveHub struct {
 	mu       sync.Mutex
@@ -40,7 +40,7 @@ type liveSession struct {
 
 	// WebSocket frames decoded so far (live), and their subscribers. Frames are
 	// immutable once decoded, so this is append-only; the stored path is empty until
-	// the session is persisted on close (plan §8.2/§8.6).
+	// the session is persisted on close.
 	messages []*trafficv1.WsMessage
 	msgSubs  map[int]chan *trafficv1.WsMessage
 }
@@ -54,7 +54,7 @@ func (h *liveHub) get(sessionID string) *liveSession {
 // start spins up the live decode for sessionID, fed by the pipe(s) via write().
 // keylogPath must already exist (it may be empty and grow). tshark handles HTTP/WS/
 // HTTP3 from the primary pipe; when custom decoders are registered, a second copy of
-// the pcap feeds the in-process Go TLS decryptor for custom raw-TCP protocols (§8.4).
+// the pcap feeds the in-process Go TLS decryptor for custom raw-TCP protocols.
 func (h *liveHub) start(sessionID, keylogPath string) {
 	pr, pw := io.Pipe()
 	ls := &liveSession{

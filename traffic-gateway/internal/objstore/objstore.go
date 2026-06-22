@@ -1,8 +1,8 @@
-// Package objstore is the gateway's blob storage abstraction (plan §6.2).
+// Package objstore is the gateway's blob storage abstraction.
 //
 // v1 is filesystem-backed; a MinIO/S3 impl can replace it behind this interface
 // with no schema change. Storing pcap/key.log and assembling pcapng are pure-Go
-// byte I/O — no pcap library, no shell (plan §7.1).
+// byte I/O — no pcap library, no shell.
 package objstore
 
 import (
@@ -23,7 +23,7 @@ type Store interface {
 	// Put writes r to key, replacing any existing object, and returns bytes written.
 	Put(key string, r io.Reader) (int64, error)
 	// WriteAt writes p at byte offset off, growing the object as needed.
-	// Used for chunked, ordered upload writes (plan §5 DataChunk.offset).
+	// Used for chunked, ordered upload writes.
 	WriteAt(key string, p []byte, off int64) error
 	// Open returns a reader for the whole object.
 	Open(key string) (io.ReadCloser, error)
@@ -31,7 +31,7 @@ type Store interface {
 	Stat(key string) (FileInfo, error)
 	// LocalPath returns an on-disk path for key if the backend is local, or
 	// ("", false) otherwise. Lets the gateway tee/tail files directly in the
-	// single-user-local case (plan §8.1) without round-tripping bytes.
+	// single-user-local case without round-tripping bytes.
 	LocalPath(key string) (string, bool)
 }
 

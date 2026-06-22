@@ -1,1 +1,1 @@
-"""capture_mitmproxy — mitmproxy capture agent (plan §7.2). Run `capture-mitmproxy`."""
+"""capture_mitmproxy — mitmproxy capture agent. Run `capture-mitmproxy`."""

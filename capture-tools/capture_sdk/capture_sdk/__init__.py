@@ -1,4 +1,4 @@
-"""capture_sdk — shared library for the capture tools (plan §7.2).
+"""capture_sdk — shared library for the capture tools.
 
 Holds what every capture app needs and nothing tool-specific: the generated gRPC
 stubs ([proto][capture_sdk.proto]), the `UploadCapture` streaming helper

@@ -1,9 +1,9 @@
-"""mitmproxy addon that streams decoded flows to the traffic-gateway (plan §7.2).
+"""mitmproxy addon that streams decoded flows to the traffic-gateway.
 
 Loaded into mitmproxy with `mitmdump -s addon.py` (the `capture-mitmproxy` launcher
 does this). mitmproxy terminates TLS, so flows arrive fully decoded; this addon pushes
 them to the gateway's IngestService.PushFlows for live view + persistence — no pcap,
-no key.log (the supplied RECORD path, plan §6.1).
+no key.log (the supplied RECORD path).
 
 WireGuard mode is just `--mode wireguard`: same addon, the device routes traffic
 through mitmproxy's WireGuard server instead of a system proxy.

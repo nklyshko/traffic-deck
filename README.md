@@ -1,8 +1,8 @@
 # Modular Traffic Analysis System
 
 Capture raw traffic from multiple sources, decode it server-side into HTTP flows,
-store it, and browse it in a mitmproxy-like TUI. See [`plan/`](plan/) for the full
-design and roadmap.
+store it, and browse it in a mitmproxy-like TUI. See [`docs/architecture.md`](docs/architecture.md)
+for the design and [`docs/adr/`](docs/adr/) for the key decisions.
 
 ## Components
 
@@ -56,7 +56,7 @@ TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back
 refresh sessions, `e` export the focused session as a `.tar.gz` bundle. In a flow
 list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`, plus annotations `~fav ~mark
 ~tag ~group ~comment`, naked = URL, `!` negate), `c` mark/compare two requests across
-sessions. Annotate (plan §12): `space` toggle select (for bulk), `t` tag, `F`
+sessions. Annotate: `space` toggle select (for bulk), `t` tag, `F`
 favorite, `m` color-mark, `n` comment, `g` group — each acts on the selection if any,
 else the focused row. `M` opens the WebSocket message timeline for a `⇅` flow. In a
 flow detail: bodies are pretty-printed (JSON reindented + syntax-colored, form fields
@@ -258,7 +258,7 @@ on `ru.oneme`.
 
 A session is self-contained — its bundle holds the flows DB, the capture, the key.log,
 spilled bodies, and the tags/groups it uses — so it can be exported as a single
-`.tar.gz` and imported into another gateway (plan §10).
+`.tar.gz` and imported into another gateway.
 
 ```sh
 # export (CLI). In the TUI, press `e` on the sessions list to export the focused one.
@@ -278,33 +278,24 @@ mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.
 | `TSHARK_PATH` | `tshark` | decode binary |
 | `GATEWAY_LIVE_DECODE` | `true` | live decode during capture (tshark HTTP/WS/HTTP3 + in-process Go TLS decryption for custom raw-TCP). Set `0`/`false` to archive only and decode on close. |
 
-## Status
+## Features
 
-- **Phase 1** — import a pcap + key.log → tshark decode (incl. request/response
-  bodies) → per-session SQLite → `ViewerService` → Textual TUI. HTTP/1.1 + HTTP/2.
-- **Phase 2** — live Chrome capture: `dumpcap` + `SSLKEYLOGFILE` → streamed ingest →
-  live `tshark -r -` decode → live-following TUI.
-- **Phase 3** — mitmproxy-like TUI: filter DSL, cross-session compare, curl/raw
-  export, and **annotations** (tags + Favorite, comments, color marks, groups;
-  `ControlService` + per-session SQLite, plan §12).
-- **Phase 4** — **WebSocket**: `websocket` frames (HTTP/1.1 Upgrade) decode into
-  message records bound to the Upgrade flow; the TUI marks ws flows with `⇅` and shows
-  a directional message timeline (`M`) that updates **live** during capture
-  (`StreamMessages`).
-- **Phase 5** — `traffic-mcp`: an MCP server (stdio or HTTP) over `ViewerService`.
-- **Phase 6** — **mitmproxy source**: an addon streams decoded flows via `PushFlows`
-  (any device, incl. WireGuard mode); live-followed and persisted with no pcap.
-- **Phase 7** — **Android**: per-app capture from a rooted emulator/device — Frida
-  `libssl.so` keylog + UID→NFLOG `tcpdump`, streamed and decoded to HTTPS flows.
-- **Phase 8** — **custom protocol decoders**: compiled-in Go modules
-  (`traffic-gateway/decoders/`) decode non-HTTP raw-TCP protocols from the TLS-decrypted
-  stream + `gateway redecode`. First decoder: **MAX** (`ru.oneme`), verified on-device.
-- **Phase 9** — **HTTP/3 + QUIC**: `quic`/`http3` frames decode into the `Flow` model
-  (req/resp per stream, like HTTP/2), keyed by QUIC connection + stream id; one
-  `SSLKEYLOGFILE` covers TLS *and* QUIC. The Chrome capture filter includes `udp port
-  443`. Verified against a decryptable QUIC sample.
-- **Phase 10** (in progress) — **hardening / polish**: pretty-printed request/response
-  bodies in the TUI (JSON, form-urlencoded), and session **export/import** as portable
-  `.tar.gz` bundles (`gateway export` / `import-session`, TUI `e`).
+- **Protocols** — HTTP/1.1, HTTP/2, HTTP/3 + QUIC, WebSocket, and custom binary
+  protocols over TLS (compiled-in Go decoders; first decoder: **MAX** / `ru.oneme`).
+- **Capture sources** — live Chrome (`dumpcap` + `SSLKEYLOGFILE`), mitmproxy (any
+  device, incl. WireGuard), and per-app Android from a rooted device/emulator (Frida
+  `libssl` key-log + UID→NFLOG `tcpdump`).
+- **Live + batch decode** — a streaming capture decodes live (tshark for HTTP/WS/HTTP3,
+  in-process Go TLS decryption for custom raw-TCP); an authoritative batch pass runs on
+  close. WebSocket and custom-protocol frames stream into a directional `M` timeline
+  live. Toggle with `GATEWAY_LIVE_DECODE`.
+- **TUI** — Textual viewer: session list → flow table → detail, body pretty-printing
+  (JSON/forms), a mitmproxy-style filter DSL, cross-session compare, curl/raw export,
+  and annotations (tags + Favorite, comments, color marks, groups).
+- **Sessions** — self-contained per-session SQLite bundles; export/import as a single
+  `.tar.gz`.
+- **MCP** — `traffic-mcp` exposes recorded sessions to LLM/agent clients over the same
+  read API.
 
-See [`plan/09-roadmap.md`](plan/09-roadmap.md) for what's next (hardening / polish).
+See [`docs/architecture.md`](docs/architecture.md) for the design and
+[`docs/adr/`](docs/adr/) for the decisions behind it.

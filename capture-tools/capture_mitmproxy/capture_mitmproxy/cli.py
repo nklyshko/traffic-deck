@@ -1,4 +1,4 @@
-"""Launcher for the mitmproxy capture agent (plan §7.2).
+"""Launcher for the mitmproxy capture agent.
 
 Runs `mitmdump` with the gateway-push addon loaded. mitmproxy terminates TLS and the
 addon streams decoded flows to the gateway (IngestService.PushFlows) — no pcap/keylog.

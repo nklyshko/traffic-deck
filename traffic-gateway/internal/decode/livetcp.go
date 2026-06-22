@@ -1,6 +1,6 @@
 package decode
 
-// Live custom-protocol decoding, fully in-process in Go (plan §8.2/§8.4). Instead of
+// Live custom-protocol decoding, fully in-process in Go. Instead of
 // re-running `tshark -z follow,tls,raw` over the growing capture, we tap the same live
 // pcap byte stream, reassemble TCP with gopacket, decrypt TLS 1.3 from the key-log
 // (internal/tlsdecrypt), and feed each matched connection's decrypted application bytes

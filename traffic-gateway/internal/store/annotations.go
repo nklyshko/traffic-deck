@@ -1,6 +1,6 @@
 package store
 
-// Annotations (plan §12): tags, comments, color marks, and groups.
+// Annotations: tags, comments, color marks, and groups.
 //
 // Tag and group *definitions* are canonical in the global catalog (so they are
 // consistent and selectable across sessions) and mirrored into each session

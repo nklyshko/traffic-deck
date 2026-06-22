@@ -1,6 +1,6 @@
-// Package importer implements the Phase 1 "import a pre-captured pcap + key.log"
-// flow (plan §9): copy the artifacts into the session bundle, batch-decode them with
-// tshark, and persist the session/analysis/flows to the per-session SQLite DB.
+// Package importer implements the "import a pre-captured pcap + key.log" flow:
+// copy the artifacts into the session bundle, batch-decode them with tshark, and
+// persist the session/analysis/flows to the per-session SQLite DB.
 package importer
 
 import (
@@ -32,7 +32,7 @@ type Result struct {
 }
 
 // Import copies the capture into the session bundle, decodes it, and persists flows.
-// The raw pcap + key.log are the canonical inputs (plan §6).
+// The raw pcap + key.log are the canonical inputs.
 func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Options) (*Result, error) {
 	sessionID := uuid.NewString()
 	pcapKey := path.Join("sessions", sessionID, "capture.pcap")

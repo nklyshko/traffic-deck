@@ -1,5 +1,5 @@
 """traffic-mcp: an MCP server exposing recorded traffic sessions to LLM/agent
-clients (plan §7.4). Backed by the gateway's ViewerService over gRPC — it does not
+clients. Backed by the gateway's ViewerService over gRPC — it does not
 touch SQLite directly, so it works locally or against a remote gateway.
 
 Run (stdio transport):  GATEWAY_ADDR=127.0.0.1:8080 uv run traffic-mcp

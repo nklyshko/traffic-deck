@@ -1,10 +1,10 @@
 // Package decode turns a captured pcap + TLS key.log into HTTP flows by
-// orchestrating tshark (plan §8). tshark does the heavy lifting (TCP reassembly,
+// orchestrating tshark. tshark does the heavy lifting (TCP reassembly,
 // TLS decryption, HPACK); we parse its PDML and stitch per-frame records into flows.
 //
 // PDML (per-protocol XML tree) rather than `-T ek` flat fields: a single packet can
 // carry many multiplexed HTTP/2 frames, and the flat format can't keep each frame's
-// stream id associated with its own fields (plan §8.6).
+// stream id associated with its own fields.
 package decode
 
 import (
@@ -50,7 +50,7 @@ type Flow struct {
 	ResponseBody []byte
 
 	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
-	// frames; the frames themselves are WsMessages keyed by this flow's ID (§8.6).
+	// frames; the frames themselves are WsMessages keyed by this flow's ID.
 	Websocket bool
 	// WsMessageCount tracks frames seen so far (for the live flow proto; the stored
 	// path recomputes it from ws_messages via attachWsCounts).
@@ -63,7 +63,7 @@ type Flow struct {
 }
 
 // WsMessage is one decoded WebSocket frame, a message-shaped record distinct from
-// the request/response Flow model (plan §8.6). It belongs to the Upgrade flow on its
+// the request/response Flow model. It belongs to the Upgrade flow on its
 // TCP stream (FlowID).
 type WsMessage struct {
 	ID           string
@@ -86,7 +86,7 @@ type Dataset struct {
 
 // metaProtos contribute packet-level fields (merged into every PDU of the packet).
 // `tls` carries the ClientHello SNI + tls.stream index, used to pick which streams to
-// hand to custom raw-TCP decoders (plan §8).
+// hand to custom raw-TCP decoders.
 var metaProtos = map[string]bool{
 	"frame": true, "ip": true, "ipv6": true, "tcp": true, "udp": true,
 	"tls": true, "quic": true,
@@ -94,7 +94,7 @@ var metaProtos = map[string]bool{
 
 // pduProtos each become one stitcher record: one per HTTP/2 frame, the HTTP/1.1
 // message, one WebSocket frame, or one HTTP/3 frame. This per-<proto> separation is
-// what fixes HTTP/2 multiplexing (§8.6) and likewise keeps each HTTP/3/WebSocket frame
+// what fixes HTTP/2 multiplexing and likewise keeps each HTTP/3/WebSocket frame
 // distinct (HTTP/3 frames nest under one `quic` proto per UDP packet).
 var pduProtos = map[string]bool{"http2": true, "http": true, "websocket": true, "http3": true}
 
@@ -111,7 +111,7 @@ var bodyFields = map[string]bool{
 // (["-r", path] for a file, ["-r", "-"] for a streamed stdin capture).
 //
 // PDML (not `-T ek` + `-e` fields) so multiplexed HTTP/2 frames in one packet each
-// keep their own <proto name="http2"> with its own stream id + fields (plan §8.6).
+// keep their own <proto name="http2"> with its own stream id + fields.
 func tsharkArgs(input []string, keylogPath string, live bool) []string {
 	args := append([]string{}, input...)
 	if keylogPath != "" {
@@ -126,7 +126,7 @@ func tsharkArgs(input []string, keylogPath string, live bool) []string {
 	// packets plus all TLS/QUIC packets. TLS packets carry the per-stream ClientHello
 	// SNI + tls.stream index used to pick streams for custom raw-TCP decoders, which run
 	// in a separate `-z follow,tls,raw` pass (tshark only exposes decrypted undissected
-	// bytes through follow, not as a PDML field; plan §8).
+	// bytes through follow, not as a PDML field;).
 	args = append(args, "-Y", "http or http2 or websocket or tls or http3", "-T", "pdml",
 		"-O", "frame,ip,ipv6,tcp,udp,tls,quic,http,http2,websocket,http3")
 	return args
@@ -233,7 +233,7 @@ func attrVal(se xml.StartElement, name string) string {
 // Decode runs tshark over pcapPath (decrypting with keylogPath if non-empty) and
 // returns the decoded flows in first-seen order. The PDML pass yields HTTP/WebSocket
 // flows + per-stream TLS metadata; custom raw-TCP decoders then run over the decrypted
-// bytes of matched streams (plan §8).
+// bytes of matched streams.
 func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Dataset, error) {
 	ds := &Dataset{Engine: "tshark", TLSKeyLogUsed: keylogPath != ""}
 	st := newStitcher(ds, nil)

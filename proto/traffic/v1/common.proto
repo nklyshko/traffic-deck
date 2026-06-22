@@ -12,7 +12,7 @@ enum SourceKind {
   SOURCE_KIND_GENERIC = 5;
 }
 
-// Which uploaded artifact a chunk belongs to (see plan §6.3).
+// Which uploaded artifact a chunk belongs to (see).
 enum FileKind {
   FILE_KIND_UNSPECIFIED = 0;
   FILE_KIND_PCAP = 1;
@@ -89,7 +89,7 @@ message Flow {
   Body request_body = 24;
   Body response_body = 25;
 
-  // Annotations (plan §12). Summaries (ListFlows/StreamFlows) carry mark_color,
+  // Annotations. Summaries (ListFlows/StreamFlows) carry mark_color,
   // favorite, tag_ids, group_ids so rows render/filter without a second call;
   // GetFlow additionally fills comments.
   string mark_color = 26;        // single color marker ("" = none)
@@ -98,13 +98,13 @@ message Flow {
   repeated string group_ids = 29;
   repeated Comment comments = 30;
 
-  // WebSocket (plan §8.6): set when this flow is an HTTP Upgrade that carries
+  // WebSocket: set when this flow is an HTTP Upgrade that carries
   // WebSocket frames; the frames are WsMessages fetched via ListMessages.
   bool websocket = 31;
   uint32 ws_message_count = 32;
 }
 
-// One decoded WebSocket frame — a message-shaped record (plan §8.6), distinct from
+// One decoded WebSocket frame — a message-shaped record, distinct from
 // the request/response Flow. Belongs to the Upgrade flow (flow_id) on its connection.
 message WsMessage {
   string id = 1;
@@ -117,7 +117,7 @@ message WsMessage {
   Body payload = 8;              // inline (small) or object_ref (large)
 }
 
-// A named, colored label (plan §12). Definitions are global (catalog) and mirrored
+// A named, colored label. Definitions are global (catalog) and mirrored
 // into each session bundle that uses them; assignments live in the bundle.
 message Tag {
   string id = 1;
@@ -127,7 +127,7 @@ message Tag {
   int64 created_at_unix_ms = 5;
 }
 
-// A free-form note attached to a record (plan §12).
+// A free-form note attached to a record.
 message Comment {
   string id = 1;
   string record_id = 2;
@@ -136,7 +136,7 @@ message Comment {
   int64 updated_at_unix_ms = 5;
 }
 
-// A user-defined, optionally hierarchical group (plan §12).
+// A user-defined, optionally hierarchical group.
 message Group {
   string id = 1;
   string name = 2;

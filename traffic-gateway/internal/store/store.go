@@ -1,4 +1,4 @@
-// Package store is the gateway's SQLite persistence layer (plan §6).
+// Package store is the gateway's SQLite persistence layer.
 //
 // Per-session bundles: each session has its own sessions/<id>/flows.sqlite holding
 // that capture's flows; a global catalog.sqlite holds the session list. Inserts
@@ -214,7 +214,7 @@ func insertHeaders(ctx context.Context, tx *sql.Tx, flowID string, dir int, hs [
 	return nil
 }
 
-// InlineBlobMax is the size threshold (plan §6.4): bodies at or below it are stored
+// InlineBlobMax is the size threshold: bodies at or below it are stored
 // inline in SQLite; larger bodies spill to a file under the session bundle.
 const InlineBlobMax = 1 << 20 // 1 MiB
 

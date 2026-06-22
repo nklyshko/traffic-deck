@@ -1,4 +1,4 @@
-// Package config loads gateway configuration from the environment (plan §10).
+// Package config loads gateway configuration from the environment.
 package config
 
 import (

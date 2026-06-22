@@ -1,4 +1,4 @@
-"""Non-interactive Android capture (plan §7, Phase 7).
+"""Non-interactive Android capture.
 
 Thin flag-based entry over the library (adb + frida_server + capture). For a guided
 flow (pick target / emulator setup / app / scripts) run `capture-android` instead.

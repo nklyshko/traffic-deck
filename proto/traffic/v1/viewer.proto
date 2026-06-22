@@ -11,7 +11,7 @@ service ViewerService {
   rpc GetFlow(GetFlowRequest) returns (Flow);
   rpc GetBody(GetBodyRequest) returns (stream BodyChunk);
 
-  // WebSocket message timeline for an Upgrade flow (plan §8.6).
+  // WebSocket message timeline for an Upgrade flow.
   rpc ListMessages(ListMessagesRequest) returns (MessageList);
   // StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
   // and the session is live) streams new frames as they're decoded, until the
@@ -32,7 +32,7 @@ message SessionList {
 message StreamFlowsRequest {
   string session_id = 1;
   bool include_backfill = 2; // replay stored flows first
-  bool follow = 3;           // keep streaming live additions (Phase 2)
+  bool follow = 3;           // keep streaming live additions
 }
 
 message SessionEvent {

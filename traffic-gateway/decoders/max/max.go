@@ -1,4 +1,4 @@
-// Package max decodes the MAX messenger (ru.oneme) raw-TCP protocol (plan §8).
+// Package max decodes the MAX messenger (ru.oneme) raw-TCP protocol.
 // Ported from the reference mitmproxy addon _EXTERNAL/max-sniff/maxproto_dump.py.
 //
 // Frame: 10-byte big-endian header [ver(1) cmd(2) seq(1) opcode(2) packed_len(4)],

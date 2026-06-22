@@ -1,5 +1,5 @@
 // Package decoders is the registry + contract for custom (non-HTTP) protocol
-// decoders (plan §8). Decoders are compiled-in Go modules under decoders/<name>/
+// decoders. Decoders are compiled-in Go modules under decoders/<name>/
 // that self-register via init() — the gateway blank-imports them. Each decoder turns
 // a TLS-decrypted (or plaintext) TCP connection's directional byte stream into
 // message-shaped records, surfaced like WebSocket frames in the viewer.
@@ -35,7 +35,7 @@ type Message struct {
 
 // Decoder decodes one custom TCP protocol. It is a factory for stateful Sessions so
 // that decoding works both in batch (feed all turns at once) and live (feed bytes as
-// they arrive over the growing capture, plan §8.2).
+// they arrive over the growing capture).
 type Decoder interface {
 	Name() string            // short id, e.g. "max"
 	Matches(StreamMeta) bool // does this decoder handle the connection?

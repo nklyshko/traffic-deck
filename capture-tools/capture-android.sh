@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Android per-app capture tool (plan §7). Run with no arguments for the
+# Launch the Android per-app capture tool. Run with no arguments for the
 # interactive flow (pick target / emulator / root / frida version / app / scripts);
 # extra flags pass through (e.g. --gateway, --duration, --all-apps).
 #

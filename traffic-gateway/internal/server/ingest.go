@@ -20,10 +20,8 @@ import (
 
 const maxChunkBytes = 1 << 20 // advertised upload chunk size
 
-// Ingest implements trafficv1.IngestServiceServer.
-//
-// Phase 2 step 1: streamed capture upload with decode-on-close (BATCH_ON_CLOSE).
-// Live streaming decode is a later step.
+// Ingest implements trafficv1.IngestServiceServer: streamed capture upload (decoded
+// live and/or on close) and the pushed-flow path for already-decoded sources.
 type Ingest struct {
 	trafficv1.UnimplementedIngestServiceServer
 	st         *store.Store
@@ -113,7 +111,7 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 	})
 }
 
-// PushFlows ingests already-decoded flows (the mitmproxy/supplied path, plan §5.1):
+// PushFlows ingests already-decoded flows (the mitmproxy/supplied path):
 // each batch is persisted to the session bundle and live-published to viewers. No
 // pcap/tshark is involved; the session is a tshark-less ("passive") live session.
 func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch, trafficv1.PushAck]) error {

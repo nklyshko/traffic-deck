@@ -1,4 +1,4 @@
-"""capture_android — per-app Android capture (plan §7). Run `capture-android`.
+"""capture_android — per-app Android capture. Run `capture-android`.
 
 `capture-android` is the interactive front-end ([cli][capture_android.cli]); it never
 imports frida and launches the actual capture under a device-matched frida via

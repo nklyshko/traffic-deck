@@ -4,17 +4,17 @@ package traffic.v1;
 
 import "traffic/v1/common.proto";
 
-// viewer -> gateway -> tools. Capture control, re-decode, annotations (plan §12).
+// viewer -> gateway -> tools. Capture control, re-decode, annotations.
 service ControlService {
   rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
   rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
   rpc ReDecode(ReDecodeRequest) returns (stream DecodeProgress);
 
   // Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
-  // spilled blobs) as a self-contained .tar.gz, streamed in chunks (plan §10).
+  // spilled blobs) as a self-contained .tar.gz, streamed in chunks.
   rpc ExportSession(ExportSessionRequest) returns (stream ExportChunk);
 
-  // --- Annotations (plan §12). Bulk ops take repeated record_ids. ---
+  // --- Annotations. Bulk ops take repeated record_ids. ---
 
   // Tags (defs are global; assignments per-session).
   rpc CreateTag(CreateTagRequest) returns (Tag);

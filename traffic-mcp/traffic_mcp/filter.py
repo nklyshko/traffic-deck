@@ -1,4 +1,4 @@
-"""mitmproxy-style flow filter (plan §7.3), ported for the MCP search_flows tool.
+"""mitmproxy-style flow filter, ported for the MCP search_flows tool.
 
 Same surface as the TUI's compile_filter: space-separated ANDed terms over a flow
 summary — `~m/~d/~u/~c/~t`, `~s/~q`, `~fav`, annotation fields

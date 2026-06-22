@@ -45,7 +45,7 @@ func (v *Viewer) GetFlow(ctx context.Context, req *trafficv1.GetFlowRequest) (*t
 
 // StreamFlows replays stored flows (backfill), then — if follow is set and the
 // session is live — streams a snapshot + subsequent live flow events until the
-// session closes or the client disconnects (plan §8.2).
+// session closes or the client disconnects.
 func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerStreamingServer[trafficv1.FlowEvent]) error {
 	flows, err := v.st.ListFlows(srv.Context(), req.GetSessionId())
 	if err != nil {
@@ -107,7 +107,7 @@ func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRe
 
 // StreamMessages replays an Upgrade flow's stored frames, then — if follow is set and
 // the session is live — streams newly decoded frames until the session closes or the
-// client disconnects (the live WebSocket timeline, mirroring StreamFlows; plan §8.6).
+// client disconnects (the live WebSocket timeline, mirroring StreamFlows;).
 func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.ServerStreamingServer[trafficv1.MessageEvent]) error {
 	send := func(m *trafficv1.WsMessage) error {
 		return srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_MessageAdded{MessageAdded: m}})
