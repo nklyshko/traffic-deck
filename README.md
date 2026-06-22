@@ -41,13 +41,15 @@ mise run gen            # generate gRPC stubs (Go + Python) — REQUIRED before 
 Start the gateway (serves on `127.0.0.1:8080`, data under `./data`):
 
 ```sh
-mise exec -- go -C traffic-gateway run ./cmd/gateway serve
+make run                                              # build ./gateway and serve
+# or: mise exec -- go -C traffic-gateway run ./cmd/gateway serve
 ```
 
 Browse in the TUI (separate terminal):
 
 ```sh
-uv run --directory traffic-viewer python -m traffic_viewer.app
+traffic-viewer/run.sh                                 # runs the TUI (GATEWAY_ADDR overridable)
+# or: uv run --directory traffic-viewer python -m traffic_viewer.app
 ```
 
 TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
