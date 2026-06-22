@@ -42,8 +42,8 @@ func bytesEqual(a, b []byte) bool {
 
 // parseFollowRaw turns tshark follow output into directional turns.
 func TestParseFollowRaw(t *testing.T) {
-	c := maxFrame(t, 1, 0x1, "hi")    // client->server (non-indented)
-	s := maxFrame(t, 2, 0x2, "yo")    // server->client (tab-indented)
+	c := maxFrame(t, 1, 0x1, "hi") // client->server (non-indented)
+	s := maxFrame(t, 2, 0x2, "yo") // server->client (tab-indented)
 	out := "\n" +
 		"===================================================================\n" +
 		"Follow: tls,raw\n" +
@@ -76,9 +76,9 @@ func TestParsedTurnsDecodeMAX(t *testing.T) {
 	if len(d) == 0 {
 		t.Fatal("MAX decoder not registered/matched")
 	}
-	msgs, err := d[0].Decode(turns)
-	if err != nil || len(msgs) != 1 {
-		t.Fatalf("decode: n=%d err=%v", len(msgs), err)
+	msgs := decoders.DecodeTurns(d[0], turns)
+	if len(msgs) != 1 {
+		t.Fatalf("decode: n=%d", len(msgs))
 	}
 	if msgs[0].Opcode != "cmd5/op0x10" || !strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
 		t.Fatalf("msg = %+v", msgs[0])

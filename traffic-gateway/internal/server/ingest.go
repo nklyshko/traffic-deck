@@ -81,7 +81,8 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 				// Ensure the key.log exists so tshark can watch it, then start live decode.
 				_ = i.obj.WriteAt(keylogKey(sid), nil, 0)
 				keylogLocal, _ := i.obj.LocalPath(keylogKey(sid))
-				i.hub.start(sid, keylogLocal)
+				pcapLocal, _ := i.obj.LocalPath(pcapKey(sid)) // for the live custom-decode poller
+				i.hub.start(sid, pcapLocal, keylogLocal)
 			}
 		case *trafficv1.CaptureChunk_Data:
 			if sid == "" {

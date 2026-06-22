@@ -33,11 +33,32 @@ type Message struct {
 	TSUnixMicros int64
 }
 
-// Decoder decodes one custom TCP protocol.
+// Decoder decodes one custom TCP protocol. It is a factory for stateful Sessions so
+// that decoding works both in batch (feed all turns at once) and live (feed bytes as
+// they arrive over the growing capture, plan §8.2).
 type Decoder interface {
-	Name() string                           // short id, e.g. "max"
-	Matches(StreamMeta) bool                // does this decoder handle the connection?
-	Decode(turns []Turn) ([]Message, error) // decode the whole connection
+	Name() string            // short id, e.g. "max"
+	Matches(StreamMeta) bool // does this decoder handle the connection?
+	NewSession() Session     // a fresh framer for one connection
+}
+
+// Session statefully frames one connection's decrypted directional byte stream. Feed
+// is called with newly-arrived bytes for a direction (in arrival order across calls)
+// and returns the messages whose frames completed with those bytes; it must buffer a
+// partial frame until the rest arrives. A frame stays within one direction.
+type Session interface {
+	Feed(fromClient bool, data []byte) []Message
+}
+
+// DecodeTurns runs a decoder over a full set of turns — the batch path. Equivalent to
+// feeding each turn to a fresh session in order.
+func DecodeTurns(d Decoder, turns []Turn) []Message {
+	s := d.NewSession()
+	var out []Message
+	for _, t := range turns {
+		out = append(out, s.Feed(t.FromClient, t.Data)...)
+	}
+	return out
 }
 
 var registry = map[string]Decoder{}

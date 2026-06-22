@@ -51,8 +51,10 @@ func (h *liveHub) get(sessionID string) *liveSession {
 }
 
 // start spins up a persistent tshark for sessionID, fed by the returned pipe via
-// write(). keylogPath must already exist (it may be empty and grow).
-func (h *liveHub) start(sessionID, keylogPath string) {
+// write(). keylogPath must already exist (it may be empty and grow); pcapPath is the
+// archive file the gateway tees to — the live custom-decode poller reads it (follow
+// can't read the stdin pipe), and may be empty/not-yet-created.
+func (h *liveHub) start(sessionID, pcapPath, keylogPath string) {
 	pr, pw := io.Pipe()
 	ls := &liveSession{
 		pw:      pw,
@@ -72,7 +74,7 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		defer pr.Close()
 		// Background context: the decode lives until the pipe is closed by stop(),
 		// independent of any single upload stream's lifetime.
-		_ = decode.LiveDecode(context.Background(), h.tshark, keylogPath, pr, ls.onFlow, ls.onMessage)
+		_ = decode.LiveDecode(context.Background(), h.tshark, pcapPath, keylogPath, pr, ls.onFlow, ls.onMessage)
 	}()
 }
 

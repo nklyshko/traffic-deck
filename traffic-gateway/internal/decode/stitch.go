@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 )
@@ -19,6 +20,9 @@ type stitcher struct {
 	// used to pick which streams to hand to custom raw-TCP decoders (plan §8). The
 	// decoded bytes themselves are pulled via tshark `follow,tls,raw` (see streams.go),
 	// since tshark only exposes decrypted undissected payloads through follow.
+	// metaMu guards it because the live custom-decode poller reads it concurrently
+	// with the PDML loop's addPacket writes.
+	metaMu     sync.Mutex
 	streamMeta map[string]*tlsStream
 
 	// onChange, if set, fires after each flow is created (isNew=true) or updated.
@@ -58,6 +62,7 @@ func (s *stitcher) addPacket(l layers) {
 	if sni == "" {
 		return // only ClientHello packets carry the metadata we need
 	}
+	s.metaMu.Lock()
 	s.streamMeta[tcp] = &tlsStream{
 		tlsStreamIdx: l.first("tls.stream"),
 		sni:          sni,
@@ -65,6 +70,20 @@ func (s *stitcher) addPacket(l layers) {
 		serverHost:   firstNonEmpty(l.first("ip.dst"), l.first("ipv6.dst")),
 		serverPort:   l.first("tcp.dstport"),
 	}
+	s.metaMu.Unlock()
+}
+
+// snapshotMeta returns a copy of the per-stream metadata map for concurrent readers
+// (the live poller). The *tlsStream values are written once in addPacket and not
+// mutated after, so sharing the pointers is safe.
+func (s *stitcher) snapshotMeta() map[string]*tlsStream {
+	s.metaMu.Lock()
+	defer s.metaMu.Unlock()
+	out := make(map[string]*tlsStream, len(s.streamMeta))
+	for k, v := range s.streamMeta {
+		out[k] = v
+	}
+	return out
 }
 
 func firstNonEmpty(a, b string) string {

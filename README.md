@@ -223,15 +223,19 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 Non-HTTP binary protocols carried over TCP (e.g. MAX messenger, `ru.oneme`) are decoded
 by **compiled-in Go modules** under [`traffic-gateway/decoders/`](traffic-gateway/decoders/).
 Each decoder is its own package that self-registers via `init()`; the gateway
-blank-imports it in `cmd/gateway`. During decode (one tshark PDML pass for HTTP/WS, then
-`tshark -z follow,tls,raw` over the TLS-decrypted bytes of any **matched** stream), a
-decoder turns a connection's directional byte stream into message frames, surfaced as a
-synthetic flow with the WebSocket-style `M` message timeline. HTTP and custom-protocol
-flows coexist in one session.
+blank-imports it in `cmd/gateway`. The gateway gets a connection's TLS-decrypted bytes
+via `tshark -z follow,tls,raw` over any **matched** stream and the decoder turns them
+into message frames, surfaced as a synthetic flow with the WebSocket-style `M` message
+timeline. HTTP and custom-protocol flows coexist in one session. This runs both on the
+batch pass (whole stream at close) and **live during capture**: the live path re-runs
+`follow` over the growing capture on a short cadence and feeds only the newly-arrived
+bytes to the decoder, so MAX frames stream into the `M` timeline in real time.
 
-A decoder implements `decoders.Decoder` (`Name`, `Matches(StreamMeta)`,
-`Decode([]Turn) ([]Message, error)`); see `decoders/max` (MAX framing → LZ4 →
-MessagePack → JSON). Add one = add a package + a blank import + rebuild.
+A decoder implements `decoders.Decoder` (`Name`, `Matches(StreamMeta)`, `NewSession`);
+the returned `Session` is a stateful framer — `Feed(fromClient, data) []Message` —
+that buffers a partial frame until the rest arrives, so it works fed all-at-once
+(batch) or incrementally (live). See `decoders/max` (MAX framing → LZ4 → MessagePack →
+JSON). Add one = add a package + a blank import + rebuild.
 
 ```sh
 # re-run custom decoders over an already-captured session (e.g. after adding a decoder)

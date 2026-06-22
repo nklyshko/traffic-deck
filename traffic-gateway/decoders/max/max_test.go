@@ -46,11 +46,7 @@ func mp(t *testing.T, v interface{}) []byte {
 
 func decode(t *testing.T, turns []decoders.Turn) []decoders.Message {
 	t.Helper()
-	msgs, err := decoder{}.Decode(turns)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	return msgs
+	return decoders.DecodeTurns(decoder{}, turns)
 }
 
 func TestMatches(t *testing.T) {
@@ -121,5 +117,41 @@ func TestSkipUndecodable(t *testing.T) {
 	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: f}})
 	if len(msgs) != 0 {
 		t.Fatalf("want 0 (skipped), got %+v", msgs)
+	}
+}
+
+// TestSessionIncrementalFeed mimics the live poller: a single frame is delivered in
+// several small byte slices (split inside the header and the payload), and a second
+// direction is interleaved. The session must emit each frame exactly once, only when
+// it's complete — the core of incremental-framing mode (plan §8.2).
+func TestSessionIncrementalFeed(t *testing.T) {
+	c := frame(t, 1, 0x1, false, mp(t, map[string]int{"x": 1}))
+	s := frame(t, 2, 0x2, false, mp(t, "srv"))
+	sess := decoder{}.NewSession()
+
+	var got []decoders.Message
+	feed := func(fromClient bool, b []byte) { got = append(got, sess.Feed(fromClient, b)...) }
+
+	// Dribble the client frame in chunks (mid-header, mid-payload); nothing until done.
+	feed(true, c[:4])
+	feed(true, c[4:headerLen+1])
+	if len(got) != 0 {
+		t.Fatalf("emitted before frame complete: %+v", got)
+	}
+	// Interleave a partial server frame — wrong direction must not complete the client one.
+	feed(false, s[:5])
+	if len(got) != 0 {
+		t.Fatalf("server bytes completed a client frame: %+v", got)
+	}
+	feed(true, c[headerLen+1:]) // finish the client frame
+	feed(false, s[5:])          // finish the server frame
+	if len(got) != 2 {
+		t.Fatalf("want 2 frames, got %d: %+v", len(got), got)
+	}
+	if !got[0].FromClient || got[0].Opcode != "cmd1/op0x1" {
+		t.Fatalf("client frame wrong: %+v", got[0])
+	}
+	if got[1].FromClient || got[1].Opcode != "cmd2/op0x2" {
+		t.Fatalf("server frame wrong: %+v", got[1])
 	}
 }

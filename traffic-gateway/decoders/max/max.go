@@ -40,26 +40,32 @@ func (decoder) Matches(m decoders.StreamMeta) bool {
 	return strings.Contains(host, "oneme.ru") || strings.HasPrefix(m.ServerHost, "155.212")
 }
 
-// Decode frames each direction's byte stream independently (a frame stays within one
-// direction) and emits messages in completion order across the turns.
-func (decoder) Decode(turns []decoders.Turn) ([]decoders.Message, error) {
+// NewSession returns a stateful framer: each direction's byte stream is framed
+// independently (a frame stays within one direction), buffering a partial frame until
+// the rest arrives — so it works whether fed all at once (batch) or incrementally (live).
+func (decoder) NewSession() decoders.Session { return &session{bufs: map[bool][]byte{}} }
+
+type session struct {
+	bufs map[bool][]byte // from_client -> pending (un-framed) bytes
+}
+
+// Feed appends newly-arrived bytes for one direction and returns any frames that
+// completed. follow,tls,raw carries no timestamps, so messages have ts=0.
+func (s *session) Feed(fromClient bool, data []byte) []decoders.Message {
+	buf := append(s.bufs[fromClient], data...)
 	var out []decoders.Message
-	bufs := map[bool][]byte{} // from_client -> pending bytes
-	for _, t := range turns {
-		buf := append(bufs[t.FromClient], t.Data...)
-		for {
-			frame, rest, ok := nextFrame(buf)
-			if !ok {
-				break
-			}
-			buf = rest
-			if m, ok := decodeFrame(frame, t.FromClient, t.TSUnixMicros); ok {
-				out = append(out, m)
-			}
+	for {
+		frame, rest, ok := nextFrame(buf)
+		if !ok {
+			break
 		}
-		bufs[t.FromClient] = buf
+		buf = rest
+		if m, ok := decodeFrame(frame, fromClient, 0); ok {
+			out = append(out, m)
+		}
 	}
-	return out, nil
+	s.bufs[fromClient] = buf
+	return out
 }
 
 // nextFrame splits one complete frame off the front of buf, or reports !ok if buf
