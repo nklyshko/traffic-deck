@@ -85,9 +85,8 @@ def _pick_profile(chrome: str):
     """Step 2: pick the user-data-dir. Returns a path, or _BUILTIN_PROFILE to launch
     with no --user-data-dir (the browser's own default). Options: browser default, a
     fresh temp, or a named persistent profile under ~/.capture-chrome/profiles."""
-    default_dir = platform.chrome_profile_default(chrome)
     choice = _choose("Profile:", [
-        f"browser default profile ({default_dir})",
+        "browser default profile",
         "temporary new empty profile",
         "custom persistent profile (~/.capture-chrome/profiles)",
     ])

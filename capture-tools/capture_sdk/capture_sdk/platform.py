@@ -61,16 +61,6 @@ def chrome_binary() -> str:
     raise RuntimeError("Chrome/Chromium not found; set CHROME_BIN")
 
 
-def chrome_profile_default(chrome_path: str | None = None) -> str:
-    """The browser's standard user-data-dir, picked from the binary name
-    (Chromium vs Chrome). Capturing on it requires the browser to be closed first."""
-    chromium = "chromium" in (chrome_path or "").lower()
-    if sys.platform == "darwin":
-        base = os.path.expanduser("~/Library/Application Support")
-        return os.path.join(base, "Chromium" if chromium else "Google/Chrome")
-    return os.path.expanduser("~/.config/" + ("chromium" if chromium else "google-chrome"))
-
-
 def dumpcap_binary() -> str:
     if env := os.environ.get("DUMPCAP_BIN"):
         return env
