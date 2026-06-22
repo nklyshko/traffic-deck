@@ -2,15 +2,7 @@ package decode
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/binary"
-	"io"
-	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -23,6 +15,7 @@ import (
 	"github.com/google/gopacket/pcapgo"
 
 	"github.com/nikitak/parsing/traffic-gateway/decoders"
+	"github.com/nikitak/parsing/traffic-gateway/internal/tlstest"
 )
 
 // --- a trivial length-prefixed test protocol + decoder (registered for this test) ---
@@ -75,7 +68,7 @@ func TestLiveTCPDecodeEndToEnd(t *testing.T) {
 		serverApp = append(serverApp, frameMsg(m)...)
 	}
 
-	c2s, s2c, keylog := tlsExchange(t, "svc.echo.test", clientApp, serverApp)
+	c2s, s2c, keylog := tlstest.Exchange(t, "svc.echo.test", clientApp, serverApp)
 
 	dir := t.TempDir()
 	klPath := filepath.Join(dir, "key.log")
@@ -133,98 +126,6 @@ func summarize(got [][2]string) []string {
 	return out
 }
 
-// tlsExchange performs a real TLS 1.3 handshake + bidirectional app-data exchange over
-// localhost, returning the recorded client→server bytes, server→client bytes, and the
-// NSS key-log.
-func tlsExchange(t *testing.T, sni string, clientApp, serverApp []byte) (c2s, s2c, keylog []byte) {
-	t.Helper()
-	cert := testCert(t)
-	klw := &syncBuf{}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-
-	done := make(chan error, 1)
-	go func() {
-		raw, err := ln.Accept()
-		if err != nil {
-			done <- err
-			return
-		}
-		sc := tls.Server(raw, &tls.Config{Certificates: []tls.Certificate{cert},
-			MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, KeyLogWriter: klw})
-		buf := make([]byte, len(clientApp))
-		if _, err := io.ReadFull(sc, buf); err != nil {
-			done <- err
-			return
-		}
-		if _, err := sc.Write(serverApp); err != nil {
-			done <- err
-			return
-		}
-		_ = sc.CloseWrite()
-		done <- nil
-	}()
-
-	raw, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := &recorder{Conn: raw}
-	cc := tls.Client(rec, &tls.Config{InsecureSkipVerify: true, ServerName: sni,
-		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, KeyLogWriter: klw})
-	if _, err := cc.Write(clientApp); err != nil {
-		t.Fatal(err)
-	}
-	got := make([]byte, len(serverApp))
-	if _, err := io.ReadFull(cc, got); err != nil {
-		t.Fatal(err)
-	}
-	cc.Close()
-	if err := <-done; err != nil {
-		t.Fatalf("server: %v", err)
-	}
-	return rec.c2s.Bytes(), rec.s2c.Bytes(), klw.b.Bytes()
-}
-
-// recorder/syncBuf/testCert mirror the helpers in the tlsdecrypt tests.
-type recorder struct {
-	net.Conn
-	c2s, s2c bytes.Buffer
-}
-
-func (r *recorder) Write(p []byte) (int, error) {
-	n, err := r.Conn.Write(p)
-	r.c2s.Write(p[:n])
-	return n, err
-}
-func (r *recorder) Read(p []byte) (int, error) {
-	n, err := r.Conn.Read(p)
-	r.s2c.Write(p[:n])
-	return n, err
-}
-
-type syncBuf struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (w *syncBuf) Write(p []byte) (int, error) { w.mu.Lock(); defer w.mu.Unlock(); return w.b.Write(p) }
-
-func testCert(t *testing.T) tls.Certificate {
-	t.Helper()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "t"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-}
-
 // buildPcap wraps the two directional byte streams into Ethernet/IPv4/TCP packets
 // (segmented at ~1200 bytes) and writes a classic pcap. Client packets are emitted
 // first so reassembly treats the connecting side as the client.
@@ -270,7 +171,7 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 	decoders.Register(echoDecoder{})
 	clientApp := frameMsg([]byte("ping"))
 	serverApp := append(frameMsg([]byte("pong")), frameMsg(bytes.Repeat([]byte("Q"), 20000))...)
-	c2s, s2c, keylog := tlsExchange(t, "svc.echo.nflog", clientApp, serverApp)
+	c2s, s2c, keylog := tlstest.Exchange(t, "svc.echo.nflog", clientApp, serverApp)
 
 	dir := t.TempDir()
 	klPath := filepath.Join(dir, "key.log")
