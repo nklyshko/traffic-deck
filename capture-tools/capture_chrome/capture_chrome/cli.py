@@ -33,7 +33,7 @@ import threading
 
 import grpc
 
-from capture_sdk import platform
+from capture_sdk import platform, prompt
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
@@ -51,50 +51,30 @@ _PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
 
 # --- interactive prompts -------------------------------------------------
 
-def _ask(prompt: str, default: str = "") -> str:
-    suffix = f" [{default}]" if default else ""
-    try:
-        v = input(f"{prompt}{suffix}: ").strip()
-    except EOFError:
-        v = ""
-    return v or default
-
-
-def _choose(title: str, items: list[str]) -> str:
-    print(f"\n{title}")
-    for i, it in enumerate(items, 1):
-        print(f"  {i:2d}. {it}")
-    while True:
-        raw = _ask("select", "1")
-        if raw.isdigit() and 1 <= int(raw) <= len(items):
-            return items[int(raw) - 1]
-        print("  ? enter a number from the list")
-
-
 def _pick_chrome() -> str:
     """Step 1: show discovered Chrome/Chromium binaries and pick one."""
     bins = platform.chrome_binaries()
     if not bins:
         print("no Chrome/Chromium found on PATH")
-        return _ask("Chrome binary path")
-    choice = _choose("Chrome to use:", bins + ["custom path…"])
-    return _ask("Chrome binary path") if choice == "custom path…" else choice
+        return prompt.text("Chrome binary path")
+    choice = prompt.select("Chrome to use:", bins + [("custom path…", "__custom__")])
+    return prompt.text("Chrome binary path") if choice == "__custom__" else choice
 
 
 def _pick_profile(chrome: str):
     """Step 2: pick the user-data-dir. Returns a path, or _BUILTIN_PROFILE to launch
     with no --user-data-dir (the browser's own default). Options: browser default, a
     fresh temp, or a named persistent profile under ~/.capture-chrome/profiles."""
-    choice = _choose("Profile:", [
-        "browser default profile",
-        "temporary new empty profile",
-        "custom persistent profile (~/.capture-chrome/profiles)",
+    choice = prompt.select("Profile:", [
+        ("browser default profile", "default"),
+        ("temporary new empty profile", "temp"),
+        ("custom persistent profile (~/.capture-chrome/profiles)", "custom"),
     ])
-    if choice.startswith("browser default"):
+    if choice == "default":
         print(f"note: uses {os.path.basename(chrome)}'s own default profile — quit any "
               "running instance of it first, or no TLS keys are logged")
         return _BUILTIN_PROFILE
-    if choice.startswith("temporary"):
+    if choice == "temp":
         return tempfile.mkdtemp(prefix="chrome-capture-")
     return _pick_persistent_profile()
 
@@ -104,9 +84,9 @@ def _pick_persistent_profile() -> str:
     os.makedirs(_PROFILES_DIR, exist_ok=True)
     existing = sorted(d for d in os.listdir(_PROFILES_DIR)
                       if os.path.isdir(os.path.join(_PROFILES_DIR, d)))
-    choice = _choose("Custom persistent profile:", existing + ["＋ create new…"])
-    if choice == "＋ create new…":
-        name = _ask("new profile name", "default")
+    choice = prompt.select("Custom persistent profile:", existing + [("＋ create new…", "__new__")])
+    if choice == "__new__":
+        name = prompt.text("New profile name", "default")
     else:
         name = choice
     path = os.path.join(_PROFILES_DIR, name)

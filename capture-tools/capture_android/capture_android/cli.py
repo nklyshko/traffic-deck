@@ -25,46 +25,10 @@ from pathlib import Path
 from capture_android import frida_versions
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
+from capture_sdk import prompt
 
 _DEFAULT_SCRIPTS_DIR = os.path.expanduser("~/.config/traffic/frida-scripts")
 _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
-
-
-# --- prompt helpers ------------------------------------------------------
-
-def _ask(prompt: str, default: str = "") -> str:
-    suffix = f" [{default}]" if default else ""
-    try:
-        v = input(f"{prompt}{suffix}: ").strip()
-    except EOFError:
-        v = ""
-    return v or default
-
-
-def _choose(title: str, items: list[str], render=lambda x: x) -> str:
-    print(f"\n{title}")
-    for i, it in enumerate(items, 1):
-        print(f"  {i:2d}. {render(it)}")
-    while True:
-        raw = _ask("select", "1")
-        if raw.isdigit() and 1 <= int(raw) <= len(items):
-            return items[int(raw) - 1]
-        print("  ? enter a number from the list")
-
-
-def _multi_choose(title: str, items: list[str]) -> list[str]:
-    """Pick zero or more by comma-separated indices ('' = none)."""
-    if not items:
-        return []
-    print(f"\n{title}")
-    for i, it in enumerate(items, 1):
-        print(f"  {i:2d}. {it}")
-    raw = _ask("select (comma-separated, empty = none)", "")
-    picked = []
-    for tok in raw.replace(" ", "").split(","):
-        if tok.isdigit() and 1 <= int(tok) <= len(items):
-            picked.append(items[int(tok) - 1])
-    return picked
 
 
 # --- steps ---------------------------------------------------------------
@@ -73,19 +37,19 @@ def pick_emulator(sdk: Sdk) -> str:
     """Step 2: choose/boot/create an emulator; returns its adb serial."""
     running = [d.serial for d in sdk.connected_devices() if d.emulator and d.state == "device"]
     avds = sdk.list_avds()
-    options = ([f"use running {s}" for s in running]
-               + [f"boot AVD {a}" for a in avds]
-               + ["create a new AVD"])
-    choice = _choose("Emulator:", options)
+    options = ([(f"use running {s}", ("use", s)) for s in running]
+               + [(f"boot AVD {a}", ("boot", a)) for a in avds]
+               + [("create a new AVD", ("new", ""))])
+    action, value = prompt.select("Emulator:", options)
 
-    if choice.startswith("use running "):
-        return choice.removeprefix("use running ")
-    if choice.startswith("boot AVD "):
-        name = choice.removeprefix("boot AVD ")
+    if action == "use":
+        return value
+    if action == "boot":
+        name = value
     else:
-        name = _ask("new AVD name", DEFAULT_AVD)
+        name = prompt.text("New AVD name", DEFAULT_AVD)
         if not sdk.system_image_installed(DEFAULT_IMAGE):
-            if _ask(f"install {DEFAULT_IMAGE}? (y/n)", "y").lower().startswith("y"):
+            if prompt.confirm(f"Install system image {DEFAULT_IMAGE}?", default=True):
                 sdk.install_system_image(DEFAULT_IMAGE)
             else:
                 raise SystemExit("a system image is required")
@@ -105,28 +69,29 @@ def pick_device(sdk: Sdk) -> str:
         if any(d.state == "unauthorized" for d in devs):
             raise SystemExit("device is unauthorized — accept the USB-debugging prompt and retry")
         raise SystemExit("no connected device (enable USB debugging and plug it in)")
-    return _choose("Device:", [d.serial for d in ready])
+    return prompt.select("Device:", [d.serial for d in ready])
 
 
 def pick_frida_version(adb: AdbClient) -> str:
     """Step 4: pick a frida version compatible with the device's Android release."""
     release = adb.shell("getprop", "ro.build.version.release").strip()
     rec = frida_versions.recommended(release)
-    opts = frida_versions.choices(rec)
-    print(f"\nAndroid {release or '?'} detected — recommended frida {rec}"
+    print(f"Android {release or '?'} detected — recommended frida {rec}"
           " (frida 17 can't spawn on Android ≤ 11)")
-    return _choose("frida version (client + server must match):", opts,
-                   render=lambda v: v + ("  (recommended)" if v == rec else ""))
+    opts = [(v + "  (recommended)" if v == rec else v, v) for v in frida_versions.choices(rec)]
+    return prompt.select("frida version (client + server must match):", opts, default=rec)
 
 
 def pick_scripts(scripts_dir: str) -> list[str]:
     """Step 6: pick extra Frida scripts from a directory and/or a custom path."""
     d = Path(scripts_dir)
     found = sorted(str(p) for p in d.glob("*.js")) if d.is_dir() else []
-    chosen = _multi_choose(f"Extra Frida scripts (from {scripts_dir}):", found) if found else []
-    if not found:
-        print(f"\n(no scripts in {scripts_dir})")
-    custom = _ask("extra script path (optional)", "")
+    if found:
+        chosen = prompt.checkbox(f"Extra Frida scripts (from {scripts_dir}):", found)
+    else:
+        print(f"(no scripts in {scripts_dir})")
+        chosen = []
+    custom = prompt.text("Extra script path (optional)", "")
     if custom:
         chosen.append(custom)
     return chosen
@@ -144,7 +109,7 @@ def main(argv=None) -> None:
     sdk = Sdk(args.sdk)
 
     # Step 1–2: target.
-    target = _choose("Capture target:", ["emulator", "device"])
+    target = prompt.select("Capture target:", ["emulator", "device"])
     serial = pick_emulator(sdk) if target == "emulator" else pick_device(sdk)
     adb = AdbClient(serial=serial, adb=sdk.adb)
 
@@ -161,11 +126,11 @@ def main(argv=None) -> None:
     pkgs = adb.list_packages(third_party=not args.all_apps)
     if not pkgs:
         pkgs = adb.list_packages(third_party=False)
-    package = _choose(f"App to capture ({len(pkgs)} installed):", pkgs)
+    package = prompt.select(f"App to capture ({len(pkgs)} installed):", pkgs)
 
     # Step 6: extra scripts + optional URL.
     scripts = pick_scripts(args.scripts_dir)
-    url = _ask("URL to open in the app (optional)", "")
+    url = prompt.text("URL to open in the app (optional)", "")
 
     # Launch the capture under the chosen frida (client+server must match).
     cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",

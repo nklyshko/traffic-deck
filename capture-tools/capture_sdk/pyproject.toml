@@ -1,11 +1,12 @@
 [project]
 name = "capture-sdk"
 version = "0.0.0"
-description = "Shared SDK for the capture tools: gRPC stubs, upload streaming, platform discovery"
+description = "Shared SDK for the capture tools: gRPC stubs, upload streaming, platform discovery, prompts"
 requires-python = ">=3.12"
 dependencies = [
     "grpcio>=1.76",
     "protobuf>=5.29",
+    "questionary>=2",
 ]
 
 [build-system]
