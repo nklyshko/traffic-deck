@@ -12,9 +12,10 @@ installable.
 ## Decision
 
 Split capture-tools into independent projects sharing a light `capture_sdk` (proto
-stubs, the upload-streaming helper, platform discovery):
+stubs, the upload-streaming helper, interactive prompts) — tool-specific code (e.g.
+Chrome/dumpcap discovery) stays in the owning app:
 
-- `capture_sdk` (deps: `grpcio`, `protobuf`) — the shared library.
+- `capture_sdk` (deps: `grpcio`, `protobuf`, `questionary`) — the shared library.
 - `capture_chrome`, `capture_mitmproxy`, `capture_android` — one app each, depending on
   `capture_sdk` via an editable **path dependency** and adding only its own heavy deps.
 

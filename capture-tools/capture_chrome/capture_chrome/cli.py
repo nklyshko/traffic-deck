@@ -33,7 +33,8 @@ import threading
 
 import grpc
 
-from capture_sdk import platform, prompt
+from capture_chrome import platform
+from capture_sdk import prompt
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
