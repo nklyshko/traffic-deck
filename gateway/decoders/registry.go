@@ -87,3 +87,56 @@ func All() []Decoder {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
 	return out
 }
+
+// --- WebSocket binary decoders --------------------------------------------
+//
+// Some protocols (e.g. MAX) that once ran over a raw TLS/TCP stream now tunnel the
+// same frames inside WebSocket *binary* messages. A WSDecoder is the WebSocket analog
+// of Decoder: it claims a connection by its HTTP Upgrade request (host/path) rather
+// than a raw TCP stream, and reuses Session to frame each direction's ordered binary
+// payloads into the same message-shaped records. One decoder type can implement both
+// Decoder and WSDecoder to handle a protocol over either transport.
+
+// WSMeta identifies a WebSocket connection (its HTTP Upgrade request) so a decoder can
+// decide whether it handles the binary frames carried on it.
+type WSMeta struct {
+	Host string // Upgrade request authority/host
+	Path string // Upgrade request path
+	SNI  string // TLS ClientHello server name, if any
+}
+
+// WSDecoder decodes the binary messages of one WebSocket sub-protocol. Session is fed
+// each binary message's payload in arrival order per direction (WebSocket preserves
+// message boundaries, but Session still buffers a partial frame split across messages).
+type WSDecoder interface {
+	Name() string
+	MatchesWS(WSMeta) bool // does this decoder handle the WebSocket connection?
+	NewSession() Session   // a fresh framer for one connection (shared with the TCP path)
+}
+
+var wsRegistry = map[string]WSDecoder{}
+
+// RegisterWS adds a WebSocket binary decoder (call from init()). Last name wins.
+func RegisterWS(d WSDecoder) { wsRegistry[d.Name()] = d }
+
+// MatchWS returns the WS decoders that claim a connection (sorted by name).
+func MatchWS(m WSMeta) []WSDecoder {
+	var out []WSDecoder
+	for _, d := range wsRegistry {
+		if d.MatchesWS(m) {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
+}
+
+// AllWS returns every registered WebSocket binary decoder.
+func AllWS() []WSDecoder {
+	out := make([]WSDecoder, 0, len(wsRegistry))
+	for _, d := range wsRegistry {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
+}

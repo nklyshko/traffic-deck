@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 // parseProxyAuth extracts credentials from a Proxy-Authorization: Basic header
@@ -51,6 +53,13 @@ type stitcher struct {
 	onChange func(f *Flow, isNew bool)
 	// onMessage, if set, fires for each WebSocket frame as it's decoded (live path).
 	onMessage func(m *WsMessage)
+
+	// WebSocket binary decoders (e.g. MAX over WebSocket): per Upgrade flow, the
+	// matched decoder (nil = none, cached) and its stateful framing session. Binary
+	// frames on a matched connection are reframed into protocol messages instead of
+	// being stored as raw bytes — the WebSocket analog of the raw-TCP decoder path.
+	wsDec  map[string]decoders.WSDecoder
+	wsSess map[string]decoders.Session
 }
 
 // tlsStream is the per-connection metadata captured from the ClientHello.
@@ -71,6 +80,8 @@ func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
 		streamMeta:    map[string]*tlsStream{},
 		proxyByStream: map[string]*FlowProxy{},
 		onChange:      onChange,
+		wsDec:         map[string]decoders.WSDecoder{},
+		wsSess:        map[string]decoders.Session{},
 	}
 }
 
@@ -237,22 +248,76 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 		return
 	}
 	f.Websocket = true
-	f.WsMessageCount++
 	src := addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort))
-	msg := &WsMessage{
+	fromClient := src != "" && src == f.SrcAddr
+	frameNum := parseUint(l.first(fFrameNum))
+	ts := epochToMicros(l.first(fFrameTime))
+	opName := wsOpcodeName(opcode)
+	payload := wsPayload(l)
+
+	// A registered WebSocket binary decoder (e.g. MAX) reframes this connection's
+	// binary payloads into protocol messages, mirroring the raw-TCP decoder path.
+	// Non-binary frames (text/ping/pong/close) and unclaimed connections fall through.
+	if opName == "binary" {
+		if frames, ok := s.decodeWSBinary(f, fromClient, payload); ok {
+			for _, fr := range frames {
+				s.emitWsMessage(f, &WsMessage{
+					ID:           uuid.NewString(),
+					FlowID:       f.ID,
+					FrameNumber:  frameNum,
+					TSUnixMicros: ts,
+					FromClient:   fr.FromClient,
+					Opcode:       fr.Opcode,
+					Payload:      fr.Payload,
+				})
+			}
+			return // a partial frame buffered with no output is fine — a later frame completes it
+		}
+	}
+
+	s.emitWsMessage(f, &WsMessage{
 		ID:           uuid.NewString(),
 		FlowID:       f.ID,
-		FrameNumber:  parseUint(l.first(fFrameNum)),
-		TSUnixMicros: epochToMicros(l.first(fFrameTime)),
-		FromClient:   src != "" && src == f.SrcAddr,
-		Opcode:       wsOpcodeName(opcode),
-		Payload:      wsPayload(l),
-	}
+		FrameNumber:  frameNum,
+		TSUnixMicros: ts,
+		FromClient:   fromClient,
+		Opcode:       opName,
+		Payload:      payload,
+	})
+}
+
+// emitWsMessage appends a WebSocket message to the dataset, bumps the parent flow's
+// frame count, and fires the live callback + flow update.
+func (s *stitcher) emitWsMessage(f *Flow, msg *WsMessage) {
+	f.WsMessageCount++
 	s.ds.Messages = append(s.ds.Messages, msg)
 	if s.onMessage != nil {
 		s.onMessage(msg)
 	}
 	s.emit(f, false) // surface the ws flag/count change on the parent flow
+}
+
+// decodeWSBinary frames a binary WebSocket payload through the WS decoder that claims
+// this Upgrade flow, returning the completed protocol messages. ok=false means no
+// decoder handles the connection (keep the raw binary frame); ok=true with an empty
+// slice means the bytes were buffered as a partial frame.
+func (s *stitcher) decodeWSBinary(f *Flow, fromClient bool, payload []byte) ([]decoders.Message, bool) {
+	dec, seen := s.wsDec[f.ID]
+	if !seen {
+		if m := decoders.MatchWS(decoders.WSMeta{Host: f.Authority, Path: f.Path, SNI: f.Authority}); len(m) > 0 {
+			dec = m[0]
+		}
+		s.wsDec[f.ID] = dec // cache the choice (may be nil)
+	}
+	if dec == nil {
+		return nil, false
+	}
+	sess := s.wsSess[f.ID]
+	if sess == nil {
+		sess = dec.NewSession()
+		s.wsSess[f.ID] = sess
+	}
+	return sess.Feed(fromClient, payload), true
 }
 
 // wsPayload returns a frame's application payload. With permessage-deflate

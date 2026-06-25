@@ -1,32 +1,63 @@
-// Package max decodes the MAX messenger (ru.oneme) raw-TCP protocol.
-// Ported from the reference mitmproxy addon _EXTERNAL/max-sniff/maxproto_dump.py.
+// Package max decodes the MAX messenger (ru.oneme / web.max.ru) protocol, over either
+// a raw TLS/TCP stream (mobile app) or WebSocket binary messages (web client).
 //
-// Frame: 10-byte big-endian header [ver(1) cmd(2) seq(1) opcode(2) packed_len(4)],
-// where the top byte of packed_len is an LZ4-compression flag and the low 24 bits are
-// the payload length; payload = next payload_length bytes → if compressed, LZ4
-// block-decompress → MessagePack. We frame the (decrypted) per-direction byte stream
-// and decode each frame's payload to JSON.
+// Frame: 10-byte big-endian header [ver(1) cmd(2) seq(1) opcode(2) len(4)]. The top
+// byte of the length field (header[6]) is a compression flag — 0 = none, 0xFF = zstd,
+// any other value = LZ4 block — and the low 24 bits are the payload length. The body is
+// decompressed accordingly, then MessagePack-decoded to JSON. Two MAX-isms (see the
+// reference client _EXTERNAL/max-desktop/maxclient/protocol/codec.py): it sometimes
+// prefixes 1-4 service bytes before the msgpack (we try a few offsets), and it boxes
+// 64-bit ids in ext type 1 — used both as values and as map keys (presence/chats), so
+// we register an ext decoder and decode maps untyped. A body that still won't parse
+// (e.g. truncated) is kept raw rather than dropped.
 package max
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
-	"github.com/pierrec/lz4/v4"
+	"github.com/klauspost/compress/zstd"
 	"github.com/vmihailenco/msgpack/v5"
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 const (
-	headerLen   = 10
-	maxDecompSz = 1 << 20 // matches the addon's uncompressed_size hint
+	headerLen = 10
+	compZstd  = 0xFF // header[6] flag: body is zstd-compressed
 )
 
-func init() { decoders.Register(&decoder{}) }
+// zstdDec is a shared stateless decoder (DecodeAll is safe for concurrent use).
+var zstdDec, _ = zstd.NewReader(nil)
+
+var errLZ4 = errors.New("max: lz4 block decompress produced no output")
+
+func init() {
+	decoders.Register(&decoder{})   // raw TLS/TCP transport (e.g. the mobile app)
+	decoders.RegisterWS(&decoder{}) // WebSocket binary transport (e.g. web.max.ru)
+
+	// MAX boxes 64-bit IDs (chat/contact/message ids) in MessagePack ext type 1, whose
+	// body is itself a msgpack integer. Without a decoder, the stdlib aborts on the
+	// unknown ext and large LOGIN/contacts/history frames fall back to raw bytes; unbox
+	// it to the plain integer so those frames decode to JSON.
+	msgpack.RegisterExtDecoder(maxIDExt, int64(0),
+		func(dec *msgpack.Decoder, v reflect.Value, _ int) error {
+			n, err := dec.DecodeInt64()
+			if err != nil {
+				return err
+			}
+			v.SetInt(n)
+			return nil
+		})
+}
+
+const maxIDExt = 1 // MessagePack ext type carrying a boxed 64-bit MAX id
 
 type decoder struct{}
 
@@ -37,7 +68,21 @@ func (decoder) Matches(m decoders.StreamMeta) bool {
 	if host == "" {
 		host = m.ServerHost
 	}
-	return strings.Contains(host, "oneme.ru") || strings.HasPrefix(m.ServerHost, "155.212")
+	return isMaxHost(host) || strings.HasPrefix(m.ServerHost, "155.212")
+}
+
+// MatchesWS claims MAX's WebSocket transport: web.max.ru / api.oneme.ru carry the same
+// 10-byte-framed MessagePack frames inside binary WebSocket messages.
+func (decoder) MatchesWS(m decoders.WSMeta) bool {
+	host := m.SNI
+	if host == "" {
+		host = m.Host
+	}
+	return isMaxHost(host)
+}
+
+func isMaxHost(host string) bool {
+	return strings.Contains(host, "oneme.ru") || strings.Contains(host, "max.ru")
 }
 
 // NewSession returns a stateful framer: each direction's byte stream is framed
@@ -87,9 +132,8 @@ func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, boo
 	cmd := binary.BigEndian.Uint16(frame[1:3])
 	seq := frame[3]
 	opcode := binary.BigEndian.Uint16(frame[4:6])
-	packed := binary.BigEndian.Uint32(frame[6:10])
-	comp := packed >> 24
-	plen := int(packed & 0xFFFFFF)
+	comp := frame[6] // compression flag (top byte of len)
+	plen := int(binary.BigEndian.Uint32(frame[6:10]) & 0xFFFFFF)
 
 	msg := decoders.Message{
 		FromClient:   fromClient,
@@ -103,26 +147,127 @@ func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, boo
 		return msg, true
 	}
 
-	payload := frame[headerLen : headerLen+plen]
-	if comp != 0 {
-		dst := make([]byte, maxDecompSz)
-		n, err := lz4.UncompressBlock(payload, dst)
-		if err != nil {
-			return decoders.Message{}, false // skip undecodable frame
-		}
-		payload = dst[:n]
+	body, err := decompressBody(frame[headerLen:headerLen+plen], comp)
+	if err != nil {
+		return rawMessage(msg, frame[headerLen:headerLen+plen]), true // keep the raw frame
 	}
 
-	var v interface{}
-	if err := msgpack.Unmarshal(payload, &v); err != nil {
-		return decoders.Message{}, false
+	v, ok := unpackMsgpack(body)
+	if !ok {
+		// LOGIN/HISTORY use a compact/ref encoding plain msgpack can't parse; keep the
+		// decompressed bytes raw (like the reference client's decoded=None path) rather
+		// than dropping the frame.
+		return rawMessage(msg, body), true
 	}
 	js, err := json.Marshal(jsonSafe(v))
 	if err != nil {
-		return decoders.Message{}, false
+		return rawMessage(msg, body), true
 	}
 	msg.Payload = js
 	return msg, true
+}
+
+// decompressBody decompresses a frame body per the header[6] flag: 0 = none,
+// 0xFF = zstd, any other value = LZ4 block (net.jpountz raw block, no framing).
+func decompressBody(body []byte, comp byte) ([]byte, error) {
+	if len(body) == 0 || comp == 0 {
+		return body, nil
+	}
+	if comp == compZstd {
+		return zstdDec.DecodeAll(body, nil)
+	}
+	out := lz4BlockDecompress(body)
+	if len(out) == 0 {
+		return nil, errLZ4
+	}
+	return out, nil
+}
+
+// lz4BlockDecompress decodes a raw LZ4 block (net.jpountz style: no frame header and no
+// stored uncompressed size, so the output grows dynamically). Ported from the reference
+// client's codec.lz4_block_decompress, including byte-by-byte copies for overlapping
+// matches (offset < length). Best-effort: it returns what it decoded if the block ends
+// or is truncated, leaving msgpack parsing to judge the result.
+func lz4BlockDecompress(src []byte) []byte {
+	var out []byte
+	i, n := 0, len(src)
+	for i < n {
+		token := src[i]
+		i++
+		litLen := int(token >> 4)
+		if litLen == 15 {
+			for i < n {
+				b := src[i]
+				i++
+				litLen += int(b)
+				if b != 0xFF {
+					break
+				}
+			}
+		}
+		if i+litLen > n { // truncated literal run — copy the remainder and stop
+			out = append(out, src[i:n]...)
+			break
+		}
+		out = append(out, src[i:i+litLen]...)
+		i += litLen
+		if i >= n {
+			break // final literal run (no trailing match)
+		}
+		if i+2 > n {
+			break
+		}
+		offset := int(src[i]) | int(src[i+1])<<8 // little-endian
+		i += 2
+		if offset == 0 || offset > len(out) {
+			break
+		}
+		matchLen := int(token&0x0F) + 4
+		if token&0x0F == 15 {
+			for i < n {
+				b := src[i]
+				i++
+				matchLen += int(b)
+				if b != 0xFF {
+					break
+				}
+			}
+		}
+		start := len(out) - offset
+		for j := 0; j < matchLen; j++ { // byte-by-byte handles overlapping matches
+			out = append(out, out[start+j])
+		}
+	}
+	return out
+}
+
+// unpackMsgpack decodes the body as MessagePack, tolerating 1-4 leading service bytes
+// MAX sometimes prefixes (it tries offsets 0..4). A candidate is accepted only if it
+// decodes AND consumes the whole remainder — mirroring python msgpack's ExtraData
+// check, so a stray leading byte isn't mistaken for a tiny scalar value.
+//
+// Maps are decoded untyped (map[interface{}]interface{}): MAX keys presence/chat maps
+// by a boxed-id ext (a non-string key), which the default string-keyed map decoder
+// rejects ("invalid code=c7 decoding string length"). jsonSafe stringifies the keys.
+func unpackMsgpack(body []byte) (interface{}, bool) {
+	for off := 0; off <= 4 && off < len(body); off++ {
+		r := bytes.NewReader(body[off:])
+		dec := msgpack.NewDecoder(r)
+		dec.SetMapDecoder(func(d *msgpack.Decoder) (interface{}, error) { return d.DecodeUntypedMap() })
+		var v interface{}
+		if err := dec.Decode(&v); err == nil && r.Len() == 0 {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// rawMessage keeps an undecodable (e.g. compact-encoded) frame's bytes verbatim so no
+// data is lost; the viewer renders them as hex.
+func rawMessage(msg decoders.Message, raw []byte) decoders.Message {
+	msg.ContentType = "application/octet-stream"
+	msg.Payload = raw
+	return msg
 }
 
 // jsonSafe makes a msgpack-decoded value JSON-encodable: stringify non-string map

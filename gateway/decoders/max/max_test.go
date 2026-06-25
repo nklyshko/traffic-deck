@@ -1,10 +1,12 @@
 package max
 
 import (
+	"bytes"
 	"encoding/binary"
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
 	"github.com/vmihailenco/msgpack/v5"
 
@@ -109,14 +111,92 @@ func TestEmptyPayload(t *testing.T) {
 	}
 }
 
-func TestSkipUndecodable(t *testing.T) {
-	// comp flag set but payload is not valid LZ4 → frame skipped, no error.
+func TestKeepUndecodableRaw(t *testing.T) {
+	// comp flag set but payload is not valid LZ4 → the frame is kept with its raw
+	// bytes (like the reference client's decoded=None path) rather than dropped.
 	h := make([]byte, headerLen)
 	binary.BigEndian.PutUint32(h[6:10], (1<<24)|4)
-	f := append(h, []byte{0xff, 0xff, 0xff, 0xff}...)
+	raw := []byte{0xff, 0xff, 0xff, 0xff}
+	f := append(h, raw...)
 	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: f}})
-	if len(msgs) != 0 {
-		t.Fatalf("want 0 (skipped), got %+v", msgs)
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 (kept raw), got %+v", msgs)
+	}
+	if msgs[0].ContentType != "application/octet-stream" || !bytes.Equal(msgs[0].Payload, raw) {
+		t.Fatalf("want raw octet-stream payload, got %+v", msgs[0])
+	}
+}
+
+func TestMatchesWS(t *testing.T) {
+	d := decoder{}
+	if !d.MatchesWS(decoders.WSMeta{Host: "api.oneme.ru", Path: "/websocket"}) {
+		t.Fatal("should match oneme.ru WebSocket")
+	}
+	if !d.MatchesWS(decoders.WSMeta{SNI: "web.max.ru"}) {
+		t.Fatal("should match max.ru SNI")
+	}
+	if d.MatchesWS(decoders.WSMeta{Host: "example.com"}) {
+		t.Fatal("should not match unrelated host")
+	}
+}
+
+// rawFrame builds a frame with an explicit compression flag over a pre-encoded body.
+func rawFrame(comp byte, body []byte) []byte {
+	h := make([]byte, headerLen)
+	h[0] = 1
+	binary.BigEndian.PutUint16(h[1:3], 5)
+	binary.BigEndian.PutUint16(h[4:6], 0x12)
+	binary.BigEndian.PutUint32(h[6:10], (uint32(comp)<<24)|uint32(len(body)))
+	return append(h, body...)
+}
+
+func TestDecodeZstd(t *testing.T) {
+	body := mp(t, map[string]interface{}{"hello": "world"})
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd writer: %v", err)
+	}
+	z := enc.EncodeAll(body, nil)
+	f := rawFrame(compZstd, z) // comp=0xFF
+	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: f}})
+	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
+		t.Fatalf("zstd decode: %+v", msgs)
+	}
+}
+
+// MAX sometimes prefixes 1-4 service bytes before the msgpack body; the offset retry
+// must skip them and decode the real value (and not stop at a leading byte).
+func TestDecodeMsgpackLeadingServiceBytes(t *testing.T) {
+	body := append([]byte{0xf5, 0x12}, mp(t, map[string]string{"k": "v"})...)
+	f := rawFrame(0, body) // uncompressed
+	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: f}})
+	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Payload), `"k":"v"`) {
+		t.Fatalf("offset decode: %+v", msgs)
+	}
+}
+
+// MAX boxes 64-bit ids in msgpack ext type 1 (body = a msgpack int). The registered
+// ext decoder must unbox it so frames carrying ids still decode to JSON.
+func TestDecodeBoxedIDExt(t *testing.T) {
+	// {"id": ext1(int32 42)} — c7 05 01 d2 0000002a is ext8 len5 type1 wrapping int32 42.
+	body := []byte{0x81, 0xa2, 'i', 'd', 0xc7, 0x05, 0x01, 0xd2, 0x00, 0x00, 0x00, 0x2a}
+	f := rawFrame(0, body)
+	msgs := decode(t, []decoders.Turn{{FromClient: false, Data: f}})
+	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Payload), `"id":42`) {
+		t.Fatalf("boxed-id ext decode: %+v", msgs)
+	}
+}
+
+// MAX keys its presence/chat maps by a boxed-id ext (a non-string key); the untyped
+// map decoder must accept it (the default string-keyed decoder rejects code c7).
+func TestDecodeBoxedIDExtAsMapKey(t *testing.T) {
+	// {ext1(int32 7): {"status": 2}}
+	body := []byte{0x81, 0xc7, 0x05, 0x01, 0xd2, 0, 0, 0, 7,
+		0x81, 0xa6, 's', 't', 'a', 't', 'u', 's', 0x02}
+	f := rawFrame(0, body)
+	msgs := decode(t, []decoders.Turn{{FromClient: false, Data: f}})
+	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Payload), `"7":{"status":2}`) {
+		t.Fatalf("ext-as-map-key decode: %+v", msgs)
 	}
 }
 
