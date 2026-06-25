@@ -378,9 +378,10 @@ async def export_request(session_id: str, flow_id: str) -> dict:
 
 
 def main() -> None:
-    # MCP_TRANSPORT: stdio (default), streamable-http, or sse. HTTP transports bind
-    # MCP_HOST:MCP_PORT (default 127.0.0.1:8765).
-    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    # MCP_TRANSPORT: streamable-http (default), sse, or stdio. The HTTP transports bind
+    # MCP_HOST:MCP_PORT (default 127.0.0.1:8765) and serve at /mcp; set stdio to speak
+    # the protocol over stdin/stdout instead.
+    transport = os.environ.get("MCP_TRANSPORT", "streamable-http")
     mcp.run(transport=transport)
 
 

@@ -73,18 +73,19 @@ domain/method/content-type/status/… in one query), `search_flows` (the TUI's f
 DSL), `get_flow`, `get_body`, `export_request` (request+response headers, no bodies),
 `list_ws_messages` + `get_ws_message_body` (WebSocket frames).
 
-Run it over stdio (point your MCP client at this command):
+Run it (defaults to the `streamable-http` transport, binding `MCP_HOST:MCP_PORT` =
+`127.0.0.1:8765` and serving the MCP endpoint at `/mcp`):
 
 ```sh
-GATEWAY_ADDR=127.0.0.1:8080 uv run --directory mcp python -m traffic_mcp.server
+mcp/run.sh                                            # GATEWAY_ADDR / MCP_PORT overridable
+# or: GATEWAY_ADDR=127.0.0.1:8080 uv run --directory mcp python -m traffic_mcp.server
 ```
 
-Or over HTTP — set `MCP_TRANSPORT` to `streamable-http` (or `sse`); it binds
-`MCP_HOST:MCP_PORT` (default `127.0.0.1:8765`) and serves the MCP endpoint at `/mcp`:
+For a client that speaks MCP over stdio instead, set `MCP_TRANSPORT=stdio` (other
+value: `sse`):
 
 ```sh
-MCP_TRANSPORT=streamable-http MCP_PORT=8765 GATEWAY_ADDR=127.0.0.1:8080 \
-    uv run --directory mcp python -m traffic_mcp.server
+MCP_TRANSPORT=stdio mcp/run.sh
 ```
 
 ## Getting traffic in
