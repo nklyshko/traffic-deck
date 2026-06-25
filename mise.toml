@@ -45,3 +45,8 @@ run = "go test ./..."
 description = "Run the tui tests"
 dir = "tui"
 run = "uv run --group dev pytest"
+
+[tasks."mcp:test"]
+description = "Run the trafficdeck-mcp tests"
+dir = "mcp"
+run = "uv run --group dev python -m pytest"

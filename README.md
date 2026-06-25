@@ -67,8 +67,11 @@ request+response, `M` ws messages. `q` quit.
 
 `trafficdeck-mcp` exposes recorded sessions over the Model Context Protocol, backed by the
 gateway's `ViewerService` (it never touches SQLite directly, so it works against a
-local or remote gateway). Tools: `list_sessions`, `search_flows` (same filter DSL as
-the TUI), `get_flow`, `get_body`, `list_ws_messages`, `export_curl`.
+local or remote gateway). Tools: `list_sessions`, `network_timeline` (the request
+sequence, like the DevTools Network tab), `search` (structured, combined
+domain/method/content-type/status/… in one query), `search_flows` (the TUI's filter
+DSL), `get_flow`, `get_body`, `export_request` (request+response headers, no bodies),
+`list_ws_messages` + `get_ws_message_body` (WebSocket frames).
 
 Run it over stdio (point your MCP client at this command):
 

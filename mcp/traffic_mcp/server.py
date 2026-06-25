@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import os
-import shlex
 
 import grpc
 from mcp.server.fastmcp import FastMCP
@@ -89,6 +88,21 @@ def _headers(hs) -> list[dict]:
     return [{"name": h.name, "value": h.value} for h in hs]
 
 
+def _short_type(ct: str) -> str:
+    """Compact content-type for timeline rows: 'application/json; charset=…' → 'json'."""
+    if not ct:
+        return ""
+    main = ct.split(";")[0].strip()
+    return main.split("/")[-1] or main
+
+
+def _body_ref(body) -> dict | None:
+    """Body metadata only (content-type + size) — no bytes. Fetch bytes via get_body."""
+    if body is None or body.size == 0:
+        return None
+    return {"content_type": body.content_type or None, "size": body.size}
+
+
 def _body_meta(body) -> dict | None:
     """Body metadata + an inline text/preview (full bytes via get_body)."""
     if body is None or body.size == 0:
@@ -117,23 +131,63 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     return d
 
 
-def _curl(f, body: bytes) -> str:
-    parts = [f"curl -X {f.method or 'GET'} {shlex.quote(flow_url(f))}"]
-    if f.protocol == "HTTP/2":
-        parts.append("--http2")
-    elif f.protocol == "HTTP/1.1":
-        parts.append("--http1.1")
-    for h in f.request_headers:
-        if h.name.startswith(":") or h.name.lower() == "host":
-            continue
-        parts.append(f"-H {shlex.quote(f'{h.name}: {h.value}')}")
-    if body:
-        try:
-            text = body.decode("utf-8")
-            parts.append(f"--data-raw {shlex.quote(text)}")
-        except UnicodeDecodeError:
-            parts.append(f"# request body: {len(body)} bytes (binary, omitted)")
-    return " \\\n  ".join(parts)
+def _bytes_payload(data: bytes) -> dict:
+    """Encode fetched body/payload bytes for the model: UTF-8 text when decodable,
+    else base64 — both capped at _BODY_MAX."""
+    out: dict = {"size": len(data), "truncated": len(data) > _BODY_MAX}
+    data = data[:_BODY_MAX]
+    try:
+        out["encoding"] = "utf-8"
+        out["text"] = data.decode("utf-8")
+    except UnicodeDecodeError:
+        out["encoding"] = "base64"
+        out["base64"] = base64.b64encode(data).decode("ascii")
+    return out
+
+
+def _matches(f, *, domain: str, method: str, content_type: str, status: int,
+             path_contains: str, url_contains: str, websocket, has_response) -> bool:
+    """Predicate for `search`: all given criteria ANDed. Substring fields are
+    case-insensitive; method/status are exact; websocket/has_response are tri-state."""
+    if domain and domain.lower() not in (f.authority or "").lower():
+        return False
+    if method and method.upper() != (f.method or "").upper():
+        return False
+    if content_type and content_type.lower() not in (f.content_type or "").lower():
+        return False
+    if status and f.status != status:
+        return False
+    if path_contains and path_contains.lower() not in (f.path or "").lower():
+        return False
+    if url_contains and url_contains.lower() not in flow_url(f).lower():
+        return False
+    if websocket is not None and bool(f.websocket) != websocket:
+        return False
+    if has_response is not None and bool(f.status) != has_response:
+        return False
+    return True
+
+
+def _timeline_row(seq: int, f, t0: int) -> dict:
+    """One compact DevTools-Network-style row (ordered by time)."""
+    path = (f.path or "") + (f"?{f.query}" if f.query else "")
+    # Relative ms from the first timestamped request; null when a flow has no
+    # timestamp (e.g. a decoder that didn't stamp the Upgrade flow).
+    t_ms = round((f.ts_unix_micros - t0) / 1000, 1) if f.ts_unix_micros > 0 else None
+    return {
+        "seq": seq,
+        "id": f.id,
+        "t_ms": t_ms,  # ms since first request
+        "method": f.method or ("WS" if f.websocket else ""),
+        "status": f.status or None,
+        "domain": f.authority,
+        "path": path[:120],
+        "type": _short_type(f.content_type),
+        "request_bytes": f.request_bytes,
+        "protocol": f.protocol,
+        "ws": f.websocket or None,
+        "ws_messages": f.ws_message_count or None,
+    }
 
 
 # --- tools ---------------------------------------------------------------
@@ -145,13 +199,82 @@ async def list_sessions() -> list[dict]:
 
 
 @mcp.tool()
+async def network_timeline(session_id: str, limit: int = 200, offset: int = 0) -> dict:
+    """The request sequence for a session, like the Chrome DevTools Network tab.
+
+    One compact row per flow ordered by time: relative start (t_ms = ms from the first
+    request), method, status, domain, path, type (content-type), request bytes, protocol
+    and websocket flags. Use `search`/`search_flows` to narrow and `get_flow` for full
+    detail. `total` is the session's flow count; page with `offset`/`limit`.
+    """
+    flows = sorted(await client().list_flows(session_id), key=lambda f: f.ts_unix_micros)
+    stamped = [f.ts_unix_micros for f in flows if f.ts_unix_micros > 0]
+    t0 = min(stamped) if stamped else 0
+    rows = [_timeline_row(i, f, t0) for i, f in enumerate(flows[offset:offset + limit], start=offset)]
+    return {"session_id": session_id, "total": len(flows), "count": len(rows), "flows": rows}
+
+
+@mcp.tool()
+async def search(session_id: str = "", domain: str = "", method: str = "",
+                 content_type: str = "", status: int = 0, path_contains: str = "",
+                 url_contains: str = "", websocket: bool | None = None,
+                 has_response: bool | None = None, limit: int = 100) -> list[dict]:
+    """Combined structured search over flows — every criterion you pass is ANDed in
+    one query, e.g. domain="api.oneme.ru" + method="POST" + content_type="json".
+
+    `domain`, `content_type`, `path_contains`, `url_contains` are case-insensitive
+    substrings; `method` is exact (case-insensitive); `status` is an exact HTTP code
+    (0 = any); `websocket`/`has_response` are tri-state (omit = any). Leave
+    `session_id` empty to search across every session (each result carries its
+    `session_id`/`session_label`). Returns time-ordered flow summaries (no
+    headers/bodies — use get_flow / get_body / export_request for those).
+    """
+    tagnames, groupnames = await _name_maps()
+    crit = dict(domain=domain, method=method, content_type=content_type, status=status,
+                path_contains=path_contains, url_contains=url_contains,
+                websocket=websocket, has_response=has_response)
+
+    if session_id:
+        sessions = [(session_id, None)]
+    else:
+        sessions = [(s.id, s.label) for s in await client().list_sessions()]
+
+    out: list[dict] = []
+    for sid, label in sessions:
+        try:
+            flows = await client().list_flows(sid)
+        except grpc.aio.AioRpcError as e:
+            # For an explicit session_id, surface the error (incl. FAILED_PRECONDITION
+            # "re-import this session"). When scanning every session, skip outdated or
+            # missing bundles but still propagate genuine faults.
+            if session_id or e.code() not in (
+                grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.NOT_FOUND
+            ):
+                raise
+            continue
+        flows.sort(key=lambda f: f.ts_unix_micros)
+        for f in flows:
+            if not _matches(f, **crit):
+                continue
+            row = _flow_summary(f, tagnames, groupnames)
+            row["session_id"] = sid
+            if label is not None:
+                row["session_label"] = label
+            out.append(row)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+@mcp.tool()
 async def search_flows(session_id: str, filter: str = "", limit: int = 100) -> list[dict]:
     """Search a session's flows with a mitmproxy-style filter expression.
 
     Terms (ANDed, `!` negates): ~m method, ~d host, ~u url, ~c status, ~t content-type,
     ~s/~q has/no response, ~fav, ~mark <color>, ~tag <name>, ~group <name>,
     ~comment <regex>; a naked regex matches the URL. Empty filter returns all flows.
-    Returns flow summaries (no headers/bodies — use get_flow for those).
+    Returns flow summaries (no headers/bodies — use get_flow for those). For plain
+    field matching prefer the structured `search` tool.
     """
     flows = await client().list_flows(session_id)
     tagnames, groupnames = await _name_maps()
@@ -172,28 +295,22 @@ async def get_flow(session_id: str, flow_id: str) -> dict:
 @mcp.tool()
 async def get_body(session_id: str, flow_id: str, response: bool = True) -> dict:
     """Fetch a full request or response body. Returns UTF-8 text when decodable, else
-    base64 (both capped). `response=False` for the request body."""
+    base64 (both capped). Bodies are stored decompressed. `response=False` for the
+    request body."""
     try:
         data = await client().get_body(session_id, flow_id, response)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no body"}
         raise
-    out: dict = {"size": len(data), "truncated": len(data) > _BODY_MAX}
-    data = data[:_BODY_MAX]
-    try:
-        out["encoding"] = "utf-8"
-        out["text"] = data.decode("utf-8")
-    except UnicodeDecodeError:
-        out["encoding"] = "base64"
-        out["base64"] = base64.b64encode(data).decode("ascii")
-    return out
+    return _bytes_payload(data)
 
 
 @mcp.tool()
-async def list_ws_messages(session_id: str, flow_id: str) -> list[dict]:
+async def list_ws_messages(session_id: str, flow_id: str) -> dict:
     """WebSocket message timeline for an Upgrade flow: directional frames in order
-    (direction, opcode, size, text/hex preview)."""
+    (direction, opcode, size, text/hex preview). Large payloads carry a note; fetch
+    them in full with get_ws_message_body using the message `id`."""
     msgs = await client().list_messages(session_id, flow_id)
     out = []
     for m in msgs:
@@ -211,20 +328,53 @@ async def list_ws_messages(session_id: str, flow_id: str) -> list[dict]:
                 item["text"] = data.decode("utf-8")[:_PREVIEW_MAX]
             except UnicodeDecodeError:
                 item["hex_preview"] = data[:64].hex()
+        elif size:
+            item["note"] = "large payload — fetch with get_ws_message_body"
         out.append(item)
-    return out
+    return {"session_id": session_id, "flow_id": flow_id, "count": len(out), "messages": out}
 
 
 @mcp.tool()
-async def export_curl(session_id: str, flow_id: str) -> str:
-    """Reconstruct a flow's request as a runnable curl command (preserves header
-    order; HTTP version pinned). Textual request bodies are inlined as --data-raw."""
-    f = await client().get_flow(session_id, flow_id)
+async def get_ws_message_body(session_id: str, message_id: str) -> dict:
+    """Fetch a full WebSocket message payload by message `id` (from list_ws_messages).
+    Returns UTF-8 text when decodable, else base64 (both capped)."""
     try:
-        body = await client().get_body(session_id, flow_id, response=False)
-    except Exception:  # noqa: BLE001 (no request body)
-        body = b""
-    return _curl(f, body)
+        data = await client().get_message_body(session_id, message_id)
+    except grpc.aio.AioRpcError as e:
+        if e.code() == grpc.StatusCode.NOT_FOUND:
+            return {"size": 0, "note": "no payload"}
+        raise
+    return _bytes_payload(data)
+
+
+@mcp.tool()
+async def export_request(session_id: str, flow_id: str) -> dict:
+    """Export a flow's request and response *without* bodies.
+
+    Returns the request (method, url, protocol, headers in wire order, cookies) and the
+    response (status, protocol, headers), each with body metadata only
+    ({content_type, size}) — no body bytes. Fetch actual bytes with get_body.
+    """
+    f = await client().get_flow(session_id, flow_id)
+    out = {
+        "request": {
+            "method": f.method or "GET",
+            "url": flow_url(f),
+            "protocol": f.protocol,
+            "headers": _headers(f.request_headers),
+            "cookies": [{"name": c.name, "value": c.value} for c in f.request_cookies],
+            "body": _body_ref(f.request_body),
+        },
+        "response": {
+            "status": f.status or None,
+            "protocol": f.protocol,
+            "headers": _headers(f.response_headers),
+            "body": _body_ref(f.response_body),
+        },
+    }
+    if f.websocket:
+        out["websocket"] = {"message_count": f.ws_message_count}
+    return out
 
 
 def main() -> None:
