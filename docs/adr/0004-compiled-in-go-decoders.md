@@ -11,7 +11,7 @@ Wireshark Lua/C dissector, or compiled-in Go.
 
 ## Decision
 
-Decoders are compiled-in Go modules under `traffic-gateway/decoders/<name>/` that
+Decoders are compiled-in Go modules under `gateway/decoders/<name>/` that
 self-register via `init()`; the gateway blank-imports them. The contract is small:
 
 - `Decoder`: `Name()`, `Matches(StreamMeta)`, `NewSession()`.

@@ -21,10 +21,10 @@ DATA_ROOT = "{{config_root}}/data"
 description = "Generate gRPC stubs (Go via buf; Python via grpcio-tools)"
 run = [
   "buf generate proto",
-  "mkdir -p capture-tools/capture_sdk/capture_sdk/gen traffic-viewer/gen traffic-mcp/gen",
-  "uv run --project capture-tools/capture_sdk --with grpcio-tools python -m grpc_tools.protoc -Iproto --python_out=capture-tools/capture_sdk/capture_sdk/gen --grpc_python_out=capture-tools/capture_sdk/capture_sdk/gen --pyi_out=capture-tools/capture_sdk/capture_sdk/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
-  "uv run --project traffic-viewer python -m grpc_tools.protoc -Iproto --python_out=traffic-viewer/gen --grpc_python_out=traffic-viewer/gen --pyi_out=traffic-viewer/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
-  "uv run --project traffic-mcp python -m grpc_tools.protoc -Iproto --python_out=traffic-mcp/gen --grpc_python_out=traffic-mcp/gen --pyi_out=traffic-mcp/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "mkdir -p capture/capture_sdk/capture_sdk/gen tui/gen mcp/gen",
+  "uv run --project capture/capture_sdk --with grpcio-tools python -m grpc_tools.protoc -Iproto --python_out=capture/capture_sdk/capture_sdk/gen --grpc_python_out=capture/capture_sdk/capture_sdk/gen --pyi_out=capture/capture_sdk/capture_sdk/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "uv run --project tui python -m grpc_tools.protoc -Iproto --python_out=tui/gen --grpc_python_out=tui/gen --pyi_out=tui/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "uv run --project mcp python -m grpc_tools.protoc -Iproto --python_out=mcp/gen --grpc_python_out=mcp/gen --pyi_out=mcp/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
 ]
 
 [tasks.lint-proto]
@@ -32,16 +32,16 @@ description = "Lint the proto contract"
 run = "buf lint proto"
 
 [tasks."gateway:build"]
-description = "Build the traffic-gateway binary"
-dir = "traffic-gateway"
+description = "Build the gateway binary"
+dir = "gateway"
 run = "go build ./..."
 
 [tasks."gateway:test"]
-description = "Run the traffic-gateway tests"
-dir = "traffic-gateway"
+description = "Run the gateway tests"
+dir = "gateway"
 run = "go test ./..."
 
-[tasks."viewer:test"]
-description = "Run the traffic-viewer tests"
-dir = "traffic-viewer"
+[tasks."tui:test"]
+description = "Run the tui tests"
+dir = "tui"
 run = "uv run --group dev pytest"

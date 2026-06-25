@@ -1,21 +1,21 @@
-# Build/run helpers for the traffic-gateway. The toolchain is mise-managed (`go`,
+# Build/run helpers for the TrafficDeck gateway. The toolchain is mise-managed (`go`,
 # `buf`, …); run `mise install` once if it's missing. The generated gRPC stubs are
 # committed, so `make build` needs only the Go toolchain — regenerate with `make gen`
 # after editing proto/.
 #
-#   make            build the gateway -> ./gateway
+#   make            build the gateway -> ./trafficdeck
 #   make run        build + run the gateway server
 #   make test       run gateway tests
 #   make gen        regenerate all stubs (Go + Python) via mise
 #   make clean      remove the built binary
 
 GO          ?= go
-GATEWAY_DIR := traffic-gateway
-GATEWAY_BIN := gateway
+GATEWAY_DIR := gateway
+GATEWAY_BIN := trafficdeck
 
 .PHONY: build run test vet gen clean help
 
-build: ## build the gateway binary -> ./gateway
+build: ## build the gateway binary -> ./trafficdeck
 	cd $(GATEWAY_DIR) && $(GO) build -o ../$(GATEWAY_BIN) ./cmd/gateway
 
 run: build ## build, then run the gateway server

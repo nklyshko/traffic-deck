@@ -11,7 +11,7 @@ installable.
 
 ## Decision
 
-Split capture-tools into independent projects sharing a light `capture_sdk` (proto
+Split capture into independent projects sharing a light `capture_sdk` (proto
 stubs, the upload-streaming helper, interactive prompts) — tool-specific code (e.g.
 Chrome/dumpcap discovery) stays in the owning app:
 

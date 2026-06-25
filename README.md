@@ -1,4 +1,4 @@
-# Modular Traffic Analysis System
+# TrafficDeck — Modular Traffic Analysis System
 
 Capture raw traffic from multiple sources, decode it server-side into HTTP flows,
 store it, and browse it in a mitmproxy-like TUI. See [`docs/architecture.md`](docs/architecture.md)
@@ -9,10 +9,10 @@ for the design and [`docs/adr/`](docs/adr/) for the key decisions.
 | Dir | What |
 |-----|------|
 | [`proto/`](proto/) | gRPC contract (source of truth) |
-| [`traffic-gateway/`](traffic-gateway/) | Go service: ingest, decode (tshark + pluggable [`decoders/`](traffic-gateway/decoders/)), per-session SQLite store, serve |
-| [`capture-tools/`](capture-tools/) | Independent Python capture apps — `capture_chrome`, `capture_mitmproxy`, `capture_android` — over a shared `capture_sdk` (each its own project + deps) |
-| [`traffic-viewer/`](traffic-viewer/) | Textual TUI |
-| [`traffic-mcp/`](traffic-mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
+| [`gateway/`](gateway/) | Go service: ingest, decode (tshark + pluggable [`decoders/`](gateway/decoders/)), per-session SQLite store, serve |
+| [`capture/`](capture/) | Independent Python capture apps — `capture_chrome`, `capture_mitmproxy`, `capture_android` — over a shared `capture_sdk` (each its own project + deps) |
+| [`tui/`](tui/) | Textual TUI |
+| [`mcp/`](mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
 
 Storage is embedded SQLite: a per-session bundle (`data/sessions/<id>/` holding
 `capture.pcap`, `key.log`, `flows.sqlite`) plus a global `data/catalog.sqlite`. No
@@ -41,15 +41,15 @@ mise run gen            # generate gRPC stubs (Go + Python) — REQUIRED before 
 Start the gateway (serves on `127.0.0.1:8080`, data under `./data`):
 
 ```sh
-make run                                              # build ./gateway and serve
-# or: mise exec -- go -C traffic-gateway run ./cmd/gateway serve
+make run                                              # build ./trafficdeck and serve
+# or: mise exec -- go -C gateway run ./cmd/gateway serve
 ```
 
 Browse in the TUI (separate terminal):
 
 ```sh
-traffic-viewer/run.sh                                 # runs the TUI (GATEWAY_ADDR overridable)
-# or: uv run --directory traffic-viewer python -m traffic_viewer.app
+tui/run.sh                                 # runs the TUI (GATEWAY_ADDR overridable)
+# or: uv run --directory tui python -m traffic_viewer.app
 ```
 
 TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
@@ -65,7 +65,7 @@ request+response, `M` ws messages. `q` quit.
 
 ### MCP server (for LLM/agent clients)
 
-`traffic-mcp` exposes recorded sessions over the Model Context Protocol, backed by the
+`trafficdeck-mcp` exposes recorded sessions over the Model Context Protocol, backed by the
 gateway's `ViewerService` (it never touches SQLite directly, so it works against a
 local or remote gateway). Tools: `list_sessions`, `search_flows` (same filter DSL as
 the TUI), `get_flow`, `get_body`, `list_ws_messages`, `export_curl`.
@@ -73,7 +73,7 @@ the TUI), `get_flow`, `get_body`, `list_ws_messages`, `export_curl`.
 Run it over stdio (point your MCP client at this command):
 
 ```sh
-GATEWAY_ADDR=127.0.0.1:8080 uv run --directory traffic-mcp python -m traffic_mcp.server
+GATEWAY_ADDR=127.0.0.1:8080 uv run --directory mcp python -m traffic_mcp.server
 ```
 
 Or over HTTP — set `MCP_TRANSPORT` to `streamable-http` (or `sse`); it binds
@@ -81,7 +81,7 @@ Or over HTTP — set `MCP_TRANSPORT` to `streamable-http` (or `sse`); it binds
 
 ```sh
 MCP_TRANSPORT=streamable-http MCP_PORT=8765 GATEWAY_ADDR=127.0.0.1:8080 \
-    uv run --directory traffic-mcp python -m traffic_mcp.server
+    uv run --directory mcp python -m traffic_mcp.server
 ```
 
 ## Getting traffic in
@@ -89,7 +89,7 @@ MCP_TRANSPORT=streamable-http MCP_PORT=8765 GATEWAY_ADDR=127.0.0.1:8080 \
 ### A) Import a pre-captured pcap + key.log
 
 ```sh
-mise exec -- go -C traffic-gateway run ./cmd/gateway import \
+mise exec -- go -C gateway run ./cmd/gateway import \
     --pcap capture.pcap --keylog key.log --label demo
 ```
 
@@ -110,13 +110,13 @@ persistent profile (pick an existing one or create a new one) under
 `~/.capture-chrome/profiles`:
 
 ```sh
-capture-tools/capture-chrome.sh
+capture/capture-chrome.sh
 ```
 
 Scripted / explicit — flags override each picker; `--no-prompt` skips them:
 
 ```sh
-sg wireshark -c 'uv run --project capture-tools/capture_chrome capture-chrome \
+sg wireshark -c 'uv run --project capture/capture_chrome trafficdeck-capture-chrome \
     --no-prompt --label "live demo" --url https://example.com'
 ```
 
@@ -125,7 +125,7 @@ extensions, history. Quit any Chrome already running on that profile first, othe
 the launch just attaches to the running instance and no TLS keys are logged:
 
 ```sh
-sg wireshark -c 'uv run --project capture-tools/capture_chrome capture-chrome \
+sg wireshark -c 'uv run --project capture/capture_chrome trafficdeck-capture-chrome \
     --no-prompt --chrome google-chrome-canary --label "manual test" \
     --profile-dir "$HOME/.config/google-chrome-canary"'
 ```
@@ -160,11 +160,11 @@ a Frida bypass.
 
 ```sh
 # regular HTTP proxy on :8080 — set the device/app proxy to <this-host>:8080
-uv run --project capture-tools/capture_mitmproxy capture-mitmproxy --label "api poke"
+uv run --project capture/capture_mitmproxy trafficdeck-capture-mitmproxy --label "api poke"
 
 # WireGuard server — any device that can be a WireGuard client routes through it
 # (mitmproxy prints the peer config / QR on startup)
-uv run --project capture-tools/capture_mitmproxy capture-mitmproxy --mode wireguard --label phone
+uv run --project capture/capture_mitmproxy trafficdeck-capture-mitmproxy --mode wireguard --label phone
 ```
 
 Flows appear live in the TUI as they complete; stop mitmdump (`q`/Ctrl-C) to close the
@@ -191,7 +191,7 @@ to the one recommended for the device's Android release — frida 17 can't spawn
 Android ≤ 11), pick the app, optionally add Frida scripts (SSL-unpinning/bypass):
 
 ```sh
-uv run --project capture-tools/capture_android capture-android
+uv run --project capture/capture_android trafficdeck-capture-android
 ```
 
 It can create + boot a rootable `google_apis` AVD (installing the system image on
@@ -202,7 +202,7 @@ path you enter). The chosen frida version is applied via `uv run --with frida==<
 **Non-interactive** — for scripting/known targets:
 
 ```sh
-uv run --project capture-tools/capture_android python -m capture_android.headless \
+uv run --project capture/capture_android python -m capture_android.headless \
     --package com.example.app --url https://example.com --duration 30 --script unpin.js
 ```
 
@@ -223,7 +223,7 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 ## Custom protocol decoders
 
 Non-HTTP binary protocols carried over TCP (e.g. MAX messenger, `ru.oneme`) are decoded
-by **compiled-in Go modules** under [`traffic-gateway/decoders/`](traffic-gateway/decoders/).
+by **compiled-in Go modules** under [`gateway/decoders/`](gateway/decoders/).
 Each decoder is its own package that self-registers via `init()`; the gateway
 blank-imports it in `cmd/gateway`. The decoder turns a connection's TLS-decrypted
 directional byte stream into message frames, surfaced as a synthetic flow with the
@@ -233,7 +233,7 @@ session. Two paths produce the decrypted bytes:
 - **Batch** (session close): `tshark -z follow,tls,raw` over each matched stream.
 - **Live** (during capture): fully in-process in Go — the gateway taps the live pcap,
   reassembles TCP (`gopacket`, including the Android `NFLOG` link type), and decrypts
-  TLS 1.3 from the key-log ([`internal/tlsdecrypt`](traffic-gateway/internal/tlsdecrypt/)),
+  TLS 1.3 from the key-log ([`internal/tlsdecrypt`](gateway/internal/tlsdecrypt/)),
   feeding the decoder as bytes arrive — no `tshark` re-run. So MAX frames stream into
   the `M` timeline in real time. Streams that aren't TLS 1.3 fall back to the batch
   pass on close. **Verified end-to-end** on the Android `ru.oneme` (MAX) app: live
@@ -247,7 +247,7 @@ JSON). Add one = add a package + a blank import + rebuild.
 
 ```sh
 # re-run custom decoders over an already-captured session (e.g. after adding a decoder)
-mise exec -- go -C traffic-gateway run ./cmd/gateway redecode <session-id>
+mise exec -- go -C gateway run ./cmd/gateway redecode <session-id>
 ```
 
 Decoding needs the connection's TLS to be decryptable from the capture's `key.log`
@@ -262,11 +262,11 @@ spilled bodies, and the tags/groups it uses — so it can be exported as a singl
 
 ```sh
 # export (CLI). In the TUI, press `e` on the sessions list to export the focused one.
-mise exec -- go -C traffic-gateway run ./cmd/gateway export <session-id> -o session.tar.gz
+mise exec -- go -C gateway run ./cmd/gateway export <session-id> -o session.tar.gz
 
 # import into this gateway's data root + catalog. --new-id imports a copy when the
 # original id already exists; --label overrides the session label.
-mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.gz [--new-id] [--label name]
+mise exec -- go -C gateway run ./cmd/gateway import-session session.tar.gz [--new-id] [--label name]
 ```
 
 ## Configuration (gateway)
@@ -297,7 +297,7 @@ mise exec -- go -C traffic-gateway run ./cmd/gateway import-session session.tar.
   and annotations (tags + Favorite, comments, color marks, groups).
 - **Sessions** — self-contained per-session SQLite bundles; export/import as a single
   `.tar.gz`.
-- **MCP** — `traffic-mcp` exposes recorded sessions to LLM/agent clients over the same
+- **MCP** — `trafficdeck-mcp` exposes recorded sessions to LLM/agent clients over the same
   read API.
 
 See [`docs/architecture.md`](docs/architecture.md) for the design and

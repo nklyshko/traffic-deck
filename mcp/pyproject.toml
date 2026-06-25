@@ -1,0 +1,17 @@
+[project]
+name = "trafficdeck-mcp"
+version = "0.0.0"
+description = "MCP server exposing recorded traffic sessions to LLM/agent clients"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2",
+    "grpcio>=1.76",
+    "grpcio-tools>=1.76",
+    "protobuf>=5.29",
+]
+
+[project.scripts]
+trafficdeck-mcp = "traffic_mcp.server:main"
+
+[tool.uv]
+package = false

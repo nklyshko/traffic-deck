@@ -9,14 +9,14 @@ binary protocols), and browse the decoded flows in a TUI or via an LLM/agent (MC
 | Module | Language | Role |
 |--------|----------|------|
 | `proto/` | protobuf | gRPC contract (source of truth), generated for Go + Python via `buf` |
-| `traffic-gateway/` | Go | ingest, decode, store, serve |
-| `capture-tools/` | Python | capture apps (`capture_chrome`, `capture_mitmproxy`, `capture_android`) over a shared `capture_sdk` |
-| `traffic-viewer/` | Python (Textual) | terminal UI over the gateway's read API |
-| `traffic-mcp/` | Python (FastMCP) | Model Context Protocol server over the same read API |
+| `gateway/` | Go | ingest, decode, store, serve |
+| `capture/` | Python | capture apps (`capture_chrome`, `capture_mitmproxy`, `capture_android`) over a shared `capture_sdk` |
+| `tui/` | Python (Textual) | terminal UI over the gateway's read API |
+| `mcp/` | Python (FastMCP) | Model Context Protocol server over the same read API |
 
 ```mermaid
 flowchart LR
-  subgraph capture[capture-tools]
+  subgraph capture[capture]
     chrome[capture_chrome]
     mitm[capture_mitmproxy]
     android[capture_android]
@@ -26,7 +26,7 @@ flowchart LR
   android -- "UploadCapture\n(pcap + key.log)" --> gw
   mitm -- "PushFlows\n(decoded flows)" --> gw
 
-  subgraph gw[traffic-gateway]
+  subgraph gw[gateway]
     ingest[IngestService]
     decode[decode pipeline]
     store[(per-session SQLite\n+ catalog)]
@@ -37,8 +37,8 @@ flowchart LR
     store --> control
   end
 
-  viewer -- "StreamFlows / StreamMessages\nGetFlow / GetBody" --> tui[traffic-viewer]
-  viewer --> mcp[traffic-mcp]
+  viewer -- "StreamFlows / StreamMessages\nGetFlow / GetBody" --> tui[tui]
+  viewer --> mcp[mcp]
   control -- "annotations, export" --> tui
 ```
 

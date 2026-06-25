@@ -7,15 +7,15 @@
 /data/
 
 # Go build artifacts
-/traffic-gateway/gateway
-/gateway
+/gateway/gateway
+/trafficdeck
 
 # Python
 __pycache__/
 *.pyc
 .venv/
-/traffic-viewer/.venv/
-/traffic-mcp/.venv/
+/tui/.venv/
+/mcp/.venv/
 
 # mise local overrides
 mise.local.toml
