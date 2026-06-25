@@ -70,8 +70,9 @@ gateway's `ViewerService` (it never touches SQLite directly, so it works against
 local or remote gateway). Tools: `list_sessions`, `network_timeline` (the request
 sequence, like the DevTools Network tab), `search` (structured, combined
 domain/method/content-type/status/… in one query), `search_flows` (the TUI's filter
-DSL), `get_flow`, `get_body`, `export_request` (request+response headers, no bodies),
-`list_ws_messages` + `get_ws_message_body` (WebSocket frames).
+DSL), `get_flow`, `get_body` (text/base64/`as_hex`), `export_request` (request+response
+headers, no bodies), `list_ws_messages` (paginated) + `get_ws_message_body` (WebSocket
+frames; `as_hex` for byte inspection). Session args accept an id prefix.
 
 Run it (defaults to the `streamable-http` transport, binding `MCP_HOST:MCP_PORT` =
 `127.0.0.1:8765` and serving the MCP endpoint at `/mcp`):

@@ -37,6 +37,20 @@ def client() -> GatewayClient:
     return _client
 
 
+async def _resolve_session(session_id: str) -> str:
+    """Resolve a full or prefix session id to the full id, with a clear error — so a
+    mistyped/short id fails loudly instead of silently returning an empty result."""
+    ids = [s.id for s in await client().list_sessions()]
+    if session_id in ids:
+        return session_id
+    matches = [i for i in ids if i.startswith(session_id)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise ValueError(f"no session matching {session_id!r} ({len(ids)} sessions — call list_sessions)")
+    raise ValueError(f"ambiguous session prefix {session_id!r}: matches {len(matches)} ({matches[:5]})")
+
+
 async def _name_maps() -> tuple[dict, dict]:
     """tag-id→name and group-id→name, for resolving annotation filters/labels."""
     try:
@@ -131,17 +145,26 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     return d
 
 
-def _bytes_payload(data: bytes) -> dict:
-    """Encode fetched body/payload bytes for the model: UTF-8 text when decodable,
-    else base64 — both capped at _BODY_MAX."""
-    out: dict = {"size": len(data), "truncated": len(data) > _BODY_MAX}
-    data = data[:_BODY_MAX]
+def _bytes_payload(data: bytes, *, as_hex: bool = False, start: int = 0) -> dict:
+    """Encode fetched body/payload bytes for the model. A window of up to _BODY_MAX bytes
+    starting at `start` is returned as UTF-8 text when decodable, else base64; pass
+    `as_hex` for a hex dump (for protocol/byte inspection). `offset`+`returned` vs `size`
+    show where the window sits, so large payloads can be paged."""
+    total = len(data)
+    start = max(0, start)
+    window = data[start:start + _BODY_MAX]
+    out: dict = {"size": total, "offset": start, "returned": len(window),
+                 "truncated": start + len(window) < total}
+    if as_hex:
+        out["encoding"] = "hex"
+        out["hex"] = window.hex()
+        return out
     try:
         out["encoding"] = "utf-8"
-        out["text"] = data.decode("utf-8")
+        out["text"] = window.decode("utf-8")
     except UnicodeDecodeError:
         out["encoding"] = "base64"
-        out["base64"] = base64.b64encode(data).decode("ascii")
+        out["base64"] = base64.b64encode(window).decode("ascii")
     return out
 
 
@@ -207,11 +230,12 @@ async def network_timeline(session_id: str, limit: int = 200, offset: int = 0) -
     and websocket flags. Use `search`/`search_flows` to narrow and `get_flow` for full
     detail. `total` is the session's flow count; page with `offset`/`limit`.
     """
-    flows = sorted(await client().list_flows(session_id), key=lambda f: f.ts_unix_micros)
+    sid = await _resolve_session(session_id)
+    flows = sorted(await client().list_flows(sid), key=lambda f: f.ts_unix_micros)
     stamped = [f.ts_unix_micros for f in flows if f.ts_unix_micros > 0]
     t0 = min(stamped) if stamped else 0
     rows = [_timeline_row(i, f, t0) for i, f in enumerate(flows[offset:offset + limit], start=offset)]
-    return {"session_id": session_id, "total": len(flows), "count": len(rows), "flows": rows}
+    return {"session_id": sid, "total": len(flows), "count": len(rows), "flows": rows}
 
 
 @mcp.tool()
@@ -235,7 +259,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
                 websocket=websocket, has_response=has_response)
 
     if session_id:
-        sessions = [(session_id, None)]
+        sessions = [(await _resolve_session(session_id), None)]
     else:
         sessions = [(s.id, s.label) for s in await client().list_sessions()]
 
@@ -276,7 +300,7 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100) -> l
     Returns flow summaries (no headers/bodies — use get_flow for those). For plain
     field matching prefer the structured `search` tool.
     """
-    flows = await client().list_flows(session_id)
+    flows = await client().list_flows(await _resolve_session(session_id))
     tagnames, groupnames = await _name_maps()
     pred = compile_filter(filter, tagnames, groupnames)  # raises ValueError on bad expr
     if pred is not None:
@@ -287,33 +311,39 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100) -> l
 @mcp.tool()
 async def get_flow(session_id: str, flow_id: str) -> dict:
     """Full detail for one flow: headers (wire order), body previews, annotations."""
-    f = await client().get_flow(session_id, flow_id)
+    f = await client().get_flow(await _resolve_session(session_id), flow_id)
     tagnames, groupnames = await _name_maps()
     return _flow_detail(f, tagnames, groupnames)
 
 
 @mcp.tool()
-async def get_body(session_id: str, flow_id: str, response: bool = True) -> dict:
-    """Fetch a full request or response body. Returns UTF-8 text when decodable, else
-    base64 (both capped). Bodies are stored decompressed. `response=False` for the
-    request body."""
+async def get_body(session_id: str, flow_id: str, response: bool = True,
+                   as_hex: bool = False, offset: int = 0) -> dict:
+    """Fetch a request or response body. Returns UTF-8 text when decodable, else base64;
+    pass `as_hex=True` for a hex dump (byte inspection). A window of up to 256 KiB from
+    `offset` is returned (page large bodies with `offset`). Bodies are stored
+    decompressed. `response=False` for the request body."""
     try:
-        data = await client().get_body(session_id, flow_id, response)
+        data = await client().get_body(await _resolve_session(session_id), flow_id, response)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no body"}
         raise
-    return _bytes_payload(data)
+    return _bytes_payload(data, as_hex=as_hex, start=offset)
 
 
 @mcp.tool()
-async def list_ws_messages(session_id: str, flow_id: str) -> dict:
+async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
+                           offset: int = 0) -> dict:
     """WebSocket message timeline for an Upgrade flow: directional frames in order
-    (direction, opcode, size, text/hex preview). Large payloads carry a note; fetch
-    them in full with get_ws_message_body using the message `id`."""
-    msgs = await client().list_messages(session_id, flow_id)
+    (direction, opcode, size, text/hex preview). Paginated — `total` is the frame count;
+    page with `offset`/`limit` (default 100) to avoid huge responses. Large payloads
+    carry a note; fetch them in full with get_ws_message_body using the message `id`."""
+    sid = await _resolve_session(session_id)
+    msgs = await client().list_messages(sid, flow_id)
+    total = len(msgs)
     out = []
-    for m in msgs:
+    for m in msgs[offset:offset + limit]:
         size = m.payload.size if m.payload else 0
         item = {
             "id": m.id,
@@ -331,20 +361,23 @@ async def list_ws_messages(session_id: str, flow_id: str) -> dict:
         elif size:
             item["note"] = "large payload — fetch with get_ws_message_body"
         out.append(item)
-    return {"session_id": session_id, "flow_id": flow_id, "count": len(out), "messages": out}
+    return {"session_id": sid, "flow_id": flow_id, "total": total,
+            "count": len(out), "messages": out}
 
 
 @mcp.tool()
-async def get_ws_message_body(session_id: str, message_id: str) -> dict:
+async def get_ws_message_body(session_id: str, message_id: str,
+                              as_hex: bool = False, offset: int = 0) -> dict:
     """Fetch a full WebSocket message payload by message `id` (from list_ws_messages).
-    Returns UTF-8 text when decodable, else base64 (both capped)."""
+    Returns UTF-8 text when decodable, else base64; pass `as_hex=True` for a hex dump
+    (byte inspection). Page large payloads with `offset`."""
     try:
-        data = await client().get_message_body(session_id, message_id)
+        data = await client().get_message_body(await _resolve_session(session_id), message_id)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no payload"}
         raise
-    return _bytes_payload(data)
+    return _bytes_payload(data, as_hex=as_hex, start=offset)
 
 
 @mcp.tool()
@@ -355,7 +388,7 @@ async def export_request(session_id: str, flow_id: str) -> dict:
     response (status, protocol, headers), each with body metadata only
     ({content_type, size}) — no body bytes. Fetch actual bytes with get_body.
     """
-    f = await client().get_flow(session_id, flow_id)
+    f = await client().get_flow(await _resolve_session(session_id), flow_id)
     out = {
         "request": {
             "method": f.method or "GET",

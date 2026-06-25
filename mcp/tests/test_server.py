@@ -96,3 +96,13 @@ def test_bytes_payload_text_and_binary():
     assert text["truncated"] is False
     binary = S._bytes_payload(b"\xff\xfe\x00\x01")
     assert binary["encoding"] == "base64" and "base64" in binary
+
+
+def test_bytes_payload_hex_and_offset():
+    data = b"\x0a\x00\x01\x02\x03\x04\x05"
+    h = S._bytes_payload(data, as_hex=True)
+    assert h["encoding"] == "hex" and h["hex"] == "0a000102030405"
+    assert h["size"] == 7 and h["offset"] == 0 and h["returned"] == 7
+    # windowed hex from an offset
+    w = S._bytes_payload(data, as_hex=True, start=2)
+    assert w["hex"] == "0102030405" and w["offset"] == 2 and w["size"] == 7
