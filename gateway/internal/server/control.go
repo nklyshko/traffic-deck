@@ -35,7 +35,7 @@ func (c *Control) ExportSession(req *trafficv1.ExportSessionRequest, srv grpc.Se
 		return status.Errorf(codes.NotFound, "export session: session %s not found", req.GetSessionId())
 	}
 	if err != nil {
-		return status.Errorf(codes.Internal, "export session: %v", err)
+		return storeStatus(err, "export session")
 	}
 	return nil
 }
@@ -63,6 +63,8 @@ func ctrlErr(what string, err error) error {
 		return status.Errorf(codes.NotFound, "%s: not found", what)
 	case errors.Is(err, store.ErrProtected):
 		return status.Errorf(codes.InvalidArgument, "%s: protected object", what)
+	case errors.Is(err, store.ErrSchemaOutdated):
+		return status.Errorf(codes.FailedPrecondition, "%s: %v", what, err)
 	case err != nil:
 		return status.Errorf(codes.Internal, "%s: %v", what, err)
 	}

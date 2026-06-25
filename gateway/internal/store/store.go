@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,23 @@ import (
 
 // ErrNotFound is returned when a requested row does not exist.
 var ErrNotFound = errors.New("store: not found")
+
+// ErrSchemaOutdated is returned when a session bundle's flows.sqlite was written by
+// an older gateway and is missing columns the current read path needs. The session
+// schema uses CREATE TABLE IF NOT EXISTS, which never alters an existing table, so
+// such bundles cannot be migrated in place — they must be re-imported. The error
+// message names the missing columns and is safe to surface to clients.
+var ErrSchemaOutdated = errors.New("session bundle schema is outdated — re-import this session")
+
+// requiredFlowColumns are the flows-table columns the read/serialize path depends on.
+// Bundles predating any of these (e.g. the proxy_* columns) trip ErrSchemaOutdated.
+var requiredFlowColumns = []string{
+	"id", "session_id", "analysis_id", "frame_number", "ts_micros", "method", "scheme",
+	"authority", "path", "query", "protocol", "status", "src_addr", "dst_addr",
+	"user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream",
+	"h2_stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
+	"proxy_user", "proxy_pass",
+}
 
 const pragmas = `PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
@@ -93,8 +111,51 @@ func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error
 	if err != nil {
 		return nil, err
 	}
+	// Reject bundles older than the current flows schema up front, so every read/write
+	// path gets a single, actionable ErrSchemaOutdated instead of a raw "no such
+	// column" SQL error deep in a query. A freshly created DB has the current schema
+	// and passes; only pre-existing older bundles fail.
+	if err := validateSessionSchema(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	s.sessions[sessionID] = db
 	return db, nil
+}
+
+// validateSessionSchema verifies the flows table has every column the read path needs.
+// Returns an ErrSchemaOutdated wrapping the list of missing columns when it doesn't.
+func validateSessionSchema(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(flows)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	have := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, typ        string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	var missing []string
+	for _, c := range requiredFlowColumns {
+		if !have[c] {
+			missing = append(missing, c)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w (flows table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // --- writes ---------------------------------------------------------------

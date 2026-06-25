@@ -24,6 +24,17 @@ type Viewer struct {
 
 func NewViewer(st *store.Store, hub *liveHub) *Viewer { return &Viewer{st: st, hub: hub} }
 
+// storeStatus maps a store error to a gRPC status. ErrSchemaOutdated becomes
+// FailedPrecondition carrying the re-import message, so any client can tell a stale
+// bundle (fix: re-import the session) apart from a transient server fault; everything
+// else is Internal. Callers handle ErrNotFound first when they want a specific message.
+func storeStatus(err error, action string) error {
+	if errors.Is(err, store.ErrSchemaOutdated) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return status.Errorf(codes.Internal, "%s: %v", action, err)
+}
+
 func (v *Viewer) ListSessions(ctx context.Context, req *trafficv1.ListSessionsRequest) (*trafficv1.SessionList, error) {
 	sessions, err := v.st.ListSessions(ctx, int(req.GetLimit()), int(req.GetOffset()))
 	if err != nil {
@@ -38,7 +49,7 @@ func (v *Viewer) GetFlow(ctx context.Context, req *trafficv1.GetFlowRequest) (*t
 		return nil, status.Error(codes.NotFound, "flow not found")
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get flow: %v", err)
+		return nil, storeStatus(err, "get flow")
 	}
 	return f, nil
 }
@@ -49,7 +60,7 @@ func (v *Viewer) GetFlow(ctx context.Context, req *trafficv1.GetFlowRequest) (*t
 func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerStreamingServer[trafficv1.FlowEvent]) error {
 	flows, err := v.st.ListFlows(srv.Context(), req.GetSessionId())
 	if err != nil {
-		return status.Errorf(codes.Internal, "list flows: %v", err)
+		return storeStatus(err, "list flows")
 	}
 	for _, f := range flows {
 		if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
@@ -92,7 +103,7 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 		return status.Error(codes.NotFound, "body not found")
 	}
 	if err != nil {
-		return status.Errorf(codes.Internal, "get body: %v", err)
+		return storeStatus(err, "get body")
 	}
 	return streamBytes(srv, body)
 }
@@ -100,7 +111,7 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRequest) (*trafficv1.MessageList, error) {
 	msgs, err := v.st.ListMessages(ctx, req.GetSessionId(), req.GetFlowId())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list messages: %v", err)
+		return nil, storeStatus(err, "list messages")
 	}
 	return &trafficv1.MessageList{Messages: msgs}, nil
 }
@@ -116,7 +127,7 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 	// Backfill from the store (populated once the session is persisted on close).
 	stored, err := v.st.ListMessages(srv.Context(), req.GetSessionId(), req.GetFlowId())
 	if err != nil {
-		return status.Errorf(codes.Internal, "list messages: %v", err)
+		return storeStatus(err, "list messages")
 	}
 	for _, m := range stored {
 		if err := send(m); err != nil {
@@ -168,7 +179,7 @@ func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.S
 		return status.Error(codes.NotFound, "message body not found")
 	}
 	if err != nil {
-		return status.Errorf(codes.Internal, "get message body: %v", err)
+		return storeStatus(err, "get message body")
 	}
 	return streamBytes(srv, body)
 }
