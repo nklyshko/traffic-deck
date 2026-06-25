@@ -3,7 +3,7 @@
 Runs `mitmdump` with the gateway-push addon loaded. mitmproxy terminates TLS and the
 addon streams decoded flows to the gateway (IngestService.PushFlows) — no pcap/keylog.
 
-  # regular HTTP proxy on :8080 (set device/app proxy to this host:8080)
+  # regular HTTP proxy on :8888 (set device/app proxy to this host:8888)
   trafficdeck-capture-mitmproxy --label "api poke"
 
   # WireGuard server — any device that can be a WireGuard client routes through it
@@ -26,7 +26,8 @@ def main() -> None:
     ap.add_argument("--mode", default="regular",
                     help="mitmproxy mode: regular | wireguard | transparent | local | ... (default regular)")
     ap.add_argument("--label", default="mitmproxy", help="session label shown in the viewer")
-    ap.add_argument("--listen-port", type=int, help="proxy/server listen port")
+    ap.add_argument("--listen-port", type=int, default=8888,
+                    help="proxy/server listen port (default 8888)")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"),
                     help="gateway address (default 127.0.0.1:8080)")
     ap.add_argument("passthrough", nargs="*",
@@ -34,9 +35,8 @@ def main() -> None:
     args = ap.parse_args()
 
     addon = Path(__file__).resolve().parent / "addon.py"
-    cmd = ["mitmdump", "-s", str(addon), "--mode", args.mode]
-    if args.listen_port:
-        cmd += ["--listen-port", str(args.listen_port)]
+    cmd = ["mitmdump", "-s", str(addon), "--mode", args.mode,
+           "--listen-port", str(args.listen_port)]
     cmd += args.passthrough
 
     env = dict(os.environ, GATEWAY_ADDR=args.gateway, CAPTURE_LABEL=args.label)

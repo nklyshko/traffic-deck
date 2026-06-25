@@ -163,7 +163,7 @@ connected, or install `~/.mitmproxy/mitmproxy-ca-cert.*`); cert-pinned apps stil
 a Frida bypass.
 
 ```sh
-# regular HTTP proxy on :8080 — set the device/app proxy to <this-host>:8080
+# regular HTTP proxy on :8888 — set the device/app proxy to <this-host>:8888
 uv run --project capture/capture_mitmproxy trafficdeck-capture-mitmproxy --label "api poke"
 
 # WireGuard server — any device that can be a WireGuard client routes through it
@@ -173,7 +173,7 @@ uv run --project capture/capture_mitmproxy trafficdeck-capture-mitmproxy --mode 
 
 Flows appear live in the TUI as they complete; stop mitmdump (`q`/Ctrl-C) to close the
 session. Args after `--` pass through to `mitmdump`. Flags: `--mode` (regular |
-wireguard | transparent | …), `--label`, `--listen-port`, `--gateway ADDR`.
+wireguard | transparent | …), `--label`, `--listen-port` (default `8888`), `--gateway ADDR`.
 
 ### D) Android (rooted emulator/device, per-app)
 
