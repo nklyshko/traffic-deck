@@ -7,7 +7,9 @@ A frida-free front-end over the capture library. Guided flow:
   3. ensure the target is rooted
   4. pick the frida version — recommended for the device's Android release, picked from
      the latest available (auto-checked on GitHub); v16 and v17 are always offered
-  5. pick the app to capture from the installed list
+  5. pick the app to capture from the installed list, shown as "App Name (package)" —
+     names are read from the device via Frida (run under the version from step 4), which
+     also starts frida-server so the capture reuses it (--no-app-names lists packages only)
   6. optionally add Frida scripts (SSL-unpinning / bypass) to load alongside the keylog
 
 It then launches the capture under the chosen frida via `uv run --with frida==<ver>`
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 from pathlib import Path
 
 from capture_android import frida_versions
@@ -97,6 +100,39 @@ def pick_scripts(scripts_dir: str) -> list[str]:
     return chosen
 
 
+def parse_app_names(stdout: str) -> dict[str, str]:
+    """Parse `list_apps` output (`<identifier>\\t<name>` per line) into {package: label}."""
+    names: dict[str, str] = {}
+    for line in stdout.splitlines():
+        ident, sep, name = line.partition("\t")
+        if sep and ident:
+            names[ident] = name
+    return names
+
+
+def enumerate_app_names(serial: str, fver: str) -> dict[str, str]:
+    """Resolve {package: label} via Frida, run under the chosen frida version.
+
+    Spawns `capture_android.list_apps` through `uv run --with frida==<fver>` (the same
+    way the capture is launched, so this CLI stays frida-free) and reads its labels
+    from the device's PackageManager — no APK downloads. Returns {} on any failure, so
+    the picker falls back to bare package names.
+    """
+    cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
+           "python", "-m", "capture_android.list_apps", "--serial", serial]
+    try:
+        out = subprocess.run(cmd, text=True, capture_output=True, timeout=180, check=True).stdout
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    return parse_app_names(out)
+
+
+def app_choices(packages: list[str], labels: dict[str, str]) -> list[tuple[str, str]]:
+    """Build (display, value) selector choices: `Label  (com.pkg)` when the label is
+    known, otherwise just the package. The chosen value is always the package."""
+    return [(f"{labels[p]}  ({p})" if p in labels else p, p) for p in packages]
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="Interactive Android capture")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
@@ -104,6 +140,8 @@ def main(argv=None) -> None:
     ap.add_argument("--sdk", default=None, help="Android SDK root (default: $ANDROID_HOME / ~/Android/Sdk)")
     ap.add_argument("--scripts-dir", default=_DEFAULT_SCRIPTS_DIR)
     ap.add_argument("--all-apps", action="store_true", help="list all packages, not just third-party")
+    ap.add_argument("--no-app-names", action="store_true",
+                    help="skip resolving app names via Frida (lists package names only)")
     args = ap.parse_args(argv)
 
     sdk = Sdk(args.sdk)
@@ -122,11 +160,19 @@ def main(argv=None) -> None:
     # Step 4: frida version (Android-compat recommendation + manual override).
     fver = pick_frida_version(adb)
 
-    # Step 5: pick the app.
-    pkgs = adb.list_packages(third_party=not args.all_apps)
+    # Step 5: pick the app, shown as "App Name  (com.pkg)" when resolvable. Names come
+    # from Frida, which also starts frida-server for the capture to reuse.
+    tp = not args.all_apps
+    pkgs = adb.list_packages(third_party=tp)
     if not pkgs:
-        pkgs = adb.list_packages(third_party=False)
-    package = prompt.select(f"App to capture ({len(pkgs)} installed):", pkgs)
+        tp = False
+        pkgs = adb.list_packages(third_party=tp)
+    names: dict[str, str] = {}
+    if not args.no_app_names:
+        print(f"resolving app names ({len(pkgs)} apps)…")
+        names = enumerate_app_names(serial, fver)
+    package = prompt.select(f"App to capture ({len(pkgs)} installed):",
+                            app_choices(pkgs, names))
 
     # Step 6: extra scripts + optional URL.
     scripts = pick_scripts(args.scripts_dir)

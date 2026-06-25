@@ -33,6 +33,23 @@ def test_nflog_rules():
     assert any("OUTPUT" in r and "NFLOG" in r for r in add)
 
 
+def test_parse_app_names():
+    from capture_android.cli import parse_app_names
+    out = ("com.android.chrome\tChrome\n"
+           "com.google.android.apps.maps\tMaps\n"
+           "malformed-no-tab\n")
+    assert parse_app_names(out) == {
+        "com.android.chrome": "Chrome",
+        "com.google.android.apps.maps": "Maps",
+    }
+
+
+def test_app_choices_formats_label_with_package():
+    from capture_android.cli import app_choices
+    choices = app_choices(["com.a", "com.b"], {"com.a": "Alpha"})
+    assert choices == [("Alpha  (com.a)", "com.a"), ("com.b", "com.b")]
+
+
 def test_parse_devices():
     from capture_android.emulator import parse_devices
     out = ("List of devices attached\n"
