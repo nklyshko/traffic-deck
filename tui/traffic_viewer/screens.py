@@ -13,7 +13,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Header, Input, Label, OptionList, Static
+from textual.widgets import Button, DataTable, Footer, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 from rich.text import Text
 
@@ -79,6 +79,39 @@ class SelectPrompt(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """Modal yes/no confirmation; dismisses True when confirmed, False otherwise."""
+
+    BINDINGS = [
+        Binding("y", "confirm", "Yes"),
+        Binding("n", "cancel", "No"),
+        Binding("escape", "cancel", "No"),
+    ]
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="prompt"):
+            yield Label(self._message)
+            with Horizontal(id="confirm-buttons"):
+                yield Button("Yes (y)", id="yes", variant="error")
+                yield Button("No (n)", id="no", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#no", Button).focus()  # default to the safe choice
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class SessionsScreen(Screen):

@@ -11,19 +11,21 @@ from textual.binding import Binding
 from textual.screen import Screen
 
 from traffic_viewer.client import GatewayClient
-from traffic_viewer.screens import SessionsScreen
+from traffic_viewer.screens import ConfirmScreen, SessionsScreen
 
 
 class TrafficViewerApp(App):
     CSS = """
     DataTable { height: 1fr; }
-    TextPrompt, SelectPrompt { align: center middle; }
+    TextPrompt, SelectPrompt, ConfirmScreen { align: center middle; }
     #prompt {
         width: 60; height: auto; max-height: 80%;
         padding: 1 2; border: thick $accent; background: $surface;
     }
     #prompt Label { margin-bottom: 1; }
     #prompt OptionList { height: auto; max-height: 16; }
+    #confirm-buttons { height: auto; align: center middle; }
+    #confirm-buttons Button { margin: 0 1; }
     """
     BINDINGS = [Binding("q", "quit", "Quit")]
 
@@ -35,6 +37,17 @@ class TrafficViewerApp(App):
 
     def get_default_screen(self) -> Screen:
         return SessionsScreen()
+
+    def action_quit(self) -> None:  # type: ignore[override]
+        # Every screen's `q` binding resolves here; confirm before tearing down.
+        if isinstance(self.screen, ConfirmScreen):
+            return  # already asking — don't stack another dialog
+
+        def on_confirm(confirmed: bool | None) -> None:
+            if confirmed:
+                self.exit()
+
+        self.push_screen(ConfirmScreen("Quit TrafficDeck?"), on_confirm)
 
     async def on_unmount(self) -> None:
         await self.client.close()

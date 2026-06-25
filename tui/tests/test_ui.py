@@ -12,6 +12,7 @@ from traffic.v1 import common_pb2 as cp
 from traffic.v1 import viewer_pb2 as vp
 from traffic_viewer.app import TrafficViewerApp
 from traffic_viewer.screens import (
+    ConfirmScreen,
     FlowDetailScreen,
     FlowsScreen,
     SessionsScreen,
@@ -172,3 +173,24 @@ async def test_open_ws_message_timeline():
         await settle(pilot)
         assert isinstance(app.screen, WsMessagesScreen)
         assert app.screen.query_one("#msgs", DataTable).row_count == len(_ws_messages())
+
+
+async def test_quit_asks_for_confirmation():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        # `q` opens the confirm dialog instead of quitting outright.
+        await pilot.press("q")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+        # Declining returns to the app, still running.
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, SessionsScreen)
+        assert app.is_running
+        # Confirming actually exits.
+        await pilot.press("q")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+    assert app.return_code == 0
