@@ -3,13 +3,14 @@ message timeline, and side-by-side compare."""
 
 from __future__ import annotations
 
+import difflib
 import os
 from datetime import datetime
 
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Input, Label, OptionList, Static
@@ -793,36 +794,113 @@ class CompareScreen(Screen):
 
     Compares (order-sensitively): HTTP version, pseudo-header order, header order +
     values, cookie order, and request body — the client/parser fingerprint surface.
+    A is shown in the left column and B in the right, rendered git-diff style: one
+    entry per line, with matching lines kept aligned and differences shown as `-`
+    (removed/left) / `+` (added/right). Pseudo-headers are compared and exported
+    separately from regular headers. One side is "focused" (▸); `p`/`h`/`k` copy that
+    side's pseudo-header/header/cookie order to the clipboard as a Go `[]string{…}`
+    literal, and `s` switches the focus between A and B.
     """
 
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back"), Binding("q", "quit", "Quit")]
+    CSS = """
+    CompareScreen #cols { height: auto; }
+    CompareScreen #diff-a, CompareScreen #diff-b { width: 1fr; padding: 0 1; }
+    CompareScreen #diff-a { border-right: solid $surface-lighten-2; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("s", "switch_side", "Switch A/B"),
+        Binding("h", "copy_headers", "Copy header order"),
+        Binding("p", "copy_pseudo", "Copy pseudo order"),
+        Binding("k", "copy_cookies", "Copy cookie order"),
+        Binding("q", "quit", "Quit"),
+    ]
 
     def __init__(self, a: tuple[str, str], b: tuple[str, str]) -> None:
         super().__init__()
         self.a, self.b = a, b
+        self._side = "A"           # which request the copy actions target
+        self._fa = self._fb = None  # loaded flows, kept for copy/refresh
 
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll(id="cmp"):
-            yield Static("loading…", id="diff")
+            with Horizontal(id="cols"):
+                yield Static("loading…", id="diff-a")
+                yield Static(id="diff-b")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "TrafficDeck"
-        self.sub_title = "compare A ⟷ B"
+        self._set_subtitle()
         self.load()
+
+    def _set_subtitle(self) -> None:
+        self.sub_title = f"compare A ⟷ B · copy target ▸{self._side}"
 
     @work(exclusive=True)
     async def load(self) -> None:
         try:
-            fa = await self.app.client.get_flow(*self.a)
-            fb = await self.app.client.get_flow(*self.b)
+            self._fa = await self.app.client.get_flow(*self.a)
+            self._fb = await self.app.client.get_flow(*self.b)
         except Exception as exc:  # noqa: BLE001
-            self.query_one("#diff", Static).update(
+            self.query_one("#diff-a", Static).update(
                 f"[red]could not load both flows: {exc}[/red]\n[dim](live/unpersisted "
                 f"sessions can't be compared yet — close them first)[/dim]")
+            self.query_one("#diff-b", Static).update("")
             return
-        self.query_one("#diff", Static).update(self._render_diff(fa, fb))
+        self._refresh()
+
+    def _refresh(self) -> None:
+        if self._fa is None or self._fb is None:
+            return
+        left, right = self._render_columns(self._fa, self._fb)
+        self.query_one("#diff-a", Static).update(left)
+        self.query_one("#diff-b", Static).update(right)
+
+    # --- copy/export actions --------------------------------------------------
+
+    def action_switch_side(self) -> None:
+        self._side = "B" if self._side == "A" else "A"
+        self._set_subtitle()
+        self._refresh()
+
+    def action_copy_headers(self) -> None:
+        f = self._fa if self._side == "A" else self._fb
+        if f is None:
+            return
+        self._copy_go_slice([n for n, _ in self._regular(f)], "header order")
+
+    def action_copy_pseudo(self) -> None:
+        f = self._fa if self._side == "A" else self._fb
+        if f is None:
+            return
+        self._copy_go_slice(self._pseudo(f), "pseudo-header order")
+
+    def action_copy_cookies(self) -> None:
+        f = self._fa if self._side == "A" else self._fb
+        if f is None:
+            return
+        self._copy_go_slice([n for n, _ in self._cookies(f)], "cookie order")
+
+    def _copy_go_slice(self, items: list[str], what: str) -> None:
+        self.app.copy_to_clipboard(self._go_slice(items))
+        self.notify(
+            f"copied request {self._side} {what} ({len(items)} entries) "
+            f"to clipboard as a Go []string{{}}")
+
+    @staticmethod
+    def _go_slice(items: list[str]) -> str:
+        """Render names as a gofmt-style `[]string{…}` literal (tab-indented)."""
+        if not items:
+            return "[]string{}"
+        body = "".join(f"\t{CompareScreen._go_quote(s)},\n" for s in items)
+        return "[]string{\n" + body + "}"
+
+    @staticmethod
+    def _go_quote(s: str) -> str:
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     # --- diff helpers ---------------------------------------------------------
 
@@ -853,54 +931,89 @@ class CompareScreen(Screen):
         return Content.from_markup(
             "[green]✓ match[/green]" if equal else "[red]✗ differ[/red]")
 
-    def _render_diff(self, a, b) -> Content:
-        # Content with $-substitution: header/cookie/body-derived text is inserted
-        # literally, never reparsed as markup (see _format_flow / _render_payload).
-        out: list[Content] = []
-        out.append(Content.from_markup(
-            "[b]A[/b] [dim]$m $auth$path[/dim]", m=a.method, auth=a.authority, path=a.path))
-        out.append(Content.from_markup(
-            "[b]B[/b] [dim]$m $auth$path[/dim]", m=b.method, auth=b.authority, path=b.path))
+    def _render_columns(self, a, b) -> tuple[Content, Content]:
+        """Build the left (A) and right (B) columns of a git-style, line-by-line diff.
+        Every logical line is emitted to both columns at once (a blank fills the side
+        that has no content), so the two columns always have equal line counts and stay
+        vertically aligned. All header/cookie text is inserted via $-substitution and
+        never reparsed as markup."""
+        left: list[Content] = []
+        right: list[Content] = []
 
-        def section(title, va, vb, equal):
-            out.append(Content(""))
-            out.append(Content.from_markup("[b u]$t[/b u]  ", t=title).append(self._mark(equal)))
-            if not equal:
-                out.append(Content.from_markup("  [cyan]A[/cyan] $v", v=va))
-                out.append(Content.from_markup("  [magenta]B[/magenta] $v", v=vb))
+        def row(l: Content, r: Content) -> None:
+            left.append(l)
+            right.append(r)
+
+        def cell(marker: str, color: str, text: str, indent: int = 2) -> Content:
+            return Content.from_markup(f"{' ' * indent}[{color}]{marker}[/{color}] $v", v=text)
+
+        def eq(va: str, vb: str) -> None:  # unchanged context line on both sides
+            row(cell(" ", "dim", va), cell(" ", "dim", vb))
+
+        def chg(va: str | None, vb: str | None) -> None:  # -removed (left) / +added (right)
+            row(cell("-", "red", va) if va is not None else Content(""),
+                cell("+", "green", vb) if vb is not None else Content(""))
+
+        def title(text: str, equal: bool) -> None:
+            row(Content(""), Content(""))
+            t = Content.from_markup("[b u]$t[/b u]  ", t=text).append(self._mark(equal))
+            row(t, t)
+
+        def diff_list(items_a: list[str], items_b: list[str]) -> None:
+            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+                    None, items_a, items_b, autojunk=False).get_opcodes():
+                if tag == "equal":
+                    for k in range(i2 - i1):
+                        eq(items_a[i1 + k], items_b[j1 + k])
+                else:  # replace/delete/insert: pair up removed/added, padding the short side
+                    la, lb = items_a[i1:i2], items_b[j1:j2]
+                    for k in range(max(len(la), len(lb))):
+                        chg(la[k] if k < len(la) else None, lb[k] if k < len(lb) else None)
+
+        # Column headers, with the ▸ copy-target marker on the focused side.
+        ma, mb = ("▸" if self._side == s else " " for s in ("A", "B"))
+        row(Content.from_markup(f"{ma} [b cyan]A[/b cyan] [dim]$m $auth$p[/dim]",
+                                m=a.method, auth=a.authority, p=a.path),
+            Content.from_markup(f"{mb} [b magenta]B[/b magenta] [dim]$m $auth$p[/dim]",
+                                m=b.method, auth=b.authority, p=b.path))
 
         # HTTP version
-        section("HTTP version", a.protocol, b.protocol, a.protocol == b.protocol)
-        # Pseudo-header order
+        title("HTTP version", a.protocol == b.protocol)
+        (eq if a.protocol == b.protocol else chg)(a.protocol or "∅", b.protocol or "∅")
+
+        # Pseudo-header order (compared separately from regular headers)
         pa, pb = self._pseudo(a), self._pseudo(b)
-        section("Pseudo-header order", " ".join(pa), " ".join(pb), pa == pb)
+        title("Pseudo-header order", pa == pb)
+        diff_list(pa, pb)
+
         # Header order (names only)
         na = [n for n, _ in self._regular(a)]
         nb = [n for n, _ in self._regular(b)]
-        section("Header order", ", ".join(na), ", ".join(nb), na == nb)
-        # Cookie order (names)
-        ca, cb = self._cookies(a), self._cookies(b)
-        section("Cookie order", ", ".join(n for n, _ in ca), ", ".join(n for n, _ in cb),
-                [n for n, _ in ca] == [n for n, _ in cb])
+        title("Header order", na == nb)
+        diff_list(na, nb)
 
-        # Header values (per name present in either side, in A's order then B-only)
-        out.append(Content(""))
+        # Cookie order (names only)
+        cna = [n for n, _ in self._cookies(a)]
+        cnb = [n for n, _ in self._cookies(b)]
+        title("Cookie order", cna == cnb)
+        diff_list(cna, cnb)
+
+        # Header values — one "name: value" line per header (A's order, then B-only).
         da, db = dict(self._regular(a)), dict(self._regular(b))
         names = list(dict.fromkeys(na + nb))
-        diffs = [n for n in names if da.get(n) != db.get(n)]
-        out.append(Content.from_markup("[b u]Header values[/b u]  ").append(self._mark(not diffs)))
-        for n in diffs:
-            out.append(Content.from_markup("  [yellow]$n[/yellow]", n=n))
-            out.append(Content.from_markup("    [cyan]A[/cyan] $v", v=da.get(n, "∅")))
-            out.append(Content.from_markup("    [magenta]B[/magenta] $v", v=db.get(n, "∅")))
+        title("Header values", not [n for n in names if da.get(n) != db.get(n)])
+        for n in names:
+            la = f"{n}: {da[n]}" if n in da else None
+            lb = f"{n}: {db[n]}" if n in db else None
+            if la is not None and la == lb:
+                eq(la, lb)
+            else:
+                chg(la, lb)
 
-        # Request body
+        # Request body (size only; bodies may be large/binary)
         ba = a.request_body.inline if a.request_body.size else b""
         bb = b.request_body.inline if b.request_body.size else b""
-        out.append(Content(""))
-        sizes = f"A={a.request_body.size}B B={b.request_body.size}B"
-        out.append(
-            Content.from_markup("[b u]Request body[/b u]  ")
-            .append(self._mark(ba == bb))
-            .append(Content.from_markup("  [dim]$s[/dim]", s=sizes)))
-        return Content("\n").join(out)
+        title("Request body", ba == bb)
+        (eq if ba == bb else chg)(f"{a.request_body.size}B", f"{b.request_body.size}B")
+
+        return Content("\n").join(left), Content("\n").join(right)
