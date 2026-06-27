@@ -38,7 +38,7 @@ import time
 import grpc
 
 from capture_chrome import platform
-from capture_sdk import paths, prompt
+from capture_sdk import paths, prompt, terminal
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
@@ -312,6 +312,9 @@ def main(argv=None) -> None:
     if args.url:
         chrome_cmd.append(args.url)
 
+    # A preceding questionary picker may have left the tty raw on a CPR-less terminal,
+    # where ^C is a literal byte not SIGINT — restore it so Ctrl-C reaches the capture.
+    terminal.restore()
     if args.duration:
         print(f"launching Chrome (auto-stop in {args.duration:g}s; Ctrl-C to stop early) …",
               flush=True)

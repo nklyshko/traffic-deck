@@ -22,6 +22,7 @@ from capture_android.frida_server import frida_device
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
+from capture_sdk import terminal
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.upload import SENTINEL, capture_chunks
 
@@ -89,6 +90,10 @@ def run_capture(
     # always torn down — even if Frida fails to spawn (common on locked-down devices).
     # First Ctrl-C requests a graceful stop (the loop breaks and the session is closed);
     # a second Ctrl-C raises through and aborts.
+    # The interactive picker (questionary) may have left the tty in raw mode on a
+    # CPR-less terminal — where ^C is a literal byte, not SIGINT — so restore canonical
+    # mode before the capture, or Ctrl-C can't stop it.
+    terminal.restore()
     interrupt = GracefulInterrupt()
     for rule in add_rules:
         adb.sh_root(" ".join(rule))
