@@ -112,7 +112,8 @@ Interactive (recommended) — the launcher activates the `wireshark` group itsel
 `sg`), then lets you pick the Chrome binary and the profile: the **browser's own
 default** (launched with no `--user-data-dir`), a fresh temp profile, or a named
 persistent profile (pick an existing one or create a new one) under
-`~/.capture-chrome/profiles`:
+`~/.traffic-deck/chrome-profiles`. The pickers default to your previous run's choices
+(remembered under `~/.traffic-deck/state`):
 
 ```sh
 capture/capture-chrome.sh
@@ -200,7 +201,7 @@ uv run --project capture/capture_android trafficdeck-capture-android
 ```
 
 It can create + boot a rootable `google_apis` AVD (installing the system image on
-first use) and drop extra Frida scripts from `~/.config/traffic/frida-scripts` (or a
+first use) and drop extra Frida scripts from `~/.traffic-deck/frida-scripts` (or a
 path you enter). The chosen frida version is applied via `uv run --with frida==<ver>`
 (client and server must match). The CLI is a thin front-end over the capture library.
 

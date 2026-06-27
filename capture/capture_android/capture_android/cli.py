@@ -28,29 +28,32 @@ from pathlib import Path
 from capture_android import frida_versions
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
-from capture_sdk import prompt
+from capture_sdk import paths, prompt
+from capture_sdk.state import Store
 
-_DEFAULT_SCRIPTS_DIR = os.path.expanduser("~/.config/traffic/frida-scripts")
+_DEFAULT_SCRIPTS_DIR = str(paths.home() / "frida-scripts")
 _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
 
 
 # --- steps ---------------------------------------------------------------
 
-def pick_emulator(sdk: Sdk) -> str:
+def pick_emulator(sdk: Sdk, store: Store) -> str:
     """Step 2: choose/boot/create an emulator; returns its adb serial."""
     running = [d.serial for d in sdk.connected_devices() if d.emulator and d.state == "device"]
     avds = sdk.list_avds()
     options = ([(f"use running {s}", ("use", s)) for s in running]
                + [(f"boot AVD {a}", ("boot", a)) for a in avds]
                + [("create a new AVD", ("new", ""))])
-    action, value = prompt.select("Emulator:", options)
+    action, value = store.remember("emulator", prompt.select(
+        "Emulator:", options, default=store.get_valid("emulator", [v for _, v in options])))
 
     if action == "use":
         return value
     if action == "boot":
         name = value
     else:
-        name = prompt.text("New AVD name", DEFAULT_AVD)
+        name = store.remember("avd_name", prompt.text(
+            "New AVD name", store.get("avd_name", DEFAULT_AVD)))
         if not sdk.system_image_installed(DEFAULT_IMAGE):
             if prompt.confirm(f"Install system image {DEFAULT_IMAGE}?", default=True):
                 sdk.install_system_image(DEFAULT_IMAGE)
@@ -64,7 +67,7 @@ def pick_emulator(sdk: Sdk) -> str:
     return serial
 
 
-def pick_device(sdk: Sdk) -> str:
+def pick_device(sdk: Sdk, store: Store) -> str:
     """Step 1 (device branch): choose a connected, authorized real device."""
     devs = [d for d in sdk.connected_devices() if not d.emulator]
     ready = [d for d in devs if d.state == "device"]
@@ -72,31 +75,41 @@ def pick_device(sdk: Sdk) -> str:
         if any(d.state == "unauthorized" for d in devs):
             raise SystemExit("device is unauthorized — accept the USB-debugging prompt and retry")
         raise SystemExit("no connected device (enable USB debugging and plug it in)")
-    return prompt.select("Device:", [d.serial for d in ready])
+    serials = [d.serial for d in ready]
+    return store.remember("device", prompt.select(
+        "Device:", serials, default=store.get_valid("device", serials)))
 
 
-def pick_frida_version(adb: AdbClient) -> str:
+def pick_frida_version(adb: AdbClient, store: Store) -> str:
     """Step 4: pick a frida version compatible with the device's Android release."""
     release = adb.shell("getprop", "ro.build.version.release").strip()
     rec = frida_versions.recommended(release)
     print(f"Android {release or '?'} detected — recommended frida {rec}"
           " (frida 17 can't spawn on Android ≤ 11)")
-    opts = [(v + "  (recommended)" if v == rec else v, v) for v in frida_versions.choices(rec)]
-    return prompt.select("frida version (client + server must match):", opts, default=rec)
+    choices = frida_versions.choices(rec)
+    opts = [(v + "  (recommended)" if v == rec else v, v) for v in choices]
+    default = store.get_valid("frida_version", choices, rec)
+    return store.remember(
+        "frida_version",
+        prompt.select("frida version (client + server must match):", opts, default=default))
 
 
-def pick_scripts(scripts_dir: str) -> list[str]:
-    """Step 6: pick extra Frida scripts from a directory and/or a custom path."""
+def pick_scripts(scripts_dir: str, store: Store) -> list[str]:
+    """Step 6: pick extra Frida scripts from a directory and/or a custom path.
+    Scripts chosen last run are pre-checked when they're still present."""
+    last = store.get("scripts", [])
     d = Path(scripts_dir)
     found = sorted(str(p) for p in d.glob("*.js")) if d.is_dir() else []
     if found:
-        chosen = prompt.checkbox(f"Extra Frida scripts (from {scripts_dir}):", found)
+        chosen = prompt.checkbox(f"Extra Frida scripts (from {scripts_dir}):", found,
+                                 checked=[s for s in last if s in found])
     else:
         print(f"(no scripts in {scripts_dir})")
         chosen = []
     custom = prompt.text("Extra script path (optional)", "")
     if custom:
         chosen.append(custom)
+    store.remember("scripts", chosen)
     return chosen
 
 
@@ -145,10 +158,15 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     sdk = Sdk(args.sdk)
+    # Each picker defaults to the previous run's choice, remembered under
+    # ~/.traffic-deck/state/android.json.
+    store = Store("android")
 
     # Step 1–2: target.
-    target = prompt.select("Capture target:", ["emulator", "device"])
-    serial = pick_emulator(sdk) if target == "emulator" else pick_device(sdk)
+    target = store.remember("target", prompt.select(
+        "Capture target:", ["emulator", "device"],
+        default=store.get_valid("target", ["emulator", "device"])))
+    serial = pick_emulator(sdk, store) if target == "emulator" else pick_device(sdk, store)
     adb = AdbClient(serial=serial, adb=sdk.adb)
 
     # Step 3: ensure rooted (fail fast; the capture re-checks too).
@@ -158,7 +176,7 @@ def main(argv=None) -> None:
         raise SystemExit(str(e))
 
     # Step 4: frida version (Android-compat recommendation + manual override).
-    fver = pick_frida_version(adb)
+    fver = pick_frida_version(adb, store)
 
     # Step 5: pick the app, shown as "App Name  (com.pkg)" when resolvable. Names come
     # from Frida, which also starts frida-server for the capture to reuse.
@@ -171,12 +189,14 @@ def main(argv=None) -> None:
     if not args.no_app_names:
         print(f"resolving app names ({len(pkgs)} apps)…")
         names = enumerate_app_names(serial, fver)
-    package = prompt.select(f"App to capture ({len(pkgs)} installed):",
-                            app_choices(pkgs, names))
+    package = store.remember("package", prompt.select(
+        f"App to capture ({len(pkgs)} installed):", app_choices(pkgs, names),
+        default=store.get_valid("package", pkgs)))
 
     # Step 6: extra scripts + optional URL.
-    scripts = pick_scripts(args.scripts_dir)
-    url = prompt.text("URL to open in the app (optional)", "")
+    scripts = pick_scripts(args.scripts_dir, store)
+    url = store.remember("url", prompt.text(
+        "URL to open in the app (optional)", store.get("url", "")))
 
     # Launch the capture under the chosen frida (client+server must match).
     cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",

@@ -13,9 +13,10 @@ the browser's own existing profiles (auto-discovered from its Local State and
 launched with --profile-directory), the browser's own default (launched with no
 --user-data-dir, so each binary uses its own default path), a fresh temp profile,
 or a named persistent profile (pick an existing one or create a new one) under
-~/.capture-chrome/profiles. Flags override each step; `--no-prompt` (or a non-TTY
-stdin) skips the pickers and uses auto-detected defaults (fresh temp profile), so
-it stays scriptable:
+~/.traffic-deck/chrome-profiles. The pickers default to the previous run's choices
+(remembered under ~/.traffic-deck/state). Flags override each step; `--no-prompt`
+(or a non-TTY stdin) skips the pickers and uses auto-detected defaults (fresh temp
+profile), so it stays scriptable:
 
     trafficdeck-capture-chrome --no-prompt --label demo --url https://example.com
 
@@ -36,10 +37,11 @@ import threading
 import grpc
 
 from capture_chrome import platform
-from capture_sdk import prompt
+from capture_sdk import paths, prompt
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
+from capture_sdk.state import Store
 
 _SENTINEL = object()
 
@@ -49,25 +51,43 @@ _BUILTIN_PROFILE = object()
 
 # Named persistent custom profiles live here so a capture's logins/state survive
 # across runs; the user picks an existing one or creates a new named one.
-_PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
+_PROFILES_DIR = str(paths.home() / "chrome-profiles")
+# Pre-relocation location, migrated into _PROFILES_DIR on first use.
+_LEGACY_PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
+
+
+def _profiles_dir() -> str:
+    """The persistent-profiles dir, creating it and migrating any legacy profiles
+    (from ~/.capture-chrome/profiles) into it on first use."""
+    os.makedirs(_PROFILES_DIR, exist_ok=True)
+    if os.path.isdir(_LEGACY_PROFILES_DIR):
+        for name in os.listdir(_LEGACY_PROFILES_DIR):
+            src = os.path.join(_LEGACY_PROFILES_DIR, name)
+            dst = os.path.join(_PROFILES_DIR, name)
+            if not os.path.exists(dst):
+                os.rename(src, dst)
+    return _PROFILES_DIR
 
 
 # --- interactive prompts -------------------------------------------------
 
-def _pick_chrome() -> str:
+def _pick_chrome(store: Store) -> str:
     """Step 1: show discovered Chrome/Chromium binaries and pick one."""
     bins = platform.chrome_binaries()
     if not bins:
         print("no Chrome/Chromium found on PATH")
-        return prompt.text("Chrome binary path")
-    choice = prompt.select("Chrome to use:", bins + [("custom path…", "__custom__")])
-    return prompt.text("Chrome binary path") if choice == "__custom__" else choice
+        return store.remember("chrome", prompt.text("Chrome binary path"))
+    default = store.get_valid("chrome", bins)
+    choice = prompt.select("Chrome to use:", bins + [("custom path…", "__custom__")],
+                           default=default)
+    chrome = prompt.text("Chrome binary path") if choice == "__custom__" else choice
+    return store.remember("chrome", chrome)
 
 
-def _pick_profile(chrome: str):
+def _pick_profile(chrome: str, store: Store):
     """Step 2: pick the profile. Returns one of: a (user_data_dir, profile_directory)
     tuple for an existing profile of this browser; a path string used as --user-data-dir
-    (fresh temp or a named persistent profile under ~/.capture-chrome/profiles); or
+    (fresh temp or a named persistent profile under ~/.traffic-deck/chrome-profiles); or
     _BUILTIN_PROFILE to launch with no --user-data-dir (the browser's own default)."""
     discovered = platform.chrome_profiles(chrome)
     options = []
@@ -76,41 +96,47 @@ def _pick_profile(chrome: str):
     options += [
         ("browser default profile", "default"),
         ("temporary new empty profile", "temp"),
-        ("custom persistent profile (~/.capture-chrome/profiles)", "custom"),
+        ("custom persistent profile (~/.traffic-deck/chrome-profiles)", "custom"),
     ]
-    choice = prompt.select("Profile:", options)
+    choice = prompt.select("Profile:", options,
+                           default=store.get_valid("profile_kind", [v for _, v in options]))
+    store.remember("profile_kind", choice)
     if choice == "existing":
-        return _pick_existing_profile(chrome, discovered)
+        return _pick_existing_profile(chrome, discovered, store)
     if choice == "default":
         print(f"note: uses {os.path.basename(chrome)}'s own default profile — quit any "
               "running instance of it first, or no TLS keys are logged")
         return _BUILTIN_PROFILE
     if choice == "temp":
         return tempfile.mkdtemp(prefix="chrome-capture-")
-    return _pick_persistent_profile()
+    return _pick_persistent_profile(store)
 
 
-def _pick_existing_profile(chrome: str, discovered: list[tuple[str, str, str]]):
+def _pick_existing_profile(chrome: str, discovered: list[tuple[str, str, str]], store: Store):
     """Pick one of the browser's own discovered profiles; returns (user_data_dir,
     profile_directory) to launch with --user-data-dir + --profile-directory."""
-    choice = prompt.select("Existing profile:",
-                           [(f"{label}  [{dirn}]", (udd, dirn)) for udd, dirn, label in discovered])
+    choices = [(f"{label}  [{dirn}]", (udd, dirn)) for udd, dirn, label in discovered]
+    choice = prompt.select("Existing profile:", choices,
+                           default=store.get_valid("existing_profile", [v for _, v in choices]))
+    store.remember("existing_profile", choice)
     print(f"note: uses {os.path.basename(chrome)}'s real profile — quit any running "
           "instance of it first, or no TLS keys are logged")
     return choice
 
 
-def _pick_persistent_profile() -> str:
+def _pick_persistent_profile(store: Store) -> str:
     """Choose one of the saved persistent profiles, or create a new named one."""
-    os.makedirs(_PROFILES_DIR, exist_ok=True)
-    existing = sorted(d for d in os.listdir(_PROFILES_DIR)
-                      if os.path.isdir(os.path.join(_PROFILES_DIR, d)))
-    choice = prompt.select("Custom persistent profile:", existing + [("＋ create new…", "__new__")])
+    profiles_dir = _profiles_dir()
+    existing = sorted(d for d in os.listdir(profiles_dir)
+                      if os.path.isdir(os.path.join(profiles_dir, d)))
+    choice = prompt.select("Custom persistent profile:", existing + [("＋ create new…", "__new__")],
+                           default=store.get_valid("profile_name", existing))
     if choice == "__new__":
-        name = prompt.text("New profile name", "default")
+        name = prompt.text("New profile name", store.get("profile_name") or "default")
     else:
         name = choice
-    path = os.path.join(_PROFILES_DIR, name)
+    store.remember("profile_name", name)
+    path = os.path.join(profiles_dir, name)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -198,11 +224,13 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     # Interactive by default in a terminal: pick the Chrome binary and profile unless
-    # they were given as flags (or prompting was disabled / there's no TTY).
+    # they were given as flags (or prompting was disabled / there's no TTY). The pickers
+    # default to the previous run's choices, remembered under ~/.traffic-deck/state.
     interactive = not args.no_prompt and sys.stdin.isatty()
+    store = Store("chrome")
     chrome = args.chrome or os.environ.get("CHROME_BIN")
     if not chrome:
-        chrome = _pick_chrome() if interactive else platform.chrome_binary()
+        chrome = _pick_chrome(store) if interactive else platform.chrome_binary()
     # profile is a path (→ --user-data-dir), a (user_data_dir, profile_directory) tuple
     # for a specific profile, or _BUILTIN_PROFILE (no flag → the browser's own default).
     if args.default_profile:
@@ -211,7 +239,7 @@ def main(argv=None) -> None:
         profile = (args.profile_dir, args.profile_directory) if args.profile_directory \
             else args.profile_dir
     elif interactive:
-        profile = _pick_profile(chrome)
+        profile = _pick_profile(chrome, store)
     else:
         profile = tempfile.mkdtemp(prefix="chrome-capture-")
 
