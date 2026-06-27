@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 import grpc
 
@@ -41,6 +42,7 @@ from capture_sdk import paths, prompt
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
+from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.state import Store
 
 _SENTINEL = object()
@@ -139,6 +141,18 @@ def _pick_persistent_profile(store: Store) -> str:
     path = os.path.join(profiles_dir, name)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _wait_for_stop(proc: subprocess.Popen, duration: float | None,
+                   stop: threading.Event) -> None:
+    """Block until Chrome exits, `duration` elapses, or a graceful stop is requested
+    (first Ctrl-C sets `stop`). Polls so the request is seen promptly without the
+    handler having to raise — keeping in-flight teardown intact."""
+    deadline = (time.monotonic() + duration) if duration else None
+    while proc.poll() is None:
+        if stop.is_set() or (deadline and time.monotonic() >= deadline):
+            break
+        time.sleep(0.2)
 
 
 def _reader_thread(stdout, q: queue.Queue, stop: threading.Event) -> None:
@@ -299,38 +313,48 @@ def main(argv=None) -> None:
         chrome_cmd.append(args.url)
 
     if args.duration:
-        print(f"launching Chrome (auto-stop in {args.duration:g}s) …", flush=True)
+        print(f"launching Chrome (auto-stop in {args.duration:g}s; Ctrl-C to stop early) …",
+              flush=True)
     else:
-        print("launching Chrome (close it to finish capture) …", flush=True)
+        print("launching Chrome (close it or press Ctrl-C to finish capture) …", flush=True)
     chrome_proc = subprocess.Popen(chrome_cmd)
+    # First Ctrl-C stops the capture and closes the session below; a second aborts.
     try:
-        chrome_proc.wait(timeout=args.duration)
-    except subprocess.TimeoutExpired:
-        pass  # --duration elapsed
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if chrome_proc.poll() is None:
-            chrome_proc.terminate()
+        with GracefulInterrupt() as interrupt:
             try:
-                chrome_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                chrome_proc.kill()
-        # Stop capture: terminate dumpcap, drain producers, end the upload stream.
-        stop.set()
-        dump.terminate()
-        try:
-            dump.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            dump.kill()
-        rt.join(timeout=5)
-        kt.join(timeout=5)
-        q.put(_SENTINEL)
-        ut.join(timeout=30)
-        if a := ack.get("ack"):
-            print(f"uploaded pcap={a.pcap_received}B keylog={a.keylog_received}B", flush=True)
-        summary = ing.CloseSession(ip.CloseSessionRequest(session_id=sid))
-        print(f"closed session {sid}: {summary.session.flow_count} flows", flush=True)
+                _wait_for_stop(chrome_proc, args.duration, interrupt.event)
+            finally:
+                # Fast teardown first: stop Chrome + dumpcap so nothing keeps recording,
+                # even if a second Ctrl-C aborts the (slower) upload drain that follows.
+                if chrome_proc.poll() is None:
+                    chrome_proc.terminate()
+                    try:
+                        chrome_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        chrome_proc.kill()
+                stop.set()
+                dump.terminate()
+                try:
+                    dump.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    dump.kill()
+                rt.join(timeout=5)
+                kt.join(timeout=5)
+                q.put(_SENTINEL)
+                # Drain the upload and close the session. A second Ctrl-C raises through
+                # here (Chrome/dumpcap already stopped) so the process exits at once.
+                try:
+                    ut.join(timeout=30)
+                    if a := ack.get("ack"):
+                        print(f"uploaded pcap={a.pcap_received}B keylog={a.keylog_received}B",
+                              flush=True)
+                    summary = ing.CloseSession(ip.CloseSessionRequest(session_id=sid))
+                    print(f"closed session {sid}: {summary.session.flow_count} flows", flush=True)
+                except KeyboardInterrupt:
+                    print("aborted — session left open (gateway closes it on timeout)", flush=True)
+                    raise
+    except KeyboardInterrupt:
+        sys.exit(130)
 
 
 if __name__ == "__main__":

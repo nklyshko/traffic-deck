@@ -22,6 +22,7 @@ from capture_android.frida_server import frida_device
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
+from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.upload import SENTINEL, capture_chunks
 
 _KEYLOG_SCRIPT = Path(__file__).resolve().parent / "frida_sslkeylog.js"
@@ -83,115 +84,126 @@ def run_capture(
     keys = {"n": 0}
     tcpdump = rt = ut = pid = None
     ack: dict = {}
+    result: CaptureResult | None = None
     # Everything after the NFLOG rules go in: a try/finally so the rules + tcpdump are
     # always torn down — even if Frida fails to spawn (common on locked-down devices).
+    # First Ctrl-C requests a graceful stop (the loop breaks and the session is closed);
+    # a second Ctrl-C raises through and aborts.
+    interrupt = GracefulInterrupt()
     for rule in add_rules:
         adb.sh_root(" ".join(rule))
-    try:
-        # On-device tcpdump on the app's NFLOG group (as root). exec-out keeps stdout
-        # raw; the device-side 2>/dev/null drops tcpdump's "listening on …" banner (it
-        # would corrupt the first pcap record).
-        tcpdump = subprocess.Popen(
-            adb.execout_root_argv(f"tcpdump -i nflog:{nflog_group} -U -s 0 -w - 2>/dev/null"),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        rt = threading.Thread(target=_tcpdump_reader, args=(tcpdump.stdout, q, stop), daemon=True)
-        rt.start()
+    with interrupt:
+        try:
+            # On-device tcpdump on the app's NFLOG group (as root). exec-out keeps stdout
+            # raw; the device-side 2>/dev/null drops tcpdump's "listening on …" banner (it
+            # would corrupt the first pcap record).
+            tcpdump = subprocess.Popen(
+                adb.execout_root_argv(f"tcpdump -i nflog:{nflog_group} -U -s 0 -w - 2>/dev/null"),
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            rt = threading.Thread(target=_tcpdump_reader, args=(tcpdump.stdout, q, stop), daemon=True)
+            rt.start()
 
-        def upload():
-            ack["ack"] = ing.UploadCapture(capture_chunks(sid, q, max_chunk, upload_id="android"))
-        ut = threading.Thread(target=upload, daemon=True)
-        ut.start()
+            def upload():
+                ack["ack"] = ing.UploadCapture(capture_chunks(sid, q, max_chunk, upload_id="android"))
+            ut = threading.Thread(target=upload, daemon=True)
+            ut.start()
 
-        # Frida: hook the app's (and its <pkg>:child processes') TLS for the key.log.
-        device = frida_device(adb.serial)
-        hooked: set[int] = set()
-        sessions: list = []
+            # Frida: hook the app's (and its <pkg>:child processes') TLS for the key.log.
+            device = frida_device(adb.serial)
+            hooked: set[int] = set()
+            sessions: list = []
 
-        def on_message(message, _data):
-            if message.get("type") == "send":
-                p = message.get("payload") or {}
-                if p.get("type") == "keylog":
-                    q.put(("keylog", (p["line"] + "\n").encode()))
-                    keys["n"] += 1
-                elif p.get("type") == "log":
-                    log(f"[frida] {p.get('message')}")
-            elif message.get("type") == "error":
-                log(f"[frida-error] {message.get('description')}")
+            def on_message(message, _data):
+                if message.get("type") == "send":
+                    p = message.get("payload") or {}
+                    if p.get("type") == "keylog":
+                        q.put(("keylog", (p["line"] + "\n").encode()))
+                        keys["n"] += 1
+                    elif p.get("type") == "log":
+                        log(f"[frida] {p.get('message')}")
+                elif message.get("type") == "error":
+                    log(f"[frida-error] {message.get('description')}")
 
-        def hook(target_pid: int) -> None:
-            if target_pid in hooked:
-                return
-            hooked.add(target_pid)
-            s = device.attach(target_pid)
-            for src in scripts:
-                sc = s.create_script(src)
-                sc.on("message", on_message)
-                sc.load()
-                sessions.append((s, sc))
+            def hook(target_pid: int) -> None:
+                if target_pid in hooked:
+                    return
+                hooked.add(target_pid)
+                s = device.attach(target_pid)
+                for src in scripts:
+                    sc = s.create_script(src)
+                    sc.on("message", on_message)
+                    sc.load()
+                    sessions.append((s, sc))
 
-        def belongs(name: str) -> bool:
-            return name == package or name.startswith(package + ":")
+            def belongs(name: str) -> bool:
+                return name == package or name.startswith(package + ":")
 
-        if attach:
-            hook(device.get_process(package).pid)
-        else:
-            pid = device.spawn([package])
-            hook(pid)  # hook the main process before it runs
-            device.resume(pid)
-        if url:
-            time.sleep(1.0)
-            adb.shell("am", "start", "-a", "android.intent.action.VIEW", "-d", url, package)
+            if attach:
+                hook(device.get_process(package).pid)
+            else:
+                pid = device.spawn([package])
+                hook(pid)  # hook the main process before it runs
+                device.resume(pid)
+            if url:
+                time.sleep(1.0)
+                adb.shell("am", "start", "-a", "android.intent.action.VIEW", "-d", url, package)
 
-        def watch_children() -> None:
-            while not stop.is_set():
+            def watch_children() -> None:
+                while not stop.is_set():
+                    try:
+                        for p in device.enumerate_processes():
+                            if belongs(p.name):
+                                hook(p.pid)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    time.sleep(0.5)
+            threading.Thread(target=watch_children, daemon=True).start()
+
+            log(f"capturing {package}" + (f" (auto-stop in {duration:g}s)" if duration else " (Ctrl-C to stop)"))
+            deadline = (time.monotonic() + duration) if duration else None
+            while True:
+                if deadline and time.monotonic() >= deadline:
+                    break
+                if interrupt.stopping or (stop_event and stop_event.is_set()):
+                    break
+                time.sleep(0.3)
+        except Exception as exc:  # noqa: BLE001 — surface (don't swallow) e.g. a Frida spawn failure
+            log(f"capture error: {type(exc).__name__}: {exc}")
+        finally:
+            # Fast teardown first: stop frida + tcpdump and remove the NFLOG rules so
+            # nothing keeps recording, even if a second Ctrl-C aborts the drain below.
+            if pid is not None:
                 try:
-                    for p in device.enumerate_processes():
-                        if belongs(p.name):
-                            hook(p.pid)
+                    frida_device(adb.serial).kill(pid)
                 except Exception:  # noqa: BLE001
                     pass
-                time.sleep(0.5)
-        threading.Thread(target=watch_children, daemon=True).start()
-
-        log(f"capturing {package}" + (f" (auto-stop in {duration:g}s)" if duration else " (Ctrl-C to stop)"))
-        deadline = (time.monotonic() + duration) if duration else None
-        while True:
-            if deadline and time.monotonic() >= deadline:
-                break
-            if stop_event and stop_event.is_set():
-                break
-            time.sleep(0.3)
-    except KeyboardInterrupt:
-        pass
-    except Exception as exc:  # noqa: BLE001 — surface (don't swallow) e.g. a Frida spawn failure
-        log(f"capture error: {type(exc).__name__}: {exc}")
-    finally:
-        if pid is not None:
+            stop.set()
+            if tcpdump is not None:
+                tcpdump.terminate()
+            adb.sh_root("pkill tcpdump", check=False)
+            for rule in teardown_rules:  # always remove our NFLOG rules
+                adb.sh_root(" ".join(rule), check=False)
+            if tcpdump is not None:
+                try:
+                    tcpdump.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    tcpdump.kill()
+            if rt is not None:
+                rt.join(timeout=5)
+            q.put(SENTINEL)
+            # Drain the upload and close the session. A second Ctrl-C raises through here
+            # (frida/tcpdump are already stopped) so the process exits at once.
             try:
-                frida_device(adb.serial).kill(pid)
-            except Exception:  # noqa: BLE001
-                pass
-        stop.set()
-        if tcpdump is not None:
-            tcpdump.terminate()
-        adb.sh_root("pkill tcpdump", check=False)
-        for rule in teardown_rules:  # always remove our NFLOG rules
-            adb.sh_root(" ".join(rule), check=False)
-        if tcpdump is not None:
-            try:
-                tcpdump.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                tcpdump.kill()
-        if rt is not None:
-            rt.join(timeout=5)
-        q.put(SENTINEL)
-        if ut is not None:
-            ut.join(timeout=30)
-        a = ack.get("ack")
-        pcap_bytes = a.pcap_received if a else 0
-        if a:
-            log(f"uploaded pcap={a.pcap_received}B keylog={a.keylog_received}B ({keys['n']} secrets)")
-        summary = ing.CloseSession(ip.CloseSessionRequest(session_id=sid))
-        log(f"closed session {sid}: {summary.session.flow_count} flows")
-        result = CaptureResult(sid, summary.session.flow_count, keys["n"], pcap_bytes)
+                if ut is not None:
+                    ut.join(timeout=30)
+                a = ack.get("ack")
+                pcap_bytes = a.pcap_received if a else 0
+                if a:
+                    log(f"uploaded pcap={a.pcap_received}B keylog={a.keylog_received}B ({keys['n']} secrets)")
+                summary = ing.CloseSession(ip.CloseSessionRequest(session_id=sid))
+                log(f"closed session {sid}: {summary.session.flow_count} flows")
+                result = CaptureResult(sid, summary.session.flow_count, keys["n"], pcap_bytes)
+            except KeyboardInterrupt:
+                log("aborted — session left open (gateway closes it on timeout)")
+                raise
     return result
