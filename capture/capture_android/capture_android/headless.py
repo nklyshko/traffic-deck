@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 from capture_android.adb import AdbClient
 from capture_android.capture import run_capture
@@ -36,9 +37,12 @@ def main(argv=None) -> None:
 
     adb = AdbClient(serial=args.serial)
     ensure_target_ready(adb)
-    run_capture(adb, args.package, gateway=args.gateway, label=args.label, url=args.url,
-                duration=args.duration, extra_scripts=args.script,
-                nflog_group=args.nflog_group, mark=args.mark, attach=args.attach)
+    try:
+        run_capture(adb, args.package, gateway=args.gateway, label=args.label, url=args.url,
+                    duration=args.duration, extra_scripts=args.script,
+                    nflog_group=args.nflog_group, mark=args.mark, attach=args.attach)
+    except KeyboardInterrupt:  # second Ctrl-C — abort without a traceback
+        sys.exit(130)
 
 
 if __name__ == "__main__":
