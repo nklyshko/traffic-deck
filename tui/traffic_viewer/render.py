@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import sys
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -106,6 +107,64 @@ def format_body(content_type: str, data: bytes, limit: int) -> Content:
                 Content.from_markup("[cyan]$k[/cyan] = $v", k=k, v=v) for k, v in pairs)
 
     return _plain_truncated(text, limit, len(data))
+
+
+def is_text(data: bytes) -> bool:
+    """Whether a body decodes as UTF-8 (so it can be shown/edited as text)."""
+    try:
+        data.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+# Map a content-type to a file suffix so an external editor can syntax-highlight a
+# body opened outside the TUI. Order matters: more specific needles first.
+_CT_SUFFIX = [
+    ("json", ".json"),
+    ("html", ".html"),
+    ("xml", ".xml"),
+    ("javascript", ".js"),
+    ("css", ".css"),
+    ("csv", ".csv"),
+]
+
+
+def editor_suffix(content_type: str, data: bytes) -> str:
+    ct = (content_type or "").lower()
+    for needle, suf in _CT_SUFFIX:
+        if needle in ct:
+            return suf
+    if ct.startswith("text/") or "x-www-form-urlencoded" in ct:
+        return ".txt"
+    return ".txt" if is_text(data) else ".bin"
+
+
+def body_for_editor(content_type: str, data: bytes) -> bytes:
+    """Bytes to write to the temp file an editor opens. JSON is pretty-printed
+    (minified JSON is unreadable, which is exactly the large-body case); anything
+    else is written verbatim so the editor shows the true bytes."""
+    ct = (content_type or "").lower()
+    if "json" in ct or data.lstrip()[:1] in (b"{", b"["):
+        try:
+            obj = json.loads(data)
+        except ValueError:
+            return data
+        return json.dumps(obj, indent=2, ensure_ascii=False).encode("utf-8")
+    return data
+
+
+def editor_command(path: str) -> tuple[list[str], bool]:
+    """Resolve a command to open `path`. Returns (argv, is_terminal).
+
+    A terminal editor ($VISUAL/$EDITOR) runs in the same terminal and needs the
+    TUI suspended while it's open; the GUI fallback (xdg-open/open) launches a
+    separate program and must NOT suspend the TUI."""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if editor:
+        return shlex.split(editor) + [path], True
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    return [opener, path], False
 
 
 def flags_cell(f, selected: bool) -> Text:

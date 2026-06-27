@@ -93,6 +93,56 @@ def test_format_body_truncates_large_json():
     assert len(c.plain) < 200
 
 
+# --- editor handoff helpers -----------------------------------------------
+
+def test_is_text():
+    assert render.is_text(b'{"k":1}') is True
+    assert render.is_text(b"\xff\xfe\xfd") is False
+
+
+def test_editor_suffix_by_content_type():
+    assert render.editor_suffix("application/json; charset=utf-8", b"{}") == ".json"
+    assert render.editor_suffix("text/html", b"<x>") == ".html"
+    assert render.editor_suffix("application/xml", b"<x/>") == ".xml"
+    assert render.editor_suffix("application/javascript", b"x") == ".js"
+    assert render.editor_suffix("text/plain", b"hi") == ".txt"
+    assert render.editor_suffix("application/x-www-form-urlencoded", b"a=1") == ".txt"
+
+
+def test_editor_suffix_sniffs_when_content_type_unknown():
+    assert render.editor_suffix("application/octet-stream", b"plain text") == ".txt"
+    assert render.editor_suffix("application/octet-stream", b"\xff\xfe") == ".bin"
+
+
+def test_body_for_editor_pretty_prints_json():
+    out = render.body_for_editor("application/json", b'{"b":2,"a":1}')
+    assert out == b'{\n  "b": 2,\n  "a": 1\n}'
+
+
+def test_body_for_editor_sniffs_json_without_content_type():
+    assert render.body_for_editor("", b"  [1,2]").startswith(b"[\n")
+
+
+def test_body_for_editor_passes_through_non_json():
+    assert render.body_for_editor("text/plain", b"hello [x]") == b"hello [x]"
+    assert render.body_for_editor("application/json", b"{bad") == b"{bad"  # invalid → verbatim
+
+
+def test_editor_command_prefers_env_editor(monkeypatch):
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim -R")
+    argv, terminal = render.editor_command("/tmp/x.json")
+    assert argv == ["vim", "-R", "/tmp/x.json"] and terminal is True
+
+
+def test_editor_command_falls_back_to_gui_opener(monkeypatch):
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    argv, terminal = render.editor_command("/tmp/x.json")
+    assert argv[-1] == "/tmp/x.json" and argv[0] in ("xdg-open", "open")
+    assert terminal is False
+
+
 # --- flow-table flags cell ------------------------------------------------
 
 def test_flags_cell():
