@@ -20,11 +20,14 @@ def _ask(question):
     return answer
 
 
-def _to_choices(choices: Sequence):
+def _to_choices(choices: Sequence, checked: Sequence = ()):
+    checked = set(checked)
     out = []
     for c in choices:
         if isinstance(c, tuple):
-            out.append(questionary.Choice(title=c[0], value=c[1]))
+            out.append(questionary.Choice(title=c[0], value=c[1], checked=c[1] in checked))
+        elif c in checked:
+            out.append(questionary.Choice(title=c, value=c, checked=True))
         else:
             out.append(c)
     return out
@@ -38,11 +41,12 @@ def select(message: str, choices: Sequence, default=None):
     return _ask(questionary.select(message, choices=_to_choices(choices), **kwargs))
 
 
-def checkbox(message: str, choices: Sequence) -> list:
-    """Multi-select (space to toggle, enter to confirm); returns chosen values ([] if none)."""
+def checkbox(message: str, choices: Sequence, checked: Sequence = ()) -> list:
+    """Multi-select (space to toggle, enter to confirm); returns chosen values ([] if
+    none). `checked` pre-selects matching choice values (e.g. last run's picks)."""
     if not choices:
         return []
-    return _ask(questionary.checkbox(message, choices=_to_choices(choices)))
+    return _ask(questionary.checkbox(message, choices=_to_choices(choices, checked)))
 
 
 def text(message: str, default: str = "") -> str:
