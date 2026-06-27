@@ -3,8 +3,10 @@ message timeline, and side-by-side compare."""
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import os
+import tempfile
 from datetime import datetime
 
 from textual import work
@@ -21,12 +23,15 @@ from .filters import compile_filter
 from .render import (
     MARK_COLORS,
     SESSION_STATUS,
+    body_for_editor,
     bytes_preview,
     curl,
+    editor_command,
+    editor_suffix,
     flags_cell,
     fmt_time,
     format_body,
-    hexdump,
+    is_text,
     raw_message,
 )
 
@@ -523,6 +528,8 @@ class FlowsScreen(Screen):
 class FlowDetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
+        Binding("b", "view_request", "View req body"),
+        Binding("B", "view_response", "View resp body"),
         Binding("r", "save_request", "Save req body"),
         Binding("s", "save_response", "Save resp body"),
         Binding("x", "export_curl", "Export curl"),
@@ -607,6 +614,25 @@ class FlowDetailScreen(Screen):
             fp.write(resp)
         self.notify(f"wrote {rp} and {sp}")
 
+    def action_view_request(self) -> None:
+        self._view_body(response=False)
+
+    def action_view_response(self) -> None:
+        self._view_body(response=True)
+
+    def _view_body(self, response: bool) -> None:
+        """Open the full, formatted+highlighted body in a dedicated viewer (which
+        falls back to the system editor for bodies too large to show in the TUI)."""
+        if self._flow is None:
+            return
+        label = "response" if response else "request"
+        body = self._flow.response_body if response else self._flow.request_body
+        if body is None or body.size == 0:
+            self.notify(f"no {label} body", severity="warning")
+            return
+        self.app.push_screen(BodyScreen(
+            self.session_id, self.flow_id, body.content_type, response, self.flow_id[:8]))
+
     @work(exclusive=True)
     async def action_save_request(self) -> None:
         await self._save_body(response=False, label="request")
@@ -632,7 +658,7 @@ class FlowDetailScreen(Screen):
     def _format_flow(self, f) -> Content:
         # Build a Textual Content with $-substitution for all flow-derived text:
         # values are inserted literally, never reparsed as markup (a stray '[' / byte
-        # sequence in a header or body must not raise MarkupError — see _render_payload).
+        # sequence in a header or body must not raise MarkupError).
         cls = type(self)
         lines: list[Content] = []
         url = f"{f.scheme or 'https'}://{f.authority}{f.path}"
@@ -653,12 +679,12 @@ class FlowDetailScreen(Screen):
         lines.append(Content.from_markup("[b u]Request headers[/b u]"))
         for h in f.request_headers:
             lines.append(Content.from_markup("  [cyan]$n[/cyan]: $val", n=h.name, val=h.value))
-        cls._append_body(lines, "Request body", f.request_body, "r")
+        cls._append_body(lines, "Request body", f.request_body, "r", "b")
         lines.append(Content(""))
         lines.append(Content.from_markup("[b u]Response headers[/b u]"))
         for h in f.response_headers:
             lines.append(Content.from_markup("  [green]$n[/green]: $val", n=h.name, val=h.value))
-        cls._append_body(lines, "Response body", f.response_body, "s")
+        cls._append_body(lines, "Response body", f.response_body, "s", "B")
         return Content("\n").join(lines)
 
     def _append_annotations(self, lines: list[Content], f) -> None:
@@ -682,18 +708,20 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup("  [dim]💬[/dim] $body", body=c.body))
 
     @classmethod
-    def _append_body(cls, lines: list[Content], title: str, body, save_key: str) -> None:
+    def _append_body(cls, lines: list[Content], title: str, body, save_key: str,
+                     view_key: str) -> None:
         if body is None or body.size == 0:
             return
         meta = f"{body.content_type or '?'} · {body.size} bytes"
         lines.append(Content(""))
         lines.append(Content.from_markup(
-            "[b u]$title[/b u] [dim]$meta · press $key to save[/dim]",
-            title=title, meta=meta, key=save_key))
+            "[b u]$title[/b u] [dim]$meta · press $vkey to view · $key to save[/dim]",
+            title=title, meta=meta, key=save_key, vkey=view_key))
         if body.WhichOneof("content") != "inline":
             lines.append(Content.from_markup(
-                "  [dim]large body — press $key to save the full $size bytes[/dim]",
-                key=save_key, size=str(body.size)))
+                "  [dim]large body — press $vkey to view (opens your editor) · "
+                "$key to save the full $size bytes[/dim]",
+                key=save_key, vkey=view_key, size=str(body.size)))
             return
         data = body.inline
         try:
@@ -703,6 +731,149 @@ class FlowDetailScreen(Screen):
                 "  [dim]$txt[/dim]", txt=f"[binary {len(data)} bytes — press {save_key} to save]"))
             return
         lines.append(format_body(body.content_type, data, cls._BODY_RENDER_LIMIT))
+
+
+class _PayloadView(Screen):
+    """Shared full-payload viewer for HTTP request/response bodies and WebSocket
+    frames. Text under `_VIEW_LIMIT` is formatted + syntax-highlighted in place
+    (JSON reindented, form bodies as key/value lines); larger text is written to a
+    temp file and opened in the system editor ($VISUAL/$EDITOR, else xdg-open/open)
+    — automatically on open, and again on `o`. Binary is hex-dumped, or for large
+    payloads left for `s` to save. Subclasses supply the bytes (`_fetch`), the
+    content-type, and naming (`_what` / `_subtitle` / `_file_stem`)."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("o", "open_editor", "Open in editor"),
+        Binding("s", "save", "Save"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    # Above this many decoded bytes we don't render in the TUI; hand off to an editor.
+    _VIEW_LIMIT = 256_000
+
+    _content_type: str = ""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._data = b""
+
+    # --- subclass hooks -------------------------------------------------------
+    async def _fetch(self) -> bytes:
+        raise NotImplementedError
+
+    @property
+    def _what(self) -> str:  # noun used in notifications ("request body", "payload")
+        return "body"
+
+    @property
+    def _subtitle(self) -> str:
+        return self._what
+
+    @property
+    def _file_stem(self) -> str:  # base name for temp + saved files
+        return "payload"
+
+    # --- shared behaviour -----------------------------------------------------
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll(id="payload"):
+            yield Static("loading…", id="pbody")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "TrafficDeck"
+        self.sub_title = self._subtitle
+        self.load()
+
+    @work(exclusive=True)
+    async def load(self) -> None:
+        self._data = await self._fetch()
+        body = self.query_one("#pbody", Static)
+        if not self._data:
+            body.update(Content.from_markup("[dim]empty $what[/dim]", what=self._what))
+            return
+        n = len(self._data)
+        if n > self._VIEW_LIMIT:
+            if is_text(self._data):
+                body.update(Content.from_markup(
+                    "[dim]large $what — $n bytes — opening in your editor…\n"
+                    "press o to reopen · s to save[/dim]", what=self._what, n=str(n)))
+                self._open_external()
+            else:
+                body.update(Content.from_markup(
+                    "[dim]large binary $what — $n bytes — press s to save[/dim]",
+                    what=self._what, n=str(n)))
+            return
+        body.update(format_body(self._content_type, self._data, self._VIEW_LIMIT))
+
+    def action_open_editor(self) -> None:
+        self._open_external()
+
+    @work(exclusive=True, group="editor")
+    async def _open_external(self) -> None:
+        if not self._data:
+            self.notify(f"empty {self._what}", severity="warning")
+            return
+        content = body_for_editor(self._content_type, self._data)
+        suffix = editor_suffix(self._content_type, self._data)
+        fd, path = tempfile.mkstemp(prefix=f"trafficdeck-{self._file_stem}-", suffix=suffix)
+        with os.fdopen(fd, "wb") as fp:
+            fp.write(content)
+        cmd, terminal = editor_command(path)
+        try:
+            if terminal:
+                # Terminal editor shares this terminal: suspend the TUI while it runs.
+                with self.app.suspend():
+                    proc = await asyncio.create_subprocess_exec(*cmd)
+                    await proc.wait()
+            else:
+                # GUI opener launches a separate program — don't suspend, don't wait.
+                await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        except OSError as exc:
+            self.notify(f"could not open editor ({cmd[0]}): {exc}", severity="error")
+            return
+        self.notify(f"opened {self._what} → {path}")
+
+    @work(exclusive=True)
+    async def action_save(self) -> None:
+        path = os.path.abspath(f"{self._file_stem}.bin")
+        with open(path, "wb") as fp:
+            fp.write(self._data)
+        self.notify(f"saved {len(self._data)} bytes → {path}")
+
+
+class BodyScreen(_PayloadView):
+    """Full, formatted + syntax-highlighted view of one HTTP request/response body."""
+
+    def __init__(self, session_id: str, flow_id: str, content_type: str,
+                 response: bool, id_prefix: str) -> None:
+        super().__init__()
+        self.session_id = session_id
+        self.flow_id = flow_id
+        self._content_type = content_type
+        self._response = response
+        self._id_prefix = id_prefix
+        self._label = "response" if response else "request"
+
+    async def _fetch(self) -> bytes:
+        try:
+            return await self.app.client.get_body(self.session_id, self.flow_id, self._response)
+        except Exception:  # noqa: BLE001 (no body / unpersisted)
+            return b""
+
+    @property
+    def _what(self) -> str:
+        return f"{self._label} body"
+
+    @property
+    def _subtitle(self) -> str:
+        return f"{self._label} body · {self._id_prefix}"
+
+    @property
+    def _file_stem(self) -> str:
+        return f"{self._id_prefix}-{self._label}"
 
 
 class WsMessagesScreen(Screen):
@@ -767,59 +938,37 @@ class WsMessagesScreen(Screen):
         self.app.push_screen(WsPayloadScreen(self.session_id, self._msgs[mid]))
 
 
-class WsPayloadScreen(Screen):
-    """Full payload of a single WebSocket frame (UTF-8 text or a hex dump)."""
-
-    BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
-        Binding("s", "save", "Save"),
-        Binding("q", "quit", "Quit"),
-    ]
+class WsPayloadScreen(_PayloadView):
+    """Full payload of a single WebSocket frame — formatted + syntax-highlighted
+    like an HTTP body (text), or hex-dumped (binary), with the same editor handoff
+    for payloads too large to view in the TUI."""
 
     def __init__(self, session_id: str, msg) -> None:
         super().__init__()
         self.session_id = session_id
         self.msg = msg
-        self._data = b""
 
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with VerticalScroll(id="payload"):
-            yield Static("loading…", id="pbody")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self.title = "TrafficDeck"
-        self.sub_title = f"{self.msg.opcode} · {'C→S' if self.msg.from_client else 'S→C'}"
-        self.load()
-
-    @work(exclusive=True)
-    async def load(self) -> None:
+    async def _fetch(self) -> bytes:
         try:
-            self._data = await self.app.client.get_message_body(self.session_id, self.msg.id)
+            return await self.app.client.get_message_body(self.session_id, self.msg.id)
         except Exception:  # noqa: BLE001 (empty payload — e.g. a bare close/ping frame)
-            self._data = self.msg.payload.inline if self.msg.payload else b""
-        self.query_one("#pbody", Static).update(self._render_payload())
+            return self.msg.payload.inline if self.msg.payload else b""
 
-    def _render_payload(self) -> Text:
-        # Build a Rich Text (not a markup string): payload bytes are arbitrary and
-        # must never be parsed as Textual markup (a stray '[' or '<' raises MarkupError).
-        if not self._data:
-            return Text("empty payload", style="dim")
-        try:
-            return Text(self._data.decode("utf-8"))
-        except UnicodeDecodeError:
-            out = Text(f"binary {len(self._data)} bytes — press s to save", style="dim")
-            out.append("\n\n")
-            out.append(hexdump(self._data))
-            return out
+    @property
+    def _content_type(self) -> str:
+        return self.msg.payload.content_type if self.msg.payload else ""
 
-    @work(exclusive=True)
-    async def action_save(self) -> None:
-        path = os.path.abspath(f"{self.msg.id[:8]}.ws.bin")
-        with open(path, "wb") as fp:
-            fp.write(self._data)
-        self.notify(f"saved {len(self._data)} bytes → {path}")
+    @property
+    def _what(self) -> str:
+        return "payload"
+
+    @property
+    def _subtitle(self) -> str:
+        return f"{self.msg.opcode} · {'C→S' if self.msg.from_client else 'S→C'}"
+
+    @property
+    def _file_stem(self) -> str:
+        return f"{self.msg.id[:8]}.ws"
 
 
 class CompareScreen(Screen):

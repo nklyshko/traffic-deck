@@ -5,18 +5,20 @@ covered by test_render.py / test_filters.py."""
 
 from __future__ import annotations
 
-from textual.widgets import DataTable, Input
+from textual.widgets import DataTable, Input, Static
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
 from traffic.v1 import common_pb2 as cp
 from traffic.v1 import viewer_pb2 as vp
 from traffic_viewer.app import TrafficViewerApp
 from traffic_viewer.screens import (
+    BodyScreen,
     ConfirmScreen,
     FlowDetailScreen,
     FlowsScreen,
     SessionsScreen,
     WsMessagesScreen,
+    WsPayloadScreen,
 )
 
 
@@ -159,6 +161,92 @@ async def test_drill_flow_to_detail():
         assert isinstance(app.screen, FlowDetailScreen)
         assert app.screen._flow is not None
         assert app.screen._flow.method == "GET"
+
+
+async def _open_first_flow_detail(pilot):
+    """Navigate sessions → flows → detail of the first flow (f1, GET)."""
+    await settle(pilot)
+    await focus(pilot, "#sessions")
+    await pilot.press("enter")
+    await settle(pilot)
+    await focus(pilot, "#flows")
+    await pilot.press("enter")
+    await settle(pilot)
+
+
+async def test_detail_view_request_body_opens_body_screen():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_first_flow_detail(pilot)
+        assert isinstance(app.screen, FlowDetailScreen)
+        await pilot.press("b")  # view request body
+        await settle(pilot)
+        assert isinstance(app.screen, BodyScreen)
+        assert app.screen._label == "request"
+        assert app.screen._data == b'{"k":1}'
+
+
+async def test_body_view_renders_small_body_inline():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(BodyScreen(SESSION_ID, "f1", "application/json", False, "f1"))
+        await settle(pilot)
+        assert isinstance(app.screen, BodyScreen)
+        rendered = app.screen.query_one("#pbody", Static).render()
+        assert '"k"' in rendered.plain  # JSON pretty-printed inline, not handed off
+
+
+async def test_body_view_opens_editor_for_large_body(monkeypatch):
+    opened = []
+    monkeypatch.setattr(BodyScreen, "_open_external", lambda self: opened.append(self._label))
+    big = b"x" * (BodyScreen._VIEW_LIMIT + 10)
+
+    async def big_body(session_id, flow_id, response):
+        return big
+
+    app = make_app()
+    app.client.get_body = big_body
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(BodyScreen(SESSION_ID, "f1", "text/plain", False, "f1"))
+        await settle(pilot)
+        assert opened == ["request"]  # auto-handed off to the editor
+
+
+async def test_ws_payload_formats_json_inline():
+    app = make_app()
+
+    async def json_body(session_id, message_id):
+        return b'{"a":1,"b":2}'
+
+    app.client.get_message_body = json_body
+    msg = _ws_messages()[0]
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(WsPayloadScreen(SESSION_ID, msg))
+        await settle(pilot)
+        assert isinstance(app.screen, WsPayloadScreen)
+        rendered = app.screen.query_one("#pbody", Static).render()
+        assert '"a"' in rendered.plain and "\n" in rendered.plain  # reindented JSON
+
+
+async def test_ws_payload_opens_editor_for_large_body(monkeypatch):
+    opened = []
+    monkeypatch.setattr(WsPayloadScreen, "_open_external", lambda self: opened.append(self._what))
+    big = b"y" * (WsPayloadScreen._VIEW_LIMIT + 10)
+
+    async def big_msg_body(session_id, message_id):
+        return big
+
+    app = make_app()
+    app.client.get_message_body = big_msg_body
+    msg = _ws_messages()[0]
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(WsPayloadScreen(SESSION_ID, msg))
+        await settle(pilot)
+        assert opened == ["payload"]  # large payload handed off to the editor
 
 
 async def test_open_ws_message_timeline():
