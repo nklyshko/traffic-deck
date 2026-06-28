@@ -1,6 +1,23 @@
 """Unit tests for the device-independent Android adb helpers (no device needed)."""
 import pytest
-from capture_android.adb import frida_arch, parse_app_uid, nflog_rules
+from capture_android import adb as adbmod
+from capture_android.adb import AdbClient, frida_arch, parse_app_uid, nflog_rules
+
+
+def test_start_root_held_detaches_stdin(monkeypatch):
+    # The held frida-server adb client must not inherit the tty, or it raws the terminal
+    # and reads keystrokes away from the prompts / Ctrl-C that follow.
+    captured = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kw):
+            captured["argv"], captured["kw"] = argv, kw
+
+    monkeypatch.setattr(adbmod.subprocess, "Popen", FakePopen)
+    AdbClient(serial="emulator-5554", adb="adb").start_root_held("/data/local/tmp/frida-server")
+    assert captured["kw"].get("stdin") is adbmod.subprocess.DEVNULL
+    assert captured["kw"].get("stdout") is adbmod.subprocess.DEVNULL
+    assert "shell" in captured["argv"]
 
 
 def test_frida_arch():

@@ -28,7 +28,7 @@ from pathlib import Path
 from capture_android import frida_versions
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
-from capture_sdk import paths, prompt
+from capture_sdk import paths, prompt, terminal
 from capture_sdk.state import Store
 
 _DEFAULT_SCRIPTS_DIR = str(paths.home() / "frida-scripts")
@@ -37,8 +37,9 @@ _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android proje
 
 # --- steps ---------------------------------------------------------------
 
-def pick_emulator(sdk: Sdk, store: Store) -> str:
-    """Step 2: choose/boot/create an emulator; returns its adb serial."""
+def pick_emulator(sdk: Sdk, store: Store, headless: bool = False) -> str:
+    """Step 2: choose/boot/create an emulator; returns its adb serial. Boots with a
+    window unless `headless` (e.g. for scripting/CI)."""
     running = [d.serial for d in sdk.connected_devices() if d.emulator and d.state == "device"]
     avds = sdk.list_avds()
     options = ([(f"use running {s}", ("use", s)) for s in running]
@@ -61,7 +62,7 @@ def pick_emulator(sdk: Sdk, store: Store) -> str:
                 raise SystemExit("a system image is required")
         sdk.create_avd(name, DEFAULT_IMAGE)
     print(f"booting {name} …")
-    sdk.boot(name)
+    sdk.boot(name, headless=headless)
     serial = sdk.wait_for_boot()
     print(f"booted {serial}")
     return serial
@@ -134,7 +135,10 @@ def enumerate_app_names(serial: str, fver: str) -> dict[str, str]:
     cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
            "python", "-m", "capture_android.list_apps", "--serial", serial]
     try:
-        out = subprocess.run(cmd, text=True, capture_output=True, timeout=180, check=True).stdout
+        # stdin=DEVNULL: this subprocess's adb/frida calls would otherwise inherit the
+        # controlling tty and leave it in a broken input state, wedging the next prompt.
+        out = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
+                             check=True, stdin=subprocess.DEVNULL).stdout
     except (subprocess.SubprocessError, OSError):
         return {}
     return parse_app_names(out)
@@ -155,6 +159,8 @@ def main(argv=None) -> None:
     ap.add_argument("--all-apps", action="store_true", help="list all packages, not just third-party")
     ap.add_argument("--no-app-names", action="store_true",
                     help="skip resolving app names via Frida (lists package names only)")
+    ap.add_argument("--headless", action="store_true",
+                    help="boot the emulator without a window (default: show it)")
     args = ap.parse_args(argv)
 
     sdk = Sdk(args.sdk)
@@ -166,7 +172,8 @@ def main(argv=None) -> None:
     target = store.remember("target", prompt.select(
         "Capture target:", ["emulator", "device"],
         default=store.get_valid("target", ["emulator", "device"])))
-    serial = pick_emulator(sdk, store) if target == "emulator" else pick_device(sdk, store)
+    serial = (pick_emulator(sdk, store, headless=args.headless)
+              if target == "emulator" else pick_device(sdk, store))
     adb = AdbClient(serial=serial, adb=sdk.adb)
 
     # Step 3: ensure rooted (fail fast; the capture re-checks too).
@@ -189,6 +196,7 @@ def main(argv=None) -> None:
     if not args.no_app_names:
         print(f"resolving app names ({len(pkgs)} apps)…")
         names = enumerate_app_names(serial, fver)
+        terminal.restore()  # heal the tty if the frida subprocess disturbed it
     package = store.remember("package", prompt.select(
         f"App to capture ({len(pkgs)} installed):", app_choices(pkgs, names),
         default=store.get_valid("package", pkgs)))

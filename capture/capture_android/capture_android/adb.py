@@ -142,7 +142,11 @@ class AdbClient:
             su exit and the orphaned server loses its root capability → "jailed").
         """
         argv = self._base() + ["shell", self._root_wrap(f"setsid {cmd} </dev/null >/dev/null 2>&1")]
-        return subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # stdin=DEVNULL: this adb client is held open (and outlives the caller), so an
+        # inherited tty would be put in raw mode and have its keystrokes read away from
+        # the interactive prompts / Ctrl-C that follow.
+        return subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def abi(self) -> str:
         return self.shell("getprop", "ro.product.cpu.abi").strip()

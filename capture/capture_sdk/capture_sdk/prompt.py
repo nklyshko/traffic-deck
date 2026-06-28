@@ -2,15 +2,27 @@
 multi-select, free text, and yes/no — built on questionary. Aborting a prompt
 (Ctrl-C / Esc) raises SystemExit so callers never proceed on a half-made choice.
 
+questionary's prompt_toolkit backend asks the terminal for cursor-position reports
+(CPR) and waits/wedges when the terminal doesn't answer — which some terminals,
+notably IDE-integrated ones, don't. ``PROMPT_TOOLKIT_NO_CPR=1`` tells prompt_toolkit
+to skip the CPR request entirely (the cursor is assumed at column 0, which holds since
+our prompts start on a fresh line), so the arrow-key UI works everywhere without the
+hang or the "terminal doesn't support CPR" warning.
+
 Choices are either plain strings, or ``(label, value)`` tuples when the displayed
 label differs from the value returned.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Sequence
 
 import questionary
+
+# prompt_toolkit reads this when deciding whether to request CPR (at render time);
+# set before any prompt runs. setdefault so an explicit override still wins.
+os.environ.setdefault("PROMPT_TOOLKIT_NO_CPR", "1")
 
 
 def _ask(question):
