@@ -116,17 +116,34 @@ class Sdk:
         return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def wait_for_boot(self, serial: str | None = None, timeout: float = 240) -> str:
-        """Wait for an emulator to finish booting; returns its serial."""
-        base = [self.adb] + (["-s", serial] if serial else [])
-        subprocess.run(base + ["wait-for-device"], check=True)
+        """Wait for an emulator to come online and finish booting, then return its serial.
+
+        Polls until the device is in `device` state and both `sys.boot_completed` and a
+        responsive package manager report ready — boot_completed flips to 1 before pm is
+        serving requests, so a `pm` query immediately after otherwise races and fails.
+        Everything targets a resolved serial (no bare `adb wait-for-device`/`shell`), so
+        it's unaffected by another attached device — those fail with 'more than one
+        device'."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            done = subprocess.run(base + ["shell", "getprop", "sys.boot_completed"],
-                                  text=True, capture_output=True).stdout.strip()
-            if done == "1":
-                if serial:
-                    return serial
-                devs = [d for d in self.connected_devices() if d.emulator and d.state == "device"]
-                return devs[0].serial if devs else "emulator-5554"
+            target = serial or self._emulator_serial()
+            if target and self._system_ready(target):
+                return target
             time.sleep(2)
         raise RuntimeError("emulator did not finish booting in time")
+
+    def _emulator_serial(self) -> str | None:
+        devs = [d for d in self.connected_devices() if d.emulator and d.state == "device"]
+        return devs[0].serial if devs else None
+
+    def _system_ready(self, serial: str) -> bool:
+        """Whether the device has booted and its package manager is serving requests."""
+        base = [self.adb, "-s", serial, "shell"]
+        booted = subprocess.run(base + ["getprop", "sys.boot_completed"],
+                                text=True, capture_output=True).stdout.strip()
+        if booted != "1":
+            return False
+        # `pm path android` is a cheap probe that fails until pm is up (the framework
+        # 'android' package always exists once it is).
+        pm = subprocess.run(base + ["pm", "path", "android"], text=True, capture_output=True)
+        return pm.returncode == 0 and pm.stdout.startswith("package:")
