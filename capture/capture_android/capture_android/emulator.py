@@ -136,6 +136,31 @@ class Sdk:
         devs = [d for d in self.connected_devices() if d.emulator and d.state == "device"]
         return devs[0].serial if devs else None
 
+    def is_running(self, serial: str) -> bool:
+        """Whether `serial` is currently a connected, ready device."""
+        return any(d.serial == serial and d.state == "device"
+                   for d in self.connected_devices())
+
+    def stop_emulator(self, serial: str) -> None:
+        """Shut a running emulator down (`adb emu kill`)."""
+        subprocess.run([self.adb, "-s", serial, "emu", "kill"],
+                       text=True, capture_output=True, check=False)
+
+    def avd_name(self, serial: str) -> str | None:
+        """The AVD backing a running emulator (`adb emu avd name`), or None."""
+        out = subprocess.run([self.adb, "-s", serial, "emu", "avd", "name"],
+                             text=True, capture_output=True, check=False).stdout
+        for line in out.splitlines():
+            line = line.strip()
+            if line and line != "OK":
+                return line
+        return None
+
+    def delete_avd(self, name: str) -> None:
+        """Delete an AVD definition (`avdmanager delete avd`); stop it first."""
+        subprocess.run([self.avdmanager, "delete", "avd", "-n", name],
+                       text=True, capture_output=True, check=False)
+
     def _system_ready(self, serial: str) -> bool:
         """Whether the device has booted and its package manager is serving requests."""
         base = [self.adb, "-s", serial, "shell"]

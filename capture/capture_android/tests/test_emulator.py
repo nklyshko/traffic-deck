@@ -69,6 +69,40 @@ def test_wait_for_boot_times_out(monkeypatch):
         sdk.wait_for_boot(timeout=240)
 
 
+def test_avd_name_parses_emu_output(monkeypatch):
+    sdk = _sdk(monkeypatch)
+    monkeypatch.setattr(emulator.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout="retools\nOK\n", returncode=0))
+    assert sdk.avd_name("emulator-5554") == "retools"
+
+    monkeypatch.setattr(emulator.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout="OK\n", returncode=0))
+    assert sdk.avd_name("emulator-5554") is None
+
+
+def test_stop_and_delete_build_expected_argv(monkeypatch):
+    sdk = _sdk(monkeypatch)
+    monkeypatch.setattr(Sdk, "avdmanager", property(lambda self: "avdmanager"))
+    calls = []
+    monkeypatch.setattr(emulator.subprocess, "run",
+                        lambda argv, **k: calls.append(argv) or types.SimpleNamespace(stdout="", returncode=0))
+    sdk.stop_emulator("emulator-5554")
+    sdk.delete_avd("retools")
+    assert calls[0] == ["adb", "-s", "emulator-5554", "emu", "kill"]
+    assert calls[1] == ["avdmanager", "delete", "avd", "-n", "retools"]
+
+
+def test_is_running(monkeypatch):
+    sdk = _sdk(monkeypatch)
+    monkeypatch.setattr(Sdk, "connected_devices", lambda self: [
+        Device(serial="emulator-5554", state="device", emulator=True)])
+    assert sdk.is_running("emulator-5554") is True
+    assert sdk.is_running("emulator-5556") is False
+    monkeypatch.setattr(Sdk, "connected_devices", lambda self: [
+        Device(serial="emulator-5554", state="offline", emulator=True)])
+    assert sdk.is_running("emulator-5554") is False  # not ready
+
+
 def test_emulator_serial_ignores_real_devices(monkeypatch):
     sdk = _sdk(monkeypatch)
     monkeypatch.setattr(Sdk, "connected_devices", lambda self: [
