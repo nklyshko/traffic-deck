@@ -7,13 +7,17 @@ A frida-free front-end over the capture library. Guided flow:
   3. ensure the target is rooted
   4. pick the frida version — recommended for the device's Android release, picked from
      the latest available (auto-checked on GitHub); v16 and v17 are always offered
-  5. pick the app to capture from the installed list, shown as "App Name (package)" —
-     names are read from the device via Frida (run under the version from step 4), which
-     also starts frida-server so the capture reuses it (--no-app-names lists packages only)
-  6. optionally add Frida scripts (SSL-unpinning / bypass) to load alongside the keylog
 
-It then launches the capture under the chosen frida via `uv run --with frida==<ver>`
-(client and server must match), so the CLI itself never imports frida.
+Then a main menu loops:
+  * Start a capture — pick the app (installed list, shown as "App Name (package)";
+    names come from Frida, which also starts frida-server for the capture to reuse —
+    --no-app-names lists packages only) + optional unpinning scripts + URL, then run it.
+    Ctrl-C stops that capture (graceful, then force on a second Ctrl-C) and returns here.
+  * Stop / Delete emulator — shut it down, or delete the AVD.
+  * Exit — and offer to stop an emulator we booted.
+
+Each capture runs under the chosen frida via `uv run --with frida==<ver>` (client and
+server must match), so the CLI itself never imports frida.
 
   trafficdeck-capture-android
 """
@@ -37,9 +41,10 @@ _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android proje
 
 # --- steps ---------------------------------------------------------------
 
-def pick_emulator(sdk: Sdk, store: Store, headless: bool = False) -> str:
-    """Step 2: choose/boot/create an emulator; returns its adb serial. Boots with a
-    window unless `headless` (e.g. for scripting/CI)."""
+def pick_emulator(sdk: Sdk, store: Store, headless: bool = False) -> tuple[str, str | None]:
+    """Step 2: choose/boot/create an emulator. Returns (serial, booted_avd) where
+    booted_avd is the AVD name iff this call booted/created it (so we own it and can
+    offer to stop it on exit), else None. Boots with a window unless `headless`."""
     running = [d.serial for d in sdk.connected_devices() if d.emulator and d.state == "device"]
     avds = sdk.list_avds()
     options = ([(f"use running {s}", ("use", s)) for s in running]
@@ -49,7 +54,7 @@ def pick_emulator(sdk: Sdk, store: Store, headless: bool = False) -> str:
         "Emulator:", options, default=store.get_valid("emulator", [v for _, v in options])))
 
     if action == "use":
-        return value
+        return value, None
     if action == "boot":
         name = value
     else:
@@ -65,7 +70,7 @@ def pick_emulator(sdk: Sdk, store: Store, headless: bool = False) -> str:
     sdk.boot(name, headless=headless)
     serial = sdk.wait_for_boot()
     print(f"booted {serial}")
-    return serial
+    return serial, name
 
 
 def pick_device(sdk: Sdk, store: Store) -> str:
@@ -150,6 +155,89 @@ def app_choices(packages: list[str], labels: dict[str, str]) -> list[tuple[str, 
     return [(f"{labels[p]}  ({p})" if p in labels else p, p) for p in packages]
 
 
+def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str, args) -> None:
+    """One capture: pick app + scripts + URL, then run the capture as a subprocess and
+    wait. Ctrl-C is owned by the capture (its two-stage stop), so we keep waiting and
+    return to the main menu once it stops, rather than exec'ing and never coming back."""
+    tp = not args.all_apps
+    pkgs = adb.list_packages(third_party=tp)
+    if not pkgs:
+        tp = False
+        pkgs = adb.list_packages(third_party=tp)
+    names: dict[str, str] = {}
+    if not args.no_app_names:
+        print(f"resolving app names ({len(pkgs)} apps)…")
+        names = enumerate_app_names(serial, fver)
+        terminal.restore()  # heal the tty if the frida subprocess disturbed it
+    package = store.remember("package", prompt.select(
+        f"App to capture ({len(pkgs)} installed):", app_choices(pkgs, names),
+        default=store.get_valid("package", pkgs)))
+    scripts = pick_scripts(args.scripts_dir, store)
+    url = store.remember("url", prompt.text(
+        "URL to open in the app (optional)", store.get("url", "")))
+
+    cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
+           "python", "-m", "capture_android.headless",
+           "--serial", serial, "--package", package, "--gateway", args.gateway]
+    if url:
+        cmd += ["--url", url]
+    if args.duration is not None:
+        cmd += ["--duration", str(args.duration)]
+    for s in scripts:
+        cmd += ["--script", s]
+    print(f"\nlaunching capture: {package} under frida {fver}  (Ctrl-C to stop)\n")
+    proc = subprocess.Popen(cmd)
+    while True:
+        try:
+            proc.wait()
+            break
+        except KeyboardInterrupt:
+            continue  # the capture handles Ctrl-C itself; keep waiting for it to stop
+    terminal.restore()  # the capture may have left the tty raw
+    print()
+
+
+def _maybe_stop_emulator(sdk: Sdk, serial: str) -> None:
+    """On exit, offer to stop an emulator we booted ourselves (best-effort)."""
+    if not sdk.is_running(serial):
+        return
+    try:
+        if prompt.confirm(f"Stop emulator {serial}?", default=True):
+            print(f"stopping {serial} …")
+            sdk.stop_emulator(serial)
+    except SystemExit:
+        pass  # Ctrl-C at the prompt → leave it running
+
+
+def _menu_loop(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str, args,
+               is_emulator: bool) -> None:
+    """Main menu: start captures repeatedly, and (for an emulator) stop/delete it."""
+    while True:
+        options = [("Start a capture", "capture")]
+        if is_emulator:
+            options += [("Stop emulator", "stop"), ("Delete emulator (AVD)", "delete")]
+        options.append(("Exit", "exit"))
+        try:
+            choice = prompt.select("Main menu:", options)
+        except SystemExit:
+            return  # Ctrl-C / Esc at the menu → exit
+        if choice == "capture":
+            _run_capture(sdk, adb, store, serial, fver, args)
+        elif choice == "stop":
+            print(f"stopping {serial} …")
+            sdk.stop_emulator(serial)
+            return
+        elif choice == "delete":
+            name = sdk.avd_name(serial)
+            if name and prompt.confirm(f"Delete AVD '{name}'? This erases it.", default=False):
+                print(f"stopping and deleting {name} …")
+                sdk.stop_emulator(serial)
+                sdk.delete_avd(name)
+                return
+        else:  # exit
+            return
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="Interactive Android capture")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
@@ -168,56 +256,30 @@ def main(argv=None) -> None:
     # ~/.traffic-deck/state/android.json.
     store = Store("android")
 
-    # Step 1–2: target.
+    # Pick the target + frida once; then loop in the main menu (capture repeatedly,
+    # stop/delete the emulator, exit). Each capture runs as a subprocess so Ctrl-C
+    # stops just that capture and drops back to the menu.
     target = store.remember("target", prompt.select(
         "Capture target:", ["emulator", "device"],
         default=store.get_valid("target", ["emulator", "device"])))
-    serial = (pick_emulator(sdk, store, headless=args.headless)
-              if target == "emulator" else pick_device(sdk, store))
-    adb = AdbClient(serial=serial, adb=sdk.adb)
+    if target == "emulator":
+        serial, booted_avd = pick_emulator(sdk, store, headless=args.headless)
+    else:
+        serial, booted_avd = pick_device(sdk, store), None
 
-    # Step 3: ensure rooted (fail fast; the capture re-checks too).
+    adb = AdbClient(serial=serial, adb=sdk.adb)
     try:
-        adb.root()
+        adb.root()  # fail fast; the capture re-checks too
     except RuntimeError as e:
         raise SystemExit(str(e))
-
-    # Step 4: frida version (Android-compat recommendation + manual override).
     fver = pick_frida_version(adb, store)
 
-    # Step 5: pick the app, shown as "App Name  (com.pkg)" when resolvable. Names come
-    # from Frida, which also starts frida-server for the capture to reuse.
-    tp = not args.all_apps
-    pkgs = adb.list_packages(third_party=tp)
-    if not pkgs:
-        tp = False
-        pkgs = adb.list_packages(third_party=tp)
-    names: dict[str, str] = {}
-    if not args.no_app_names:
-        print(f"resolving app names ({len(pkgs)} apps)…")
-        names = enumerate_app_names(serial, fver)
-        terminal.restore()  # heal the tty if the frida subprocess disturbed it
-    package = store.remember("package", prompt.select(
-        f"App to capture ({len(pkgs)} installed):", app_choices(pkgs, names),
-        default=store.get_valid("package", pkgs)))
-
-    # Step 6: extra scripts + optional URL.
-    scripts = pick_scripts(args.scripts_dir, store)
-    url = store.remember("url", prompt.text(
-        "URL to open in the app (optional)", store.get("url", "")))
-
-    # Launch the capture under the chosen frida (client+server must match).
-    cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
-           "python", "-m", "capture_android.headless",
-           "--serial", serial, "--package", package, "--gateway", args.gateway]
-    if url:
-        cmd += ["--url", url]
-    if args.duration is not None:
-        cmd += ["--duration", str(args.duration)]
-    for s in scripts:
-        cmd += ["--script", s]
-    print(f"\nlaunching capture: {package} under frida {fver}\n")
-    os.execvp("uv", cmd)
+    try:
+        _menu_loop(sdk, adb, store, serial, fver, args, is_emulator=target == "emulator")
+    finally:
+        # Offer to stop an emulator we booted ourselves (leave pre-existing ones alone).
+        if booted_avd:
+            _maybe_stop_emulator(sdk, serial)
 
 
 if __name__ == "__main__":
