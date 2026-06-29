@@ -84,6 +84,12 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
         sbody = _content(resp)
         if sbody:
             pf.response_body.CopyFrom(cp.Body(size=len(sbody), content_type=resp.headers.get("content-type", ""), inline=sbody))
+
+    # Forward any source-supplied metadata. Other addons (e.g. a scrape manager
+    # that knows which proxy/provider served the request) stash it on
+    # flow.metadata; we pass it through verbatim for the viewer to display.
+    for k, v in (flow.metadata or {}).items():
+        pf.metadata[_s(k)] = _s(v)
     return pf
 
 

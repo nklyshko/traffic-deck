@@ -263,11 +263,26 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 		if err := insertHeaders(ctx, tx, id, 1, f.ResponseHeaders); err != nil {
 			return 0, err
 		}
+		if err := insertMetadata(ctx, tx, id, f.Metadata); err != nil {
+			return 0, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	return len(flows), nil
+}
+
+// insertMetadata writes a flow's opaque source-supplied key/value metadata.
+func insertMetadata(ctx context.Context, tx *sql.Tx, flowID string, md map[string]string) error {
+	for k, v := range md {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO flow_metadata (flow_id, key, value) VALUES (?,?,?)`,
+			flowID, k, v); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func insertHeaders(ctx context.Context, tx *sql.Tx, flowID string, dir int, hs []decode.Header) error {
@@ -438,7 +453,37 @@ func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.F
 	if err := s.attachWsCounts(ctx, db, byID); err != nil {
 		return nil, err
 	}
+	if err := s.attachMetadata(ctx, db, byID); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// attachMetadata fills each flow's Metadata map from the flow_metadata side table.
+func (s *Store) attachMetadata(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
+	if len(flows) == 0 {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT flow_id, key, value FROM flow_metadata`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fid, k, v string
+		if err := rows.Scan(&fid, &k, &v); err != nil {
+			return err
+		}
+		f := flows[fid]
+		if f == nil {
+			continue
+		}
+		if f.Metadata == nil {
+			f.Metadata = map[string]string{}
+		}
+		f.Metadata[k] = v
+	}
+	return rows.Err()
 }
 
 // CountFlows returns the number of flows stored in a session's bundle. Used to
@@ -502,6 +547,9 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		return nil, err
 	}
 	if err := s.attachWsCounts(ctx, db, single); err != nil {
+		return nil, err
+	}
+	if err := s.attachMetadata(ctx, db, single); err != nil {
 		return nil, err
 	}
 	return f, nil

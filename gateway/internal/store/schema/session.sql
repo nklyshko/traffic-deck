@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS flow_headers (
     value     TEXT NOT NULL
 );
 
+-- Custom per-flow metadata supplied by the capture source (e.g. proxy provider).
+-- Opaque key/value pairs; a side table (not flows columns) so existing bundles
+-- created before this feature still read cleanly — the table is just empty.
+CREATE TABLE IF NOT EXISTS flow_metadata (
+    flow_id TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    PRIMARY KEY (flow_id, key)
+);
+
 -- Content-addressed bodies (plan §6.4): small bodies inline (bytes set), large
 -- bodies spilled to sessions/<id>/blobs/<sha256> (external_path set, bytes NULL).
 CREATE TABLE IF NOT EXISTS blobs (
@@ -71,6 +81,7 @@ CREATE TABLE IF NOT EXISTS ws_messages (
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
 CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
+CREATE INDEX IF NOT EXISTS flow_metadata_flow_idx ON flow_metadata (flow_id);
 CREATE INDEX IF NOT EXISTS ws_messages_flow_idx  ON ws_messages (flow_id, ts_micros, frame_number);
 
 -- Annotations (plan §12). A "record" is a flow today (a WebSocket message later).

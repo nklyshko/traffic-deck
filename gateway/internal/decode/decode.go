@@ -57,6 +57,11 @@ type Flow struct {
 	// detected from the captured handshake.
 	Proxy *FlowProxy
 
+	// Metadata is opaque key/value data attached by the capture source (e.g. proxy
+	// provider). Only the pushed-flow path populates it; tshark-decoded flows leave
+	// it nil. Persisted verbatim and surfaced in the viewer.
+	Metadata map[string]string
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool
