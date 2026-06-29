@@ -674,6 +674,9 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup(
                 "[yellow]⇄ via $type proxy $addr[/yellow]$creds",
                 type=f.proxy.type, addr=f.proxy.addr, creds=creds))
+        for k, v in f.metadata.items():
+            lines.append(Content.from_markup(
+                "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
         self._append_annotations(lines, f)
         lines.append(Content(""))
         lines.append(Content.from_markup("[b u]Request headers[/b u]"))

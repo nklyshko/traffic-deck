@@ -540,7 +540,11 @@ type Flow struct {
 	WsMessageCount uint32 `protobuf:"varint,32,opt,name=ws_message_count,json=wsMessageCount,proto3" json:"ws_message_count,omitempty"`
 	// Proxy: set when this connection went through an HTTP CONNECT or SOCKS proxy,
 	// detected from the captured handshake.
-	Proxy         *Proxy `protobuf:"bytes,33,opt,name=proxy,proto3" json:"proxy,omitempty"`
+	Proxy *Proxy `protobuf:"bytes,33,opt,name=proxy,proto3" json:"proxy,omitempty"`
+	// Custom metadata attached by the capture source (e.g. proxy provider, pool,
+	// region). Opaque key/value pairs the gateway stores and surfaces verbatim;
+	// the gateway neither interprets nor validates them.
+	Metadata      map[string]string `protobuf:"bytes,34,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -802,6 +806,13 @@ func (x *Flow) GetWsMessageCount() uint32 {
 func (x *Flow) GetProxy() *Proxy {
 	if x != nil {
 		return x.Proxy
+	}
+	return nil
+}
+
+func (x *Flow) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
 	}
 	return nil
 }
@@ -1310,7 +1321,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\x86\t\n" +
+	"\acontent\"\xff\t\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1351,7 +1362,11 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\bcomments\x18\x1e \x03(\v2\x13.traffic.v1.CommentR\bcomments\x12\x1c\n" +
 	"\twebsocket\x18\x1f \x01(\bR\twebsocket\x12(\n" +
 	"\x10ws_message_count\x18  \x01(\rR\x0ewsMessageCount\x12'\n" +
-	"\x05proxy\x18! \x01(\v2\x11.traffic.v1.ProxyR\x05proxy\"g\n" +
+	"\x05proxy\x18! \x01(\v2\x11.traffic.v1.ProxyR\x05proxy\x12:\n" +
+	"\bmetadata\x18\" \x03(\v2\x1e.traffic.v1.Flow.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
 	"\x05Proxy\x12\x12\n" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
@@ -1428,7 +1443,7 @@ func file_traffic_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_traffic_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_traffic_v1_common_proto_goTypes = []any{
 	(SourceKind)(0),        // 0: traffic.v1.SourceKind
 	(FileKind)(0),          // 1: traffic.v1.FileKind
@@ -1444,6 +1459,7 @@ var file_traffic_v1_common_proto_goTypes = []any{
 	(*Comment)(nil),        // 11: traffic.v1.Comment
 	(*Group)(nil),          // 12: traffic.v1.Group
 	(*DecodeProgress)(nil), // 13: traffic.v1.DecodeProgress
+	nil,                    // 14: traffic.v1.Flow.MetadataEntry
 }
 var file_traffic_v1_common_proto_depIdxs = []int32{
 	0,  // 0: traffic.v1.Session.source_kind:type_name -> traffic.v1.SourceKind
@@ -1455,12 +1471,13 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	6,  // 6: traffic.v1.Flow.response_body:type_name -> traffic.v1.Body
 	11, // 7: traffic.v1.Flow.comments:type_name -> traffic.v1.Comment
 	8,  // 8: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
-	6,  // 9: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	14, // 9: traffic.v1.Flow.metadata:type_name -> traffic.v1.Flow.MetadataEntry
+	6,  // 10: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }
@@ -1478,7 +1495,7 @@ func file_traffic_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_common_proto_rawDesc), len(file_traffic_v1_common_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

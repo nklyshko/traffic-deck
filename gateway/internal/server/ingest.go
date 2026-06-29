@@ -184,6 +184,7 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 		H2StreamID:   pf.GetH2StreamId(),
 		RequestBody:  pf.GetRequestBody().GetInline(),
 		ResponseBody: pf.GetResponseBody().GetInline(),
+		Metadata:     pf.GetMetadata(),
 	}
 	for _, h := range pf.GetRequestHeaders() {
 		df.RequestHeaders = append(df.RequestHeaders, decode.Header{Name: h.GetName(), Value: h.GetValue()})

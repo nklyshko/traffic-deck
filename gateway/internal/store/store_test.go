@@ -48,6 +48,7 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 		ResponseHeaders: []decode.Header{{Name: "content-type", Value: "text/html"}},
 		RequestBody:     []byte(`{"q":1}`),
 		ResponseBody:    []byte("<html>hi</html>"),
+		Metadata:        map[string]string{"proxy_provider": "acme", "pool": "residential"},
 	}}
 	n, err := st.InsertFlows(ctx, sid, aid, flows)
 	if err != nil || n != 1 {
@@ -85,6 +86,9 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	if listed[0].Authority != "example.com" || listed[0].Status != 200 {
 		t.Fatalf("flow mismatch: %+v", listed[0])
 	}
+	if listed[0].Metadata["proxy_provider"] != "acme" || listed[0].Metadata["pool"] != "residential" {
+		t.Fatalf("list flow metadata: %+v", listed[0].Metadata)
+	}
 
 	full, err := st.GetFlow(ctx, sid, listed[0].Id)
 	if err != nil {
@@ -95,6 +99,9 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	}
 	if len(full.ResponseHeaders) != 1 || full.ResponseHeaders[0].Value != "text/html" {
 		t.Fatalf("response headers: %+v", full.ResponseHeaders)
+	}
+	if len(full.Metadata) != 2 || full.Metadata["proxy_provider"] != "acme" {
+		t.Fatalf("get flow metadata: %+v", full.Metadata)
 	}
 
 	if _, err := st.GetFlow(ctx, sid, uuid.NewString()); err != ErrNotFound {
