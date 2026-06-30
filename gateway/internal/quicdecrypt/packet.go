@@ -100,16 +100,23 @@ func parseLongHeader(data []byte) (h longHeader, ok bool) {
 	return h, true
 }
 
-// Frame types we care about (RFC 9000 §19); others are skipped by length.
 const (
-	frmPadding    = 0x00
-	frmPing       = 0x01
-	frmCrypto     = 0x06
-	frmStreamLo   = 0x08 // 0x08..0x0f: STREAM, low 3 bits are OFF/LEN/FIN flags
-	frmStreamHi   = 0x0f
-	frmConnClose1 = 0x1c
-	frmConnClose2 = 0x1d
+	frmCrypto   = 0x06
+	frmStreamLo = 0x08 // 0x08..0x0f: STREAM, low 3 bits are OFF/LEN/FIN flags
+	frmStreamHi = 0x0f
 )
+
+// skipVarints advances past n consecutive varints; returns -1 on truncation.
+func skipVarints(p []byte, i, n int) int {
+	for ; n > 0; n-- {
+		_, k := readVarint(p[i:])
+		if k == 0 {
+			return -1
+		}
+		i += k
+	}
+	return i
+}
 
 // cryptoFrame / streamFrame carry the offset+data the reassembler needs.
 type cryptoFrame struct {
@@ -124,33 +131,50 @@ type streamFrame struct {
 	fin    bool
 }
 
-// parseFrames walks a decrypted packet payload, returning CRYPTO and STREAM frames (in
-// order). ACK/flow-control/etc. frames are skipped. Returns false on a malformed frame.
+// parseFrames walks a decrypted packet payload, collecting CRYPTO and STREAM frames. All
+// other frame types (RFC 9000 §19) are skipped by their wire length so later CRYPTO/STREAM
+// frames are still reached — e.g. a server Initial that begins with an ACK frame. Returns
+// false on a malformed/truncated frame or an unknown frame type (length unknowable).
 func parseFrames(p []byte) (crypto []cryptoFrame, streams []streamFrame, ok bool) {
 	i := 0
 	for i < len(p) {
-		t := p[i]
+		t := p[i] // all standard frame types fit in one byte (< 0x40)
 		i++
 		switch {
-		case t == frmPadding || t == frmPing:
-			// no body
-		case t == frmCrypto:
-			off, n := readVarint(p[i:])
+		case t == 0x00 || t == 0x01: // PADDING, PING
+		case t == 0x02 || t == 0x03: // ACK
+			if i = skipVarints(p, i, 2); i < 0 { // largest_ack, ack_delay
+				return nil, nil, false
+			}
+			cnt, n := readVarint(p[i:])
 			if n == 0 {
 				return nil, nil, false
 			}
 			i += n
-			ln, n2 := readVarint(p[i:])
-			if n2 == 0 {
+			if i = skipVarints(p, i, 1+2*int(cnt)); i < 0 { // first_ack_range + gaps/lengths
 				return nil, nil, false
 			}
-			i += n2
-			if i+int(ln) > len(p) {
+			if t == 0x03 { // ECN counts
+				if i = skipVarints(p, i, 3); i < 0 {
+					return nil, nil, false
+				}
+			}
+		case t == frmCrypto:
+			off, n := readVarint(p[i:])
+			ln, n2 := readVarint(p[i+n:])
+			if n == 0 || n2 == 0 || i+n+n2+int(ln) > len(p) {
 				return nil, nil, false
 			}
+			i += n + n2
 			crypto = append(crypto, cryptoFrame{off, p[i : i+int(ln)]})
 			i += int(ln)
-		case t >= frmStreamLo && t <= frmStreamHi:
+		case t == 0x07: // NEW_TOKEN
+			ln, n := readVarint(p[i:])
+			if n == 0 {
+				return nil, nil, false
+			}
+			i += n + int(ln)
+		case t >= frmStreamLo && t <= frmStreamHi: // STREAM
 			id, n := readVarint(p[i:])
 			if n == 0 {
 				return nil, nil, false
@@ -177,12 +201,40 @@ func parseFrames(p []byte) (crypto []cryptoFrame, streams []streamFrame, ok bool
 			}
 			streams = append(streams, streamFrame{id, off, p[i : i+int(ln)], t&0x01 != 0})
 			i += int(ln)
-		case t == frmConnClose1 || t == frmConnClose2:
-			return crypto, streams, true // stop at close
+		case t == 0x10 || t == 0x12 || t == 0x13 || t == 0x14 || t == 0x16 || t == 0x17 || t == 0x19:
+			i = skipVarints(p, i, 1) // MAX_DATA, MAX_STREAMS, DATA_BLOCKED, STREAMS_BLOCKED, RETIRE_CONNECTION_ID
+		case t == 0x11 || t == 0x15: // MAX_STREAM_DATA, STREAM_DATA_BLOCKED
+			i = skipVarints(p, i, 2)
+		case t == 0x04: // RESET_STREAM
+			i = skipVarints(p, i, 3)
+		case t == 0x05: // STOP_SENDING
+			i = skipVarints(p, i, 2)
+		case t == 0x18: // NEW_CONNECTION_ID: seq, retire (varints), len(1), cid, 16-byte token
+			if i = skipVarints(p, i, 2); i < 0 || i >= len(p) {
+				return nil, nil, false
+			}
+			i += 1 + int(p[i]) + 16
+		case t == 0x1a || t == 0x1b: // PATH_CHALLENGE/RESPONSE
+			i += 8
+		case t == 0x1c || t == 0x1d: // CONNECTION_CLOSE
+			skip := 1
+			if t == 0x1c {
+				skip = 2 // includes the frame type that triggered the close
+			}
+			if i = skipVarints(p, i, skip); i < 0 {
+				return nil, nil, false
+			}
+			ln, n := readVarint(p[i:])
+			if n == 0 {
+				return nil, nil, false
+			}
+			i += n + int(ln)
+		case t == 0x1e: // HANDSHAKE_DONE
 		default:
-			// Unhandled frame type: we can't know its length, so stop parsing this
-			// packet (we've already collected the frames we care about up to here).
-			return crypto, streams, true
+			return crypto, streams, false // unknown frame type: can't determine length
+		}
+		if i < 0 || i > len(p) {
+			return nil, nil, false
 		}
 	}
 	return crypto, streams, true

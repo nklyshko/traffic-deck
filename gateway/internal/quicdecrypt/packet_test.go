@@ -80,3 +80,29 @@ func TestParseServerHelloSuite(t *testing.T) {
 		t.Errorf("parseServerHello = (%#x, %v), want (0x1301, true)", id, ok)
 	}
 }
+
+// A server Initial begins with an ACK frame before the CRYPTO frame; parseFrames must
+// skip the ACK (and other frames) by length to reach the CRYPTO/STREAM frames.
+func TestParseFramesSkipsACK(t *testing.T) {
+	// ACK (0x02): largest=0, delay=0, range_count=0, first_range=0  -> 02 00 00 00 00
+	// then CRYPTO (0x06): offset=0, len=3, data="abc"
+	p := []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x03, 'a', 'b', 'c'}
+	crypto, _, ok := parseFrames(p)
+	if !ok || len(crypto) != 1 || string(crypto[0].data) != "abc" {
+		t.Fatalf("ok=%v crypto=%d data=%q", ok, len(crypto), func() string {
+			if len(crypto) > 0 {
+				return string(crypto[0].data)
+			}
+			return ""
+		}())
+	}
+	// NEW_CONNECTION_ID (0x18) before a STREAM frame must also be skipped.
+	// 0x18 seq=1 retire=0 len=4 cid=11223344 token=16 bytes, then STREAM 0x0a id=0 len=2 "hi"
+	p2 := []byte{0x18, 0x01, 0x00, 0x04, 0x11, 0x22, 0x33, 0x44}
+	p2 = append(p2, make([]byte, 16)...)
+	p2 = append(p2, 0x0a, 0x00, 0x02, 'h', 'i')
+	_, streams, ok := parseFrames(p2)
+	if !ok || len(streams) != 1 || string(streams[0].data) != "hi" {
+		t.Fatalf("ok=%v streams=%d", ok, len(streams))
+	}
+}
