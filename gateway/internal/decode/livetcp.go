@@ -9,6 +9,7 @@ package decode
 // unsupported link type) are left to the batch tshark pass on close.
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"log"
@@ -93,20 +94,29 @@ func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassem
 	return s
 }
 
-// tcpStream is one reassembled TCP connection: its TLS decryptor, and (once a decoder
-// claims it) the decoder session + synthetic flow.
+// tcpStream is one reassembled TCP connection: its TLS decryptor, and — once classified
+// from its first decrypted bytes — either a custom-decoder session or an HTTP/1.1 parser.
 type tcpStream struct {
 	lt                                 *liveTCP
 	serverHost, serverPort, clientAddr string
 	conn                               *tlsdecrypt.Conn
 
 	sniffed     bool // checked the first client bytes look like TLS
-	decided     bool // ran decoder matching once the SNI was known
-	matched     bool
+	decided     bool // classified the connection from its first decrypted client bytes
+	matched     bool // a custom decoder claimed it
+	isHTTP      bool // decoding as HTTP/1.1
 	dropped     bool
 	flowEmitted bool
 	sess        decoders.Session
 	flow        *Flow
+	httpSess    *httpStream
+	preBuf      []appChunk // decrypted bytes buffered until classification (needs client bytes)
+}
+
+// appChunk is one decrypted application record buffered before classification.
+type appChunk struct {
+	fromClient bool
+	data       []byte
 }
 
 func (s *tcpStream) Accept(_ *gplayers.TCP, _ gopacket.CaptureInfo, _ reassembly.TCPFlowDirection,
@@ -141,29 +151,73 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 	}
 }
 
-func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool { return true }
+func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
+	if s.httpSess != nil {
+		s.httpSess.close() // EOF the HTTP parser goroutines so they drain + exit
+	}
+	return true
+}
 
-// onApp receives decrypted application bytes from the TLS layer. On the first call it
-// matches the connection (by SNI/host) to a decoder; thereafter it frames the bytes
-// into messages and publishes them like the WebSocket live path.
+// onApp receives decrypted application bytes from the TLS layer. It buffers until the
+// first client bytes arrive, classifies the connection (custom decoder / HTTP/1.1 /
+// drop), then dispatches each chunk to the chosen decoder.
 func (s *tcpStream) onApp(fromClient bool, plain []byte) {
+	if s.dropped {
+		return
+	}
 	if !s.decided {
-		s.decided = true
-		m := decoders.Match(decoders.StreamMeta{
-			ServerHost: s.serverHost, ServerPort: s.serverPort, SNI: s.conn.SNI(),
-		})
-		if len(m) == 0 {
-			s.dropped = true
+		// Buffer (copy: the decryptor reuses its plaintext buffer). Classification needs
+		// the first client bytes — to match a custom decoder and to spot an HTTP/2 preface.
+		s.preBuf = append(s.preBuf, appChunk{fromClient, append([]byte(nil), plain...)})
+		if !fromClient {
 			return
 		}
+		s.classify(plain)
+		buffered := s.preBuf
+		s.preBuf = nil
+		for _, c := range buffered {
+			s.dispatch(c.fromClient, c.data)
+		}
+		return
+	}
+	s.dispatch(fromClient, plain)
+}
+
+// classify decides how to decode the connection from its first decrypted client bytes.
+func (s *tcpStream) classify(firstClient []byte) {
+	s.decided = true
+	if m := decoders.Match(decoders.StreamMeta{
+		ServerHost: s.serverHost, ServerPort: s.serverPort, SNI: s.conn.SNI(),
+	}); len(m) > 0 {
 		s.sess = m[0].NewSession()
 		s.flow = customFlowMeta(s.conn.SNI(), s.serverHost, s.serverPort, s.clientAddr, m[0].Name())
 		s.matched = true
 		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
-	}
-	if !s.matched {
 		return
 	}
+	// HTTP/2 (ALPN h2) opens with the client connection preface; passive H2 decode isn't
+	// implemented yet, so leave those streams to the batch tshark pass on close.
+	if bytes.HasPrefix(firstClient, []byte("PRI * HTTP/2.0\r\n")) {
+		s.dropped = true
+		log.Printf("live decode: HTTP/2 on %s left to batch decode", s.conn.SNI())
+		return
+	}
+	s.httpSess = newHTTPStream(s)
+	s.isHTTP = true
+}
+
+func (s *tcpStream) dispatch(fromClient bool, plain []byte) {
+	switch {
+	case s.matched:
+		s.feedCustom(fromClient, plain)
+	case s.isHTTP:
+		s.httpSess.feed(fromClient, plain)
+	}
+}
+
+// feedCustom frames decrypted bytes into messages via a custom decoder and publishes
+// them like the WebSocket live path.
+func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 	for _, msg := range s.sess.Feed(fromClient, plain) {
 		if !s.flowEmitted {
 			s.lt.onFlow(s.flow, true)

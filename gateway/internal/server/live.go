@@ -52,22 +52,21 @@ func (h *liveHub) get(sessionID string) *liveSession {
 }
 
 // start spins up the live decode for sessionID, fed by the pipe(s) via write().
-// keylogPath must already exist (it may be empty and grow). tshark handles HTTP/WS/
-// HTTP3 from the primary pipe; when custom decoders are registered, a second copy of
-// the pcap feeds the in-process Go TLS decryptor for custom raw-TCP protocols.
+// keylogPath must already exist (it may be empty and grow). The primary pipe feeds
+// tshark (plaintext HTTP/WS/HTTP3); a second copy feeds the in-process Go decoder
+// (LiveTCPDecode), which handles TLS-decrypted HTTP/1.1 + custom raw-TCP protocols —
+// tshark can't decrypt a live capture with a growing key-log, so this is the live path
+// for HTTPS flows. The batch tshark pass on close stays authoritative.
 func (h *liveHub) start(sessionID, keylogPath string) {
 	pr, pw := io.Pipe()
+	customPR, customPW := io.Pipe()
 	ls := &liveSession{
-		pw:      pw,
-		done:    make(chan struct{}),
-		flows:   map[string]*trafficv1.Flow{},
-		subs:    map[int]chan *trafficv1.FlowEvent{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
-	}
-
-	var customPR *io.PipeReader
-	if decode.HasCustomDecoders() {
-		customPR, ls.customPW = io.Pipe()
+		pw:       pw,
+		customPW: customPW,
+		done:     make(chan struct{}),
+		flows:    map[string]*trafficv1.Flow{},
+		subs:     map[int]chan *trafficv1.FlowEvent{},
+		msgSubs:  map[int]chan *trafficv1.WsMessage{},
 	}
 
 	h.mu.Lock()
@@ -79,17 +78,18 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		// Close the read end when decode exits so writes can't block forever if
 		// tshark dies early (they get ErrClosedPipe instead).
 		defer pr.Close()
-		// Background context: the decode lives until the pipe is closed by stop(),
-		// independent of any single upload stream's lifetime.
-		_ = decode.LiveDecode(context.Background(), h.tshark, keylogPath, pr, ls.onFlow, ls.onMessage)
+		// Empty key-log: the live tshark decodes only plaintext (HTTP/WS/HTTP3). TLS is
+		// the Go decoder's job live (LiveTCPDecode, below) — tshark can't decrypt a
+		// growing key-log mid-stream and would otherwise re-emit the same TLS flows when
+		// it finally reloads the key-log at EOF, duplicating the Go path. The batch pass
+		// on close still uses the full key-log and stays authoritative.
+		_ = decode.LiveDecode(context.Background(), h.tshark, "", pr, ls.onFlow, ls.onMessage)
 	}()
 
-	if customPR != nil {
-		go func() {
-			defer customPR.Close()
-			_ = decode.LiveTCPDecode(customPR, keylogPath, ls.onFlow, ls.onMessage)
-		}()
-	}
+	go func() {
+		defer customPR.Close()
+		_ = decode.LiveTCPDecode(customPR, keylogPath, ls.onFlow, ls.onMessage)
+	}()
 }
 
 // startPassive registers a tshark-less live session for a *pushed* source

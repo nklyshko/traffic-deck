@@ -65,7 +65,10 @@ class CaptureResult:
 def _tcpdump_reader(stdout, q: "queue.Queue", stop: threading.Event) -> None:
     try:
         while not stop.is_set():
-            b = stdout.read(65536)
+            # read1: return as soon as any data is available (one underlying read),
+            # rather than read() which blocks until the full 64 KiB or EOF — that would
+            # buffer a low-volume capture until close and defeat live decode.
+            b = stdout.read1(65536)
             if not b:
                 break
             q.put(("pcap", b))
