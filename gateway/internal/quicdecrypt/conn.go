@@ -36,6 +36,17 @@ func NewConn(keylog *tlsdecrypt.Keylog, onStream func(streamID uint64, fromClien
 	return &Conn{keylog: keylog, onStream: onStream, streams: map[uint64]*streamReasm{}}
 }
 
+// IsClientInitial reports whether a UDP payload looks like a QUIC v1 client Initial
+// packet (long header + fixed bit, Initial type, version 1) — used to decide whether a
+// UDP 4-tuple is an HTTP/3 connection worth tracking.
+func IsClientInitial(p []byte) bool {
+	if len(p) < 5 || p[0]&0xc0 != 0xc0 || p[0]&0x30 != 0 {
+		return false
+	}
+	version := uint32(p[1])<<24 | uint32(p[2])<<16 | uint32(p[3])<<8 | uint32(p[4])
+	return version == Version1
+}
+
 func dirIdx(fromClient bool) int {
 	if fromClient {
 		return 0

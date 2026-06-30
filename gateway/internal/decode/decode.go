@@ -66,6 +66,8 @@ type Flow struct {
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool
 	respBodyFinal bool
+	// internal: live HTTP/3 path — whether the flow_added event has been emitted yet.
+	emitted bool
 }
 
 // FlowProxy describes a proxy a connection went through (detected from the wire).

@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 
 	"github.com/google/gopacket"
 	gplayers "github.com/google/gopacket/layers"
@@ -22,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
@@ -42,6 +44,7 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 		keylog: tlsdecrypt.NewKeylog(keylogPath),
 		onFlow: onFlow,
 		onMsg:  onMsg,
+		quic:   map[string]*quicConnState{},
 	}
 	asm := reassembly.NewAssembler(reassembly.NewStreamPool(lt))
 	linkType := reader.LinkType()
@@ -64,11 +67,14 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 			pkt = gopacket.NewPacket(data, linkType, gopacket.Lazy)
 		}
 		netLayer := pkt.NetworkLayer()
-		tcpLayer := pkt.Layer(gplayers.LayerTypeTCP)
-		if netLayer == nil || tcpLayer == nil {
-			continue // non-TCP, or a link type gopacket can't decode
+		if netLayer == nil {
+			continue
 		}
-		asm.Assemble(netLayer.NetworkFlow(), tcpLayer.(*gplayers.TCP))
+		if tcpLayer := pkt.Layer(gplayers.LayerTypeTCP); tcpLayer != nil {
+			asm.Assemble(netLayer.NetworkFlow(), tcpLayer.(*gplayers.TCP))
+		} else if udpLayer := pkt.Layer(gplayers.LayerTypeUDP); udpLayer != nil {
+			lt.handleUDP(netLayer.NetworkFlow(), udpLayer.(*gplayers.UDP))
+		}
 	}
 	asm.FlushAll()
 	return nil
@@ -79,6 +85,41 @@ type liveTCP struct {
 	keylog *tlsdecrypt.Keylog
 	onFlow func(*Flow, bool)
 	onMsg  func(*WsMessage)
+	quic   map[string]*quicConnState // QUIC connections keyed by canonical UDP 4-tuple
+}
+
+// quicConnState is one tracked QUIC connection: its HTTP/3 decoder + the address that
+// initiated it (the client), so each datagram's direction can be determined.
+type quicConnState struct {
+	sess   *quicSession
+	client string
+}
+
+// handleUDP routes a UDP datagram to its QUIC connection's HTTP/3 decoder, starting one
+// when a datagram first looks like a QUIC client Initial. Non-QUIC UDP is ignored.
+func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP) {
+	payload := udp.Payload
+	if len(payload) < 5 {
+		return
+	}
+	src := net.JoinHostPort(netFlow.Src().String(), strconv.Itoa(int(udp.SrcPort)))
+	dst := net.JoinHostPort(netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)))
+	key := src + "|" + dst
+	if src > dst {
+		key = dst + "|" + src
+	}
+	st := f.quic[key]
+	if st == nil {
+		if !quicdecrypt.IsClientInitial(payload) {
+			return // not (the start of) an HTTP/3 connection
+		}
+		st = &quicConnState{
+			sess:   newQUICSession(f.keylog, f.onFlow, netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)), src),
+			client: src,
+		}
+		f.quic[key] = st
+	}
+	st.sess.feed(src == st.client, payload)
 }
 
 func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassembly.AssemblerContext) reassembly.Stream {

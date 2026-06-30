@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.6
 	github.com/pierrec/lz4/v4 v4.1.27
+	github.com/quic-go/qpack v0.5.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.55.0
