@@ -14,17 +14,31 @@ import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * HttpsProbe — the test app for the Android capture tools.
  *
- * Enter a URL, pick GET/POST, and fire HTTPS requests (via HttpURLConnection, which
- * uses Conscrypt — so the capture's frida TLS-keylog hook sees real traffic). It can
- * also be driven programmatically for scripted capture tests; see [handleIntent].
+ * Enter a URL, pick GET/POST, and fire HTTPS requests. Two engines, both over the
+ * platform Conscrypt TLS stack (so the capture's frida TLS-keylog hook sees real
+ * traffic): the default OkHttp engine negotiates HTTP/2 via ALPN (to exercise the
+ * gateway's live HTTP/2 decode), and the framework HttpURLConnection engine speaks
+ * HTTP/1.1. It can also be driven programmatically for scripted capture tests; see
+ * [handleIntent].
  */
 class MainActivity : Activity() {
 
     private val io = Executors.newSingleThreadExecutor()
+
+    // Prefers HTTP/2, falling back to HTTP/1.1 when the server doesn't offer h2.
+    private val okhttp by lazy {
+        OkHttpClient.Builder()
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+            .build()
+    }
 
     private lateinit var urlInput: EditText
     private lateinit var bodyInput: EditText
@@ -71,6 +85,7 @@ class MainActivity : Activity() {
         var url = intent.getStringExtra("url")
         var method = intent.getStringExtra("method")
         var body = intent.getStringExtra("body")
+        var engine = intent.getStringExtra("engine")
         var times = intent.getIntExtra("times", 0)
         val data: Uri? = intent.data
         if (url == null && data != null) {
@@ -78,6 +93,7 @@ class MainActivity : Activity() {
                 url = data.getQueryParameter("url")
                 method = method ?: data.getQueryParameter("method")
                 body = body ?: data.getQueryParameter("body")
+                engine = engine ?: data.getQueryParameter("engine")
                 if (times == 0) times = data.getQueryParameter("times")?.toIntOrNull() ?: 0
             } else {
                 url = data.toString()  // a direct http/https link
@@ -87,10 +103,11 @@ class MainActivity : Activity() {
         urlInput.setText(url)
         method?.let { methodGroup.check(if (it.equals("POST", true)) R.id.post else R.id.get) }
         body?.let { bodyInput.setText(it) }
-        fire(read(), times = if (times > 0) times else 1)
+        // engine: "urlconn" forces HttpURLConnection (HTTP/1.1); anything else uses OkHttp.
+        fire(read().copy(urlConn = engine.equals("urlconn", ignoreCase = true)), times = if (times > 0) times else 1)
     }
 
-    private data class Req(val url: String, val method: String, val body: String)
+    private data class Req(val url: String, val method: String, val body: String, val urlConn: Boolean = false)
 
     private fun read() = Req(
         urlInput.text.toString().trim(),
@@ -134,7 +151,29 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun request(req: Req): String {
+    private fun request(req: Req): String =
+        if (req.urlConn) requestUrlConn(req) else requestOkHttp(req)
+
+    // OkHttp engine: negotiates HTTP/2 via ALPN (falls back to HTTP/1.1). Logs the
+    // negotiated protocol so a scripted test can confirm h2 was used.
+    private fun requestOkHttp(req: Req): String {
+        val start = System.nanoTime()
+        val builder = Request.Builder().url(req.url).header("User-Agent", "HttpsProbe/1.0")
+        if (req.method == "POST") {
+            builder.post(req.body.toRequestBody())
+        } else {
+            builder.method(req.method, null)
+        }
+        okhttp.newCall(builder.build()).execute().use { resp ->
+            val text = resp.body?.string() ?: ""
+            val ms = (System.nanoTime() - start) / 1_000_000
+            val proto = resp.protocol.toString() // "h2" | "http/1.1"
+            Log.i(TAG, "${req.method} ${req.url} -> ${resp.code} $proto ${text.length}B ${ms}ms")
+            return "${resp.code} ${resp.message}  [$proto]  ${text.length}B  ${ms}ms\n${text.take(2000)}"
+        }
+    }
+
+    private fun requestUrlConn(req: Req): String {
         val start = System.nanoTime()
         val conn = (URL(req.url).openConnection() as HttpURLConnection).apply {
             requestMethod = req.method

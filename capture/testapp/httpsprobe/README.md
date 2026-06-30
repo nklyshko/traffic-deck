@@ -4,9 +4,11 @@ A tiny Android app used to exercise the Android capture tools end-to-end. Enter 
 pick GET/POST, optionally a body, and fire HTTPS requests — or drive it programmatically
 for scripted capture tests.
 
-It uses the platform `HttpURLConnection` (Conscrypt under the hood) and **no third-party
-libraries**, so the capture's frida TLS-keylog hook sees real, decryptable HTTPS with
-nothing extra to install. Package: `com.example.httpsprobe`.
+Two request engines, both over the platform Conscrypt TLS stack (so the capture's frida
+TLS-keylog hook sees real, decryptable HTTPS): the default **OkHttp** engine negotiates
+**HTTP/2** via ALPN (to exercise the gateway's live HTTP/2 decode), and the framework
+**`HttpURLConnection`** engine speaks HTTP/1.1 — select it with `--es engine urlconn`
+(or `&engine=urlconn` in a deeplink). Package: `com.example.httpsprobe`.
 
 ```
 ┌───────────────────────────────┐
@@ -45,9 +47,15 @@ For scripted capture tests, fire requests without touching the UI. The app is
 `singleTop`, so repeated launches re-fire in the same instance.
 
 ```sh
-# intent extras (no URL-encoding needed) — url / method / body / times
+# intent extras (no URL-encoding needed) — url / method / body / times / engine
 adb shell am start -n com.example.httpsprobe/.MainActivity \
   --es url https://example.com --es method POST --es body '{"k":1}' --ei times 3
+
+# force HTTP/2 (default OkHttp engine, h2 via ALPN) against an h2 server
+adb shell am start -a android.intent.action.VIEW -d 'https://www.google.com/generate_204'
+# force HTTP/1.1 (framework HttpURLConnection)
+adb shell am start -n com.example.httpsprobe/.MainActivity \
+  --es url https://example.com --es engine urlconn
 
 # a plain http(s) link → GET it (this is what `capture-android --url` does)
 adb shell am start -a android.intent.action.VIEW -d 'https://example.com'

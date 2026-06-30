@@ -30,5 +30,10 @@ android {
     }
 }
 
-// No dependencies: a plain framework Activity + HttpURLConnection (Conscrypt under the
-// hood), so the capture's frida TLS-keylog hook sees real HTTPS with no extra libraries.
+dependencies {
+    // OkHttp negotiates HTTP/2 via ALPN (over the platform Conscrypt TLS stack, so the
+    // capture's frida TLS-keylog hook still sees the traffic). It's the default engine
+    // so e2e tests exercise the gateway's live HTTP/2 decode; the framework
+    // HttpURLConnection path (HTTP/1.1 here) stays available via `--es engine urlconn`.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+}
