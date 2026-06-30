@@ -78,12 +78,20 @@ func (b *byteStream) Close() error {
 type httpStream struct {
 	owner  *tcpStream
 	onFlow func(*Flow, bool)
+	onMsg  func(*WsMessage)
 	req    *byteStream
 	resp   *byteStream
+	wsMu   sync.Mutex // guards the upgraded flow across the two WebSocket reader goroutines
 }
 
 func newHTTPStream(owner *tcpStream) *httpStream {
-	h := &httpStream{owner: owner, onFlow: owner.lt.onFlow, req: newByteStream(), resp: newByteStream()}
+	h := &httpStream{
+		owner:  owner,
+		onFlow: owner.lt.onFlow,
+		onMsg:  owner.lt.onMsg,
+		req:    newByteStream(),
+		resp:   newByteStream(),
+	}
 	go h.run()
 	return h
 }
@@ -131,10 +139,49 @@ func (h *httpStream) run() {
 		}
 		f.Status = uint32(resp.StatusCode)
 		f.ResponseHeaders = headersOf(resp.Header)
-		f.ResponseBody = readRespBody(resp)
 		f.ContentType = resp.Header.Get("Content-Type")
+
+		if isWSUpgrade(resp) {
+			// The connection is now WebSocket; the "body" is RFC 6455 frames. Don't read
+			// resp.Body (it would consume the frames). Mark the flow and hand both
+			// directions (whatever the bufio readers buffered, then the byte streams) to
+			// the frame parsers. HTTP/1.1 can't carry more requests after the upgrade.
+			f.Websocket = true
+			h.onFlow(f, false)
+			h.startWebSocket(f, reqBr, respBr)
+			return
+		}
+
+		f.ResponseBody = readRespBody(resp)
 		h.onFlow(f, false)
 	}
+}
+
+func isWSUpgrade(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusSwitchingProtocols &&
+		strings.EqualFold(resp.Header.Get("Upgrade"), "websocket")
+}
+
+// startWebSocket reads RFC 6455 frames from both directions of the upgraded connection,
+// emitting a WsMessage per frame and refreshing the flow's frame count. The two
+// goroutines share the flow under wsMu; they exit when close() shuts the byte streams.
+func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
+	emit := func(opcode string, fromClient bool, payload []byte) {
+		h.wsMu.Lock()
+		f.WsMessageCount++
+		h.onMsg(&WsMessage{
+			ID:           uuid.NewString(),
+			FlowID:       f.ID,
+			TSUnixMicros: time.Now().UnixMicro(),
+			FromClient:   fromClient,
+			Opcode:       opcode,
+			Payload:      payload,
+		})
+		h.onFlow(f, false) // refresh the row's ⇅ count
+		h.wsMu.Unlock()
+	}
+	go readWSFrames(reqBr, true, emit)
+	go readWSFrames(respBr, false, emit)
 }
 
 // drainBody reads up to maxLiveBody bytes, then drains the rest so the next message on a
