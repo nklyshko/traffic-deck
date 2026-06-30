@@ -13,11 +13,16 @@ import android.widget.TextView
 import java.io.BufferedReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 
 /**
  * HttpsProbe — the test app for the Android capture tools.
@@ -151,8 +156,48 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun request(req: Req): String =
-        if (req.urlConn) requestUrlConn(req) else requestOkHttp(req)
+    private fun request(req: Req): String = when {
+        req.url.startsWith("ws://", true) || req.url.startsWith("wss://", true) -> requestWebSocket(req)
+        req.urlConn -> requestUrlConn(req)
+        else -> requestOkHttp(req)
+    }
+
+    // WebSocket engine (OkHttp over Conscrypt): opens a wss:// connection and ping-pongs
+    // a few text frames with an echo server, then closes — to exercise the gateway's live
+    // WebSocket decode. Blocks until the socket closes or a timeout.
+    private fun requestWebSocket(req: Req): String {
+        val out = StringBuilder()
+        val done = CountDownLatch(1)
+        var sent = 0
+        val maxMsgs = 5
+        val listener = object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                Log.i(TAG, "WS open ${req.url} -> ${response.code} ${response.protocol}")
+                out.append("open ${response.code} [${response.protocol}]\n")
+                sent++; ws.send("msg-$sent")
+            }
+            override fun onMessage(ws: WebSocket, text: String) {
+                Log.i(TAG, "WS recv ${text.length}B")
+                out.append("recv: ${text.take(80)}\n")
+                runOnUiThread { response.text = out.toString() }
+                if (sent < maxMsgs) {
+                    sent++; ws.send("msg-$sent")
+                } else {
+                    ws.close(1000, "done")
+                }
+            }
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WS closed $code"); done.countDown()
+            }
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.i(TAG, "WS fail ${t.javaClass.simpleName}: ${t.message}")
+                out.append("error: ${t.message}\n"); done.countDown()
+            }
+        }
+        okhttp.newWebSocket(Request.Builder().url(req.url).header("User-Agent", "HttpsProbe/1.0").build(), listener)
+        done.await(20, TimeUnit.SECONDS)
+        return out.toString().ifEmpty { "ws: no response" }
+    }
 
     // OkHttp engine: negotiates HTTP/2 via ALPN (falls back to HTTP/1.1). Logs the
     // negotiated protocol so a scripted test can confirm h2 was used.
