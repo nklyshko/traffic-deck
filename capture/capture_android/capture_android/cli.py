@@ -32,11 +32,16 @@ from pathlib import Path
 from capture_android import frida_versions
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
-from capture_sdk import paths, prompt, terminal
+from capture_sdk import prompt, terminal
 from capture_sdk.state import Store
 
-_DEFAULT_SCRIPTS_DIR = str(paths.home() / "frida-scripts")
 _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
+# Standard unpinning/bypass scripts shipped with the repo; the picker lists these.
+_DEFAULT_SCRIPTS_DIR = str(Path(_PROJECT) / "frida_scripts")
+
+# Sentinel choices for the script picker (kept off the filesystem-path namespace).
+_CUSTOM = "\0custom"
+_NONE = "\0none"
 
 
 # --- steps ---------------------------------------------------------------
@@ -101,20 +106,26 @@ def pick_frida_version(adb: AdbClient, store: Store) -> str:
 
 
 def pick_scripts(scripts_dir: str, store: Store) -> list[str]:
-    """Step 6: pick extra Frida scripts from a directory and/or a custom path.
-    Scripts chosen last run are pre-checked when they're still present."""
+    """Step 6: pick one of the standard unpinning/bypass scripts bundled in
+    `scripts_dir`, or enter a path to a custom script (or none). Last run's pick is
+    pre-selected when it's still available."""
     last = store.get("scripts", [])
     d = Path(scripts_dir)
-    found = sorted(str(p) for p in d.glob("*.js")) if d.is_dir() else []
-    if found:
-        chosen = prompt.checkbox(f"Extra Frida scripts (from {scripts_dir}):", found,
-                                 checked=[s for s in last if s in found])
+    found = sorted(d.glob("*.js")) if d.is_dir() else []
+    choices: list[tuple[str, str]] = [(p.stem, str(p)) for p in found]
+    choices.append(("Custom script path…", _CUSTOM))
+    choices.append(("None", _NONE))
+
+    found_paths = {str(p) for p in found}
+    default = last[0] if last and last[0] in found_paths else _NONE
+    pick = prompt.select("Unpinning / bypass script:", choices, default=default)
+    if pick == _NONE:
+        chosen: list[str] = []
+    elif pick == _CUSTOM:
+        custom = prompt.text("Path to custom script", "")
+        chosen = [custom] if custom else []
     else:
-        print(f"(no scripts in {scripts_dir})")
-        chosen = []
-    custom = prompt.text("Extra script path (optional)", "")
-    if custom:
-        chosen.append(custom)
+        chosen = [pick]
     store.remember("scripts", chosen)
     return chosen
 
@@ -222,7 +233,13 @@ def _menu_loop(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str, a
         except SystemExit:
             return  # Ctrl-C / Esc at the menu → exit
         if choice == "capture":
-            _run_capture(sdk, adb, store, serial, fver, args)
+            try:
+                _run_capture(sdk, adb, store, serial, fver, args)
+            except Exception as exc:  # noqa: BLE001 — a failed capture returns to the
+                # menu (keeping the booted emulator) instead of crashing the CLI. Ctrl-C
+                # / Esc at a prompt raises SystemExit (not Exception), so it still exits.
+                terminal.restore()
+                print(f"\ncapture failed: {type(exc).__name__}: {exc}\n")
         elif choice == "stop":
             print(f"stopping {serial} …")
             sdk.stop_emulator(serial)

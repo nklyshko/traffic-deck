@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 
 def find_adb() -> str:
@@ -151,13 +152,30 @@ class AdbClient:
     def abi(self) -> str:
         return self.shell("getprop", "ro.product.cpu.abi").strip()
 
+    def _pm(self, *args: str, retries: int = 5) -> str:
+        """Run a `pm` command, retrying transient failures. PackageManager can return
+        non-zero ("Is the system running?") for a few seconds after heavy frida/app
+        activity while system_server settles — so a capture+stop+capture loop would
+        otherwise crash on the next `pm` call. Raises with the device error if it never
+        recovers."""
+        res = self.run("shell", "pm", *args, check=False)
+        for _ in range(retries - 1):
+            if res.returncode == 0:
+                return res.stdout
+            time.sleep(1.0)
+            res = self.run("shell", "pm", *args, check=False)
+        if res.returncode != 0:
+            raise RuntimeError(f"`pm {' '.join(args)}` failed: "
+                               f"{res.stderr.strip() or res.stdout.strip() or 'non-zero exit'}")
+        return res.stdout
+
     def app_uid(self, package: str) -> int:
-        return parse_app_uid(self.shell("pm", "list", "packages", "-U"), package)
+        return parse_app_uid(self._pm("list", "packages", "-U"), package)
 
     def list_packages(self, third_party: bool = True) -> list[str]:
         """Installed package names (third-party only by default), sorted."""
-        args = ["pm", "list", "packages"] + (["-3"] if third_party else [])
-        pkgs = [l.strip()[8:] for l in self.shell(*args).splitlines()
+        args = ["list", "packages"] + (["-3"] if third_party else [])
+        pkgs = [l.strip()[8:] for l in self._pm(*args).splitlines()
                 if l.strip().startswith("package:")]
         return sorted(pkgs)
 

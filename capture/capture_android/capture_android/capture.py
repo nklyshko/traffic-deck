@@ -8,6 +8,7 @@ pcap + key.log to the gateway over UploadCapture.
 from __future__ import annotations
 
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+import frida
 import grpc
 
 from capture_android.adb import AdbClient, nflog_rules
@@ -27,6 +29,29 @@ from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.upload import SENTINEL, capture_chunks
 
 _KEYLOG_SCRIPT = Path(__file__).resolve().parent / "frida_sslkeylog.js"
+# Plain-IIFE bundle of frida-java-bridge that installs globalThis.Java; see
+# ../frida_scripts/_bridge/. Prepended to legacy Java-global scripts on Frida >= 17.
+_JAVA_BRIDGE = Path(__file__).resolve().parents[1] / "frida_scripts" / "_bridge" / "java-bridge.js"
+
+
+def _frida_major() -> int:
+    try:
+        return int(frida.__version__.split(".", 1)[0])
+    except (ValueError, AttributeError):
+        return 0
+
+
+def load_script(path: Path | str, log: Callable[[str], None] = lambda _m: None) -> str:
+    """Read a Frida script, prepending the vendored frida-java-bridge bundle when it's a
+    legacy script that uses the global `Java` and we're on Frida >= 17 (which dropped
+    that global from the runtime). No-op on Frida <= 16, on scripts that don't touch
+    `Java`, or on scripts that already bundle the bridge (e.g. frida-compile output)."""
+    src = Path(path).read_text()
+    if (_frida_major() >= 17 and re.search(r"\bJava\b", src)
+            and "frida-java-bridge" not in src):
+        log(f"prepending frida-java-bridge to {Path(path).name} (Frida {frida.__version__})")
+        src = f"{_JAVA_BRIDGE.read_text()}\n{src}"
+    return src
 
 
 @dataclass
@@ -67,7 +92,7 @@ def run_capture(
     Ctrl-C. Extra Frida scripts (e.g. SSL-unpinning) load alongside the keylog hook."""
     label = label or package
     uid = adb.app_uid(package)
-    scripts = [_KEYLOG_SCRIPT.read_text()] + [Path(s).read_text() for s in extra_scripts]
+    scripts = [_KEYLOG_SCRIPT.read_text()] + [load_script(s, log) for s in extra_scripts]
     log(f"{package} uid={uid}  scripts={1 + len(extra_scripts)}")
 
     chan = grpc.insecure_channel(gateway)

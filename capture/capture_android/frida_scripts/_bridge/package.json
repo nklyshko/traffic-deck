@@ -1,0 +1,13 @@
+{
+  "name": "trafficdeck-frida-bridge",
+  "private": true,
+  "description": "Builds java-bridge.js: a plain-IIFE bundle of frida-java-bridge that installs globalThis.Java. capture.py prepends it to legacy SSL-unpinning scripts when running under Frida >= 17, where the runtime no longer provides the Java global. Run `npm install && npm run build` after bumping frida-java-bridge.",
+  "scripts": {
+    "build": "esbuild bridge_entry.js --bundle --format=iife --platform=neutral --alias:buffer=@frida/buffer --legal-comments=none --outfile=java-bridge.js"
+  },
+  "devDependencies": {
+    "@frida/buffer": "^7",
+    "esbuild": "^0.25",
+    "frida-java-bridge": "^7"
+  }
+}
