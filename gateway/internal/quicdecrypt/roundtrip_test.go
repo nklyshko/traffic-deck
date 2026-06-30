@@ -132,11 +132,14 @@ func TestConnRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var gotID uint64
-	var gotFromClient bool
-	var gotData []byte
+	type delivery struct {
+		id   uint64
+		fc   bool
+		data string
+	}
+	var got []delivery
 	c := NewConn(tlsdecrypt.NewKeylog(klPath), func(id uint64, fromClient bool, data []byte) {
-		gotID, gotFromClient, gotData = id, fromClient, data
+		got = append(got, delivery{id, fromClient, string(data)})
 	})
 
 	// Initial keys are deterministic from the client DCID; 1-RTT keys come from the keylog.
@@ -145,6 +148,7 @@ func TestConnRoundTrip(t *testing.T) {
 	svInit, _ := deriveKeys(svSec, aes128gcm)
 	suite, _ := suiteByID(0x1301)
 	clApp, _ := deriveKeys(clientTS, suite)
+	svApp, _ := deriveKeys(serverTS, suite)
 
 	// 1) client Initial with the ClientHello → Conn learns client_random + SNI.
 	ci := buildInitial(clInit, dcid, clientSCID, 0, cryptoFrameBytes(clientHelloMsg(random, "example.com")))
@@ -155,11 +159,19 @@ func TestConnRoundTrip(t *testing.T) {
 	// 2) server Initial with the ServerHello → Conn learns the cipher suite + serverSCID.
 	si := buildInitial(svInit, clientSCID, serverSCID, 0, cryptoFrameBytes(serverHelloMsg(0x1301)))
 	c.Feed(false, si)
-	// 3) client 1-RTT carrying a STREAM frame (DCID = server's SCID).
-	app := build1RTT(clApp, serverSCID, 0, streamFrameBytes(0, []byte("hello-http3")))
-	c.Feed(true, app)
+	// 3) client request + server response on bidi stream 0 — BOTH at offset 0. A bidi
+	// stream carries each direction with independent offsets, so they must reassemble
+	// separately (regression: a single per-id buffer mixed them and corrupted the second).
+	c.Feed(true, build1RTT(clApp, serverSCID, 0, streamFrameBytes(0, []byte("request-bytes"))))
+	c.Feed(false, build1RTT(svApp, clientSCID, 0, streamFrameBytes(0, []byte("response-bytes"))))
 
-	if string(gotData) != "hello-http3" || gotID != 0 || !gotFromClient {
-		t.Fatalf("onStream got (id=%d fromClient=%v data=%q), want (0, true, hello-http3)", gotID, gotFromClient, gotData)
+	if len(got) != 2 {
+		t.Fatalf("got %d deliveries, want 2: %+v", len(got), got)
+	}
+	want := map[bool]string{true: "request-bytes", false: "response-bytes"}
+	for _, d := range got {
+		if d.id != 0 || d.data != want[d.fc] {
+			t.Errorf("delivery %+v; want id=0 data=%q", d, want[d.fc])
+		}
 	}
 }

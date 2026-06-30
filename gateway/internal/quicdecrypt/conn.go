@@ -22,7 +22,7 @@ type Conn struct {
 	app          [2]*keys // 1-RTT keys: [0]=client, [1]=server
 
 	crypto    [2]cryptoReasm
-	streams   map[uint64]*streamReasm
+	streams   map[streamKey]*streamReasm
 	largestPN [2]uint64 // 1-RTT, per direction
 	unsupp    bool
 
@@ -33,7 +33,15 @@ type Conn struct {
 // NewConn returns a decryptor that calls onStream with newly-available, in-order bytes
 // for a stream (direction + stream id).
 func NewConn(keylog *tlsdecrypt.Keylog, onStream func(streamID uint64, fromClient bool, data []byte)) *Conn {
-	return &Conn{keylog: keylog, onStream: onStream, streams: map[uint64]*streamReasm{}}
+	return &Conn{keylog: keylog, onStream: onStream, streams: map[streamKey]*streamReasm{}}
+}
+
+// streamKey identifies a reassembly buffer. A bidirectional QUIC stream carries each
+// direction with its own independent byte offsets, so client and server data on the same
+// stream id must be reassembled separately.
+type streamKey struct {
+	id         uint64
+	fromClient bool
 }
 
 // IsClientInitial reports whether a UDP payload looks like a QUIC v1 client Initial
@@ -172,10 +180,11 @@ func (c *Conn) handleShort(fromClient bool, pkt []byte) {
 }
 
 func (c *Conn) deliverStream(fromClient bool, fr streamFrame) {
-	r := c.streams[fr.id]
+	key := streamKey{fr.id, fromClient}
+	r := c.streams[key]
 	if r == nil {
 		r = &streamReasm{}
-		c.streams[fr.id] = r
+		c.streams[key] = r
 	}
 	if data := r.add(fr.offset, fr.data); len(data) > 0 {
 		c.onStream(fr.id, fromClient, data)
