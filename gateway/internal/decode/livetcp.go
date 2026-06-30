@@ -105,11 +105,13 @@ type tcpStream struct {
 	decided     bool // classified the connection from its first decrypted client bytes
 	matched     bool // a custom decoder claimed it
 	isHTTP      bool // decoding as HTTP/1.1
+	isH2        bool // decoding as HTTP/2
 	dropped     bool
 	flowEmitted bool
 	sess        decoders.Session
 	flow        *Flow
 	httpSess    *httpStream
+	h2Sess      *h2Stream
 	preBuf      []appChunk // decrypted bytes buffered until classification (needs client bytes)
 }
 
@@ -155,6 +157,9 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 	if s.httpSess != nil {
 		s.httpSess.close() // EOF the HTTP parser goroutines so they drain + exit
 	}
+	if s.h2Sess != nil {
+		s.h2Sess.close()
+	}
 	return true
 }
 
@@ -195,11 +200,10 @@ func (s *tcpStream) classify(firstClient []byte) {
 		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
 		return
 	}
-	// HTTP/2 (ALPN h2) opens with the client connection preface; passive H2 decode isn't
-	// implemented yet, so leave those streams to the batch tshark pass on close.
+	// HTTP/2 (ALPN h2) opens with the client connection preface.
 	if bytes.HasPrefix(firstClient, []byte("PRI * HTTP/2.0\r\n")) {
-		s.dropped = true
-		log.Printf("live decode: HTTP/2 on %s left to batch decode", s.conn.SNI())
+		s.h2Sess = newH2Stream(s)
+		s.isH2 = true
 		return
 	}
 	s.httpSess = newHTTPStream(s)
@@ -212,6 +216,8 @@ func (s *tcpStream) dispatch(fromClient bool, plain []byte) {
 		s.feedCustom(fromClient, plain)
 	case s.isHTTP:
 		s.httpSess.feed(fromClient, plain)
+	case s.isH2:
+		s.h2Sess.feed(fromClient, plain)
 	}
 }
 
