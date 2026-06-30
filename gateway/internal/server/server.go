@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -71,7 +72,7 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	if !req.GetFollow() {
 		return nil
 	}
-	ls := v.hub.get(req.GetSessionId())
+	ls := v.waitForLive(srv.Context(), req.GetSessionId())
 	if ls == nil {
 		return nil // not a live session; backfill is all there is
 	}
@@ -93,6 +94,35 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 			if err := srv.Send(ev); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// waitForLive returns the live-hub session for sessionID, briefly waiting out the race
+// between OpenSession (the session row is created) and the first UploadBegin (which
+// registers the hub session and starts live decode). Without this, a viewer that
+// subscribes in that window sees hub.get==nil and gets only backfill — no live flows —
+// even though the session is live. Returns nil if the session is already closed, gone,
+// or stays open without ever registering a live decode (e.g. live decode disabled).
+func (v *Viewer) waitForLive(ctx context.Context, sessionID string) *liveSession {
+	const poll = 50 * time.Millisecond
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if ls := v.hub.get(sessionID); ls != nil {
+			return ls
+		}
+		// Stop waiting once the session is no longer open (it won't become live) or gone.
+		s, err := v.st.GetSession(ctx, sessionID)
+		if err != nil || s.GetStatus() != trafficv1.SessionStatus_SESSION_STATUS_OPEN {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(poll):
 		}
 	}
 }
@@ -138,7 +168,7 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 	if !req.GetFollow() {
 		return nil
 	}
-	ls := v.hub.get(req.GetSessionId())
+	ls := v.waitForLive(srv.Context(), req.GetSessionId())
 	if ls == nil {
 		return nil // not live; the backfill is all there is
 	}
