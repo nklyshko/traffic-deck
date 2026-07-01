@@ -8,8 +8,33 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
+
+// TestUnsupportedReason checks that an unsupported suite marks the connection unsupported
+// with a descriptive reason (surfaced to the live-decode logs).
+func TestUnsupportedReason(t *testing.T) {
+	c := NewConn(NewKeylog(""), nil)
+	c.clientRandom = make([]byte, 32) // pretend the ClientHello was already seen
+
+	// ServerHello body: legacy_version 0x0303, 32-byte random, empty session_id, cipher
+	// 0x000a (3DES — unsupported live), null compression, no extensions.
+	body := []byte{0x03, 0x03}
+	body = append(body, make([]byte, 32)...)
+	body = append(body, 0x00)       // session_id length
+	body = append(body, 0x00, 0x0a) // cipher_suite = TLS_RSA_WITH_3DES_EDE_CBC_SHA
+	body = append(body, 0x00)       // compression_method
+	body = append(body, 0x00, 0x00) // extensions length
+	c.parseServerHello(body)
+
+	if !c.Unsupported() {
+		t.Fatal("expected connection to be marked unsupported")
+	}
+	if r := c.UnsupportedReason(); !strings.Contains(r, "0x000a") || !strings.Contains(r, "TLS 1.2") {
+		t.Fatalf("reason %q missing version/cipher detail", r)
+	}
+}
 
 // runLegacyCBC exercises the AES-CBC record layer for a given negotiated TLS version,
 // crafting records exactly as a stack would (prf10 key derivation for <1.2; explicit IV

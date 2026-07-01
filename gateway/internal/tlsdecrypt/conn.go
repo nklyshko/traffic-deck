@@ -6,6 +6,8 @@ package tlsdecrypt
 // records using key material from the key-log, delivering application plaintext via
 // onApp. The negotiated version (from the ServerHello) selects the record layer.
 
+import "fmt"
+
 const (
 	recHeaderLen   = 5
 	ctHandshake    = 22
@@ -50,7 +52,8 @@ type Conn struct {
 	suite12      *tls12Suite // TLS 1.2 AEAD suite
 	haveCH       bool
 	haveSH       bool
-	unsupported  bool // ServerHello seen but not a supported version/suite
+	unsupported  bool   // ServerHello seen but not a supported version/suite
+	unsupReason  string // human-readable reason, for diagnostics/logging
 
 	dir [2]*dirState
 }
@@ -79,9 +82,38 @@ func dirIdx(fromClient bool) int {
 func (c *Conn) SNI() string { return c.sni }
 
 // Unsupported reports that the ServerHello negotiated something this decryptor can't
-// handle (not TLS 1.3, or an unknown suite) — the caller should stop and leave the
-// stream to the batch tshark pass.
+// handle (an unknown version or suite) — the caller should stop and leave the stream to
+// the batch tshark pass.
 func (c *Conn) Unsupported() bool { return c.unsupported }
+
+// UnsupportedReason returns a short human-readable explanation of why the connection is
+// unsupported (empty until Unsupported reports true), for diagnostics/logging.
+func (c *Conn) UnsupportedReason() string { return c.unsupReason }
+
+// markUnsupported flags the connection unsupported, keeping the first reason recorded.
+func (c *Conn) markUnsupported(reason string) {
+	c.unsupported = true
+	if c.unsupReason == "" {
+		c.unsupReason = reason
+	}
+}
+
+// versionName renders a negotiated version as a short label for diagnostics.
+func versionName(v uint16) string {
+	switch v {
+	case vSSL30:
+		return "SSL 3.0"
+	case vTLS10:
+		return "TLS 1.0"
+	case vTLS11:
+		return "TLS 1.1"
+	case vTLS12:
+		return "TLS 1.2"
+	case vTLS13:
+		return "TLS 1.3"
+	}
+	return fmt.Sprintf("version %#04x", v)
+}
 
 // Feed appends newly-reassembled record bytes for one direction and decrypts as far as
 // it can. Both directions are drained in a loop until neither progresses, because a
@@ -153,7 +185,7 @@ func (c *Conn) handle13(fromClient bool, ds *dirState, typ byte, header, frag []
 				}
 				dec, err := newRecordDecryptor(c.suite, secret)
 				if err != nil {
-					c.unsupported = true
+					c.markUnsupported(fmt.Sprintf("%s key setup failed: %v", versionName(c.version), err))
 				} else {
 					ds.dec = dec
 				}
@@ -200,16 +232,16 @@ func (c *Conn) handle12(fromClient bool, ds *dirState, typ byte, header, frag []
 		}
 		dec, err := newTLS12Decryptor(c.suite12, ms, c.clientRandom, c.serverRandom, fromClient, c.version)
 		if err != nil {
-			c.unsupported = true
+			c.markUnsupported(fmt.Sprintf("%s key setup failed: %v", versionName(c.version), err))
 			return true
 		}
 		ds.dec12 = dec
 	}
 	plain, ok := ds.dec12.open(header, frag)
 	if !ok {
-		// With the correct key an AEAD failure shouldn't happen; bail to the batch pass
+		// With the correct key an AEAD/MAC failure shouldn't happen; bail to the batch pass
 		// rather than desynchronize the sequence number.
-		c.unsupported = true
+		c.markUnsupported(fmt.Sprintf("%s record decrypt/MAC failed", versionName(c.version)))
 		return true
 	}
 	// The record's content type is the cleartext outer type; only application_data carries
@@ -313,20 +345,21 @@ func (c *Conn) parseServerHello(b []byte) {
 		if s, found := suiteByID(id); found {
 			c.suite = s
 		} else {
-			c.unsupported = true
+			c.markUnsupported(fmt.Sprintf("%s cipher %#04x not supported", versionName(c.version), id))
 		}
 	case vTLS12, vTLS11, vTLS10, vSSL30:
 		s, found := tls12SuiteByID(id)
 		switch {
 		case !found:
-			c.unsupported = true // 3DES/RC4 / unknown suite — batch pass
+			// e.g. 3DES/RC4, which we don't decrypt live (tshark handles them on close).
+			c.markUnsupported(fmt.Sprintf("%s cipher %#04x not supported (3DES/RC4?)", versionName(c.version), id))
 		case c.version < vTLS12 && !s.cbc:
-			c.unsupported = true // SSL 3.0 / TLS 1.0/1.1 predate the AEAD suites
+			c.markUnsupported(fmt.Sprintf("%s with AEAD cipher %#04x (invalid)", versionName(c.version), id))
 		default:
 			c.suite12 = s
 		}
 	default:
-		c.unsupported = true // unknown version — batch pass
+		c.markUnsupported(versionName(c.version) + " not supported")
 	}
 }
 

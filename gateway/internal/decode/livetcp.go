@@ -190,6 +190,10 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 	}
 	s.conn.Feed(fromClient, data)
 	if s.conn.Unsupported() {
+		// A TLS connection we recognized but can't decrypt live (e.g. 3DES/RC4). Surface it
+		// — the batch tshark pass on close is still authoritative.
+		log.Printf("live decode: not decoding %s (%s) live: %s — deferred to batch pass on close",
+			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, s.conn.UnsupportedReason())
 		s.dropped = true
 	}
 }
@@ -201,7 +205,22 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 	if s.h2Sess != nil {
 		s.h2Sess.close()
 	}
+	// A TLS connection we never managed to decrypt (no key-log secret arrived, or the
+	// handshake never completed in the capture) yields no live flow — flag it so the gap
+	// isn't silent. Batch decode on close may still recover it if keys are present.
+	if s.sniffed && !s.dropped && !s.decided && !s.conn.Unsupported() {
+		log.Printf("live decode: %s (%s) not decoded live: no TLS key-log secret (or incomplete handshake) — trying batch pass on close",
+			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost)
+	}
 	return true
+}
+
+// hostLabel prefers the SNI for identifying a connection, falling back to the server host.
+func hostLabel(sni, host string) string {
+	if sni != "" {
+		return sni
+	}
+	return host
 }
 
 // onApp receives decrypted application bytes from the TLS layer. It buffers until the
