@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 // maxLiveBody caps body bytes kept per live message; the batch decode on close has the
@@ -171,9 +173,18 @@ func isWSUpgrade(resp *http.Response) bool {
 // startWebSocket reads RFC 6455 frames from both directions of the upgraded connection,
 // emitting a WsMessage per frame and refreshing the flow's frame count. The two
 // goroutines share the flow under wsMu; they exit when close() shuts the byte streams.
+//
+// If a registered WebSocket binary decoder claims this Upgrade (by host/path/SNI), its
+// binary frames are reframed into protocol messages — the live counterpart of the batch
+// stitcher's decodeWSBinary. Text/ping/pong/close and unclaimed connections pass through
+// as raw frames.
 func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
-	emit := func(opcode string, fromClient bool, payload []byte) {
-		h.wsMu.Lock()
+	var wsSess decoders.Session
+	if m := decoders.MatchWS(decoders.WSMeta{Host: f.Authority, Path: f.Path, SNI: h.owner.conn.SNI()}); len(m) > 0 {
+		wsSess = m[0].NewSession()
+	}
+
+	emitMsg := func(opcode string, fromClient bool, payload []byte) {
 		f.WsMessageCount++
 		h.onMsg(&WsMessage{
 			ID:           uuid.NewString(),
@@ -183,8 +194,19 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 			Opcode:       opcode,
 			Payload:      payload,
 		})
+	}
+	emit := func(opcode string, fromClient bool, payload []byte) {
+		h.wsMu.Lock()
+		defer h.wsMu.Unlock()
+		if opcode == "binary" && wsSess != nil {
+			// Frame the binary payload through the custom decoder (buffering partials).
+			for _, fr := range wsSess.Feed(fromClient, payload) {
+				emitMsg(fr.Opcode, fr.FromClient, fr.Payload)
+			}
+		} else {
+			emitMsg(opcode, fromClient, payload)
+		}
 		h.onFlow(f, false) // refresh the row's ⇅ count
-		h.wsMu.Unlock()
 	}
 	go readWSFrames(reqBr, true, emit)
 	go readWSFrames(respBr, false, emit)
