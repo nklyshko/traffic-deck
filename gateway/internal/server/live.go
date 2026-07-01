@@ -120,14 +120,16 @@ func (h *liveHub) write(sessionID string, b []byte) {
 }
 
 // stop ends a session's live decode: close the pipe (EOF tshark), wait for all
-// flows to be emitted, publish a closed session_event, and close subscribers.
-func (h *liveHub) stop(sessionID string) {
+// flows to be emitted, publish a closed session_event, and close subscribers. It
+// returns the finalized session (or nil) so the caller can persist its flows in
+// record-live mode; the accumulated flows/messages stay readable after close.
+func (h *liveHub) stop(sessionID string) *liveSession {
 	h.mu.Lock()
 	ls := h.sessions[sessionID]
 	delete(h.sessions, sessionID)
 	h.mu.Unlock()
 	if ls == nil {
-		return
+		return nil
 	}
 	if ls.customPW != nil {
 		_ = ls.customPW.Close() // EOF the Go custom-TCP decoder's pcap reader
@@ -155,6 +157,20 @@ func (h *liveHub) stop(sessionID string) {
 	ls.subs = nil
 	ls.msgSubs = nil
 	ls.mu.Unlock()
+	return ls
+}
+
+// snapshot returns the final accumulated flows (in arrival order) and WebSocket messages,
+// for persisting a record-live session on close.
+func (ls *liveSession) snapshot() ([]*trafficv1.Flow, []*trafficv1.WsMessage) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	flows := make([]*trafficv1.Flow, 0, len(ls.order))
+	for _, id := range ls.order {
+		flows = append(flows, ls.flows[id])
+	}
+	msgs := append([]*trafficv1.WsMessage(nil), ls.messages...)
+	return flows, msgs
 }
 
 func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {

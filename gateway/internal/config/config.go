@@ -15,6 +15,11 @@ type Config struct {
 	// custom raw-TCP). When false, no live decode runs and the capture is decoded only
 	// by the batch tshark pass on session close (the pre-live behavior).
 	LiveDecode bool
+	// RecordLive persists the live-decoded flows on close and skips the authoritative
+	// batch tshark re-decode. Only takes effect when LiveDecode is on and the session has
+	// a live decode running. Default false: the batch pass runs on close (authoritative,
+	// full bodies) — useful for verifying the live decoder against tshark.
+	RecordLive bool
 }
 
 func getenv(key, def string) string {
@@ -43,5 +48,6 @@ func Load() Config {
 		DataRoot:   getenv("DATA_ROOT", "./data"),
 		TsharkPath: getenv("TSHARK_PATH", "tshark"),
 		LiveDecode: getbool("GATEWAY_LIVE_DECODE", true),
+		RecordLive: getbool("GATEWAY_RECORD_LIVE", false),
 	}
 }

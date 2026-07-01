@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path"
 
@@ -29,10 +30,11 @@ type Ingest struct {
 	tshark     string
 	hub        *liveHub
 	liveDecode bool // when false, streaming uploads are archived and decoded only on close
+	recordLive bool // when true, persist the live-decoded flows on close instead of batch decode
 }
 
-func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode bool) *Ingest {
-	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub, liveDecode: liveDecode}
+func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive bool) *Ingest {
+	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub, liveDecode: liveDecode, recordLive: recordLive}
 }
 
 func pcapKey(sid string) string   { return path.Join("sessions", sid, "capture.pcap") }
@@ -200,8 +202,8 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRequest) (*trafficv1.SessionSummary, error) {
 	sid := req.GetSessionId()
 
-	// Stop live decode (if any) before the authoritative batch decode.
-	i.hub.stop(sid)
+	// Stop live decode (if any); ls holds the accumulated live flows for record-live mode.
+	ls := i.hub.stop(sid)
 
 	var pcapBytes, keylogBytes int64
 	if fi, err := i.obj.Stat(pcapKey(sid)); err == nil {
@@ -216,13 +218,20 @@ func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRe
 		return nil, status.Errorf(codes.Internal, "set sizes: %v", err)
 	}
 
-	if pcapBytes > 0 {
+	switch {
+	case i.recordLive && ls != nil && pcapBytes > 0:
+		// RECORD-LIVE: persist the flows the live decoder already produced; skip the batch
+		// tshark re-decode. Bodies are the live previews (capped at maxLiveBody).
+		if err := i.persistLive(ctx, sid, ls); err != nil {
+			return nil, status.Errorf(codes.Internal, "persist live: %v", err)
+		}
+	case pcapBytes > 0:
 		// PACKET source: authoritative batch decode over the finalized pcap.
 		pcapLocal, _ := i.obj.LocalPath(pcapKey(sid))
 		if _, err := importer.Finalize(ctx, i.st, i.tshark, sid, pcapLocal, keylogLocal); err != nil {
 			return nil, status.Errorf(codes.Internal, "finalize: %v", err)
 		}
-	} else {
+	default:
 		// Supplied/pushed source (PushFlows): flows were persisted incrementally;
 		// there's nothing to decode — just mark the session closed with its count.
 		n, err := i.st.CountFlows(ctx, sid)
@@ -239,4 +248,51 @@ func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRe
 		return nil, status.Errorf(codes.Internal, "get session: %v", err)
 	}
 	return &trafficv1.SessionSummary{Session: sess}, nil
+}
+
+// persistLive records the flows + WebSocket messages produced by the live decoder as a
+// "live" analysis, then finishes the session — the record-live alternative to the batch
+// tshark pass. The flows are the live path's final state (bodies capped at maxLiveBody).
+func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) error {
+	flows, msgs := ls.snapshot()
+
+	aid := uuid.NewString()
+	if err := i.st.CreateAnalysis(ctx, store.NewAnalysis{
+		ID: aid, SessionID: sid, Engine: "live", TLSKeyLogUsed: true,
+	}); err != nil {
+		return fmt.Errorf("create analysis: %w", err)
+	}
+
+	dflows := make([]*decode.Flow, len(flows))
+	for j, pf := range flows {
+		dflows[j] = protoToDecodeFlow(pf)
+	}
+	n, err := i.st.InsertFlows(ctx, sid, aid, dflows)
+	if err != nil {
+		return fmt.Errorf("insert flows: %w", err)
+	}
+
+	dmsgs := make([]*decode.WsMessage, len(msgs))
+	for j, pm := range msgs {
+		dmsgs[j] = protoToDecodeWsMessage(pm)
+	}
+	if _, err := i.st.InsertWsMessages(ctx, sid, dmsgs); err != nil {
+		return fmt.Errorf("insert ws messages: %w", err)
+	}
+
+	return i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n)
+}
+
+// protoToDecodeWsMessage converts a live proto WebSocket frame to the decode type the
+// store persists (payloads are inline on the live path).
+func protoToDecodeWsMessage(pm *trafficv1.WsMessage) *decode.WsMessage {
+	return &decode.WsMessage{
+		ID:           pm.GetId(),
+		FlowID:       pm.GetFlowId(),
+		FrameNumber:  pm.GetFrameNumber(),
+		TSUnixMicros: pm.GetTsUnixMicros(),
+		FromClient:   pm.GetFromClient(),
+		Opcode:       pm.GetOpcode(),
+		Payload:      pm.GetPayload().GetInline(),
+	}
 }
