@@ -1,9 +1,10 @@
 package tlsdecrypt
 
-// Conn passively decrypts one TLS 1.3 connection from its two directional record
+// Conn passively decrypts one TLS 1.2 or 1.3 connection from its two directional record
 // streams, fed incrementally. It parses the cleartext ClientHello (client_random + SNI)
-// and ServerHello (cipher suite), then decrypts application_data records using the
-// key-log's traffic secrets, delivering inner application plaintext via onApp.
+// and ServerHello (negotiated version + cipher suite), then decrypts application_data
+// records using key material from the key-log, delivering application plaintext via
+// onApp. The negotiated version (from the ServerHello) selects the record layer.
 
 const (
 	recHeaderLen   = 5
@@ -13,23 +14,37 @@ const (
 	ctAppData      = 23
 )
 
+// Negotiated protocol versions (ProtocolVersion on the wire).
+const (
+	vSSL30 = 0x0300
+	vTLS10 = 0x0301
+	vTLS11 = 0x0302
+	vTLS12 = 0x0303
+	vTLS13 = 0x0304
+)
+
 // dirState is one direction's record buffer + decryptor.
 type dirState struct {
-	label string // key-log label for this direction's app traffic secret
-	buf   []byte // un-parsed record bytes
-	dec   *recordDecryptor
+	label     string           // key-log label for this direction's app traffic secret (TLS 1.3)
+	buf       []byte           // un-parsed record bytes
+	dec       *recordDecryptor // TLS 1.3
+	dec12     *tls12Decryptor  // TLS 1.2
+	encrypted bool             // TLS 1.2: this direction's ChangeCipherSpec has been seen
 }
 
 type Conn struct {
 	keylog *Keylog
 	onApp  func(fromClient bool, data []byte)
 
+	version      uint16 // negotiated version once the ServerHello is seen (0 until then)
 	clientRandom []byte
+	serverRandom []byte // TLS 1.2 key expansion needs both randoms
 	sni          string
-	suite        *suite
+	suite        *suite      // TLS 1.3 suite
+	suite12      *tls12Suite // TLS 1.2 AEAD suite
 	haveCH       bool
 	haveSH       bool
-	unsupported  bool // ServerHello seen but not a supported TLS 1.3 AEAD suite
+	unsupported  bool // ServerHello seen but not a supported version/suite
 
 	dir [2]*dirState
 }
@@ -93,40 +108,110 @@ func (c *Conn) drain(fromClient bool) bool {
 		header := ds.buf[:recHeaderLen]
 		frag := ds.buf[recHeaderLen : recHeaderLen+length]
 
-		switch typ {
-		case ctHandshake: // cleartext ClientHello / ServerHello
-			c.parseHandshake(fromClient, frag)
-		case ctChangeCipher, ctAlert:
-			// legacy ChangeCipherSpec / cleartext alert — ignore
-		case ctAppData:
-			if !c.ready() {
-				return progressed // ServerHello not seen yet; retry on a later Feed
-			}
-			if !c.unsupported {
-				if ds.dec == nil {
-					secret, ok := c.keylog.Get(ds.label, c.clientRandom)
-					if !ok {
-						return progressed // secret not in the key-log yet; retry later
-					}
-					dec, err := newRecordDecryptor(c.suite, secret)
-					if err != nil {
-						c.unsupported = true
-					} else {
-						ds.dec = dec
-					}
-				}
-				if ds.dec != nil {
-					// On failure the record was a handshake-phase record under a
-					// different key; skip it (open didn't advance the sequence number).
-					if plain, ctype, ok := ds.dec.open(header, frag); ok {
-						c.handleInner(fromClient, ds, ctype, plain)
-					}
-				}
-			}
+		// handle* return false when the record can't be processed yet (keys/ServerHello
+		// not available); leave it buffered and retry on a later Feed.
+		var consumed bool
+		if c.version == vTLS12 {
+			consumed = c.handle12(fromClient, ds, typ, header, frag)
+		} else {
+			// TLS 1.3, or version not yet known (only cleartext handshake matters until
+			// the ServerHello sets the version). Unsupported legacy versions also land
+			// here and simply drop through to the batch pass.
+			consumed = c.handle13(fromClient, ds, typ, header, frag)
+		}
+		if !consumed {
+			return progressed
 		}
 		ds.buf = ds.buf[recHeaderLen+length:]
 		progressed = true
 	}
+}
+
+// handle13 processes one TLS 1.3 record (or a pre-ServerHello cleartext handshake). It
+// returns false if an application record can't be decrypted yet (keys not available).
+func (c *Conn) handle13(fromClient bool, ds *dirState, typ byte, header, frag []byte) bool {
+	switch typ {
+	case ctHandshake: // cleartext ClientHello / ServerHello
+		c.parseHandshake(fromClient, frag)
+	case ctChangeCipher, ctAlert:
+		// legacy ChangeCipherSpec / cleartext alert — ignore
+	case ctAppData:
+		if !c.ready() {
+			return false // ServerHello not seen yet; retry on a later Feed
+		}
+		if !c.unsupported {
+			if ds.dec == nil {
+				secret, ok := c.keylog.Get(ds.label, c.clientRandom)
+				if !ok {
+					return false // secret not in the key-log yet; retry later
+				}
+				dec, err := newRecordDecryptor(c.suite, secret)
+				if err != nil {
+					c.unsupported = true
+				} else {
+					ds.dec = dec
+				}
+			}
+			if ds.dec != nil {
+				// On failure the record was a handshake-phase record under a
+				// different key; skip it (open didn't advance the sequence number).
+				if plain, ctype, ok := ds.dec.open(header, frag); ok {
+					c.handleInner(fromClient, ds, ctype, plain)
+				}
+			}
+		}
+	}
+	return true
+}
+
+// handle12 processes one TLS 1.2 record. Before this direction's ChangeCipherSpec the
+// handshake is cleartext; after it every record (Finished, session tickets, application
+// data, alerts) is AEAD-encrypted with a continuous sequence number that starts at 0. It
+// returns false if an encrypted record can't be decrypted yet (master secret not in the
+// key-log), leaving it buffered to retry.
+func (c *Conn) handle12(fromClient bool, ds *dirState, typ byte, header, frag []byte) bool {
+	if c.unsupported {
+		return true // leave the connection to the batch pass; just consume + ignore
+	}
+	if !ds.encrypted {
+		switch typ {
+		case ctHandshake: // cleartext ClientHello / ServerHello / Certificate / ...
+			c.parseHandshake(fromClient, frag)
+		case ctChangeCipher:
+			ds.encrypted = true // records after this point are encrypted
+		case ctAlert:
+			// cleartext warning/alert — ignore
+		}
+		return true
+	}
+	if ds.dec12 == nil {
+		if c.suite12 == nil || c.serverRandom == nil || c.clientRandom == nil {
+			return false // ServerHello not fully parsed yet (shouldn't happen post-CCS)
+		}
+		ms, ok := c.keylog.Get("CLIENT_RANDOM", c.clientRandom)
+		if !ok {
+			return false // master secret not in the key-log yet; retry on a later Feed
+		}
+		dec, err := newTLS12Decryptor(c.suite12, ms, c.clientRandom, c.serverRandom, fromClient)
+		if err != nil {
+			c.unsupported = true
+			return true
+		}
+		ds.dec12 = dec
+	}
+	plain, ok := ds.dec12.open(header, frag)
+	if !ok {
+		// With the correct key an AEAD failure shouldn't happen; bail to the batch pass
+		// rather than desynchronize the sequence number.
+		c.unsupported = true
+		return true
+	}
+	// The record's content type is the cleartext outer type; only application_data carries
+	// payload we care about (Finished / tickets / alerts are decrypted only to keep seq).
+	if typ == ctAppData && len(plain) > 0 && c.onApp != nil {
+		c.onApp(fromClient, plain)
+	}
+	return true
 }
 
 // handleInner dispatches a decrypted record by its inner content type.
@@ -193,21 +278,72 @@ func (c *Conn) parseClientHello(b []byte) {
 
 func (c *Conn) parseServerHello(b []byte) {
 	// legacy_version(2) random(32) session_id<1> cipher_suite(2) compression(1) extensions<2>
+	if len(b) < 2+32 {
+		return
+	}
+	c.serverRandom = append([]byte(nil), b[2:2+32]...)
+	legacy := uint16(b[0])<<8 | uint16(b[1])
 	p := 2 + 32
 	var ok bool
 	if p, ok = skipVec8(b, p); !ok { // session_id
 		return
 	}
-	if len(b) < p+2 {
+	if len(b) < p+3 {
 		return
 	}
 	id := uint16(b[p])<<8 | uint16(b[p+1])
+	p += 3 // cipher_suite(2) + compression_method(1)
 	c.haveSH = true
-	if s, found := suiteByID(id); found {
-		c.suite = s
-	} else {
-		c.unsupported = true
+
+	// TLS 1.3 pins legacy_version to 0x0303 and carries the real version in the
+	// supported_versions extension; ≤1.2 uses legacy_version directly.
+	c.version = legacy
+	if v, found := shSupportedVersion(b, p); found {
+		c.version = v
 	}
+
+	switch c.version {
+	case vTLS13:
+		if s, found := suiteByID(id); found {
+			c.suite = s
+		} else {
+			c.unsupported = true
+		}
+	case vTLS12:
+		if s, found := tls12SuiteByID(id); found {
+			c.suite12 = s
+		} else {
+			c.unsupported = true // CBC / unknown suite — left to the batch pass (Step 2+)
+		}
+	default:
+		c.unsupported = true // TLS 1.1/1.0/SSL 3.0 — later steps; batch pass for now
+	}
+}
+
+// shSupportedVersion returns the version selected in a ServerHello supported_versions
+// extension (type 43), scanning the extension block that starts at p.
+func shSupportedVersion(b []byte, p int) (uint16, bool) {
+	if len(b) < p+2 {
+		return 0, false
+	}
+	end := p + 2 + (int(b[p])<<8 | int(b[p+1]))
+	p += 2
+	if end > len(b) {
+		end = len(b)
+	}
+	for p+4 <= end {
+		etype := int(b[p])<<8 | int(b[p+1])
+		elen := int(b[p+2])<<8 | int(b[p+3])
+		p += 4
+		if p+elen > end {
+			return 0, false
+		}
+		if etype == 43 && elen >= 2 { // supported_versions
+			return uint16(b[p])<<8 | uint16(b[p+1]), true
+		}
+		p += elen
+	}
+	return 0, false
 }
 
 // parseSNI scans the ClientHello extensions starting at p for the host_name SNI.
