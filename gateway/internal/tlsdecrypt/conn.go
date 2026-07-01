@@ -23,9 +23,11 @@ const (
 	vTLS13 = 0x0304
 )
 
-// isLegacyTLS reports whether a negotiated version uses the TLS 1.0–1.2 record layer
-// (cleartext handshake → ChangeCipherSpec → MAC/AEAD records), handled by handle12.
-func isLegacyTLS(v uint16) bool { return v == vTLS10 || v == vTLS11 || v == vTLS12 }
+// isLegacyTLS reports whether a negotiated version uses the SSL 3.0 / TLS 1.0–1.2 record
+// layer (cleartext handshake → ChangeCipherSpec → MAC/AEAD records), handled by handle12.
+func isLegacyTLS(v uint16) bool {
+	return v == vSSL30 || v == vTLS10 || v == vTLS11 || v == vTLS12
+}
 
 // dirState is one direction's record buffer + decryptor.
 type dirState struct {
@@ -313,18 +315,18 @@ func (c *Conn) parseServerHello(b []byte) {
 		} else {
 			c.unsupported = true
 		}
-	case vTLS12, vTLS11, vTLS10:
+	case vTLS12, vTLS11, vTLS10, vSSL30:
 		s, found := tls12SuiteByID(id)
 		switch {
 		case !found:
 			c.unsupported = true // 3DES/RC4 / unknown suite — batch pass
 		case c.version < vTLS12 && !s.cbc:
-			c.unsupported = true // TLS 1.0/1.1 predate the AEAD suites
+			c.unsupported = true // SSL 3.0 / TLS 1.0/1.1 predate the AEAD suites
 		default:
 			c.suite12 = s
 		}
 	default:
-		c.unsupported = true // SSL 3.0 (and anything else) — batch pass for now
+		c.unsupported = true // unknown version — batch pass
 	}
 }
 

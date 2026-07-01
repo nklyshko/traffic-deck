@@ -9,10 +9,12 @@
 //     the CLIENT_RANDOM master secret via the TLS 1.2 PRF.
 //   - TLS 1.1 / 1.0 — the AES-CBC suites; keys via the TLS 1.0/1.1 PRF (MD5⊕SHA-1). TLS
 //     1.1 carries an explicit per-record IV; TLS 1.0 chains an implicit IV between records.
+//   - SSL 3.0 — the AES-CBC suites; its own MD5/SHA-1 key block and two-pass record MAC,
+//     with an implicit chained IV (see ssl3.go). Long dead; for archived captures only.
 //
-// Streams using an unsupported version or suite (TLS 1.x 3DES/RC4, or SSL 3.0) are reported
-// unsupported and left to the batch tshark pass. For TLS 1.3 we never need to decrypt the
-// handshake (handshake-phase records simply fail the AEAD and are skipped); for TLS 1.0–1.2
+// Streams using an unsupported version or suite (3DES/RC4) are reported unsupported and
+// left to the batch tshark pass. For TLS 1.3 we never need to decrypt the handshake
+// (handshake-phase records simply fail the AEAD and are skipped); for SSL 3.0 / TLS 1.0–1.2
 // the ChangeCipherSpec marks where each direction's records become encrypted.
 package tlsdecrypt
 

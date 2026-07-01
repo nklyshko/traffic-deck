@@ -24,13 +24,19 @@ func runLegacyCBC(t *testing.T, version uint16, suiteID uint16) {
 		t.Fatalf("suite %#x not a CBC suite", suiteID)
 	}
 	bs := suite.blockSize
-	implicit := version == vTLS10
+	implicit := version == vTLS10 || version == vSSL30
+	ssl3 := version == vSSL30
 	ivLen := 0
 	if implicit {
 		ivLen = bs
 	}
-	kb := prf10(master, "key expansion", append(append([]byte{}, serverRandom...), clientRandom...),
-		2*suite.macLen+2*suite.keyLen+2*ivLen)
+	need := 2*suite.macLen + 2*suite.keyLen + 2*ivLen
+	var kb []byte
+	if ssl3 {
+		kb = ssl3KeyBlock(master, clientRandom, serverRandom, need)
+	} else {
+		kb = prf10(master, "key expansion", append(append([]byte{}, serverRandom...), clientRandom...), need)
+	}
 	// Key block layout: clientMAC, serverMAC, clientKey, serverKey, clientIV, serverIV.
 	serverMAC := kb[suite.macLen : 2*suite.macLen]
 	serverKey := kb[2*suite.macLen+suite.keyLen : 2*suite.macLen+2*suite.keyLen]
@@ -48,13 +54,19 @@ func runLegacyCBC(t *testing.T, version uint16, suiteID uint16) {
 	verLo := byte(version & 0xff)
 
 	seal := func(seq uint64, content []byte) []byte {
-		aad := make([]byte, 8)
-		binary.BigEndian.PutUint64(aad, seq)
-		aad = append(aad, ctAppData, 0x03, verLo, byte(len(content)>>8), byte(len(content)))
-		m := hmac.New(suite.macHash, serverMAC)
-		m.Write(aad)
-		m.Write(content)
-		plain := append(append([]byte{}, content...), m.Sum(nil)...)
+		var mac []byte
+		if ssl3 {
+			mac = ssl3MAC(suite.macHash, serverMAC, suite.macLen, seq, ctAppData, content)
+		} else {
+			aad := make([]byte, 8)
+			binary.BigEndian.PutUint64(aad, seq)
+			aad = append(aad, ctAppData, 0x03, verLo, byte(len(content)>>8), byte(len(content)))
+			m := hmac.New(suite.macHash, serverMAC)
+			m.Write(aad)
+			m.Write(content)
+			mac = m.Sum(nil)
+		}
+		plain := append(append([]byte{}, content...), mac...)
 		padLen := (bs - (len(plain)+1)%bs) % bs
 		for i := 0; i <= padLen; i++ {
 			plain = append(plain, byte(padLen))
@@ -92,6 +104,7 @@ func runLegacyCBC(t *testing.T, version uint16, suiteID uint16) {
 
 func TestTLS11CBCRoundTrip(t *testing.T) { runLegacyCBC(t, vTLS11, 0xc013) } // AES128-CBC-SHA
 func TestTLS10CBCRoundTrip(t *testing.T) { runLegacyCBC(t, vTLS10, 0xc013) }
+func TestSSL30CBCRoundTrip(t *testing.T) { runLegacyCBC(t, vSSL30, 0x002f) } // RSA-AES128-CBC-SHA
 
 // TestPRF12SHA256 checks prf12 against the canonical TLS 1.2 P_SHA256 test vector
 // (widely cited from the IETF TLS WG mailing list).

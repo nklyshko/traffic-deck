@@ -134,8 +134,9 @@ type tls12Decryptor struct {
 	// CBC:
 	block      cipher.Block
 	macKey     []byte
-	implicitIV bool   // TLS 1.0: IV chains from the previous record instead of being on the wire
-	cbcIV      []byte // TLS 1.0 chained IV state (next record's IV)
+	implicitIV bool   // TLS 1.0 / SSL 3.0: IV chains from the previous record, not on the wire
+	cbcIV      []byte // chained IV state (next record's IV)
+	ssl3       bool   // SSL 3.0 record MAC (bespoke two-pass hash, no version) instead of HMAC
 }
 
 // newTLS12Decryptor derives the direction's key material from the master secret via key
@@ -143,24 +144,29 @@ type tls12Decryptor struct {
 // PRF (TLS 1.0/1.1 use MD5⊕SHA-1; 1.2 uses the suite hash) and, for CBC, the IV scheme
 // (TLS 1.0 chains an implicit IV from the key block; 1.1/1.2 carry it per record).
 func newTLS12Decryptor(s *tls12Suite, masterSecret, clientRandom, serverRandom []byte, fromClient bool, version uint16) (*tls12Decryptor, error) {
-	prf := func(secret []byte, label string, seed []byte, n int) []byte {
-		if version < vTLS12 {
-			return prf10(secret, label, seed, n)
-		}
-		return prf12(s.prfHash, secret, label, seed, n)
-	}
-	implicitIV := s.cbc && version == vTLS10
+	implicitIV := s.cbc && (version == vTLS10 || version == vSSL30)
 	ivLen := s.fixedIVLen // AEAD salt; 0 for 1.1/1.2 CBC (explicit IV on the wire)
 	if implicitIV {
 		ivLen = s.blockSize
 	}
 
-	// key_block = PRF(master_secret, "key expansion", server_random + client_random)
-	seed := make([]byte, 0, 64)
-	seed = append(seed, serverRandom...)
-	seed = append(seed, clientRandom...)
+	// key_block: SSL 3.0 uses its own KDF; TLS uses PRF(master, "key expansion",
+	// server_random + client_random).
 	need := 2*s.macLen + 2*s.keyLen + 2*ivLen
-	kb := prf(masterSecret, "key expansion", seed, need)
+	var kb []byte
+	switch {
+	case version == vSSL30:
+		kb = ssl3KeyBlock(masterSecret, clientRandom, serverRandom, need)
+	default:
+		seed := make([]byte, 0, 64)
+		seed = append(seed, serverRandom...)
+		seed = append(seed, clientRandom...)
+		if version < vTLS12 {
+			kb = prf10(masterSecret, "key expansion", seed, need)
+		} else {
+			kb = prf12(s.prfHash, masterSecret, "key expansion", seed, need)
+		}
+	}
 
 	// Layout: client_write_MAC, server_write_MAC, client_write_key, server_write_key,
 	// client_write_IV, server_write_IV.
@@ -182,6 +188,7 @@ func newTLS12Decryptor(s *tls12Suite, masterSecret, clientRandom, serverRandom [
 		}
 		d.block = block
 		d.implicitIV = implicitIV
+		d.ssl3 = version == vSSL30
 		if implicitIV {
 			d.cbcIV = append([]byte(nil), iv...)
 		}
@@ -284,11 +291,18 @@ func (d *tls12Decryptor) openCBC(header, frag []byte) ([]byte, bool) {
 	content := body[:len(body)-d.macLen()]
 	mac := body[len(body)-d.macLen():]
 
-	// MAC = HMAC(mac_key, seq || type || version || content_length || content).
-	m := hmac.New(d.suite.macHash, d.macKey)
-	m.Write(d.aad12(header, len(content)))
-	m.Write(content)
-	if !hmac.Equal(mac, m.Sum(nil)) {
+	// Verify the record MAC: TLS uses HMAC over seq||type||version||length||content; SSL 3.0
+	// uses its own two-pass hash that omits the version.
+	var want []byte
+	if d.ssl3 {
+		want = ssl3MAC(d.suite.macHash, d.macKey, d.suite.macLen, d.seq, header[0], content)
+	} else {
+		m := hmac.New(d.suite.macHash, d.macKey)
+		m.Write(d.aad12(header, len(content)))
+		m.Write(content)
+		want = m.Sum(nil)
+	}
+	if !hmac.Equal(mac, want) {
 		return nil, false
 	}
 	d.seq++
