@@ -9,6 +9,7 @@ package decode
 // the quic-go/qpack decoder doesn't support live).
 
 import (
+	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,8 +34,10 @@ type quicSession struct {
 	conn                               *quicdecrypt.Conn
 	serverHost, serverPort, clientAddr string
 
-	mu      sync.Mutex
-	streams map[uint64]*h3Stream
+	mu          sync.Mutex
+	streams     map[uint64]*h3Stream
+	loggedUnsup bool // logged the unsupported-suite diagnostic once
+	loggedQPACK bool // logged the QPACK-dynamic-table diagnostic once
 }
 
 // h3Stream is one request stream: buffered bytes + parser state per direction, and the
@@ -55,6 +58,11 @@ func newQUICSession(keylog *tlsdecrypt.Keylog, onFlow func(*Flow, bool), serverH
 
 func (s *quicSession) feed(fromClient bool, datagram []byte) {
 	s.conn.Feed(fromClient, datagram)
+	if !s.loggedUnsup && s.conn.Unsupported() {
+		log.Printf("live decode: not decoding HTTP/3 %s (%s) live: %s — deferred to batch pass on close",
+			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, s.conn.UnsupportedReason())
+		s.loggedUnsup = true
+	}
 }
 
 // onStream receives in-order bytes for a QUIC stream. Only client-initiated bidirectional
@@ -112,6 +120,11 @@ func (s *quicSession) onHeaders(st *h3Stream, fromClient bool, payload []byte) {
 	fields, err := dec.DecodeFull(payload)
 	if err != nil {
 		// QPACK dynamic-table reference (unsupported live) or partial — leave to batch.
+		if !s.loggedQPACK {
+			log.Printf("live decode: HTTP/3 %s (%s): QPACK dynamic-table HEADERS not decodable live — deferred to batch pass on close",
+				hostLabel(s.conn.SNI, s.serverHost), s.serverHost)
+			s.loggedQPACK = true
+		}
 		return
 	}
 	f := st.flow

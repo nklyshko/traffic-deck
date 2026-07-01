@@ -1,6 +1,10 @@
 package quicdecrypt
 
-import "gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+import (
+	"fmt"
+
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+)
 
 // Conn passively decrypts one QUIC connection from its two directional datagram streams,
 // fed incrementally. It decrypts Initial packets with the version-derived keys to recover
@@ -21,14 +25,20 @@ type Conn struct {
 	suite        *suite
 	app          [2]*keys // 1-RTT keys: [0]=client, [1]=server
 
-	crypto    [2]cryptoReasm
-	streams   map[streamKey]*streamReasm
-	largestPN [2]uint64 // 1-RTT, per direction
-	unsupp    bool
+	crypto      [2]cryptoReasm
+	streams     map[streamKey]*streamReasm
+	largestPN   [2]uint64 // 1-RTT, per direction
+	unsupp      bool
+	unsupReason string
 
 	// SNI is the ClientHello server name, available after the client Initial.
 	SNI string
 }
+
+// Unsupported reports that the ServerHello negotiated a suite this decryptor can't handle;
+// UnsupportedReason gives a short explanation for diagnostics/logging.
+func (c *Conn) Unsupported() bool         { return c.unsupp }
+func (c *Conn) UnsupportedReason() string { return c.unsupReason }
 
 // NewConn returns a decryptor that calls onStream with newly-available, in-order bytes
 // for a stream (direction + stream id).
@@ -129,6 +139,7 @@ func (c *Conn) onHandshake(fromClient bool, msg []byte) {
 				c.suite = s
 			} else {
 				c.unsupp = true
+				c.unsupReason = fmt.Sprintf("QUIC cipher %#04x not supported", id)
 			}
 		}
 	}
