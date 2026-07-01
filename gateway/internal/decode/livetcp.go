@@ -40,6 +40,9 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 	if err != nil {
 		return err // includes EOF if the session sent no pcap
 	}
+	if onMsg == nil {
+		onMsg = func(*WsMessage) {} // the WebSocket/custom paths call it unconditionally
+	}
 	lt := &liveTCP{
 		keylog: tlsdecrypt.NewKeylog(keylogPath),
 		onFlow: onFlow,
