@@ -199,7 +199,9 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 		h.wsMu.Lock()
 		defer h.wsMu.Unlock()
 		if opcode == "binary" && wsSess != nil {
-			// Frame the binary payload through the custom decoder (buffering partials).
+			// Keep the raw frame (original bytes) and also frame it through the custom
+			// decoder (buffering partials), so both remain queryable.
+			emitMsg("binary", fromClient, payload)
 			for _, fr := range wsSess.Feed(fromClient, payload) {
 				emitMsg(fr.Opcode, fr.FromClient, fr.Payload)
 			}

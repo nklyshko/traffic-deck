@@ -285,8 +285,15 @@ func (s *tcpStream) dispatch(fromClient bool, plain []byte) {
 }
 
 // feedCustom frames decrypted bytes into messages via a custom decoder and publishes
-// them like the WebSocket live path.
+// them like the WebSocket live path. The raw (undecoded) directional streams are kept on
+// the flow's request/response body so the original bytes remain queryable.
 func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
+	if fromClient {
+		s.flow.RequestBody = appendCapped(s.flow.RequestBody, plain)
+		s.flow.RequestBytes = uint64(len(s.flow.RequestBody))
+	} else {
+		s.flow.ResponseBody = appendCapped(s.flow.ResponseBody, plain)
+	}
 	for _, msg := range s.sess.Feed(fromClient, plain) {
 		if !s.flowEmitted {
 			s.lt.onFlow(s.flow, true)

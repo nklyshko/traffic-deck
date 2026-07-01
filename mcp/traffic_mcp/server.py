@@ -322,7 +322,11 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
     """Fetch a request or response body. Returns UTF-8 text when decodable, else base64;
     pass `as_hex=True` for a hex dump (byte inspection). A window of up to 256 KiB from
     `offset` is returned (page large bodies with `offset`). Bodies are stored
-    decompressed. `response=False` for the request body."""
+    decompressed. `response=False` for the request body.
+
+    For a custom-protocol flow (a decoded raw-TCP connection), this returns the original
+    *undecoded* bytes: `response=False` = the raw client->server stream, `response=True` =
+    the raw server->client stream — the bytes that were fed to the decoder."""
     try:
         data = await client().get_body(await _resolve_session(session_id), flow_id, response)
     except grpc.aio.AioRpcError as e:
@@ -338,7 +342,11 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
     """WebSocket message timeline for an Upgrade flow: directional frames in order
     (direction, opcode, size, text/hex preview). Paginated — `total` is the frame count;
     page with `offset`/`limit` (default 100) to avoid huge responses. Large payloads
-    carry a note; fetch them in full with get_ws_message_body using the message `id`."""
+    carry a note; fetch them in full with get_ws_message_body using the message `id`.
+
+    When a custom decoder handles the connection, each binary frame appears twice: the raw
+    frame (opcode `binary`, the original undecoded bytes) and its decoded form (the
+    decoder's opcode). Fetch the original bytes from the `binary` message's `id`."""
     sid = await _resolve_session(session_id)
     msgs = await client().list_messages(sid, flow_id)
     total = len(msgs)
@@ -370,7 +378,8 @@ async def get_ws_message_body(session_id: str, message_id: str,
                               as_hex: bool = False, offset: int = 0) -> dict:
     """Fetch a full WebSocket message payload by message `id` (from list_ws_messages).
     Returns UTF-8 text when decodable, else base64; pass `as_hex=True` for a hex dump
-    (byte inspection). Page large payloads with `offset`."""
+    (byte inspection). Page large payloads with `offset`. For a `binary`-opcode message
+    this is the original undecoded frame bytes."""
     try:
         data = await client().get_message_body(await _resolve_session(session_id), message_id)
     except grpc.aio.AioRpcError as e:

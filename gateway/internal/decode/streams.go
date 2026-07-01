@@ -45,6 +45,16 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 			continue
 		}
 		f := customFlow(info, tcp, matched[0].Name())
+		// Keep the raw (undecoded) directional streams on the flow body so the original
+		// bytes remain queryable alongside the decoded messages.
+		for _, tn := range turns {
+			if tn.FromClient {
+				f.RequestBody = append(f.RequestBody, tn.Data...)
+			} else {
+				f.ResponseBody = append(f.ResponseBody, tn.Data...)
+			}
+		}
+		f.RequestBytes = uint64(len(f.RequestBody))
 		st.ds.Flows = append(st.ds.Flows, f)
 		for _, m := range msgs {
 			st.ds.Messages = append(st.ds.Messages, &WsMessage{
