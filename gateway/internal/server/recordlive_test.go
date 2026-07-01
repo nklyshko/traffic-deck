@@ -1,18 +1,21 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	"github.com/google/uuid"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
-// TestPersistLive checks that a record-live session's accumulated flows + WebSocket
-// messages are persisted as a "live" analysis on close (no batch tshark pass involved).
-func TestPersistLive(t *testing.T) {
+// TestPersistLiveFullBodies checks that record-live persists the live decoder's flows —
+// including a response body larger than the live preview cap — in full, plus WS messages,
+// as a "live" analysis on close.
+func TestPersistLiveFullBodies(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, t.TempDir())
 	if err != nil {
@@ -28,17 +31,25 @@ func TestPersistLive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Build a live session with two flows (one updated: request then response) and a WS frame.
 	ls := &liveSession{
-		flows:   map[string]*trafficv1.Flow{},
-		subs:    map[int]chan *trafficv1.FlowEvent{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		recordLive: true,
+		flows:      map[string]*trafficv1.Flow{},
+		dflows:     map[string]*decode.Flow{},
+		subs:       map[int]chan *trafficv1.FlowEvent{},
+		msgSubs:    map[int]chan *trafficv1.WsMessage{},
 	}
+
+	// A response body well past the 256 KiB live preview cap — record-live must keep it all.
+	bigBody := bytes.Repeat([]byte("A"), 700<<10)
 	f1 := uuid.NewString()
-	ls.publish(&trafficv1.Flow{Id: f1, Authority: "example.com", Method: "GET", Protocol: "HTTP/2"}, true)
-	ls.publish(&trafficv1.Flow{Id: f1, Authority: "example.com", Method: "GET", Protocol: "HTTP/2", Status: 200}, false)
+	flow := &decode.Flow{ID: f1, Authority: "example.com", Method: "GET", Protocol: "HTTP/2"}
+	ls.onFlow(flow, true)       // request seen
+	flow.Status = 200           // same pointer, updated in place
+	flow.ResponseBody = bigBody // response arrives
+	ls.onFlow(flow, false)      // response completes
+
 	f2 := uuid.NewString()
-	ls.publish(&trafficv1.Flow{Id: f2, Authority: "ws.example.com", Protocol: "HTTP/1.1", Websocket: true}, true)
+	ls.onFlow(&decode.Flow{ID: f2, Authority: "ws.example.com", Protocol: "HTTP/1.1", Websocket: true}, true)
 	ls.publishMessage(&trafficv1.WsMessage{
 		Id: uuid.NewString(), FlowId: f2, Opcode: "text",
 		Payload: &trafficv1.Body{Size: 2, Content: &trafficv1.Body_Inline{Inline: []byte("hi")}},
@@ -56,15 +67,14 @@ func TestPersistLive(t *testing.T) {
 	if len(flows) != 2 {
 		t.Fatalf("persisted %d flows, want 2", len(flows))
 	}
-	byID := map[string]*trafficv1.Flow{}
-	for _, f := range flows {
-		byID[f.Id] = f
+
+	// The big response body must be stored in full (not truncated to the preview cap).
+	body, _, err := st.GetBodyBytes(ctx, sid, f1, true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if byID[f1].GetStatus() != 200 { // the response update must be the persisted state
-		t.Errorf("flow1 status = %d, want 200", byID[f1].GetStatus())
-	}
-	if !byID[f2].GetWebsocket() {
-		t.Errorf("flow2 should be a websocket flow")
+	if len(body) != len(bigBody) {
+		t.Fatalf("persisted body = %d bytes, want %d (full)", len(body), len(bigBody))
 	}
 
 	msgs, err := st.ListMessages(ctx, sid, f2)

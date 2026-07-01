@@ -254,7 +254,7 @@ func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRe
 // "live" analysis, then finishes the session — the record-live alternative to the batch
 // tshark pass. The flows are the live path's final state (bodies capped at maxLiveBody).
 func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) error {
-	flows, msgs := ls.snapshot()
+	flows, msgs := ls.snapshotForRecord()
 
 	aid := uuid.NewString()
 	if err := i.st.CreateAnalysis(ctx, store.NewAnalysis{
@@ -263,20 +263,11 @@ func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) e
 		return fmt.Errorf("create analysis: %w", err)
 	}
 
-	dflows := make([]*decode.Flow, len(flows))
-	for j, pf := range flows {
-		dflows[j] = protoToDecodeFlow(pf)
-	}
-	n, err := i.st.InsertFlows(ctx, sid, aid, dflows)
+	n, err := i.st.InsertFlows(ctx, sid, aid, flows)
 	if err != nil {
 		return fmt.Errorf("insert flows: %w", err)
 	}
-
-	dmsgs := make([]*decode.WsMessage, len(msgs))
-	for j, pm := range msgs {
-		dmsgs[j] = protoToDecodeWsMessage(pm)
-	}
-	if _, err := i.st.InsertWsMessages(ctx, sid, dmsgs); err != nil {
+	if _, err := i.st.InsertWsMessages(ctx, sid, msgs); err != nil {
 		return fmt.Errorf("insert ws messages: %w", err)
 	}
 

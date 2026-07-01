@@ -205,7 +205,7 @@ func maybeGunzip(raw []byte) []byte {
 		return raw // truncated/partial (capped) gzip — leave the raw bytes
 	}
 	defer zr.Close()
-	out, err := io.ReadAll(io.LimitReader(zr, maxLiveBody))
+	out, err := io.ReadAll(io.LimitReader(zr, int64(maxLiveBody)))
 	if err != nil && len(out) == 0 {
 		return raw
 	}

@@ -20,8 +20,14 @@ import (
 )
 
 // maxLiveBody caps body bytes kept per live message; the batch decode on close has the
-// full bodies. Live is a preview, so this also bounds memory under heavy traffic.
-const maxLiveBody = 256 << 10
+// full bodies. Live is a preview, so this also bounds memory under heavy traffic. It's a
+// process-wide setting (SetUnlimitedLiveBodies) rather than a const so record-live mode —
+// which persists the live flows as the authoritative record — can keep full bodies.
+var maxLiveBody = 256 << 10
+
+// SetUnlimitedLiveBodies removes the live body cap so the live decoders keep full bodies
+// (for record-live mode). Call once at startup, before any decode runs.
+func SetUnlimitedLiveBodies() { maxLiveBody = 1 << 62 }
 
 // byteStream is an unbounded buffer whose Write never blocks and whose Read blocks until
 // data or Close. The single reassembly loop Writes into it, so a stalled HTTP parse on
@@ -192,7 +198,7 @@ func drainBody(rc io.ReadCloser) []byte {
 		return nil
 	}
 	defer rc.Close()
-	data, _ := io.ReadAll(io.LimitReader(rc, maxLiveBody))
+	data, _ := io.ReadAll(io.LimitReader(rc, int64(maxLiveBody)))
 	_, _ = io.Copy(io.Discard, rc)
 	return data
 }
@@ -208,7 +214,7 @@ func readRespBody(resp *http.Response) []byte {
 			r = gz
 		}
 	}
-	data, _ := io.ReadAll(io.LimitReader(r, maxLiveBody))
+	data, _ := io.ReadAll(io.LimitReader(r, int64(maxLiveBody)))
 	_, _ = io.Copy(io.Discard, resp.Body) // drain remaining compressed/raw bytes
 	return data
 }

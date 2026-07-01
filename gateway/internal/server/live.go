@@ -17,13 +17,14 @@ const liveEventBuffer = 256
 // viewer subscribers. Persistence is authoritative on close (batch
 // decode); the live path is for responsiveness only.
 type liveHub struct {
-	mu       sync.Mutex
-	sessions map[string]*liveSession
-	tshark   string
+	mu         sync.Mutex
+	sessions   map[string]*liveSession
+	tshark     string
+	recordLive bool // retain full decode flows so they can be persisted on close
 }
 
-func newLiveHub(tshark string) *liveHub {
-	return &liveHub{sessions: map[string]*liveSession{}, tshark: tshark}
+func newLiveHub(tshark string, recordLive bool) *liveHub {
+	return &liveHub{sessions: map[string]*liveSession{}, tshark: tshark, recordLive: recordLive}
 }
 
 type liveSession struct {
@@ -31,8 +32,11 @@ type liveSession struct {
 	customPW *io.PipeWriter // second copy of the pcap for the Go custom-TCP decoder (may be nil)
 	done     chan struct{}  // closed when the tshark decode goroutine exits
 
+	recordLive bool // retain full decode flows (dflows) for persistence on close
+
 	mu     sync.Mutex
 	flows  map[string]*trafficv1.Flow
+	dflows map[string]*decode.Flow // full-body decode flows, kept only in record-live mode
 	order  []string
 	subs   map[int]chan *trafficv1.FlowEvent
 	nextID int
@@ -61,12 +65,14 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 	pr, pw := io.Pipe()
 	customPR, customPW := io.Pipe()
 	ls := &liveSession{
-		pw:       pw,
-		customPW: customPW,
-		done:     make(chan struct{}),
-		flows:    map[string]*trafficv1.Flow{},
-		subs:     map[int]chan *trafficv1.FlowEvent{},
-		msgSubs:  map[int]chan *trafficv1.WsMessage{},
+		pw:         pw,
+		customPW:   customPW,
+		done:       make(chan struct{}),
+		recordLive: h.recordLive,
+		flows:      map[string]*trafficv1.Flow{},
+		dflows:     map[string]*decode.Flow{},
+		subs:       map[int]chan *trafficv1.FlowEvent{},
+		msgSubs:    map[int]chan *trafficv1.WsMessage{},
 	}
 
 	h.mu.Lock()
@@ -160,20 +166,33 @@ func (h *liveHub) stop(sessionID string) *liveSession {
 	return ls
 }
 
-// snapshot returns the final accumulated flows (in arrival order) and WebSocket messages,
-// for persisting a record-live session on close.
-func (ls *liveSession) snapshot() ([]*trafficv1.Flow, []*trafficv1.WsMessage) {
+// snapshotForRecord returns the final full-body decode flows (in arrival order) and the
+// WebSocket messages, for persisting a record-live session on close. WS message payloads
+// are carried inline in the proto (uncapped once SetUnlimitedLiveBodies is set).
+func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.WsMessage) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
-	flows := make([]*trafficv1.Flow, 0, len(ls.order))
+	flows := make([]*decode.Flow, 0, len(ls.order))
 	for _, id := range ls.order {
-		flows = append(flows, ls.flows[id])
+		if f := ls.dflows[id]; f != nil {
+			flows = append(flows, f)
+		}
 	}
-	msgs := append([]*trafficv1.WsMessage(nil), ls.messages...)
+	msgs := make([]*decode.WsMessage, 0, len(ls.messages))
+	for _, pm := range ls.messages {
+		msgs = append(msgs, protoToDecodeWsMessage(pm))
+	}
 	return flows, msgs
 }
 
 func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
+	if ls.recordLive {
+		// Retain the full-body decode flow (the proto below is a capped preview for
+		// streaming). f is updated in place across calls, so this holds its final state.
+		ls.mu.Lock()
+		ls.dflows[f.ID] = f
+		ls.mu.Unlock()
+	}
 	ls.publish(flowToProto(f), isNew)
 }
 

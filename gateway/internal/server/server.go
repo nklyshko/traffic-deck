@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
@@ -229,7 +230,11 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 // Register attaches all implemented services to s, sharing one live hub between
 // the ingest (producer) and viewer (subscriber) sides.
 func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string, liveDecode, recordLive bool) {
-	hub := newLiveHub(tshark)
+	if recordLive {
+		// The persisted record is the live decode, so keep full bodies (not previews).
+		decode.SetUnlimitedLiveBodies()
+	}
+	hub := newLiveHub(tshark, recordLive)
 	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive))

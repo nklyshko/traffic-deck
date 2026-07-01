@@ -66,8 +66,8 @@ func readWSFrames(r *bufio.Reader, fromClient bool, emit func(opcode string, fro
 			}
 		}
 		keep := ln
-		if keep > maxLiveBody {
-			keep = maxLiveBody
+		if keep > uint64(maxLiveBody) {
+			keep = uint64(maxLiveBody)
 		}
 		payload := make([]byte, keep)
 		if _, err := io.ReadFull(r, payload); err != nil {
