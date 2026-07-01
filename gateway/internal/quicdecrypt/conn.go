@@ -24,6 +24,8 @@ type Conn struct {
 	clientRandom []byte
 	suite        *suite
 	app          [2]*keys // 1-RTT keys: [0]=client, [1]=server
+	earlyKey     *keys    // client 0-RTT key (early data rides the application PN space)
+	zeroRTT      [][]byte // client 0-RTT packets buffered until the suite + early secret are known
 
 	crypto      [2]cryptoReasm
 	streams     map[streamKey]*streamReasm
@@ -88,12 +90,56 @@ func (c *Conn) Feed(fromClient bool, datagram []byte) {
 			return
 		}
 		abs := datagram[off : off+h.end]
-		if h.kind == pktInitial && h.version == Version1 {
+		switch {
+		case h.kind == pktInitial && h.version == Version1:
 			c.handleInitial(fromClient, h, abs)
+		case h.kind == pkt0RTT && h.version == Version1 && fromClient:
+			// Early request data. Buffer until the suite (ServerHello) + early secret are
+			// known, then decrypt in the application PN space alongside 1-RTT.
+			c.zeroRTT = append(c.zeroRTT, append([]byte(nil), abs...))
+			c.tryEarly()
 		}
-		// 0-RTT/Handshake are not needed for HTTP/3 (which rides 1-RTT); skip them.
+		// Handshake packets aren't needed for HTTP/3 (which rides 1-RTT / 0-RTT).
 		off += h.end
 	}
+}
+
+// tryEarly derives the client 0-RTT key (once the suite and CLIENT_EARLY_TRAFFIC_SECRET are
+// available) and decrypts any buffered 0-RTT packets. 0-RTT shares the client application
+// packet-number space with 1-RTT, so it must be processed before the client's 1-RTT packets
+// (it is: 0-RTT arrives before the handshake completes).
+func (c *Conn) tryEarly() {
+	if c.earlyKey == nil {
+		if c.suite == nil || c.clientRandom == nil {
+			return
+		}
+		es, ok := c.keylog.Get("CLIENT_EARLY_TRAFFIC_SECRET", c.clientRandom)
+		if !ok {
+			return // not in the key-log yet (or this connection sent no 0-RTT)
+		}
+		c.earlyKey, _ = deriveKeys(es, c.suite)
+		if c.earlyKey == nil {
+			return
+		}
+	}
+	for _, pkt := range c.zeroRTT {
+		h, ok := parseLongHeader(pkt)
+		if !ok {
+			continue
+		}
+		_, payload, pn, ok := c.earlyKey.open(pkt, h.pnOffset, h.end, true, c.largestPN[0])
+		if !ok {
+			continue
+		}
+		if pn > c.largestPN[0] {
+			c.largestPN[0] = pn
+		}
+		_, streams, _ := parseFrames(payload)
+		for _, fr := range streams {
+			c.deliverStream(true, fr)
+		}
+	}
+	c.zeroRTT = nil
 }
 
 func (c *Conn) handleInitial(fromClient bool, h longHeader, pkt []byte) {
@@ -144,6 +190,7 @@ func (c *Conn) onHandshake(fromClient bool, msg []byte) {
 		}
 	}
 	c.derive1RTT()
+	c.tryEarly() // 0-RTT only needs the suite + early secret, independent of the 1-RTT keys
 }
 
 // derive1RTT pulls the 1-RTT traffic secrets from the key-log (by client_random) once
@@ -163,6 +210,9 @@ func (c *Conn) derive1RTT() {
 
 func (c *Conn) handleShort(fromClient bool, pkt []byte) {
 	c.derive1RTT()
+	if len(c.zeroRTT) > 0 {
+		c.tryEarly() // early secret may have arrived after the app keys were derived
+	}
 	k := c.app[dirIdx(fromClient)]
 	if k == nil {
 		return // 1-RTT keys not available yet

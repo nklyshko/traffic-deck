@@ -67,6 +67,22 @@ func build1RTT(k *keys, dcid []byte, pn uint64, payload []byte) []byte {
 	return seal(k, hdr, pnOffset, 1, pn, payload, false)
 }
 
+// buildZeroRTT assembles + seals a long-header 0-RTT packet (1-byte pn) carrying payload.
+// Same shape as an Initial but without the token field.
+func buildZeroRTT(k *keys, dcid, scid []byte, pn uint64, payload []byte) []byte {
+	length := 1 + len(payload) + 16
+	hdr := []byte{0xd0} // long | fixed | 0-RTT (type 01) | pnLen-1=0
+	hdr = append(hdr, 0x00, 0x00, 0x00, 0x01)
+	hdr = append(hdr, byte(len(dcid)))
+	hdr = append(hdr, dcid...)
+	hdr = append(hdr, byte(len(scid)))
+	hdr = append(hdr, scid...)
+	hdr = append(hdr, putVarint(uint64(length))...)
+	pnOffset := len(hdr)
+	hdr = append(hdr, byte(pn))
+	return seal(k, hdr, pnOffset, 1, pn, payload, true)
+}
+
 func cryptoFrameBytes(msg []byte) []byte {
 	out := []byte{frmCrypto}
 	out = append(out, putVarint(0)...)
@@ -91,9 +107,9 @@ func clientHelloMsg(random []byte, sni string) []byte {
 
 	body := []byte{0x03, 0x03}
 	body = append(body, random...)
-	body = append(body, 0x00)             // session_id len 0
+	body = append(body, 0x00)                   // session_id len 0
 	body = append(body, 0x00, 0x02, 0x13, 0x01) // cipher_suites: TLS_AES_128_GCM_SHA256
-	body = append(body, 0x01, 0x00)       // compression methods
+	body = append(body, 0x01, 0x00)             // compression methods
 	body = append(body, exts...)
 	return append([]byte{0x01, byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body))}, body...)
 }
@@ -173,5 +189,56 @@ func TestConnRoundTrip(t *testing.T) {
 		if d.id != 0 || d.data != want[d.fc] {
 			t.Errorf("delivery %+v; want id=0 data=%q", d, want[d.fc])
 		}
+	}
+}
+
+// TestConn0RTT checks that client 0-RTT early data — which arrives before the ServerHello
+// reveals the cipher suite — is buffered and decrypted once the suite is known.
+func TestConn0RTT(t *testing.T) {
+	dcid := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	clientSCID := []byte{0x11, 0x12, 0x13, 0x14}
+	serverSCID := []byte{0x21, 0x22, 0x23, 0x24}
+	random := make([]byte, 32)
+	for i := range random {
+		random[i] = byte(i + 1)
+	}
+	earlyTS := make([]byte, 32)
+	for i := range earlyTS {
+		earlyTS[i] = byte(0xc0 + i)
+	}
+
+	dir := t.TempDir()
+	klPath := filepath.Join(dir, "key.log")
+	kl := "CLIENT_EARLY_TRAFFIC_SECRET " + hex.EncodeToString(random) + " " + hex.EncodeToString(earlyTS) + "\n"
+	if err := os.WriteFile(klPath, []byte(kl), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	c := NewConn(tlsdecrypt.NewKeylog(klPath), func(id uint64, fromClient bool, data []byte) {
+		if fromClient {
+			got = append(got, string(data))
+		}
+	})
+
+	clSec, svSec := initialSecrets(dcid)
+	clInit, _ := deriveKeys(clSec, aes128gcm)
+	svInit, _ := deriveKeys(svSec, aes128gcm)
+	suite, _ := suiteByID(0x1301)
+	earlyKey, _ := deriveKeys(earlyTS, suite)
+
+	// 1) client Initial (ClientHello) → learns client_random.
+	c.Feed(true, buildInitial(clInit, dcid, clientSCID, 0, cryptoFrameBytes(clientHelloMsg(random, "example.com"))))
+	// 2) client 0-RTT with early request data — arrives before the ServerHello, so it's
+	// buffered (the suite isn't known yet).
+	c.Feed(true, buildZeroRTT(earlyKey, dcid, clientSCID, 1, streamFrameBytes(0, []byte("early-request"))))
+	if len(got) != 0 {
+		t.Fatalf("0-RTT delivered before ServerHello: %v", got)
+	}
+	// 3) server Initial (ServerHello) reveals the suite → buffered 0-RTT decrypts.
+	c.Feed(false, buildInitial(svInit, clientSCID, serverSCID, 0, cryptoFrameBytes(serverHelloMsg(0x1301))))
+
+	if len(got) != 1 || got[0] != "early-request" {
+		t.Fatalf("0-RTT deliveries = %v; want [early-request]", got)
 	}
 }
