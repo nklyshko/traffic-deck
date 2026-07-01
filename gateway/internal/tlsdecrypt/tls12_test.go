@@ -11,6 +11,88 @@ import (
 	"testing"
 )
 
+// runLegacyCBC exercises the AES-CBC record layer for a given negotiated TLS version,
+// crafting records exactly as a stack would (prf10 key derivation for <1.2; explicit IV
+// for 1.1, implicit chained IV for 1.0) and checking the decryptor recovers each message.
+func runLegacyCBC(t *testing.T, version uint16, suiteID uint16) {
+	t.Helper()
+	master := bytes.Repeat([]byte{0x7c}, 48)
+	clientRandom := bytes.Repeat([]byte{0x66}, 32)
+	serverRandom := bytes.Repeat([]byte{0x77}, 32)
+	suite, ok := tls12SuiteByID(suiteID)
+	if !ok || !suite.cbc {
+		t.Fatalf("suite %#x not a CBC suite", suiteID)
+	}
+	bs := suite.blockSize
+	implicit := version == vTLS10
+	ivLen := 0
+	if implicit {
+		ivLen = bs
+	}
+	kb := prf10(master, "key expansion", append(append([]byte{}, serverRandom...), clientRandom...),
+		2*suite.macLen+2*suite.keyLen+2*ivLen)
+	// Key block layout: clientMAC, serverMAC, clientKey, serverKey, clientIV, serverIV.
+	serverMAC := kb[suite.macLen : 2*suite.macLen]
+	serverKey := kb[2*suite.macLen+suite.keyLen : 2*suite.macLen+2*suite.keyLen]
+	var chainIV []byte
+	if implicit {
+		serverIVOff := 2*suite.macLen + 2*suite.keyLen + ivLen // after clientIV
+		chainIV = append([]byte{}, kb[serverIVOff:serverIVOff+ivLen]...)
+	}
+	block, _ := aes.NewCipher(serverKey)
+
+	dec, err := newTLS12Decryptor(suite, master, clientRandom, serverRandom, false, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verLo := byte(version & 0xff)
+
+	seal := func(seq uint64, content []byte) []byte {
+		aad := make([]byte, 8)
+		binary.BigEndian.PutUint64(aad, seq)
+		aad = append(aad, ctAppData, 0x03, verLo, byte(len(content)>>8), byte(len(content)))
+		m := hmac.New(suite.macHash, serverMAC)
+		m.Write(aad)
+		m.Write(content)
+		plain := append(append([]byte{}, content...), m.Sum(nil)...)
+		padLen := (bs - (len(plain)+1)%bs) % bs
+		for i := 0; i <= padLen; i++ {
+			plain = append(plain, byte(padLen))
+		}
+		ct := make([]byte, len(plain))
+		var iv []byte
+		if implicit {
+			iv = chainIV
+		} else {
+			iv = bytes.Repeat([]byte{byte(seq) ^ 0x5a}, bs)
+		}
+		cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, plain)
+		var frag []byte
+		if implicit {
+			chainIV = append([]byte{}, ct[len(ct)-bs:]...)
+			frag = ct
+		} else {
+			frag = append(append([]byte{}, iv...), ct...)
+		}
+		header := []byte{ctAppData, 0x03, verLo, byte(len(frag) >> 8), byte(len(frag))}
+		return append(header, frag...)
+	}
+
+	for seq, msg := range [][]byte{[]byte("legacy record one"), []byte("legacy record two, spanning multiple blocks!!")} {
+		rec := seal(uint64(seq), msg)
+		got, ok := dec.open(rec[:recHeaderLen], rec[recHeaderLen:])
+		if !ok {
+			t.Fatalf("record %d: open failed", seq)
+		}
+		if !bytes.Equal(got, msg) {
+			t.Fatalf("record %d: got %q want %q", seq, got, msg)
+		}
+	}
+}
+
+func TestTLS11CBCRoundTrip(t *testing.T) { runLegacyCBC(t, vTLS11, 0xc013) } // AES128-CBC-SHA
+func TestTLS10CBCRoundTrip(t *testing.T) { runLegacyCBC(t, vTLS10, 0xc013) }
+
 // TestPRF12SHA256 checks prf12 against the canonical TLS 1.2 P_SHA256 test vector
 // (widely cited from the IETF TLS WG mailing list).
 func TestPRF12SHA256(t *testing.T) {
@@ -49,7 +131,7 @@ func TestTLS12GCMRoundTrip(t *testing.T) {
 	block, _ := aes.NewCipher(serverKey)
 	gcm, _ := cipher.NewGCM(block)
 
-	dec, err := newTLS12Decryptor(suite, master, clientRandom, serverRandom, false)
+	dec, err := newTLS12Decryptor(suite, master, clientRandom, serverRandom, false, vTLS12)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +180,7 @@ func TestTLS12CBCRoundTrip(t *testing.T) {
 	serverKey := kb[2*suite.macLen+suite.keyLen : 2*suite.macLen+2*suite.keyLen]
 	block, _ := aes.NewCipher(serverKey)
 
-	dec, err := newTLS12Decryptor(suite, master, clientRandom, serverRandom, false)
+	dec, err := newTLS12Decryptor(suite, master, clientRandom, serverRandom, false, vTLS12)
 	if err != nil {
 		t.Fatal(err)
 	}

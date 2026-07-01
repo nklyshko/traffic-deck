@@ -11,6 +11,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
+	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -33,10 +34,11 @@ type tls12Suite struct {
 	chacha     bool // ChaCha20-Poly1305 nonce construction (RFC 7905) vs GCM explicit nonce
 
 	// CBC suites (MAC-then-encrypt, HMAC over seq||header||content):
-	cbc      bool
-	macHash  func() hash.Hash
-	macLen   int // HMAC output/key length (SHA1=20, SHA256=32, SHA384=48)
-	blockNew func(key []byte) (cipher.Block, error)
+	cbc       bool
+	macHash   func() hash.Hash
+	macLen    int // HMAC output/key length (SHA1=20, SHA256=32, SHA384=48)
+	blockNew  func(key []byte) (cipher.Block, error)
+	blockSize int // cipher block size (TLS 1.0 implicit IV length)
 }
 
 func aesBlock(key []byte) (cipher.Block, error) { return aes.NewCipher(key) }
@@ -60,19 +62,19 @@ func tls12SuiteByID(id uint16) (*tls12Suite, bool) {
 	// --- AES-CBC (explicit per-record IV; PRF is SHA-256 except for the SHA384 suites) ---
 	// AES-128-CBC-SHA (SHA-1 MAC)
 	case 0x002f, 0x0033, 0xc009, 0xc013:
-		return &tls12Suite{id: id, keyLen: 16, prfHash: sha256.New, cbc: true, macHash: sha1.New, macLen: 20, blockNew: aesBlock}, true
+		return &tls12Suite{id: id, keyLen: 16, prfHash: sha256.New, cbc: true, macHash: sha1.New, macLen: 20, blockNew: aesBlock, blockSize: aes.BlockSize}, true
 	// AES-256-CBC-SHA (SHA-1 MAC)
 	case 0x0035, 0x0039, 0xc00a, 0xc014:
-		return &tls12Suite{id: id, keyLen: 32, prfHash: sha256.New, cbc: true, macHash: sha1.New, macLen: 20, blockNew: aesBlock}, true
+		return &tls12Suite{id: id, keyLen: 32, prfHash: sha256.New, cbc: true, macHash: sha1.New, macLen: 20, blockNew: aesBlock, blockSize: aes.BlockSize}, true
 	// AES-128-CBC-SHA256
 	case 0x003c, 0x0067, 0xc023, 0xc027:
-		return &tls12Suite{id: id, keyLen: 16, prfHash: sha256.New, cbc: true, macHash: sha256.New, macLen: 32, blockNew: aesBlock}, true
+		return &tls12Suite{id: id, keyLen: 16, prfHash: sha256.New, cbc: true, macHash: sha256.New, macLen: 32, blockNew: aesBlock, blockSize: aes.BlockSize}, true
 	// AES-256-CBC-SHA256
 	case 0x003d, 0x006b:
-		return &tls12Suite{id: id, keyLen: 32, prfHash: sha256.New, cbc: true, macHash: sha256.New, macLen: 32, blockNew: aesBlock}, true
+		return &tls12Suite{id: id, keyLen: 32, prfHash: sha256.New, cbc: true, macHash: sha256.New, macLen: 32, blockNew: aesBlock, blockSize: aes.BlockSize}, true
 	// AES-256-CBC-SHA384 (SHA-384 MAC and PRF)
 	case 0xc024, 0xc028:
-		return &tls12Suite{id: id, keyLen: 32, prfHash: sha512.New384, cbc: true, macHash: sha512.New384, macLen: 48, blockNew: aesBlock}, true
+		return &tls12Suite{id: id, keyLen: 32, prfHash: sha512.New384, cbc: true, macHash: sha512.New384, macLen: 48, blockNew: aesBlock, blockSize: aes.BlockSize}, true
 	}
 	return nil, false
 }
@@ -102,7 +104,24 @@ func prf12(newHash func() hash.Hash, secret []byte, label string, seed []byte, n
 	return pHash(newHash, secret, ls, n)
 }
 
-// tls12Decryptor decrypts one direction's TLS 1.2 records, advancing the per-direction
+// prf10 is the TLS 1.0/1.1 PRF (RFC 2246/4346 §5): P_MD5(S1, .) XOR P_SHA-1(S2, .), where
+// S1/S2 are the two halves of the secret (sharing the middle byte when odd-length).
+func prf10(secret []byte, label string, seed []byte, n int) []byte {
+	ls := make([]byte, 0, len(label)+len(seed))
+	ls = append(ls, label...)
+	ls = append(ls, seed...)
+	half := (len(secret) + 1) / 2
+	s1 := secret[:half]
+	s2 := secret[len(secret)-half:]
+	a := pHash(md5.New, s1, ls, n)
+	b := pHash(sha1.New, s2, ls, n)
+	for i := range a {
+		a[i] ^= b[i]
+	}
+	return a
+}
+
+// tls12Decryptor decrypts one direction's TLS 1.0–1.2 records, advancing the per-direction
 // sequence number (which starts at 0 with the encrypted Finished).
 type tls12Decryptor struct {
 	suite *tls12Suite
@@ -113,19 +132,35 @@ type tls12Decryptor struct {
 	iv   []byte // fixed/implicit IV (salt)
 
 	// CBC:
-	block  cipher.Block
-	macKey []byte
+	block      cipher.Block
+	macKey     []byte
+	implicitIV bool   // TLS 1.0: IV chains from the previous record instead of being on the wire
+	cbcIV      []byte // TLS 1.0 chained IV state (next record's IV)
 }
 
 // newTLS12Decryptor derives the direction's key material from the master secret via key
-// expansion (RFC 5246 §6.3) and builds the AEAD or CBC record layer.
-func newTLS12Decryptor(s *tls12Suite, masterSecret, clientRandom, serverRandom []byte, fromClient bool) (*tls12Decryptor, error) {
+// expansion (RFC 5246 §6.3) and builds the AEAD or CBC record layer. version selects the
+// PRF (TLS 1.0/1.1 use MD5⊕SHA-1; 1.2 uses the suite hash) and, for CBC, the IV scheme
+// (TLS 1.0 chains an implicit IV from the key block; 1.1/1.2 carry it per record).
+func newTLS12Decryptor(s *tls12Suite, masterSecret, clientRandom, serverRandom []byte, fromClient bool, version uint16) (*tls12Decryptor, error) {
+	prf := func(secret []byte, label string, seed []byte, n int) []byte {
+		if version < vTLS12 {
+			return prf10(secret, label, seed, n)
+		}
+		return prf12(s.prfHash, secret, label, seed, n)
+	}
+	implicitIV := s.cbc && version == vTLS10
+	ivLen := s.fixedIVLen // AEAD salt; 0 for 1.1/1.2 CBC (explicit IV on the wire)
+	if implicitIV {
+		ivLen = s.blockSize
+	}
+
 	// key_block = PRF(master_secret, "key expansion", server_random + client_random)
 	seed := make([]byte, 0, 64)
 	seed = append(seed, serverRandom...)
 	seed = append(seed, clientRandom...)
-	need := 2*s.macLen + 2*s.keyLen + 2*s.fixedIVLen // macLen==0 for AEAD, fixedIVLen==0 for CBC
-	kb := prf12(s.prfHash, masterSecret, "key expansion", seed, need)
+	need := 2*s.macLen + 2*s.keyLen + 2*ivLen
+	kb := prf(masterSecret, "key expansion", seed, need)
 
 	// Layout: client_write_MAC, server_write_MAC, client_write_key, server_write_key,
 	// client_write_IV, server_write_IV.
@@ -133,7 +168,7 @@ func newTLS12Decryptor(s *tls12Suite, masterSecret, clientRandom, serverRandom [
 	take := func(n int) []byte { v := kb[p : p+n]; p += n; return v }
 	clientMAC, serverMAC := take(s.macLen), take(s.macLen)
 	clientKey, serverKey := take(s.keyLen), take(s.keyLen)
-	clientIV, serverIV := take(s.fixedIVLen), take(s.fixedIVLen)
+	clientIV, serverIV := take(ivLen), take(ivLen)
 
 	mac, key, iv := serverMAC, serverKey, serverIV
 	if fromClient {
@@ -146,6 +181,10 @@ func newTLS12Decryptor(s *tls12Suite, masterSecret, clientRandom, serverRandom [
 			return nil, err
 		}
 		d.block = block
+		d.implicitIV = implicitIV
+		if implicitIV {
+			d.cbcIV = append([]byte(nil), iv...)
+		}
 		return d, nil
 	}
 	aead, err := s.aead(key)
@@ -205,18 +244,32 @@ func (d *tls12Decryptor) open(header, frag []byte) ([]byte, bool) {
 	return out, true
 }
 
-// openCBC decrypts one TLS 1.2 AES-CBC record: strip the explicit IV, CBC-decrypt, remove
-// PKCS-style TLS padding, split off and verify the trailing HMAC. Returns false on any
-// structural or MAC failure (so the caller bails to the batch pass).
+// openCBC decrypts one TLS 1.0–1.2 AES-CBC record: take the IV (explicit per-record for
+// 1.1/1.2, chained from the previous record for 1.0), CBC-decrypt, remove the TLS padding,
+// split off and verify the trailing HMAC. Returns false on any structural or MAC failure
+// (so the caller bails to the batch pass).
 func (d *tls12Decryptor) openCBC(header, frag []byte) ([]byte, bool) {
 	bs := d.block.BlockSize()
-	// GenericBlockCipher: explicit IV (one block) || CBC(content || MAC || padding || pad_len).
-	if len(frag) < bs+bs || (len(frag)-bs)%bs != 0 {
-		return nil, false
+	var iv, ct []byte
+	if d.implicitIV {
+		// TLS 1.0: no IV on the wire; use the chained IV (last ciphertext block of the
+		// previous record, or the key-block IV for the first).
+		if len(frag) < bs || len(frag)%bs != 0 {
+			return nil, false
+		}
+		iv, ct = d.cbcIV, frag
+	} else {
+		// GenericBlockCipher: explicit IV (one block) || CBC(content || MAC || padding || pad_len).
+		if len(frag) < bs+bs || (len(frag)-bs)%bs != 0 {
+			return nil, false
+		}
+		iv, ct = frag[:bs], frag[bs:]
 	}
-	iv, ct := frag[:bs], frag[bs:]
 	plain := make([]byte, len(ct))
 	cipher.NewCBCDecrypter(d.block, iv).CryptBlocks(plain, ct)
+	if d.implicitIV {
+		d.cbcIV = append([]byte(nil), ct[len(ct)-bs:]...) // chain into the next record
+	}
 
 	// Remove padding: the last byte is padding_length; that many preceding bytes (all equal
 	// to padding_length) plus the length byte itself are padding.

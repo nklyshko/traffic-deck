@@ -7,11 +7,13 @@
 //     *_TRAFFIC_SECRET_0 key-log secrets.
 //   - TLS 1.2 — the same AEAD suites plus the AES-CBC suites (MAC-then-encrypt); keys from
 //     the CLIENT_RANDOM master secret via the TLS 1.2 PRF.
+//   - TLS 1.1 / 1.0 — the AES-CBC suites; keys via the TLS 1.0/1.1 PRF (MD5⊕SHA-1). TLS
+//     1.1 carries an explicit per-record IV; TLS 1.0 chains an implicit IV between records.
 //
-// Streams using an unsupported version or suite (e.g. TLS 1.2 3DES/RC4, or TLS <1.2) are
-// reported unsupported and left to the batch tshark pass. For TLS 1.3 we never need to
-// decrypt the handshake (handshake-phase records simply fail the AEAD and are skipped);
-// for TLS 1.2 the ChangeCipherSpec marks where each direction's records become encrypted.
+// Streams using an unsupported version or suite (TLS 1.x 3DES/RC4, or SSL 3.0) are reported
+// unsupported and left to the batch tshark pass. For TLS 1.3 we never need to decrypt the
+// handshake (handshake-phase records simply fail the AEAD and are skipped); for TLS 1.0–1.2
+// the ChangeCipherSpec marks where each direction's records become encrypted.
 package tlsdecrypt
 
 import (

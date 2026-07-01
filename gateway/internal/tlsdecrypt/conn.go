@@ -23,6 +23,10 @@ const (
 	vTLS13 = 0x0304
 )
 
+// isLegacyTLS reports whether a negotiated version uses the TLS 1.0–1.2 record layer
+// (cleartext handshake → ChangeCipherSpec → MAC/AEAD records), handled by handle12.
+func isLegacyTLS(v uint16) bool { return v == vTLS10 || v == vTLS11 || v == vTLS12 }
+
 // dirState is one direction's record buffer + decryptor.
 type dirState struct {
 	label     string           // key-log label for this direction's app traffic secret (TLS 1.3)
@@ -111,12 +115,12 @@ func (c *Conn) drain(fromClient bool) bool {
 		// handle* return false when the record can't be processed yet (keys/ServerHello
 		// not available); leave it buffered and retry on a later Feed.
 		var consumed bool
-		if c.version == vTLS12 {
+		if isLegacyTLS(c.version) {
 			consumed = c.handle12(fromClient, ds, typ, header, frag)
 		} else {
 			// TLS 1.3, or version not yet known (only cleartext handshake matters until
-			// the ServerHello sets the version). Unsupported legacy versions also land
-			// here and simply drop through to the batch pass.
+			// the ServerHello sets the version). Unsupported versions (e.g. SSL 3.0) also
+			// land here and simply drop through to the batch pass.
 			consumed = c.handle13(fromClient, ds, typ, header, frag)
 		}
 		if !consumed {
@@ -192,7 +196,7 @@ func (c *Conn) handle12(fromClient bool, ds *dirState, typ byte, header, frag []
 		if !ok {
 			return false // master secret not in the key-log yet; retry on a later Feed
 		}
-		dec, err := newTLS12Decryptor(c.suite12, ms, c.clientRandom, c.serverRandom, fromClient)
+		dec, err := newTLS12Decryptor(c.suite12, ms, c.clientRandom, c.serverRandom, fromClient, c.version)
 		if err != nil {
 			c.unsupported = true
 			return true
@@ -309,14 +313,18 @@ func (c *Conn) parseServerHello(b []byte) {
 		} else {
 			c.unsupported = true
 		}
-	case vTLS12:
-		if s, found := tls12SuiteByID(id); found {
+	case vTLS12, vTLS11, vTLS10:
+		s, found := tls12SuiteByID(id)
+		switch {
+		case !found:
+			c.unsupported = true // 3DES/RC4 / unknown suite — batch pass
+		case c.version < vTLS12 && !s.cbc:
+			c.unsupported = true // TLS 1.0/1.1 predate the AEAD suites
+		default:
 			c.suite12 = s
-		} else {
-			c.unsupported = true // CBC / unknown suite — left to the batch pass (Step 2+)
 		}
 	default:
-		c.unsupported = true // TLS 1.1/1.0/SSL 3.0 — later steps; batch pass for now
+		c.unsupported = true // SSL 3.0 (and anything else) — batch pass for now
 	}
 }
 
