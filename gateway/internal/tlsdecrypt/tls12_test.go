@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -71,6 +72,64 @@ func TestTLS12GCMRoundTrip(t *testing.T) {
 		got, ok := dec.open(rec[:recHeaderLen], rec[recHeaderLen:])
 		if !ok {
 			t.Fatalf("record %d: open failed", seq)
+		}
+		if !bytes.Equal(got, msg) {
+			t.Fatalf("record %d: got %q want %q", seq, got, msg)
+		}
+	}
+}
+
+// TestTLS12CBCRoundTrip crafts real TLS 1.2 AES-128-CBC-SHA256 records (MAC-then-encrypt
+// with an explicit per-record IV) and verifies openCBC recovers the plaintext, checks the
+// HMAC, and advances the sequence number.
+func TestTLS12CBCRoundTrip(t *testing.T) {
+	master := bytes.Repeat([]byte{0x3b}, 48)
+	clientRandom := bytes.Repeat([]byte{0x44}, 32)
+	serverRandom := bytes.Repeat([]byte{0x55}, 32)
+	suite, ok := tls12SuiteByID(0xc027) // ECDHE-RSA-AES128-CBC-SHA256
+	if !ok || !suite.cbc {
+		t.Fatal("suite 0xc027 not a CBC suite")
+	}
+
+	// Independently derive the server_write MAC + key (decryptor reads the server half).
+	kb := prf12(suite.prfHash, master, "key expansion", append(append([]byte{}, serverRandom...), clientRandom...),
+		2*suite.macLen+2*suite.keyLen)
+	serverMAC := kb[suite.macLen : 2*suite.macLen]
+	serverKey := kb[2*suite.macLen+suite.keyLen : 2*suite.macLen+2*suite.keyLen]
+	block, _ := aes.NewCipher(serverKey)
+
+	dec, err := newTLS12Decryptor(suite, master, clientRandom, serverRandom, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seal := func(seq uint64, content []byte) []byte {
+		aad := make([]byte, 8)
+		binary.BigEndian.PutUint64(aad, seq)
+		aad = append(aad, ctAppData, 0x03, 0x03, byte(len(content)>>8), byte(len(content)))
+		m := hmac.New(suite.macHash, serverMAC)
+		m.Write(aad)
+		m.Write(content)
+		plain := append(append([]byte{}, content...), m.Sum(nil)...)
+
+		padLen := (aes.BlockSize - (len(plain)+1)%aes.BlockSize) % aes.BlockSize
+		for i := 0; i <= padLen; i++ {
+			plain = append(plain, byte(padLen))
+		}
+		iv := bytes.Repeat([]byte{byte(seq) ^ 0xa5}, aes.BlockSize)
+		ct := make([]byte, len(plain))
+		cipher.NewCBCEncrypter(block, iv).CryptBlocks(ct, plain)
+
+		frag := append(append([]byte{}, iv...), ct...)
+		header := []byte{ctAppData, 0x03, 0x03, byte(len(frag) >> 8), byte(len(frag))}
+		return append(header, frag...)
+	}
+
+	for seq, msg := range [][]byte{[]byte("cbc record one"), []byte("cbc record two, a bit longer than one block")} {
+		rec := seal(uint64(seq), msg)
+		got, ok := dec.open(rec[:recHeaderLen], rec[recHeaderLen:])
+		if !ok {
+			t.Fatalf("record %d: openCBC failed", seq)
 		}
 		if !bytes.Equal(got, msg) {
 			t.Fatalf("record %d: got %q want %q", seq, got, msg)

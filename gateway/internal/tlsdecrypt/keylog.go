@@ -2,11 +2,13 @@
 // stream using an NSS key-log (SSLKEYLOGFILE), so the gateway can decode custom raw-TCP
 // protocols live, in-process, without re-running tshark.
 //
-// Scope: the standard AEAD suites (AES-128-GCM, AES-256-GCM, CHACHA20-POLY1305) over
-//   - TLS 1.3 (keys from the *_TRAFFIC_SECRET_0 key-log secrets), and
-//   - TLS 1.2 (keys from the CLIENT_RANDOM master secret via the TLS 1.2 PRF).
+// Scope:
+//   - TLS 1.3 — AEAD suites (AES-128-GCM, AES-256-GCM, CHACHA20-POLY1305); keys from the
+//     *_TRAFFIC_SECRET_0 key-log secrets.
+//   - TLS 1.2 — the same AEAD suites plus the AES-CBC suites (MAC-then-encrypt); keys from
+//     the CLIENT_RANDOM master secret via the TLS 1.2 PRF.
 //
-// Streams using an unsupported version or suite (e.g. TLS 1.2 CBC, or TLS <1.2) are
+// Streams using an unsupported version or suite (e.g. TLS 1.2 3DES/RC4, or TLS <1.2) are
 // reported unsupported and left to the batch tshark pass. For TLS 1.3 we never need to
 // decrypt the handshake (handshake-phase records simply fail the AEAD and are skipped);
 // for TLS 1.2 the ChangeCipherSpec marks where each direction's records become encrypted.
