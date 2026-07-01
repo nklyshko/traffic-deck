@@ -2,6 +2,7 @@ package decode
 
 import (
 	"bytes"
+	"encoding/hex"
 	"sync"
 	"testing"
 
@@ -76,4 +77,55 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	if string(flow.ResponseBody) != `{"ok":true}` {
 		t.Errorf("body=%q", flow.ResponseBody)
 	}
+}
+
+// TestLiveHTTP3DynamicTable exercises the QPACK dynamic table: a request HEADERS that
+// references dynamic entries arrives before the encoder-stream inserts (so it's blocked),
+// then the encoder stream unblocks it and the flow emits with the decoded values.
+func TestLiveHTTP3DynamicTable(t *testing.T) {
+	var mu sync.Mutex
+	var flow *Flow
+	onFlow := func(f *Flow, _ bool) { mu.Lock(); flow = f; mu.Unlock() }
+	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "203.0.113.5", "443", "198.51.100.2:50000")
+
+	// Request field section: prefix (Required Insert Count=2, Base=0), :method GET (static
+	// 17), :scheme https (static 23), then post-base dynamic :authority (0) and :path (1).
+	section := mustDecodeHex(t, "0381d1d71011")
+	s.onStream(0, true, h3Frame(h3FrameHeaders, section))
+
+	mu.Lock()
+	blockedFlow := flow
+	mu.Unlock()
+	if blockedFlow != nil {
+		t.Fatal("flow emitted before encoder-stream inserts arrived (should be blocked)")
+	}
+
+	// Client QPACK encoder stream (uni stream id 2): type byte 0x02, set capacity 220, then
+	// insert :authority=www.example.com and :path=/sample/path.
+	enc := append([]byte{0x02}, mustDecodeHex(t, "3fbd01")...)
+	enc = append(enc, mustDecodeHex(t, "c00f")...)
+	enc = append(enc, "www.example.com"...)
+	enc = append(enc, mustDecodeHex(t, "c10c")...)
+	enc = append(enc, "/sample/path"...)
+	s.onStream(2, true, enc)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if flow == nil {
+		t.Fatal("no flow emitted after encoder stream unblocked the HEADERS")
+	}
+	if flow.Method != "GET" || flow.Scheme != "https" ||
+		flow.Authority != "www.example.com" || flow.Path != "/sample/path" {
+		t.Errorf("method=%q scheme=%q authority=%q path=%q",
+			flow.Method, flow.Scheme, flow.Authority, flow.Path)
+	}
+}
+
+func mustDecodeHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

@@ -4,9 +4,9 @@ package decode
 // connection's UDP datagrams into reassembled QUIC streams (decrypting Initial with the
 // version-derived keys and 1-RTT with the key-log secrets); here we parse the HTTP/3
 // frame layer on each client-initiated bidirectional (request) stream, QPACK-decode the
-// HEADERS, and emit a Flow per request/response — like the H1/H2 live paths. The batch
-// tshark pass on close stays authoritative (and covers QPACK dynamic-table headers, which
-// the quic-go/qpack decoder doesn't support live).
+// HEADERS (with dynamic-table support via internal/qpackdec, fed by the peer's QPACK
+// encoder stream), and emit a Flow per request/response — like the H1/H2 live paths. The
+// batch tshark pass on close stays authoritative.
 
 import (
 	"log"
@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/quic-go/qpack"
 
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/qpackdec"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
@@ -36,8 +36,27 @@ type quicSession struct {
 
 	mu          sync.Mutex
 	streams     map[uint64]*h3Stream
-	loggedUnsup bool // logged the unsupported-suite diagnostic once
-	loggedQPACK bool // logged the QPACK-dynamic-table diagnostic once
+	uni         map[uint64]*uniStream // unidirectional streams (control, QPACK enc/dec, push)
+	qpack       [2]*qpackdec.Decoder  // QPACK dynamic tables: [0]=client (requests), [1]=server
+	blocked     []blockedSection      // HEADERS awaiting more encoder-stream inserts
+	loggedUnsup bool                  // logged the unsupported-suite diagnostic once
+	loggedQPACK bool                  // logged a QPACK decode failure once
+}
+
+// uniStream tracks one unidirectional QUIC stream until its type is known, then whether it
+// is the peer's QPACK encoder stream (whose inserts drive our dynamic table).
+type uniStream struct {
+	typeKnown bool
+	isEncoder bool
+	pending   []byte // bytes buffered while the leading stream-type varint is incomplete
+}
+
+// blockedSection is a HEADERS field section that referenced dynamic entries not yet
+// received on the encoder stream; retried as the encoder stream advances.
+type blockedSection struct {
+	st         *h3Stream
+	fromClient bool
+	payload    []byte
 }
 
 // h3Stream is one request stream: buffered bytes + parser state per direction, and the
@@ -51,9 +70,19 @@ func newQUICSession(keylog *tlsdecrypt.Keylog, onFlow func(*Flow, bool), serverH
 	s := &quicSession{
 		onFlow: onFlow, serverHost: serverHost, serverPort: serverPort, clientAddr: clientAddr,
 		streams: map[uint64]*h3Stream{},
+		uni:     map[uint64]*uniStream{},
+		qpack:   [2]*qpackdec.Decoder{qpackdec.New(), qpackdec.New()},
 	}
 	s.conn = quicdecrypt.NewConn(keylog, s.onStream)
 	return s
+}
+
+// qdir maps a direction to the dynamic-table / buffer index (0=client, 1=server).
+func qdir(fromClient bool) int {
+	if fromClient {
+		return 0
+	}
+	return 1
 }
 
 func (s *quicSession) feed(fromClient bool, datagram []byte) {
@@ -65,26 +94,57 @@ func (s *quicSession) feed(fromClient bool, datagram []byte) {
 	}
 }
 
-// onStream receives in-order bytes for a QUIC stream. Only client-initiated bidirectional
-// streams (id&0x03==0) carry HTTP/3 requests/responses; the rest (control, QPACK, push)
-// are ignored. Frames may span calls, so we buffer per direction and parse what's whole.
+// onStream receives in-order bytes for a QUIC stream. Client-initiated bidirectional
+// streams (id&0x03==0) carry HTTP/3 requests/responses; unidirectional streams (bit 1 set)
+// carry control / QPACK / push — we track only the QPACK encoder stream. Frames may span
+// calls, so we buffer per direction and parse what's whole.
 func (s *quicSession) onStream(streamID uint64, fromClient bool, data []byte) {
-	if streamID&0x03 != 0 {
-		return // not a client bidirectional request stream
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if streamID&0x02 != 0 {
+		s.onUni(streamID, fromClient, data)
+		return
+	}
+	if streamID&0x03 != 0 {
+		return // server-initiated bidirectional stream — not an HTTP/3 request
+	}
 	st := s.streams[streamID]
 	if st == nil {
 		st = &h3Stream{flow: s.newFlow(streamID)}
 		s.streams[streamID] = st
 	}
-	d := 0
-	if !fromClient {
-		d = 1
-	}
+	d := qdir(fromClient)
 	st.buf[d] = append(st.buf[d], data...)
 	st.buf[d] = s.parseFrames(st, fromClient, st.buf[d])
+}
+
+// onUni handles a unidirectional stream: read the leading stream-type varint, then feed a
+// QPACK encoder stream (type 0x02) into the matching direction's dynamic table. Other
+// stream types (control 0x00, push 0x01, QPACK decoder 0x03, reserved) are ignored.
+func (s *quicSession) onUni(streamID uint64, fromClient bool, data []byte) {
+	u := s.uni[streamID]
+	if u == nil {
+		u = &uniStream{}
+		s.uni[streamID] = u
+	}
+	if !u.typeKnown {
+		u.pending = append(u.pending, data...)
+		t, n := uvarint(u.pending)
+		if n == 0 {
+			return // stream-type varint not fully arrived yet
+		}
+		u.typeKnown = true
+		u.isEncoder = t == 0x02 // QPACK encoder stream
+		data = u.pending[n:]
+		u.pending = nil
+	}
+	if !u.isEncoder || len(data) == 0 {
+		return
+	}
+	if err := s.qpack[qdir(fromClient)].ReadEncoderStream(data); err != nil {
+		return // malformed encoder stream — leave the connection to the batch pass
+	}
+	s.retryBlocked() // new inserts may unblock buffered HEADERS
 }
 
 // parseFrames consumes whole HTTP/3 frames from buf, returning the unconsumed remainder.
@@ -115,18 +175,46 @@ func (s *quicSession) parseFrames(st *h3Stream, fromClient bool, buf []byte) []b
 	return buf[i:]
 }
 
+// onHeaders decodes a HEADERS field section with the direction's QPACK dynamic table. A
+// section that references not-yet-inserted dynamic entries is buffered and retried as the
+// encoder stream advances (retryBlocked).
 func (s *quicSession) onHeaders(st *h3Stream, fromClient bool, payload []byte) {
-	dec := qpack.NewDecoder(nil)
-	fields, err := dec.DecodeFull(payload)
+	fields, blocked, err := s.qpack[qdir(fromClient)].DecodeFieldSection(payload)
+	if blocked {
+		s.blocked = append(s.blocked, blockedSection{st, fromClient, append([]byte(nil), payload...)})
+		return
+	}
 	if err != nil {
-		// QPACK dynamic-table reference (unsupported live) or partial — leave to batch.
 		if !s.loggedQPACK {
-			log.Printf("live decode: HTTP/3 %s (%s): QPACK dynamic-table HEADERS not decodable live — deferred to batch pass on close",
-				hostLabel(s.conn.SNI, s.serverHost), s.serverHost)
+			log.Printf("live decode: HTTP/3 %s (%s): QPACK HEADERS decode failed (%v) — deferred to batch pass on close",
+				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err)
 			s.loggedQPACK = true
 		}
 		return
 	}
+	s.applyHeaders(st, fromClient, fields)
+}
+
+// retryBlocked re-attempts buffered HEADERS sections after the encoder stream advanced.
+func (s *quicSession) retryBlocked() {
+	if len(s.blocked) == 0 {
+		return
+	}
+	kept := s.blocked[:0]
+	for _, b := range s.blocked {
+		fields, blocked, err := s.qpack[qdir(b.fromClient)].DecodeFieldSection(b.payload)
+		switch {
+		case blocked:
+			kept = append(kept, b) // still waiting on more inserts
+		case err == nil:
+			s.applyHeaders(b.st, b.fromClient, fields)
+		}
+	}
+	s.blocked = kept
+}
+
+// applyHeaders folds decoded header fields into the stream's Flow and emits it.
+func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpackdec.HeaderField) {
 	f := st.flow
 	if fromClient {
 		for _, hf := range fields {
