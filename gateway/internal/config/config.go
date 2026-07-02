@@ -22,9 +22,11 @@ type Config struct {
 	// a live decode running. Default false: the batch pass runs on close (authoritative,
 	// full bodies) — useful for verifying the live decoder against tshark.
 	RecordLive bool
-	// VerifyLive, on session close, compares the live-decoded flows against the
-	// authoritative batch (tshark) decode and logs any differences. Requires LiveDecode
-	// on and RecordLive off (the batch pass must run to compare against). Default false.
+	// VerifyLive, on session close, compares the live-decoded flows against a batch
+	// (tshark) decode and logs any differences. Requires LiveDecode on. With RecordLive
+	// off it compares against the authoritative batch pass that runs anyway; with
+	// RecordLive on it runs an extra diagnostic batch decode (not persisted) just for
+	// the comparison. Default false.
 	VerifyLive bool
 
 	// Logging. File logging is on by default (no env needed): logs are teed to stderr and

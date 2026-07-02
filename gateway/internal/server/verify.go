@@ -1,12 +1,37 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
+
+// verifyRecordedLive batch-decodes the session's pcap (without persisting the result)
+// and compares the just-recorded live flows against it, logging any differences — the
+// verification pass for record-live mode, where the authoritative batch decode on close
+// is otherwise skipped. Failures are logged rather than returned: the session is already
+// persisted and closed, and a broken verification must not fail the close.
+func (i *Ingest) verifyRecordedLive(ctx context.Context, sid string, ls *liveSession, keylogPath string) {
+	pcapLocal, ok := i.obj.LocalPath(pcapKey(sid))
+	if !ok {
+		log.Printf("verify %s: pcap not available locally; skipping batch verification", sid)
+		return
+	}
+	ds, err := decode.Decode(ctx, i.tshark, pcapLocal, keylogPath)
+	if err != nil {
+		log.Printf("verify %s: batch decode failed: %v", sid, err)
+		return
+	}
+	batch := make([]*trafficv1.Flow, 0, len(ds.Flows))
+	for _, f := range ds.Flows {
+		batch = append(batch, flowToProto(f))
+	}
+	verifyLiveVsBatch(sid, ls.protoFlows(), batch)
+}
 
 // verifyLiveVsBatch compares the live-decoded flows against the authoritative batch
 // (tshark) decode and logs any differences, so a live-decoder gap (a missed or extra

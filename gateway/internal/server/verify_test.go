@@ -1,10 +1,14 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"log"
 	"strings"
 	"testing"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
 )
 
 func f(proto, method, authority, path string) *trafficv1.Flow {
@@ -38,5 +42,32 @@ func TestVerifyLiveVsBatch(t *testing.T) {
 	}
 	if !strings.Contains(joined, "example.com/a: live=2 batch=1") {
 		t.Errorf("expected extra example.com diff, got:\n%s", joined)
+	}
+}
+
+// TestVerifyRecordedLiveLogsDecodeFailure checks the record-live verification pass:
+// a failing batch decode is logged and swallowed — it must never fail the close, since
+// the live flows are already persisted by then.
+func TestVerifyRecordedLiveLogsDecodeFailure(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	obj, err := objstore.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := "verify-rec"
+	if _, err := obj.Put(pcapKey(sid), strings.NewReader("not a pcap")); err != nil {
+		t.Fatal(err)
+	}
+
+	ing := &Ingest{obj: obj, tshark: "/nonexistent/tshark"}
+	ls := &liveSession{flows: map[string]*trafficv1.Flow{}}
+	ing.verifyRecordedLive(context.Background(), sid, ls, "")
+
+	if !strings.Contains(buf.String(), "batch decode failed") {
+		t.Errorf("expected decode failure to be logged, got:\n%s", buf.String())
 	}
 }

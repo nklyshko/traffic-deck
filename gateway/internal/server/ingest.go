@@ -345,6 +345,10 @@ func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRe
 		if err := i.persistLive(ctx, sid, ls); err != nil {
 			return nil, status.Errorf(codes.Internal, "persist live: %v", err)
 		}
+		if i.verifyLive {
+			// Diagnostic batch decode (not persisted) to check the recorded live flows.
+			i.verifyRecordedLive(ctx, sid, ls, keylogLocal)
+		}
 	case pcapBytes > 0:
 		// PACKET source: authoritative batch decode over the finalized pcap.
 		pcapLocal, _ := i.obj.LocalPath(pcapKey(sid))
