@@ -13,6 +13,7 @@ require (
 	golang.org/x/net v0.55.0
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.11
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	modernc.org/sqlite v1.52.0
 )
 

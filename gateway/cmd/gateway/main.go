@@ -20,6 +20,7 @@ import (
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/importer"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/server"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
@@ -70,6 +71,7 @@ func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.St
 func serve() {
 	ctx := context.Background()
 	cfg := config.Load()
+	logging.Setup(cfg) // tee logs to stderr + a rolling file (default on)
 	obj, st := openDeps(ctx, cfg)
 	defer st.Close()
 
