@@ -1,6 +1,7 @@
 """Traffic-viewer TUI: a read-only Textual UI over the gateway's ViewerService.
-Session list → flow table → flow detail, with live follow, annotations, filtering,
-compare, and export. See render.py / filters.py / screens.py for the pieces."""
+Session list → a tabbed workspace (one flow table per open session) → flow detail, with
+live follow, annotations, filtering, cross-tab compare, and export. See render.py /
+filters.py / screens.py for the pieces."""
 
 from __future__ import annotations
 
@@ -17,6 +18,9 @@ from traffic_viewer.screens import ConfirmScreen, SessionsScreen
 class TrafficViewerApp(App):
     CSS = """
     DataTable { height: 1fr; }
+    TabbedContent { height: 1fr; }
+    SessionPane { height: 1fr; }
+    #pane-status { color: $text-muted; }
     TextPrompt, SelectPrompt, ConfirmScreen { align: center middle; }
     #prompt {
         width: 60; height: auto; max-height: 80%;

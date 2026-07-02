@@ -15,7 +15,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Button, DataTable, Footer, Header, Input, Label, OptionList, Static
+from textual.widgets import (
+    Button, DataTable, Footer, Header, Input, Label, OptionList, Static,
+    TabbedContent, TabPane,
+)
 from textual.widgets.option_list import Option
 from rich.text import Text
 
@@ -169,6 +172,7 @@ class SessionsScreen(Screen):
         except Exception as exc:  # noqa: BLE001
             self.notify(f"list_sessions failed: {exc}", severity="error")
             return
+        self._labels = {s.id: s.label for s in sessions}  # for the workspace tab title
         for s in sessions:
             created = datetime.fromtimestamp(s.created_at_unix_ms / 1e3).strftime("%Y-%m-%d %H:%M")
             table.add_row(
@@ -184,7 +188,9 @@ class SessionsScreen(Screen):
             self.notify("no sessions — import one with `gateway import`")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.app.push_screen(FlowsScreen(str(event.row_key.value)))
+        sid = str(event.row_key.value)
+        label = getattr(self, "_labels", {}).get(sid, "")
+        self.app.push_screen(WorkspaceScreen(sid, label))
 
     def _focused_session_id(self) -> str | None:
         table = self.query_one("#sessions", DataTable)
@@ -208,9 +214,12 @@ class SessionsScreen(Screen):
         self.notify(f"exported {n/1_048_576:.1f}M → {dest}")
 
 
-class FlowsScreen(Screen):
+class SessionPane(Vertical):
+    """One session's live flow table + filtering + annotations. Hosted as a tab in the
+    WorkspaceScreen so several sessions can be open and compared side by side. (Was a
+    full Screen; the shared Header/Footer now live on the workspace.)"""
+
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
         Binding("f", "filter", "Filter"),
         Binding("c", "compare", "Compare A/B"),
         Binding("space", "select", "Select"),
@@ -220,12 +229,12 @@ class FlowsScreen(Screen):
         Binding("n", "comment", "Comment"),
         Binding("g", "group", "Group"),
         Binding("M", "messages", "WS msgs"),
-        Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, label: str = "") -> None:
         super().__init__()
         self.session_id = session_id
+        self.label = label
         self.flows: dict[str, object] = {}  # flow id -> cached Flow (for live detail)
         self._rows: set[str] = set()
         self._cols: list = []
@@ -237,15 +246,13 @@ class FlowsScreen(Screen):
         self._groupnames: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Label("", id="pane-status")
         yield Input(id="filter", placeholder="filter: ~m GET  ~d example.com  ~fav  ~tag auth  ~mark red  (f focus, Enter apply)")
         table = NavDataTable(id="flows", cursor_type="row", zebra_stripes=True)
         self._cols = table.add_columns("", "Time", "Method", "Status", "Proto", "Authority", "Path")
         yield table
-        yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "TrafficDeck"
         self._update_subtitle()
         self.query_one("#flows", DataTable).focus()
         self.load_defs()
@@ -264,12 +271,12 @@ class FlowsScreen(Screen):
         self._groupnames = {g.id: g.name for g in self._groups}
 
     def _update_subtitle(self) -> None:
-        base = f"flows · {self.session_id[:8]}"
+        base = f"{len(self.flows)} flows"
         if self._selected:
             base += f" · {len(self._selected)} selected"
         if self._predicate is not None:
             base += f" · {len(self._rows)}/{len(self.flows)} shown"
-        self.sub_title = base
+        self.query_one("#pane-status", Label).update(base)
 
     def _matches(self, f) -> bool:
         return self._predicate is None or self._predicate(f)
@@ -542,6 +549,113 @@ class FlowsScreen(Screen):
                 self.notify(f"group failed: {exc}", severity="error")
                 return
         await self._refresh(targets)
+
+
+class WorkspaceScreen(Screen):
+    """Tabbed workspace: one SessionPane per open session, so several sessions can be
+    viewed and compared side by side. Compare A/B (c) works across tabs via app.compare_a."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Sessions"),
+        Binding("o", "open_session", "Open session"),
+        Binding("w", "close_tab", "Close tab"),
+        Binding("ctrl+w", "close_tab", "Close tab", show=False),
+        Binding("]", "next_tab", "Next tab"),
+        Binding("[", "prev_tab", "Prev tab"),
+        Binding("ctrl+pagedown", "next_tab", "Next tab", show=False),
+        Binding("ctrl+pageup", "prev_tab", "Prev tab", show=False),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, session_id: str, label: str = "") -> None:
+        super().__init__()
+        self._first = (session_id, label)
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield TabbedContent(id="tabs")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        self.title = "TrafficDeck"
+        await self.open_session(*self._first)
+
+    @staticmethod
+    def _tab_id(session_id: str) -> str:
+        return "t" + session_id.replace("-", "")[:16]
+
+    async def open_session(self, session_id: str, label: str = "") -> None:
+        """Open the session in a tab, or focus its existing tab."""
+        tabs = self.query_one(TabbedContent)
+        tid = self._tab_id(session_id)
+        if any(p.id == tid for p in tabs.query(TabPane)):
+            tabs.active = tid
+        else:
+            await tabs.add_pane(TabPane(label or session_id[:8], SessionPane(session_id, label), id=tid))
+            tabs.active = tid
+        self._sync_subtitle()
+        self.call_after_refresh(self._focus_active)
+
+    def _active_pane(self) -> "SessionPane | None":
+        pane = self.query_one(TabbedContent).active_pane
+        return pane.query_one(SessionPane) if pane else None
+
+    def _focus_active(self) -> None:
+        pane = self._active_pane()
+        if pane is not None:
+            pane.query_one("#flows", DataTable).focus()
+
+    def _sync_subtitle(self) -> None:
+        pane = self._active_pane()
+        self.sub_title = (pane.label or pane.session_id[:8]) if pane else "workspace"
+
+    def on_tabbed_content_tab_activated(self, _event) -> None:
+        self._sync_subtitle()
+        self.call_after_refresh(self._focus_active)
+
+    def _cycle(self, step: int) -> None:
+        tabs = self.query_one(TabbedContent)
+        ids = [p.id for p in tabs.query(TabPane)]
+        if not ids:
+            return
+        i = ids.index(tabs.active) if tabs.active in ids else 0
+        tabs.active = ids[(i + step) % len(ids)]
+        self._sync_subtitle()
+        self.call_after_refresh(self._focus_active)
+
+    def action_next_tab(self) -> None:
+        self._cycle(1)
+
+    def action_prev_tab(self) -> None:
+        self._cycle(-1)
+
+    async def action_close_tab(self) -> None:
+        tabs = self.query_one(TabbedContent)
+        if not tabs.active:
+            return
+        await tabs.remove_pane(tabs.active)
+        if not tabs.query(TabPane):
+            self.app.pop_screen()  # closed the last tab — back to the sessions list
+        else:
+            self._sync_subtitle()
+            self.call_after_refresh(self._focus_active)
+
+    @work
+    async def action_open_session(self) -> None:
+        """Pick another session to open as a tab (the sessions list from the workspace)."""
+        try:
+            sessions = await self.app.client.list_sessions()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"list_sessions failed: {exc}", severity="error")
+            return
+        if not sessions:
+            self.notify("no sessions")
+            return
+        labels = {s.id: s.label for s in sessions}
+        opts = [(s.id, f"{s.label or '—'}  ({s.id[:8]}, {s.flow_count} flows)") for s in sessions]
+        choice = await self.app.push_screen_wait(SelectPrompt("Open session", opts))
+        if choice:
+            await self.open_session(choice, labels.get(choice, ""))
 
 
 class FlowDetailScreen(Screen):

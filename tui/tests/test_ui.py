@@ -5,7 +5,7 @@ covered by test_render.py / test_filters.py."""
 
 from __future__ import annotations
 
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import DataTable, Input, Static, TabPane
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
 from traffic.v1 import common_pb2 as cp
@@ -15,8 +15,10 @@ from traffic_viewer.screens import (
     BodyScreen,
     ConfirmScreen,
     FlowDetailScreen,
-    FlowsScreen,
+    SessionPane,
+    WorkspaceScreen,
     SessionsScreen,
+    CompareScreen,
     WsMessagesScreen,
     WsPayloadScreen,
 )
@@ -48,6 +50,17 @@ def _flow(fid, method, status, websocket=False):
 
 _FLOWS = [_flow("f1", "GET", 200), _flow("f2", "POST", 201), _flow("f3", "", 0, websocket=True)]
 
+SESSION_ID2 = "sess-2"
+_FLOWS2 = [_flow("g1", "GET", 200), _flow("g2", "DELETE", 204)]
+
+
+def _session2():
+    return cp.Session(id=SESSION_ID2, label="prod", status=3, flow_count=len(_FLOWS2),
+                      pcap_bytes=2048, created_at_unix_ms=1_700_000_100_000)
+
+
+_BY_SESSION = {SESSION_ID: _FLOWS, SESSION_ID2: _FLOWS2}
+
 
 def _ws_messages():
     return [
@@ -60,14 +73,14 @@ class FakeClient:
     """Implements the async surface the screens call, served from memory."""
 
     async def list_sessions(self, limit=200):
-        return [_session()]
+        return [_session(), _session2()]
 
     async def stream_flows(self, session_id, follow=False):
-        for f in _FLOWS:
+        for f in _BY_SESSION.get(session_id, _FLOWS):
             yield vp.FlowEvent(flow_added=f)
 
     async def get_flow(self, session_id, flow_id):
-        for f in _FLOWS:
+        for f in _BY_SESSION.get(session_id, _FLOWS):
             if f.id == flow_id:
                 return f
         raise KeyError(flow_id)
@@ -118,7 +131,7 @@ async def test_sessions_screen_lists():
         await settle(pilot)
         assert isinstance(app.screen, SessionsScreen)
         table = app.screen.query_one("#sessions", DataTable)
-        assert table.row_count == 1
+        assert table.row_count == 2  # two sessions in the fixture
 
 
 async def test_drill_session_to_flows():
@@ -128,9 +141,10 @@ async def test_drill_session_to_flows():
         await focus(pilot, "#sessions")
         await pilot.press("enter")  # open the focused session
         await settle(pilot)
-        assert isinstance(app.screen, FlowsScreen)
-        assert app.screen.session_id == SESSION_ID
-        assert app.screen.query_one("#flows", DataTable).row_count == len(_FLOWS)
+        assert isinstance(app.screen, WorkspaceScreen)
+        pane = app.screen.query_one(SessionPane)
+        assert pane.session_id == SESSION_ID
+        assert pane.query_one("#flows", DataTable).row_count == len(_FLOWS)
 
 
 async def test_filter_reduces_rows():
@@ -331,3 +345,57 @@ async def test_ws_messages_jump_keys():
         await pilot.press("home")
         await pilot.pause()
         assert table.cursor_coordinate.row == 0
+
+
+async def _open_workspace(pilot):
+    await settle(pilot)
+    await focus(pilot, "#sessions")
+    await pilot.press("enter")          # open sess-1 in the workspace
+    await settle(pilot)
+    return pilot.app.screen             # WorkspaceScreen
+
+
+async def test_open_multiple_session_tabs():
+    app = make_app()
+    async with app.run_test() as pilot:
+        ws = await _open_workspace(pilot)
+        assert isinstance(ws, WorkspaceScreen)
+        assert len(ws.query(TabPane)) == 1
+
+        await pilot.press("o")           # open-session picker (lists both sessions)
+        await settle(pilot)
+        await pilot.press("down")        # highlight sess-2
+        await pilot.press("enter")       # open it as a second tab
+        await settle(pilot)
+
+        assert len(ws.query(SessionPane)) == 2
+        assert ws._active_pane().session_id == SESSION_ID2  # new tab is active
+
+        await pilot.press("[")  # switch to the first tab
+        await settle(pilot)
+        assert ws._active_pane().session_id == SESSION_ID
+
+        await pilot.press("w")            # close the focused tab
+        await settle(pilot)
+        assert len(ws.query(SessionPane)) == 1
+
+
+async def test_compare_requests_across_tabs():
+    app = make_app()
+    async with app.run_test() as pilot:
+        ws = await _open_workspace(pilot)
+        await pilot.press("o")
+        await settle(pilot)
+        await pilot.press("down")
+        await pilot.press("enter")        # second tab (sess-2), active + focused
+        await settle(pilot)
+
+        await pilot.press("c")            # mark request A in sess-2 (its first flow)
+        assert app.compare_a == (SESSION_ID2, "g1")
+
+        await pilot.press("[")  # back to sess-1
+        await settle(pilot)
+        await pilot.press("c")            # compare against sess-1's focused flow
+        await settle(pilot)
+        assert isinstance(app.screen, CompareScreen)
+        assert app.compare_a is None      # consumed by the compare
