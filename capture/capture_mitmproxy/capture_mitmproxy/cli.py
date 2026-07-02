@@ -83,8 +83,10 @@ def _run_with_qr(cmd: list[str], env: dict) -> int:
     """Run mitmdump, streaming its output, and render the WireGuard client config it prints
     as a QR code. The child runs in its own session so a terminal Ctrl-C reaches only us; we
     forward one SIGINT for a graceful shutdown."""
+    # PYTHONUNBUFFERED so mitmdump flushes to the pipe live (not only on exit).
     proc = subprocess.Popen(
-        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cmd, env={**env, "PYTHONUNBUFFERED": "1"},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1, start_new_session=True)
 
     def forward(_sig, _frame):
@@ -97,7 +99,9 @@ def _run_with_qr(cmd: list[str], env: dict) -> int:
 
     scanner = _WGConfigScanner()
     assert proc.stdout is not None
-    for line in proc.stdout:
+    # readline (not `for line in proc.stdout`) — the iterator's read-ahead buffer would
+    # hold lines back until it fills, so nothing would appear until the child exits.
+    for line in iter(proc.stdout.readline, ""):
         sys.stdout.write(line)
         sys.stdout.flush()
         if scanner.config is None and scanner.feed(line):
