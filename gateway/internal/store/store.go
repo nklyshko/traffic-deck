@@ -45,10 +45,12 @@ var requiredFlowColumns = []string{
 	"proxy_user", "proxy_pass",
 }
 
-const pragmas = `PRAGMA journal_mode=WAL;
-PRAGMA busy_timeout=5000;
-PRAGMA foreign_keys=ON;
-PRAGMA synchronous=NORMAL;`
+// dsnPragmas are applied to every pooled connection (unlike `PRAGMA` run via Exec, which
+// only affects the one connection it ran on). busy_timeout on all connections makes
+// concurrent writers wait for the lock instead of failing with SQLITE_BUSY — important
+// under many concurrent writers (e.g. the mitmproxy push path opening a stream per frame).
+const dsnPragmas = "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)" +
+	"&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)"
 
 type Store struct {
 	dataRoot string
@@ -81,12 +83,8 @@ func (s *Store) Close() {
 
 // openDB opens a SQLite file, applies pragmas and the (idempotent) schema.
 func openDB(ctx context.Context, path, schema string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+dsnPragmas)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, pragmas); err != nil {
-		db.Close()
 		return nil, err
 	}
 	if _, err := db.ExecContext(ctx, schema); err != nil {

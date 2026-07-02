@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"path"
+	"sync"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -33,10 +34,38 @@ type Ingest struct {
 	liveDecode bool // when false, streaming uploads are archived and decoded only on close
 	recordLive bool // when true, persist the live-decoded flows on close instead of batch decode
 	verifyLive bool // when true, compare live vs batch flows on close and log differences
+
+	// pushAnalyses gives each pushed (mitmproxy) session a single analysis, shared across
+	// its many PushFlows streams — the addon opens one stream per flow/message.
+	pushMu       sync.Mutex
+	pushAnalyses map[string]string // sessionID -> analysisID
 }
 
 func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive, verifyLive bool) *Ingest {
-	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub, liveDecode: liveDecode, recordLive: recordLive, verifyLive: verifyLive}
+	return &Ingest{
+		st: st, obj: obj, tshark: tshark, hub: hub,
+		liveDecode: liveDecode, recordLive: recordLive, verifyLive: verifyLive,
+		pushAnalyses: map[string]string{},
+	}
+}
+
+// pushAnalysis returns the session's push analysis id, creating it once. Shared across the
+// addon's many concurrent PushFlows streams so they don't each create an analysis.
+func (i *Ingest) pushAnalysis(ctx context.Context, sid string) (string, error) {
+	i.pushMu.Lock()
+	defer i.pushMu.Unlock()
+	if i.pushAnalyses == nil {
+		i.pushAnalyses = map[string]string{}
+	}
+	if aid, ok := i.pushAnalyses[sid]; ok {
+		return aid, nil
+	}
+	aid := uuid.NewString()
+	if err := i.st.CreateAnalysis(ctx, store.NewAnalysis{ID: aid, SessionID: sid, Engine: "mitmproxy"}); err != nil {
+		return "", err
+	}
+	i.pushAnalyses[sid] = aid
+	return aid, nil
 }
 
 func pcapKey(sid string) string   { return path.Join("sessions", sid, "capture.pcap") }
@@ -120,7 +149,6 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch, trafficv1.PushAck]) error {
 	ctx := stream.Context()
 	var accepted uint32
-	analyses := map[string]string{} // session id -> analysis id (created once)
 
 	for {
 		batch, err := stream.Recv()
@@ -136,13 +164,9 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 		}
 		ls := i.hub.startPassive(sid)
 
-		aid, ok := analyses[sid]
-		if !ok {
-			aid = uuid.NewString()
-			if err := i.st.CreateAnalysis(ctx, store.NewAnalysis{ID: aid, SessionID: sid, Engine: "mitmproxy"}); err != nil {
-				return status.Errorf(codes.Internal, "create analysis: %v", err)
-			}
-			analyses[sid] = aid
+		aid, err := i.pushAnalysis(ctx, sid) // one analysis per session, across all streams
+		if err != nil {
+			return status.Errorf(codes.Internal, "create analysis: %v", err)
 		}
 
 		flows := batch.GetFlows()
