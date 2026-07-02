@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -69,7 +71,74 @@ def main() -> None:
     cmd += args.passthrough
 
     env = dict(os.environ, GATEWAY_ADDR=args.gateway, CAPTURE_LABEL=args.label)
+
+    if args.mode == "wireguard":
+        # mitmproxy logs the WireGuard client config on startup; run it as a child so we can
+        # tee that output and also render it as a scannable QR code.
+        sys.exit(_run_with_qr(cmd, env))
     os.execvpe(cmd[0], cmd, env)
+
+
+def _run_with_qr(cmd: list[str], env: dict) -> int:
+    """Run mitmdump, streaming its output, and render the WireGuard client config it prints
+    as a QR code. The child runs in its own session so a terminal Ctrl-C reaches only us; we
+    forward one SIGINT for a graceful shutdown."""
+    proc = subprocess.Popen(
+        cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, start_new_session=True)
+
+    def forward(_sig, _frame):
+        try:
+            proc.send_signal(signal.SIGINT)
+        except ProcessLookupError:
+            pass
+    signal.signal(signal.SIGINT, forward)
+    signal.signal(signal.SIGTERM, forward)
+
+    scanner = _WGConfigScanner()
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if scanner.config is None and scanner.feed(line):
+            _print_qr(scanner.config)
+    return proc.wait()
+
+
+class _WGConfigScanner:
+    """Extracts the WireGuard client config block ([Interface]…Endpoint) from mitmproxy's
+    streamed log output, tolerating any log prefix on the delimiter/first line."""
+
+    def __init__(self) -> None:
+        self._lines: list[str] = []
+        self._capturing = False
+        self.config: str | None = None
+
+    def feed(self, line: str) -> bool:
+        """Feed one output line; returns True on the line that completes the config."""
+        if self.config is not None:
+            return False
+        if "[Interface]" in line:
+            self._capturing = True
+            self._lines = [line[line.index("[Interface]"):].rstrip("\n")]
+        elif self._capturing:
+            self._lines.append(line.rstrip("\n"))
+            if line.lstrip().startswith("Endpoint"):  # last line of the config
+                self.config = "\n".join(self._lines)
+                return True
+        return False
+
+
+def _print_qr(config: str) -> None:
+    """Render a WireGuard client config as a terminal QR code (scannable by the WireGuard
+    mobile app). Best-effort: on any failure the config text (already printed) is enough."""
+    try:
+        import segno
+        print("\nScan with the WireGuard app to add this tunnel:\n", flush=True)
+        segno.make(config, error="l").terminal(compact=True)
+        print(flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"(QR render failed: {exc}; use the config text above)", flush=True)
 
 
 if __name__ == "__main__":
