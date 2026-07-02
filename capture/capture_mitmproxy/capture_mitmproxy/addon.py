@@ -14,13 +14,18 @@ Config via env (set by the launcher): GATEWAY_ADDR, CAPTURE_LABEL.
 from __future__ import annotations
 
 import os
+import uuid
 
 import grpc
-from mitmproxy import ctx, http
+from mitmproxy import ctx, http, tcp
 
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
+
+# Bound each push so a slow/unreachable gateway can't wedge a hook — and, importantly,
+# can't block mitmproxy's shutdown on the first Ctrl+C.
+PUSH_TIMEOUT = 5.0
 
 
 def _s(v) -> str:
@@ -47,6 +52,11 @@ def _content(msg) -> bytes:
         return msg.raw_content or b""
 
 
+def _is_ws_upgrade(resp) -> bool:
+    return bool(resp and resp.status_code == 101 and
+                resp.headers.get("upgrade", "").lower() == "websocket")
+
+
 def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     """Translate a mitmproxy HTTPFlow into the gateway's proto Flow."""
     req, resp = flow.request, flow.response
@@ -66,6 +76,7 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
         ts_unix_micros=int((req.timestamp_start or 0) * 1_000_000),
         tls_decrypted=(req.scheme == "https"),
         user_agent=req.headers.get("user-agent", ""),
+        websocket=_is_ws_upgrade(resp),
     )
     for k, v in req.headers.fields:
         pf.request_headers.append(cp.Header(name=_s(k), value=_s(v)))
@@ -93,6 +104,43 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     return pf
 
 
+def build_tcp_flow(flow: tcp.TCPFlow) -> cp.Flow:
+    """Synthesize a Flow for a raw (non-HTTP) TCP connection mitmproxy tunneled. Its byte
+    stream is surfaced as directional messages (like WebSocket), so websocket=True reuses
+    the message-timeline UI."""
+    addr = flow.server_conn.address
+    host = addr[0] if addr else ""
+    sni = getattr(flow.server_conn, "sni", "") or ""
+    authority = sni or (f"{host}:{addr[1]}" if addr else "")
+    return cp.Flow(
+        id=flow.id,
+        protocol="TCP",
+        authority=authority,
+        src_addr=_peer(flow.client_conn.peername),
+        dst_addr=_peer(addr),
+        ts_unix_micros=int((flow.client_conn.timestamp_start or 0) * 1_000_000),
+        tls_decrypted=bool(getattr(flow.server_conn, "tls_established", False)),
+        websocket=True,
+    )
+
+
+def _ws_opcode(msg) -> str:
+    name = getattr(getattr(msg, "type", None), "name", "") or ""
+    return "text" if name.upper() == "TEXT" else "binary"
+
+
+def _message(flow_id: str, from_client: bool, opcode: str, content: bytes, ts: float) -> cp.WsMessage:
+    content = content or b""
+    return cp.WsMessage(
+        id=str(uuid.uuid4()),
+        flow_id=flow_id,
+        from_client=bool(from_client),
+        opcode=opcode,
+        ts_unix_micros=int((ts or 0) * 1_000_000),
+        payload=cp.Body(size=len(content), inline=content),
+    )
+
+
 class GatewayPusher:
     """Pushes completed flows to the gateway; opens the session on startup."""
 
@@ -115,20 +163,39 @@ class GatewayPusher:
         ctx.log.info(f"gateway: session {self.session_id} @ {self.addr}")
 
     async def response(self, flow: http.HTTPFlow) -> None:
-        await self._push(flow)
+        await self._send(flows=[build_flow(flow)])
 
     async def error(self, flow: http.HTTPFlow) -> None:
         # Push request-only flows too (connection reset, upstream error, …).
         if isinstance(flow, http.HTTPFlow):
-            await self._push(flow)
+            await self._send(flows=[build_flow(flow)])
 
-    async def _push(self, flow: http.HTTPFlow) -> None:
+    async def websocket_message(self, flow: http.HTTPFlow) -> None:
+        # The parent Upgrade flow was pushed on `response` (101). Push each frame as it
+        # arrives; flow.websocket.messages[-1] is the newest.
+        if not flow.websocket or not flow.websocket.messages:
+            return
+        m = flow.websocket.messages[-1]
+        await self._send(messages=[_message(flow.id, m.from_client, _ws_opcode(m), m.content, m.timestamp)])
+
+    async def tcp_start(self, flow: tcp.TCPFlow) -> None:
+        # Raw (non-HTTP) TCP connection: push the synthetic connection flow up front so its
+        # byte-stream messages have a parent.
+        await self._send(flows=[build_tcp_flow(flow)])
+
+    async def tcp_message(self, flow: tcp.TCPFlow) -> None:
+        if not flow.messages:
+            return
+        m = flow.messages[-1]
+        await self._send(messages=[_message(flow.id, m.from_client, "binary", m.content, m.timestamp)])
+
+    async def _send(self, flows=None, messages=None) -> None:
         if self._stub is None or self.session_id is None:
             return
         try:
-            pf = build_flow(flow)
-            call = self._stub.PushFlows()
-            await call.write(ip.FlowBatch(session_id=self.session_id, flows=[pf]))
+            call = self._stub.PushFlows(timeout=PUSH_TIMEOUT)
+            await call.write(ip.FlowBatch(
+                session_id=self.session_id, flows=flows or [], messages=messages or []))
             await call.done_writing()
             await call
         except Exception as exc:  # noqa: BLE001 (never break the proxy on a push error)

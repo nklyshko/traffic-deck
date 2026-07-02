@@ -101,12 +101,14 @@ class UploadAck(_message.Message):
     def __init__(self, upload_id: _Optional[str] = ..., pcap_received: _Optional[int] = ..., keylog_received: _Optional[int] = ...) -> None: ...
 
 class FlowBatch(_message.Message):
-    __slots__ = ("session_id", "flows")
+    __slots__ = ("session_id", "flows", "messages")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FLOWS_FIELD_NUMBER: _ClassVar[int]
+    MESSAGES_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     flows: _containers.RepeatedCompositeFieldContainer[_common_pb2.Flow]
-    def __init__(self, session_id: _Optional[str] = ..., flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ...) -> None: ...
+    messages: _containers.RepeatedCompositeFieldContainer[_common_pb2.WsMessage]
+    def __init__(self, session_id: _Optional[str] = ..., flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., messages: _Optional[_Iterable[_Union[_common_pb2.WsMessage, _Mapping]]] = ...) -> None: ...
 
 class PushAck(_message.Message):
     __slots__ = ("accepted",)

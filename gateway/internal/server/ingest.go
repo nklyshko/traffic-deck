@@ -159,7 +159,26 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 		for _, pf := range flows {
 			ls.publish(pf, true)
 		}
-		accepted += uint32(len(flows))
+
+		// WebSocket / raw-TCP frames: their flow_id references a flow pushed earlier
+		// (same or prior batch), so the parent flow is already persisted.
+		msgs := batch.GetMessages()
+		dmsgs := make([]*decode.WsMessage, 0, len(msgs))
+		for _, pm := range msgs {
+			if pm.GetId() == "" {
+				pm.Id = uuid.NewString()
+			}
+			dmsgs = append(dmsgs, protoToDecodeWsMessage(pm))
+		}
+		if len(dmsgs) > 0 {
+			if _, err := i.st.InsertWsMessages(ctx, sid, dmsgs); err != nil {
+				return status.Errorf(codes.Internal, "insert ws messages: %v", err)
+			}
+			for _, pm := range msgs {
+				ls.publishMessage(pm)
+			}
+		}
+		accepted += uint32(len(flows)) + uint32(len(msgs))
 	}
 	return stream.SendAndClose(&trafficv1.PushAck{Accepted: accepted})
 }

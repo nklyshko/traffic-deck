@@ -574,11 +574,13 @@ func (x *UploadAck) GetKeylogReceived() uint64 {
 	return 0
 }
 
-// Already-decoded flows (mitmproxy path) pushed for live view.
+// Already-decoded flows (mitmproxy path) pushed for live view. A batch may carry flows
+// and/or WebSocket/raw-TCP messages (each message's flow_id references a pushed flow).
 type FlowBatch struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	Flows         []*Flow                `protobuf:"bytes,2,rep,name=flows,proto3" json:"flows,omitempty"`
+	Messages      []*WsMessage           `protobuf:"bytes,3,rep,name=messages,proto3" json:"messages,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -623,6 +625,13 @@ func (x *FlowBatch) GetSessionId() string {
 func (x *FlowBatch) GetFlows() []*Flow {
 	if x != nil {
 		return x.Flows
+	}
+	return nil
+}
+
+func (x *FlowBatch) GetMessages() []*WsMessage {
+	if x != nil {
+		return x.Messages
 	}
 	return nil
 }
@@ -801,11 +810,12 @@ const file_traffic_v1_ingest_proto_rawDesc = "" +
 	"\tUploadAck\x12\x1b\n" +
 	"\tupload_id\x18\x01 \x01(\tR\buploadId\x12#\n" +
 	"\rpcap_received\x18\x02 \x01(\x04R\fpcapReceived\x12'\n" +
-	"\x0fkeylog_received\x18\x03 \x01(\x04R\x0ekeylogReceived\"R\n" +
+	"\x0fkeylog_received\x18\x03 \x01(\x04R\x0ekeylogReceived\"\x85\x01\n" +
 	"\tFlowBatch\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12&\n" +
-	"\x05flows\x18\x02 \x03(\v2\x10.traffic.v1.FlowR\x05flows\"%\n" +
+	"\x05flows\x18\x02 \x03(\v2\x10.traffic.v1.FlowR\x05flows\x121\n" +
+	"\bmessages\x18\x03 \x03(\v2\x15.traffic.v1.WsMessageR\bmessages\"%\n" +
 	"\aPushAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\rR\baccepted\"4\n" +
 	"\x13CloseSessionRequest\x12\x1d\n" +
@@ -858,7 +868,8 @@ var file_traffic_v1_ingest_proto_goTypes = []any{
 	(SourceKind)(0),             // 14: traffic.v1.SourceKind
 	(FileKind)(0),               // 15: traffic.v1.FileKind
 	(*Flow)(nil),                // 16: traffic.v1.Flow
-	(*Session)(nil),             // 17: traffic.v1.Session
+	(*WsMessage)(nil),           // 17: traffic.v1.WsMessage
+	(*Session)(nil),             // 18: traffic.v1.Session
 }
 var file_traffic_v1_ingest_proto_depIdxs = []int32{
 	14, // 0: traffic.v1.OpenSessionRequest.source_kind:type_name -> traffic.v1.SourceKind
@@ -871,20 +882,21 @@ var file_traffic_v1_ingest_proto_depIdxs = []int32{
 	5,  // 7: traffic.v1.CaptureChunk.data:type_name -> traffic.v1.DataChunk
 	6,  // 8: traffic.v1.CaptureChunk.end:type_name -> traffic.v1.UploadEnd
 	16, // 9: traffic.v1.FlowBatch.flows:type_name -> traffic.v1.Flow
-	17, // 10: traffic.v1.SessionSummary.session:type_name -> traffic.v1.Session
-	1,  // 11: traffic.v1.IngestService.OpenSession:input_type -> traffic.v1.OpenSessionRequest
-	7,  // 12: traffic.v1.IngestService.UploadCapture:input_type -> traffic.v1.CaptureChunk
-	9,  // 13: traffic.v1.IngestService.PushFlows:input_type -> traffic.v1.FlowBatch
-	11, // 14: traffic.v1.IngestService.CloseSession:input_type -> traffic.v1.CloseSessionRequest
-	2,  // 15: traffic.v1.IngestService.OpenSession:output_type -> traffic.v1.SessionHandle
-	8,  // 16: traffic.v1.IngestService.UploadCapture:output_type -> traffic.v1.UploadAck
-	10, // 17: traffic.v1.IngestService.PushFlows:output_type -> traffic.v1.PushAck
-	12, // 18: traffic.v1.IngestService.CloseSession:output_type -> traffic.v1.SessionSummary
-	15, // [15:19] is the sub-list for method output_type
-	11, // [11:15] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	17, // 10: traffic.v1.FlowBatch.messages:type_name -> traffic.v1.WsMessage
+	18, // 11: traffic.v1.SessionSummary.session:type_name -> traffic.v1.Session
+	1,  // 12: traffic.v1.IngestService.OpenSession:input_type -> traffic.v1.OpenSessionRequest
+	7,  // 13: traffic.v1.IngestService.UploadCapture:input_type -> traffic.v1.CaptureChunk
+	9,  // 14: traffic.v1.IngestService.PushFlows:input_type -> traffic.v1.FlowBatch
+	11, // 15: traffic.v1.IngestService.CloseSession:input_type -> traffic.v1.CloseSessionRequest
+	2,  // 16: traffic.v1.IngestService.OpenSession:output_type -> traffic.v1.SessionHandle
+	8,  // 17: traffic.v1.IngestService.UploadCapture:output_type -> traffic.v1.UploadAck
+	10, // 18: traffic.v1.IngestService.PushFlows:output_type -> traffic.v1.PushAck
+	12, // 19: traffic.v1.IngestService.CloseSession:output_type -> traffic.v1.SessionSummary
+	16, // [16:20] is the sub-list for method output_type
+	12, // [12:16] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_ingest_proto_init() }

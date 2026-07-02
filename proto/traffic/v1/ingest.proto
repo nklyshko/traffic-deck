@@ -68,10 +68,12 @@ message UploadAck {
   uint64 keylog_received = 3;
 }
 
-// Already-decoded flows (mitmproxy path) pushed for live view.
+// Already-decoded flows (mitmproxy path) pushed for live view. A batch may carry flows
+// and/or WebSocket/raw-TCP messages (each message's flow_id references a pushed flow).
 message FlowBatch {
   string session_id = 1;
   repeated Flow flows = 2;
+  repeated WsMessage messages = 3;
 }
 
 message PushAck {

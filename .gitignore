@@ -25,3 +25,7 @@ mise.local.toml
 
 # The plan is maintained as its own git repository
 /plan/
+
+# capture agent logs
+capture/capture-mitm.log
+*.log
