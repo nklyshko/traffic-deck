@@ -226,6 +226,20 @@ func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
 		default: // slow subscriber: drop (it re-backfills from the store after close)
 		}
 	}
+	// Keep the parent flow's live ⇅ count current so the flow row reflects the messages
+	// (the decode paths bump this on the Flow; the pushed path publishes messages
+	// separately, so bump it here) and re-publish the flow as an update.
+	if f := ls.flows[pm.GetFlowId()]; f != nil {
+		f.Websocket = true
+		f.WsMessageCount++
+		ev := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: f}}
+		for _, ch := range ls.subs {
+			select {
+			case ch <- ev:
+			default:
+			}
+		}
+	}
 }
 
 // subscribeMessages returns the frames seen so far for one flow, a channel of

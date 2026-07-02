@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/importer"
@@ -39,6 +40,19 @@ type Ingest struct {
 	// its many PushFlows streams — the addon opens one stream per flow/message.
 	pushMu       sync.Mutex
 	pushAnalyses map[string]string // sessionID -> analysisID
+
+	// wsStates runs custom WebSocket decoders over pushed binary frames (the push path
+	// bypasses the tshark/Go decoders), keyed by the parent flow id.
+	wsDecMu  sync.Mutex
+	wsStates map[string]*wsPushState
+}
+
+// wsPushState is one pushed WebSocket flow's decoder framing state.
+type wsPushState struct {
+	meta    decoders.WSMeta
+	decided bool
+	dec     decoders.WSDecoder // nil once decided if none claims the connection
+	sess    decoders.Session
 }
 
 func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive, verifyLive bool) *Ingest {
@@ -66,6 +80,47 @@ func (i *Ingest) pushAnalysis(ctx context.Context, sid string) (string, error) {
 	}
 	i.pushAnalyses[sid] = aid
 	return aid, nil
+}
+
+// recordWSMeta remembers a pushed WebSocket upgrade flow's host/path so a WSDecoder can be
+// matched for its binary frames. Raw-TCP flows (protocol "TCP") are left to store as-is.
+func (i *Ingest) recordWSMeta(pf *trafficv1.Flow) {
+	if !pf.GetWebsocket() || pf.GetProtocol() == "TCP" {
+		return
+	}
+	i.wsDecMu.Lock()
+	defer i.wsDecMu.Unlock()
+	if i.wsStates == nil {
+		i.wsStates = map[string]*wsPushState{}
+	}
+	if _, ok := i.wsStates[pf.GetId()]; !ok {
+		i.wsStates[pf.GetId()] = &wsPushState{meta: decoders.WSMeta{Host: pf.GetAuthority(), Path: pf.GetPath()}}
+	}
+}
+
+// decodePushedWSBinary frames a pushed binary WebSocket payload through the WSDecoder that
+// claims its flow. ok=false means no decoder handles it (store the raw frame). The addon
+// awaits each push, so frames for a flow arrive in order — the stateful session stays synced.
+func (i *Ingest) decodePushedWSBinary(flowID string, fromClient bool, payload []byte) ([]decoders.Message, bool) {
+	i.wsDecMu.Lock()
+	defer i.wsDecMu.Unlock()
+	st := i.wsStates[flowID]
+	if st == nil {
+		return nil, false
+	}
+	if !st.decided {
+		if m := decoders.MatchWS(st.meta); len(m) > 0 {
+			st.dec = m[0]
+		}
+		st.decided = true
+	}
+	if st.dec == nil {
+		return nil, false
+	}
+	if st.sess == nil {
+		st.sess = st.dec.NewSession()
+	}
+	return st.sess.Feed(fromClient, payload), true
 }
 
 func pcapKey(sid string) string   { return path.Join("sessions", sid, "capture.pcap") }
@@ -182,23 +237,43 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 		}
 		for _, pf := range flows {
 			ls.publish(pf, true)
+			i.recordWSMeta(pf) // remember host/path so a WSDecoder can claim its frames
 		}
 
 		// WebSocket / raw-TCP frames: their flow_id references a flow pushed earlier
-		// (same or prior batch), so the parent flow is already persisted.
+		// (same or prior batch), so the parent flow is already persisted. A registered
+		// WSDecoder reframes binary frames into protocol messages (carrying the original
+		// bytes in Raw); unclaimed frames are stored as-is.
 		msgs := batch.GetMessages()
-		dmsgs := make([]*decode.WsMessage, 0, len(msgs))
+		var store []*decode.WsMessage
+		var pub []*trafficv1.WsMessage
 		for _, pm := range msgs {
 			if pm.GetId() == "" {
 				pm.Id = uuid.NewString()
 			}
-			dmsgs = append(dmsgs, protoToDecodeWsMessage(pm))
+			payload := pm.GetPayload().GetInline()
+			if pm.GetOpcode() == "binary" {
+				if frames, ok := i.decodePushedWSBinary(pm.GetFlowId(), pm.GetFromClient(), payload); ok {
+					for _, fr := range frames {
+						dm := &decode.WsMessage{
+							ID: uuid.NewString(), FlowID: pm.GetFlowId(),
+							FromClient: fr.FromClient, Opcode: fr.Opcode,
+							TSUnixMicros: pm.GetTsUnixMicros(), Payload: fr.Payload, Raw: payload,
+						}
+						store = append(store, dm)
+						pub = append(pub, wsMsgToProto(dm))
+					}
+					continue
+				}
+			}
+			store = append(store, protoToDecodeWsMessage(pm))
+			pub = append(pub, pm)
 		}
-		if len(dmsgs) > 0 {
-			if _, err := i.st.InsertWsMessages(ctx, sid, dmsgs); err != nil {
+		if len(store) > 0 {
+			if _, err := i.st.InsertWsMessages(ctx, sid, store); err != nil {
 				return status.Errorf(codes.Internal, "insert ws messages: %v", err)
 			}
-			for _, pm := range msgs {
+			for _, pm := range pub {
 				ls.publishMessage(pm)
 			}
 		}

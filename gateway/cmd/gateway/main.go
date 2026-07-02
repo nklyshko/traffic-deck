@@ -79,7 +79,9 @@ func serve() {
 	if err != nil {
 		log.Fatalf("listen %s: %v", cfg.GRPCAddr, err)
 	}
-	s := grpc.NewServer()
+	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
+	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
+	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
 	server.Register(s, st, obj, cfg.TsharkPath, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
 	log.Printf("gateway listening on %s (live decode: %v, record live: %v, verify live: %v)",
 		cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)

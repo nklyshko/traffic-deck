@@ -154,7 +154,11 @@ class GatewayPusher:
     async def running(self) -> None:
         if self.session_id is not None:
             return  # `running` can fire more than once
-        self._channel = grpc.aio.insecure_channel(self.addr)
+        # Allow large messages: a captured download body can far exceed gRPC's 4 MiB default.
+        self._channel = grpc.aio.insecure_channel(self.addr, options=[
+            ("grpc.max_send_message_length", 256 * 1024 * 1024),
+            ("grpc.max_receive_message_length", 256 * 1024 * 1024),
+        ])
         self._stub = ig.IngestServiceStub(self._channel)
         handle = await self._stub.OpenSession(
             ip.OpenSessionRequest(label=self.label, source_kind=cp.SOURCE_KIND_MITMPROXY)

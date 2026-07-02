@@ -9,9 +9,23 @@ import (
 
 	"github.com/google/uuid"
 
+	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
+
+// pushWSDecoder is a WSDecoder claiming only the test host, so it can't affect other tests.
+type pushWSDecoder struct{}
+
+func (pushWSDecoder) Name() string                     { return "pushws-test" }
+func (pushWSDecoder) MatchesWS(m decoders.WSMeta) bool { return m.Host == "ws.custom.test" }
+func (pushWSDecoder) NewSession() decoders.Session     { return pushWSSession{} }
+
+type pushWSSession struct{}
+
+func (pushWSSession) Feed(fromClient bool, data []byte) []decoders.Message {
+	return []decoders.Message{{FromClient: fromClient, Opcode: "decoded", Payload: append([]byte("D:"), data...)}}
+}
 
 // fakePushStream is a minimal grpc.ClientStreamingServer[FlowBatch, PushAck] that replays
 // a fixed set of batches, then EOF.
@@ -94,5 +108,54 @@ func TestPushFlowsWithMessages(t *testing.T) {
 	}
 	if string(msgs[1].GetPayload().GetInline()) != "resp" || msgs[1].GetFromClient() {
 		t.Errorf("msg1 = %+v", msgs[1])
+	}
+}
+
+// TestPushFlowsCustomWSDecode checks a registered WSDecoder reframes pushed binary frames,
+// storing the decoded payload with the original bytes in raw.
+func TestPushFlowsCustomWSDecode(t *testing.T) {
+	decoders.RegisterWS(pushWSDecoder{})
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, store.NewSession{
+		ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_MITMPROXY,
+		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fid := uuid.NewString()
+	ing := &Ingest{st: st, hub: newLiveHub("", false)}
+	stream := &fakePushStream{ctx: ctx, batches: []*trafficv1.FlowBatch{
+		{SessionId: sid, Flows: []*trafficv1.Flow{
+			{Id: fid, Protocol: "HTTP/1.1", Authority: "ws.custom.test", Websocket: true},
+		}},
+		{SessionId: sid, Messages: []*trafficv1.WsMessage{
+			{Id: uuid.NewString(), FlowId: fid, FromClient: true, Opcode: "binary",
+				Payload: &trafficv1.Body{Size: 5, Content: &trafficv1.Body_Inline{Inline: []byte("hello")}}},
+		}},
+	}}
+	if err := ing.PushFlows(stream); err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, err := st.ListMessages(ctx, sid, fid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1 (decoded): %+v", len(msgs), msgs)
+	}
+	if msgs[0].GetOpcode() != "decoded" || string(msgs[0].GetPayload().GetInline()) != "D:hello" {
+		t.Errorf("decoded message = %+v", msgs[0])
+	}
+	if string(msgs[0].GetRaw().GetInline()) != "hello" {
+		t.Errorf("raw original bytes = %q, want hello", msgs[0].GetRaw().GetInline())
 	}
 }
