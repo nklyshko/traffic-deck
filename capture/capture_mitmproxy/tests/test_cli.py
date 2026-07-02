@@ -1,4 +1,46 @@
-from capture_mitmproxy.cli import _WGConfigScanner, _print_qr
+from capture_mitmproxy import cli
+from capture_mitmproxy.cli import _WGConfigScanner, _iface_rank, _print_qr
+
+
+class _FakeStore:
+    def get(self, key, default=""):
+        return default
+
+
+def test_iface_rank_physical_lan_first():
+    items = [
+        ("172.18.0.1", "singbox_tun"),   # VPN tun (owns default route on this box)
+        ("192.168.163.1", "vmnet1"),     # VMware host-only (looks LAN but virtual)
+        ("192.168.0.26", "wlan0"),       # the real LAN address
+        ("172.17.0.1", "docker0"),
+        ("10.0.0.5", "eth0"),
+    ]
+    ips = [ip for ip, _ in sorted(items, key=_iface_rank)]
+    # physical LAN interfaces rank before virtual ones
+    assert ips.index("192.168.0.26") < ips.index("192.168.163.1")  # wlan0 before vmnet1
+    assert ips.index("10.0.0.5") < ips.index("172.17.0.1")         # eth0 before docker0
+    assert ips.index("192.168.0.26") < ips.index("172.18.0.1")     # LAN before VPN tun
+
+
+def test_choose_host_override_wins():
+    assert cli._choose_host(_FakeStore(), "1.2.3.4") == "1.2.3.4"
+
+
+def test_choose_host_single_candidate(monkeypatch):
+    monkeypatch.setattr(cli, "_lan_candidates", lambda: [("192.168.0.26", "wlan0")])
+    assert cli._choose_host(_FakeStore(), None) == "192.168.0.26"
+
+
+def test_choose_host_defaults_to_best_guess(monkeypatch):
+    # Non-interactive (pytest stdin isn't a tty) → the first (best-guess) candidate.
+    monkeypatch.setattr(cli, "_lan_candidates",
+                        lambda: [("192.168.0.26", "wlan0"), ("172.17.0.1", "docker0")])
+    assert cli._choose_host(_FakeStore(), None) == "192.168.0.26"
+
+
+def test_choose_host_none_without_interfaces(monkeypatch):
+    monkeypatch.setattr(cli, "_lan_candidates", lambda: [])
+    assert cli._choose_host(_FakeStore(), None) is None
 
 # A realistic mitmproxy WireGuard startup log: a prefixed delimiter, the client config
 # block, the closing delimiter, then unrelated log lines.

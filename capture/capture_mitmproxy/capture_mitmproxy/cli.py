@@ -43,6 +43,50 @@ def _choose_mode(store: Store) -> str:
     return remembered
 
 
+def _lan_candidates() -> list[tuple[str, str]]:
+    """Local IPv4 (ip, iface) pairs, physical LAN interfaces first — auto-detection is
+    unreliable when a VPN/Docker owns the default route, so we let the user pick."""
+    import socket
+
+    import psutil
+
+    cands = []
+    for name, addrs in psutil.net_if_addrs().items():
+        for a in addrs:
+            if a.family == socket.AF_INET and not a.address.startswith("127."):
+                cands.append((a.address, name))
+    cands.sort(key=_iface_rank)
+    return cands
+
+
+def _iface_rank(item: tuple[str, str]):
+    """Sort key placing physical LAN interfaces first, virtual (docker/bridge/vmnet/VPN)
+    last — so the default endpoint is the address a device on the LAN can reach."""
+    ip, name = item
+    virtual = name.startswith(("docker", "br-", "veth", "vmnet")) or "tun" in name or "tap" in name
+    lan = ip.startswith("192.168.") or ip.startswith("10.")
+    return (virtual, not lan, name)
+
+
+def _choose_host(store: Store, override: str | None) -> str | None:
+    """The address the device connects to (WireGuard Endpoint / bind host). An explicit
+    --listen-host wins; otherwise pick interactively from the local interfaces (default:
+    the last-used address, else the best-guess physical LAN interface)."""
+    if override:
+        return override
+    cands = _lan_candidates()
+    if not cands:
+        return None
+    values = [ip for ip, _ in cands]
+    remembered = store.get("listen_host", "")
+    default = remembered if remembered in values else values[0]
+    if len(values) == 1 or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return default
+    choices = [(f"{ip}  ({iface})", ip) for ip, iface in cands]
+    return prompt.select(
+        "WireGuard endpoint — the address your device connects to", choices, default=default)
+
+
 def main() -> None:
     # Proxy settings default to the previous run's, remembered under
     # ~/.traffic-deck/state/mitmproxy.json; passing a flag updates the remembered value.
@@ -54,6 +98,9 @@ def main() -> None:
     ap.add_argument("--label", default="mitmproxy", help="session label shown in the viewer")
     ap.add_argument("--listen-port", type=int, default=store.get("listen_port", 8888),
                     help="proxy/server listen port (default 8888)")
+    ap.add_argument("--listen-host", default=None,
+                    help="bind/endpoint address; in wireguard mode this is what the device "
+                         "connects to (omit to choose interactively from local interfaces)")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"),
                     help="gateway address (default 127.0.0.1:8080)")
     ap.add_argument("passthrough", nargs="*",
@@ -68,6 +115,15 @@ def main() -> None:
     addon = Path(__file__).resolve().parent / "addon.py"
     cmd = ["mitmdump", "-s", str(addon), "--mode", args.mode,
            "--listen-port", str(args.listen_port)]
+    if args.mode == "wireguard":
+        # Auto-detection picks the wrong interface when a VPN/Docker owns the default route,
+        # so choose the endpoint address (and bind the WireGuard server to it).
+        host = _choose_host(store, args.listen_host)
+        if host:
+            store.remember("listen_host", host)
+            cmd += ["--listen-host", host]
+    elif args.listen_host:
+        cmd += ["--listen-host", args.listen_host]
     cmd += args.passthrough
 
     env = dict(os.environ, GATEWAY_ADDR=args.gateway, CAPTURE_LABEL=args.label)
