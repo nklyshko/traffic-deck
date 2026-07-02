@@ -18,9 +18,27 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
+from capture_sdk import prompt
 from capture_sdk.state import Store
+
+# The two modes offered by the interactive selector (label shown, value passed to mitmdump).
+# --mode still accepts any mitmproxy mode (transparent, local, ...) for power users.
+_MODE_CHOICES = [
+    ("Regular — set the device/app HTTP(S) proxy to this host", "regular"),
+    ("WireGuard — device connects as a WireGuard peer (no proxy config)", "wireguard"),
+]
+
+
+def _choose_mode(store: Store) -> str:
+    """Return the mitmproxy mode: the last-used one is the default. Interactive arrow-key
+    selector when attached to a terminal; otherwise fall back to the remembered value."""
+    remembered = store.get("mode", "regular")
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return prompt.select("mitmproxy capture mode", _MODE_CHOICES, default=remembered)
+    return remembered
 
 
 def main() -> None:
@@ -28,8 +46,9 @@ def main() -> None:
     # ~/.traffic-deck/state/mitmproxy.json; passing a flag updates the remembered value.
     store = Store("mitmproxy")
     ap = argparse.ArgumentParser(prog="trafficdeck-capture-mitmproxy")
-    ap.add_argument("--mode", default=store.get("mode", "regular"),
-                    help="mitmproxy mode: regular | wireguard | transparent | local | ... (default regular)")
+    ap.add_argument("--mode", default=None,
+                    help="mitmproxy mode: regular | wireguard | transparent | local | ...; "
+                         "omit to choose regular/wireguard interactively")
     ap.add_argument("--label", default="mitmproxy", help="session label shown in the viewer")
     ap.add_argument("--listen-port", type=int, default=store.get("listen_port", 8888),
                     help="proxy/server listen port (default 8888)")
@@ -38,6 +57,9 @@ def main() -> None:
     ap.add_argument("passthrough", nargs="*",
                     help="extra args forwarded to mitmdump (use `--` to separate)")
     args = ap.parse_args()
+
+    # --mode given → use it verbatim; otherwise pick interactively (or the remembered value).
+    args.mode = args.mode or _choose_mode(store)
     store.remember("mode", args.mode)
     store.remember("listen_port", args.listen_port)
 
