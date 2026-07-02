@@ -133,6 +133,8 @@ message WsMessage {
   bool from_client = 6;          // direction: true = client→server
   string opcode = 7;             // text|binary|close|ping|pong|continuation
   Body payload = 8;              // inline (small) or object_ref (large)
+  Body raw = 9;                  // original undecoded frame bytes, set when a custom decoder
+                                 // produced this message; fetch full bytes via GetMessageBody raw=true
 }
 
 // A named, colored label. Definitions are global (catalog) and mirrored

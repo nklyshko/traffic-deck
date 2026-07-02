@@ -59,29 +59,29 @@ func TestLiveWebSocketCustomDecoder(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Three messages: the raw binary frame (original bytes), its decoded form, and the text
-	// frame. The raw + decoded let a caller query the original bytes via MCP.
-	if len(msgs) != 3 {
-		t.Fatalf("got %d ws messages, want 3: %+v", len(msgs), msgs)
+	// Two messages: the decoded binary frame (carrying its original bytes in Raw) and the
+	// text frame. The decoded message's Raw is the original undecoded frame, queryable via MCP.
+	if len(msgs) != 2 {
+		t.Fatalf("got %d ws messages, want 2: %+v", len(msgs), msgs)
 	}
-	var rawBin, decoded, text *WsMessage
+	var decoded, text *WsMessage
 	for _, m := range msgs {
-		switch {
-		case m.FromClient && m.Opcode == "binary":
-			rawBin = m
-		case m.FromClient && m.Opcode == "custom":
+		if m.FromClient {
 			decoded = m
-		case !m.FromClient:
+		} else {
 			text = m
 		}
 	}
-	if rawBin == nil || string(rawBin.Payload) != "hello" {
-		t.Errorf("raw binary frame (original bytes) missing: %+v", rawBin)
-	}
-	if decoded == nil || string(decoded.Payload) != "D:hello" {
+	if decoded == nil || decoded.Opcode != "custom" || string(decoded.Payload) != "D:hello" {
 		t.Errorf("binary frame not reframed by the decoder: %+v", decoded)
+	}
+	if decoded == nil || string(decoded.Raw) != "hello" {
+		t.Errorf("decoded message should carry the original bytes in Raw: %+v", decoded)
 	}
 	if text == nil || text.Opcode != "text" || string(text.Payload) != "world" {
 		t.Errorf("text frame should pass through raw: %+v", text)
+	}
+	if text != nil && len(text.Raw) != 0 {
+		t.Errorf("non-decoded frame should have no Raw: %+v", text)
 	}
 }

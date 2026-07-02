@@ -285,5 +285,6 @@ func protoToDecodeWsMessage(pm *trafficv1.WsMessage) *decode.WsMessage {
 		FromClient:   pm.GetFromClient(),
 		Opcode:       pm.GetOpcode(),
 		Payload:      pm.GetPayload().GetInline(),
+		Raw:          pm.GetRaw().GetInline(),
 	}
 }

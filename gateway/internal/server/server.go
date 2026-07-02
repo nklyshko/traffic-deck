@@ -205,7 +205,7 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 }
 
 func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
-	body, err := v.st.GetWsMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId())
+	body, err := v.st.GetWsMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId(), req.GetRaw())
 	if errors.Is(err, store.ErrNotFound) {
 		return status.Error(codes.NotFound, "message body not found")
 	}

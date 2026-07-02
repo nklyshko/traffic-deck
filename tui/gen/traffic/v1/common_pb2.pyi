@@ -186,7 +186,7 @@ class Proxy(_message.Message):
     def __init__(self, addr: _Optional[str] = ..., type: _Optional[str] = ..., username: _Optional[str] = ..., password: _Optional[str] = ...) -> None: ...
 
 class WsMessage(_message.Message):
-    __slots__ = ("id", "session_id", "flow_id", "frame_number", "ts_unix_micros", "from_client", "opcode", "payload")
+    __slots__ = ("id", "session_id", "flow_id", "frame_number", "ts_unix_micros", "from_client", "opcode", "payload", "raw")
     ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
@@ -195,6 +195,7 @@ class WsMessage(_message.Message):
     FROM_CLIENT_FIELD_NUMBER: _ClassVar[int]
     OPCODE_FIELD_NUMBER: _ClassVar[int]
     PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    RAW_FIELD_NUMBER: _ClassVar[int]
     id: str
     session_id: str
     flow_id: str
@@ -203,7 +204,8 @@ class WsMessage(_message.Message):
     from_client: bool
     opcode: str
     payload: Body
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., from_client: _Optional[bool] = ..., opcode: _Optional[str] = ..., payload: _Optional[_Union[Body, _Mapping]] = ...) -> None: ...
+    raw: Body
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., from_client: _Optional[bool] = ..., opcode: _Optional[str] = ..., payload: _Optional[_Union[Body, _Mapping]] = ..., raw: _Optional[_Union[Body, _Mapping]] = ...) -> None: ...
 
 class Tag(_message.Message):
     __slots__ = ("id", "name", "color", "is_favorite", "created_at_unix_ms")

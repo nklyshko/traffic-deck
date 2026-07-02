@@ -191,7 +191,7 @@ func TestWsMessagesRoundTrip(t *testing.T) {
 		t.Fatalf("msg1 = %+v", got[1])
 	}
 
-	body, err := st.GetWsMessageBody(ctx, sid, msgs[1].ID)
+	body, err := st.GetWsMessageBody(ctx, sid, msgs[1].ID, false)
 	if err != nil || string(body) != "world" {
 		t.Fatalf("get ws body = %q err=%v", body, err)
 	}

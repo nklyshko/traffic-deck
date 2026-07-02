@@ -741,6 +741,7 @@ type GetMessageBodyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	MessageId     string                 `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Raw           bool                   `protobuf:"varint,3,opt,name=raw,proto3" json:"raw,omitempty"` // fetch the original undecoded bytes instead of the decoded payload
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -787,6 +788,13 @@ func (x *GetMessageBodyRequest) GetMessageId() string {
 		return x.MessageId
 	}
 	return ""
+}
+
+func (x *GetMessageBodyRequest) GetRaw() bool {
+	if x != nil {
+		return x.Raw
+	}
+	return false
 }
 
 var File_traffic_v1_viewer_proto protoreflect.FileDescriptor
@@ -841,12 +849,13 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\fMessageEvent\x12<\n" +
 	"\rmessage_added\x18\x01 \x01(\v2\x15.traffic.v1.WsMessageH\x00R\fmessageAdded\x12?\n" +
 	"\rsession_event\x18\x02 \x01(\v2\x18.traffic.v1.SessionEventH\x00R\fsessionEventB\a\n" +
-	"\x05event\"U\n" +
+	"\x05event\"g\n" +
 	"\x15GetMessageBodyRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
-	"message_id\x18\x02 \x01(\tR\tmessageId2\x83\x04\n" +
+	"message_id\x18\x02 \x01(\tR\tmessageId\x12\x10\n" +
+	"\x03raw\x18\x03 \x01(\bR\x03raw2\x83\x04\n" +
 	"\rViewerService\x12H\n" +
 	"\fListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12F\n" +
 	"\vStreamFlows\x12\x1e.traffic.v1.StreamFlowsRequest\x1a\x15.traffic.v1.FlowEvent0\x01\x127\n" +

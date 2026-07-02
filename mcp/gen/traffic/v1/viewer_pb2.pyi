@@ -108,9 +108,11 @@ class MessageEvent(_message.Message):
     def __init__(self, message_added: _Optional[_Union[_common_pb2.WsMessage, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ...) -> None: ...
 
 class GetMessageBodyRequest(_message.Message):
-    __slots__ = ("session_id", "message_id")
+    __slots__ = ("session_id", "message_id", "raw")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     MESSAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    RAW_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     message_id: str
-    def __init__(self, session_id: _Optional[str] = ..., message_id: _Optional[str] = ...) -> None: ...
+    raw: bool
+    def __init__(self, session_id: _Optional[str] = ..., message_id: _Optional[str] = ..., raw: _Optional[bool] = ...) -> None: ...

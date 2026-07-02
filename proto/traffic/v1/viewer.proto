@@ -89,4 +89,5 @@ message MessageEvent {
 message GetMessageBodyRequest {
   string session_id = 1;
   string message_id = 2;
+  bool raw = 3; // fetch the original undecoded bytes instead of the decoded payload
 }

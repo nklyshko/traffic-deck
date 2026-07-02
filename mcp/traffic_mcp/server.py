@@ -344,9 +344,9 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
     page with `offset`/`limit` (default 100) to avoid huge responses. Large payloads
     carry a note; fetch them in full with get_ws_message_body using the message `id`.
 
-    When a custom decoder handles the connection, each binary frame appears twice: the raw
-    frame (opcode `binary`, the original undecoded bytes) and its decoded form (the
-    decoder's opcode). Fetch the original bytes from the `binary` message's `id`."""
+    When a custom decoder handled the connection, a message's payload is the decoded form
+    and `has_raw` is true — fetch the original undecoded bytes with
+    get_ws_message_body(message_id, raw=True)."""
     sid = await _resolve_session(session_id)
     msgs = await client().list_messages(sid, flow_id)
     total = len(msgs)
@@ -360,6 +360,8 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
             "opcode": m.opcode,
             "size": size,
         }
+        if m.raw and m.raw.size:
+            item["has_raw"] = True  # original undecoded bytes; fetch with get_ws_message_body(raw=True)
         if m.payload and m.payload.WhichOneof("content") == "inline":
             data = m.payload.inline
             try:
@@ -375,16 +377,20 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
 
 @mcp.tool()
 async def get_ws_message_body(session_id: str, message_id: str,
-                              as_hex: bool = False, offset: int = 0) -> dict:
+                              as_hex: bool = False, offset: int = 0,
+                              raw: bool = False) -> dict:
     """Fetch a full WebSocket message payload by message `id` (from list_ws_messages).
     Returns UTF-8 text when decodable, else base64; pass `as_hex=True` for a hex dump
-    (byte inspection). Page large payloads with `offset`. For a `binary`-opcode message
-    this is the original undecoded frame bytes."""
+    (byte inspection). Page large payloads with `offset`.
+
+    Pass `raw=True` to fetch the original *undecoded* frame bytes instead of the decoded
+    payload — available for messages a custom decoder produced (those have `has_raw` in
+    list_ws_messages)."""
     try:
-        data = await client().get_message_body(await _resolve_session(session_id), message_id)
+        data = await client().get_message_body(await _resolve_session(session_id), message_id, raw=raw)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
-            return {"size": 0, "note": "no payload"}
+            return {"size": 0, "note": "no raw bytes" if raw else "no payload"}
         raise
     return _bytes_payload(data, as_hex=as_hex, start=offset)
 

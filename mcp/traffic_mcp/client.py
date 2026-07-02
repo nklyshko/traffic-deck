@@ -80,9 +80,9 @@ class GatewayClient:
         )
         return list(resp.messages)
 
-    async def get_message_body(self, session_id: str, message_id: str) -> bytes:
+    async def get_message_body(self, session_id: str, message_id: str, raw: bool = False) -> bytes:
         call = self._v().GetMessageBody(
-            viewer_pb2.GetMessageBodyRequest(session_id=session_id, message_id=message_id)
+            viewer_pb2.GetMessageBodyRequest(session_id=session_id, message_id=message_id, raw=raw)
         )
         return b"".join([c.payload async for c in call])
 

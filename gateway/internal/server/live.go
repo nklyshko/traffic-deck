@@ -356,6 +356,12 @@ func wsMsgToProto(m *decode.WsMessage) *trafficv1.WsMessage {
 			Content: &trafficv1.Body_Inline{Inline: m.Payload},
 		}
 	}
+	if len(m.Raw) > 0 {
+		pm.Raw = &trafficv1.Body{
+			Size:    uint64(len(m.Raw)),
+			Content: &trafficv1.Body_Inline{Inline: m.Raw},
+		}
+	}
 	return pm
 }
 

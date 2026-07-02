@@ -123,39 +123,54 @@ func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error
 	return db, nil
 }
 
-// validateSessionSchema verifies the flows table has every column the read path needs.
-// Returns an ErrSchemaOutdated wrapping the list of missing columns when it doesn't.
+// requiredWsMessageColumns are the ws_messages columns the read path depends on. Bundles
+// predating raw_ref trip ErrSchemaOutdated (re-import to get the raw-bytes column).
+var requiredWsMessageColumns = []string{
+	"id", "flow_id", "frame_number", "ts_micros", "from_client", "opcode",
+	"payload_ref", "raw_ref",
+}
+
+// validateSessionSchema verifies the flows + ws_messages tables have every column the read
+// path needs. Returns an ErrSchemaOutdated wrapping the missing columns when they don't.
 func validateSessionSchema(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(flows)`)
-	if err != nil {
+	if missing, err := missingColumns(ctx, db, "flows", requiredFlowColumns); err != nil {
 		return err
+	} else if len(missing) > 0 {
+		return fmt.Errorf("%w (flows table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
+	}
+	if missing, err := missingColumns(ctx, db, "ws_messages", requiredWsMessageColumns); err != nil {
+		return err
+	} else if len(missing) > 0 {
+		return fmt.Errorf("%w (ws_messages table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// missingColumns returns which of `required` are absent from `table`.
+func missingColumns(ctx context.Context, db *sql.DB, table string, required []string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	have := make(map[string]bool)
 	for rows.Next() {
-		var (
-			cid, notnull, pk int
-			name, typ        string
-			dflt             sql.NullString
-		)
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			return err
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
 		}
 		have[name] = true
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	var missing []string
-	for _, c := range requiredFlowColumns {
+	for _, c := range required {
 		if !have[c] {
 			missing = append(missing, c)
 		}
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%w (flows table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
-	}
-	return nil
+	return missing, nil
 }
 
 // --- writes ---------------------------------------------------------------

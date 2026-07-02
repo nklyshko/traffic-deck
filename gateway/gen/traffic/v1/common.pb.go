@@ -899,6 +899,7 @@ type WsMessage struct {
 	FromClient    bool                   `protobuf:"varint,6,opt,name=from_client,json=fromClient,proto3" json:"from_client,omitempty"` // direction: true = client→server
 	Opcode        string                 `protobuf:"bytes,7,opt,name=opcode,proto3" json:"opcode,omitempty"`                            // text|binary|close|ping|pong|continuation
 	Payload       *Body                  `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`                          // inline (small) or object_ref (large)
+	Raw           *Body                  `protobuf:"bytes,9,opt,name=raw,proto3" json:"raw,omitempty"`                                  // original undecoded frame bytes, set when a custom decoder
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -985,6 +986,13 @@ func (x *WsMessage) GetOpcode() string {
 func (x *WsMessage) GetPayload() *Body {
 	if x != nil {
 		return x.Payload
+	}
+	return nil
+}
+
+func (x *WsMessage) GetRaw() *Body {
+	if x != nil {
+		return x.Raw
 	}
 	return nil
 }
@@ -1371,7 +1379,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
 	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x04 \x01(\tR\bpassword\"\x81\x02\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xa5\x02\n" +
 	"\tWsMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1382,7 +1390,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\vfrom_client\x18\x06 \x01(\bR\n" +
 	"fromClient\x12\x16\n" +
 	"\x06opcode\x18\a \x01(\tR\x06opcode\x12*\n" +
-	"\apayload\x18\b \x01(\v2\x10.traffic.v1.BodyR\apayload\"\x8d\x01\n" +
+	"\apayload\x18\b \x01(\v2\x10.traffic.v1.BodyR\apayload\x12\"\n" +
+	"\x03raw\x18\t \x01(\v2\x10.traffic.v1.BodyR\x03raw\"\x8d\x01\n" +
 	"\x03Tag\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -1473,11 +1482,12 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	8,  // 8: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
 	14, // 9: traffic.v1.Flow.metadata:type_name -> traffic.v1.Flow.MetadataEntry
 	6,  // 10: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	6,  // 11: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }

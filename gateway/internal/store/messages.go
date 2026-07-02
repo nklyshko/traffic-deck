@@ -29,12 +29,17 @@ func (s *Store) InsertWsMessages(ctx context.Context, sessionID string, msgs []*
 			if err != nil {
 				return err
 			}
+			rawRef, err := s.storeBlob(ctx, tx, sessionID, m.Raw, "")
+			if err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO ws_messages (id, flow_id, frame_number, ts_micros,
-				    from_client, opcode, payload_len, payload_ref)
-				VALUES (?,?,?,?,?,?,?,?)`,
+				    from_client, opcode, payload_len, payload_ref, raw_ref)
+				VALUES (?,?,?,?,?,?,?,?,?)`,
 				m.ID, m.FlowID, int64(m.FrameNumber), m.TSUnixMicros,
-				boolToInt(m.FromClient), m.Opcode, int64(len(m.Payload)), nullIfEmpty(ref)); err != nil {
+				boolToInt(m.FromClient), m.Opcode, int64(len(m.Payload)),
+				nullIfEmpty(ref), nullIfEmpty(rawRef)); err != nil {
 				return err
 			}
 		}
@@ -54,7 +59,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx, `
-		SELECT id, flow_id, frame_number, ts_micros, from_client, opcode, payload_ref
+		SELECT id, flow_id, frame_number, ts_micros, from_client, opcode, payload_ref, raw_ref
 		FROM ws_messages WHERE flow_id=? ORDER BY ts_micros, frame_number`, flowID)
 	if err != nil {
 		return nil, err
@@ -64,16 +69,16 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 	var out []*trafficv1.WsMessage
 	for rows.Next() {
 		var (
-			id, flow        string
-			frameNumber, ts int64
-			fromClient      int64
-			opcode          sql.NullString
-			payloadRef      sql.NullString
+			id, flow           string
+			frameNumber, ts    int64
+			fromClient         int64
+			opcode             sql.NullString
+			payloadRef, rawRef sql.NullString
 		)
-		if err := rows.Scan(&id, &flow, &frameNumber, &ts, &fromClient, &opcode, &payloadRef); err != nil {
+		if err := rows.Scan(&id, &flow, &frameNumber, &ts, &fromClient, &opcode, &payloadRef, &rawRef); err != nil {
 			return nil, err
 		}
-		out = append(out, &trafficv1.WsMessage{
+		m := &trafficv1.WsMessage{
 			Id:           id,
 			SessionId:    sessionID,
 			FlowId:       flow,
@@ -82,20 +87,30 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 			FromClient:   fromClient != 0,
 			Opcode:       opcode.String,
 			Payload:      s.loadBody(ctx, db, payloadRef.String),
-		})
+		}
+		if rawRef.Valid && rawRef.String != "" {
+			m.Raw = s.loadBody(ctx, db, rawRef.String)
+		}
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }
 
-// GetWsMessageBody returns the full payload bytes of one WebSocket message.
-func (s *Store) GetWsMessageBody(ctx context.Context, sessionID, messageID string) ([]byte, error) {
+// GetWsMessageBody returns the full payload bytes of one WebSocket message. When raw is
+// true it returns the original undecoded bytes instead (available when a custom decoder
+// produced the message).
+func (s *Store) GetWsMessageBody(ctx context.Context, sessionID, messageID string, raw bool) ([]byte, error) {
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
+	col := "payload_ref"
+	if raw {
+		col = "raw_ref"
+	}
 	var ref sql.NullString
 	switch err := db.QueryRowContext(ctx,
-		`SELECT payload_ref FROM ws_messages WHERE id=?`, messageID).Scan(&ref); {
+		`SELECT `+col+` FROM ws_messages WHERE id=?`, messageID).Scan(&ref); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
 	case err != nil:

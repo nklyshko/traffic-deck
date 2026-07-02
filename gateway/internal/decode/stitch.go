@@ -260,16 +260,7 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 	// Non-binary frames (text/ping/pong/close) and unclaimed connections fall through.
 	if opName == "binary" {
 		if frames, ok := s.decodeWSBinary(f, fromClient, payload); ok {
-			// Keep the raw binary frame (original bytes) plus the decoded messages.
-			s.emitWsMessage(f, &WsMessage{
-				ID:           uuid.NewString(),
-				FlowID:       f.ID,
-				FrameNumber:  frameNum,
-				TSUnixMicros: ts,
-				FromClient:   fromClient,
-				Opcode:       opName,
-				Payload:      payload,
-			})
+			// Reframe into protocol messages, carrying the raw binary frame (original bytes).
 			for _, fr := range frames {
 				s.emitWsMessage(f, &WsMessage{
 					ID:           uuid.NewString(),
@@ -279,6 +270,7 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 					FromClient:   fr.FromClient,
 					Opcode:       fr.Opcode,
 					Payload:      fr.Payload,
+					Raw:          payload,
 				})
 			}
 			return // a partial frame buffered with no output is fine — a later frame completes it

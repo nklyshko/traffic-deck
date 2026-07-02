@@ -89,6 +89,7 @@ type WsMessage struct {
 	FromClient   bool   // direction: true = client→server
 	Opcode       string // text|binary|close|ping|pong|continuation
 	Payload      []byte
+	Raw          []byte // original undecoded bytes, when a custom decoder produced this message
 }
 
 // Dataset is the result of decoding one capture.

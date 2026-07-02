@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS ws_messages (
     from_client  INTEGER NOT NULL DEFAULT 0,
     opcode       TEXT,
     payload_len  INTEGER NOT NULL DEFAULT 0,
-    payload_ref  TEXT                  -- -> blobs.sha256 (NULL when empty)
+    payload_ref  TEXT,                 -- -> blobs.sha256 (NULL when empty)
+    raw_ref      TEXT                  -- original undecoded bytes -> blobs.sha256 (NULL unless a decoder produced this)
 );
 
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
