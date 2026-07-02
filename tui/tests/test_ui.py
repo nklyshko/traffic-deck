@@ -347,6 +347,68 @@ async def test_ws_messages_jump_keys():
         assert table.cursor_coordinate.row == 0
 
 
+async def test_flow_list_follow_mode():
+    app = make_app()
+    async with app.run_test() as pilot:
+        table = await _open_flows(pilot)
+        pane = pilot.app.screen.query_one(SessionPane)
+        assert table.cursor_coordinate.row == 0
+
+        # follow off (default): a new flow doesn't move the cursor
+        pane._upsert(_flow("f4", "GET", 200))
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 0
+
+        # enabling follow jumps to the newest row and tracks arrivals
+        await pilot.press("l")
+        await pilot.pause()
+        assert table.follow and table.cursor_coordinate.row == 3
+        pane._upsert(_flow("f5", "PUT", 200))
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 4
+        # an update to an existing row doesn't count as an arrival
+        await pilot.press("home")
+        await pilot.pause()
+        pane._upsert(_flow("f5", "PUT", 500))
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 0
+
+        # toggling off stops the tracking
+        await pilot.press("l")
+        pane._upsert(_flow("f6", "GET", 200))
+        await pilot.pause()
+        assert not table.follow and table.cursor_coordinate.row == 0
+
+
+async def test_ws_messages_follow_mode():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_flows(pilot)
+        await pilot.press("end")   # f3 (last row) is the websocket flow
+        await pilot.pause()
+        await pilot.press("M")
+        await settle(pilot)
+        screen = pilot.app.screen
+        assert isinstance(screen, WsMessagesScreen)
+        table = screen.query_one("#msgs", DataTable)
+        assert table.cursor_coordinate.row == 0
+
+        await pilot.press("l")     # enable follow: jump to the newest frame
+        await pilot.pause()
+        assert table.follow and table.cursor_coordinate.row == 1
+        screen._add_message(cp.WsMessage(
+            id="m3", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=4))
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 2
+
+        await pilot.press("l")     # disable: new frames no longer move the cursor
+        await pilot.pause()
+        screen._add_message(cp.WsMessage(
+            id="m4", flow_id="f3", from_client=False, opcode="text", ts_unix_micros=5))
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 2
+
+
 async def _open_workspace(pilot):
     await settle(pilot)
     await focus(pilot, "#sessions")

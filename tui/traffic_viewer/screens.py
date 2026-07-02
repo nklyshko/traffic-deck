@@ -43,7 +43,11 @@ class NavDataTable(DataTable):
     """Row DataTable with list-friendly navigation. PageUp/PageDown (inherited) move the
     cursor a page; Home/End and Ctrl/Cmd+Up/Down jump to the first/last row. By default a
     row DataTable maps Home/End to horizontal scroll, which isn't useful for these lists.
-    (Terminals that don't deliver Cmd still get the jump via Home/End or Ctrl+Up/Down.)"""
+    (Terminals that don't deliver Cmd still get the jump via Home/End or Ctrl+Up/Down.)
+
+    Also implements follow mode for live lists: while `follow` is on, the cursor tracks
+    each newly added row (tail -f style). Hosts toggle it and jump to the newest row via
+    `set_follow`; updates to existing rows never scroll."""
 
     BINDINGS = [
         Binding("home", "scroll_top", "Top", show=False),
@@ -55,6 +59,19 @@ class NavDataTable(DataTable):
         Binding("super+up", "scroll_top", "Top", show=False),
         Binding("super+down", "scroll_bottom", "Bottom", show=False),
     ]
+
+    follow = False
+
+    def add_row(self, *cells, **kwargs):
+        key = super().add_row(*cells, **kwargs)
+        if self.follow:
+            self.move_cursor(row=self.row_count - 1)
+        return key
+
+    def set_follow(self, on: bool) -> None:
+        self.follow = on
+        if on and self.row_count:
+            self.move_cursor(row=self.row_count - 1)
 
 
 class TextPrompt(ModalScreen[str | None]):
@@ -229,6 +246,7 @@ class SessionPane(Vertical):
         Binding("n", "comment", "Comment"),
         Binding("g", "group", "Group"),
         Binding("M", "messages", "WS msgs"),
+        Binding("l", "follow", "Follow new"),
     ]
 
     def __init__(self, session_id: str, label: str = "") -> None:
@@ -276,7 +294,15 @@ class SessionPane(Vertical):
             base += f" · {len(self._selected)} selected"
         if self._predicate is not None:
             base += f" · {len(self._rows)}/{len(self.flows)} shown"
+        if self.query_one("#flows", NavDataTable).follow:
+            base += " · ⇣ follow"
         self.query_one("#pane-status", Label).update(base)
+
+    def action_follow(self) -> None:
+        """Toggle follow mode: the cursor tracks each newly arriving flow."""
+        table = self.query_one("#flows", NavDataTable)
+        table.set_follow(not table.follow)
+        self._update_subtitle()
 
     def _matches(self, f) -> bool:
         return self._predicate is None or self._predicate(f)
@@ -1018,6 +1044,7 @@ class WsMessagesScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back"),
+        Binding("l", "follow", "Follow new"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -1036,9 +1063,21 @@ class WsMessagesScreen(Screen):
 
     def on_mount(self) -> None:
         self.title = "TrafficDeck"
-        self.sub_title = f"websocket · {self.flow_id[:8]}"
+        self._update_subtitle()
         self.query_one("#msgs", DataTable).focus()
         self.load()
+
+    def _update_subtitle(self) -> None:
+        base = f"websocket · {self.flow_id[:8]}"
+        if self.query_one("#msgs", NavDataTable).follow:
+            base += " · ⇣ follow"
+        self.sub_title = base
+
+    def action_follow(self) -> None:
+        """Toggle follow mode: the cursor tracks each newly arriving frame."""
+        table = self.query_one("#msgs", NavDataTable)
+        table.set_follow(not table.follow)
+        self._update_subtitle()
 
     def _add_message(self, m) -> None:
         if m.id in self._msgs:
