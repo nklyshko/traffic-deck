@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"path"
 
 	"github.com/google/uuid"
@@ -31,10 +32,11 @@ type Ingest struct {
 	hub        *liveHub
 	liveDecode bool // when false, streaming uploads are archived and decoded only on close
 	recordLive bool // when true, persist the live-decoded flows on close instead of batch decode
+	verifyLive bool // when true, compare live vs batch flows on close and log differences
 }
 
-func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive bool) *Ingest {
-	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub, liveDecode: liveDecode, recordLive: recordLive}
+func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive, verifyLive bool) *Ingest {
+	return &Ingest{st: st, obj: obj, tshark: tshark, hub: hub, liveDecode: liveDecode, recordLive: recordLive, verifyLive: verifyLive}
 }
 
 func pcapKey(sid string) string   { return path.Join("sessions", sid, "capture.pcap") }
@@ -230,6 +232,14 @@ func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRe
 		pcapLocal, _ := i.obj.LocalPath(pcapKey(sid))
 		if _, err := importer.Finalize(ctx, i.st, i.tshark, sid, pcapLocal, keylogLocal); err != nil {
 			return nil, status.Errorf(codes.Internal, "finalize: %v", err)
+		}
+		if i.verifyLive && ls != nil {
+			// Compare the live decode against the just-persisted batch flows and log diffs.
+			if batch, err := i.st.ListFlows(ctx, sid); err == nil {
+				verifyLiveVsBatch(sid, ls.protoFlows(), batch)
+			} else {
+				log.Printf("verify %s: cannot list batch flows: %v", sid, err)
+			}
 		}
 	default:
 		// Supplied/pushed source (PushFlows): flows were persisted incrementally;

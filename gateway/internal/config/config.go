@@ -20,6 +20,10 @@ type Config struct {
 	// a live decode running. Default false: the batch pass runs on close (authoritative,
 	// full bodies) — useful for verifying the live decoder against tshark.
 	RecordLive bool
+	// VerifyLive, on session close, compares the live-decoded flows against the
+	// authoritative batch (tshark) decode and logs any differences. Requires LiveDecode
+	// on and RecordLive off (the batch pass must run to compare against). Default false.
+	VerifyLive bool
 }
 
 func getenv(key, def string) string {
@@ -49,5 +53,6 @@ func Load() Config {
 		TsharkPath: getenv("TSHARK_PATH", "tshark"),
 		LiveDecode: getbool("GATEWAY_LIVE_DECODE", true),
 		RecordLive: getbool("GATEWAY_RECORD_LIVE", false),
+		VerifyLive: getbool("GATEWAY_VERIFY_LIVE", false),
 	}
 }

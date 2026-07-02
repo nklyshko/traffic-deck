@@ -185,6 +185,18 @@ func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.WsMessage)
 	return flows, msgs
 }
 
+// protoFlows returns the live-decoded flows (final state, arrival order) as protos — used
+// to compare against the batch decode for verification on close.
+func (ls *liveSession) protoFlows() []*trafficv1.Flow {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	flows := make([]*trafficv1.Flow, 0, len(ls.order))
+	for _, id := range ls.order {
+		flows = append(flows, ls.flows[id])
+	}
+	return flows
+}
+
 func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
 	if ls.recordLive {
 		// Retain the full-body decode flow (the proto below is a capped preview for
