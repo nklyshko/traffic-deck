@@ -282,3 +282,52 @@ async def test_quit_asks_for_confirmation():
         await pilot.press("y")
         await pilot.pause()
     assert app.return_code == 0
+
+
+async def _open_flows(pilot):
+    await settle(pilot)
+    await focus(pilot, "#sessions")
+    await pilot.press("enter")
+    await settle(pilot)
+    await focus(pilot, "#flows")
+    return pilot.app.screen.query_one("#flows", DataTable)
+
+
+async def test_flow_list_jump_and_page_keys():
+    app = make_app()
+    async with app.run_test() as pilot:
+        table = await _open_flows(pilot)
+        assert table.row_count == 3 and table.cursor_coordinate.row == 0
+
+        for key, want in [("end", 2), ("home", 0), ("ctrl+down", 2), ("ctrl+up", 0),
+                          ("cmd+down", 2), ("cmd+up", 0)]:
+            await pilot.press(key)
+            await pilot.pause()
+            assert table.cursor_coordinate.row == want, f"{key} -> {table.cursor_coordinate.row}, want {want}"
+
+        # page down/up move the cursor (inherited) and still work under the subclass
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert table.cursor_coordinate.row > 0
+        await pilot.press("pageup")
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 0
+
+
+async def test_ws_messages_jump_keys():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_flows(pilot)
+        # f3 (last row) is the websocket flow; select it, then open its message timeline
+        await pilot.press("end")
+        await pilot.pause()
+        await pilot.press("M")
+        await settle(pilot)
+        table = pilot.app.screen.query_one("#msgs", DataTable)
+        assert table.row_count == 2
+        await pilot.press("end")
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 1
+        await pilot.press("home")
+        await pilot.pause()
+        assert table.cursor_coordinate.row == 0

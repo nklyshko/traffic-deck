@@ -36,6 +36,24 @@ from .render import (
 )
 
 
+class NavDataTable(DataTable):
+    """Row DataTable with list-friendly navigation. PageUp/PageDown (inherited) move the
+    cursor a page; Home/End and Ctrl/Cmd+Up/Down jump to the first/last row. By default a
+    row DataTable maps Home/End to horizontal scroll, which isn't useful for these lists.
+    (Terminals that don't deliver Cmd still get the jump via Home/End or Ctrl+Up/Down.)"""
+
+    BINDINGS = [
+        Binding("home", "scroll_top", "Top", show=False),
+        Binding("end", "scroll_bottom", "Bottom", show=False),
+        Binding("ctrl+up", "scroll_top", "Top", show=False),
+        Binding("ctrl+down", "scroll_bottom", "Bottom", show=False),
+        Binding("cmd+up", "scroll_top", "Top", show=False),
+        Binding("cmd+down", "scroll_bottom", "Bottom", show=False),
+        Binding("super+up", "scroll_top", "Top", show=False),
+        Binding("super+down", "scroll_bottom", "Bottom", show=False),
+    ]
+
+
 class TextPrompt(ModalScreen[str | None]):
     """Modal single-line text input; dismisses with the entered text, or None on Esc."""
 
@@ -128,7 +146,7 @@ class SessionsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        table = DataTable(id="sessions", cursor_type="row", zebra_stripes=True)
+        table = NavDataTable(id="sessions", cursor_type="row", zebra_stripes=True)
         table.add_columns("Session", "Label", "Status", "Flows", "pcap", "Created")
         yield table
         yield Footer()
@@ -136,6 +154,7 @@ class SessionsScreen(Screen):
     def on_mount(self) -> None:
         self.title = "TrafficDeck"
         self.sub_title = "sessions"
+        self.query_one("#sessions", DataTable).focus()  # so nav keys work immediately
         self.load_sessions()
 
     def action_refresh(self) -> None:
@@ -220,7 +239,7 @@ class FlowsScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Input(id="filter", placeholder="filter: ~m GET  ~d example.com  ~fav  ~tag auth  ~mark red  (f focus, Enter apply)")
-        table = DataTable(id="flows", cursor_type="row", zebra_stripes=True)
+        table = NavDataTable(id="flows", cursor_type="row", zebra_stripes=True)
         self._cols = table.add_columns("", "Time", "Method", "Status", "Proto", "Authority", "Path")
         yield table
         yield Footer()
@@ -896,7 +915,7 @@ class WsMessagesScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        table = DataTable(id="msgs", cursor_type="row", zebra_stripes=True)
+        table = NavDataTable(id="msgs", cursor_type="row", zebra_stripes=True)
         table.add_columns("Time", "Dir", "Opcode", "Len", "Preview")
         yield table
         yield Footer()
