@@ -104,9 +104,9 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
 
     # Record why a request failed (connection reset, timeout, TLS/upstream error, …) so
     # the viewer can explain a flow with no response — mitmproxy sets flow.error on the
-    # `error` hook. Carried in the opaque metadata channel (viewer flags the "error" key).
+    # `error` hook.
     if flow.error and flow.error.msg:
-        pf.metadata["error"] = _s(flow.error.msg)
+        pf.error = _s(flow.error.msg)
     return pf
 
 

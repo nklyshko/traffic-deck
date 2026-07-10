@@ -84,6 +84,7 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "method": f.method,
         "url": flow_url(f),
         "status": f.status or None,
+        "error": f.error or None,
         "protocol": f.protocol,
         "content_type": f.content_type or None,
         "request_bytes": f.request_bytes,
@@ -203,6 +204,7 @@ def _timeline_row(seq: int, f, t0: int) -> dict:
         "t_ms": t_ms,  # ms since first request
         "method": f.method or ("WS" if f.websocket else ""),
         "status": f.status or None,
+        "error": f.error or None,
         "domain": f.authority,
         "path": path[:120],
         "type": _short_type(f.content_type),

@@ -42,7 +42,7 @@ var requiredFlowColumns = []string{
 	"authority", "path", "query", "protocol", "status", "src_addr", "dst_addr",
 	"user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream",
 	"h2_stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
-	"proxy_user", "proxy_pass",
+	"proxy_user", "proxy_pass", "error",
 }
 
 // dsnPragmas are applied to every pooled connection (unlike `PRAGMA` run via Exec, which
@@ -260,14 +260,14 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 			    method, scheme, authority, path, query, protocol, status,
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
 			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref,
-			    proxy_addr, proxy_type, proxy_user, proxy_pass)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			    proxy_addr, proxy_type, proxy_user, proxy_pass, error)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
 			boolToInt(f.TLSDecrypted), f.TCPStream, f.H2StreamID,
 			nullIfEmpty(reqRef), nullIfEmpty(respRef),
-			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass)); err != nil {
+			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass), f.Error); err != nil {
 			return 0, err
 		}
 		if err := insertHeaders(ctx, tx, id, 0, f.RequestHeaders); err != nil {
@@ -432,7 +432,7 @@ func (s *Store) SetSessionBytes(ctx context.Context, id string, pcapBytes, keylo
 const flowCols = `id, session_id, analysis_id, frame_number, ts_micros, method, scheme,
 	authority, path, query, protocol, status, src_addr, dst_addr,
 	user_agent, content_type, request_bytes, tls_decrypted, tcp_stream, h2_stream_id,
-	proxy_addr, proxy_type, proxy_user, proxy_pass`
+	proxy_addr, proxy_type, proxy_user, proxy_pass, error`
 
 // ListFlows returns flow summaries (no headers/bodies) for backfill.
 func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.Flow, error) {
@@ -640,13 +640,13 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		frameNumber, tsMicros, requestBytes, status                int64
 		method, scheme, authority, path, query, protocol           sql.NullString
 		srcAddr, dstAddr, userAgent, contentType, tcpStream, h2sid sql.NullString
-		proxyAddr, proxyType, proxyUser, proxyPass                 sql.NullString
+		proxyAddr, proxyType, proxyUser, proxyPass, flowError      sql.NullString
 		tlsDecrypted                                               int64
 	)
 	if err := row.Scan(&id, &sessionID, &analysisID, &frameNumber, &tsMicros, &method, &scheme,
 		&authority, &path, &query, &protocol, &status, &srcAddr, &dstAddr,
 		&userAgent, &contentType, &requestBytes, &tlsDecrypted, &tcpStream, &h2sid,
-		&proxyAddr, &proxyType, &proxyUser, &proxyPass); err != nil {
+		&proxyAddr, &proxyType, &proxyUser, &proxyPass, &flowError); err != nil {
 		return nil, err
 	}
 	f := &trafficv1.Flow{
@@ -670,6 +670,7 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		TlsDecrypted: tlsDecrypted != 0,
 		TcpStream:    tcpStream.String,
 		H2StreamId:   h2sid.String,
+		Error:        flowError.String,
 	}
 	if proxyAddr.String != "" {
 		f.Proxy = &trafficv1.Proxy{

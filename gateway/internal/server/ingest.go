@@ -307,6 +307,7 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 		RequestBody:  pf.GetRequestBody().GetInline(),
 		ResponseBody: pf.GetResponseBody().GetInline(),
 		Metadata:     pf.GetMetadata(),
+		Error:        pf.GetError(),
 	}
 	for _, h := range pf.GetRequestHeaders() {
 		df.RequestHeaders = append(df.RequestHeaders, decode.Header{Name: h.GetName(), Value: h.GetValue()})

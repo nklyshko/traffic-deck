@@ -343,6 +343,7 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		H2StreamId:     f.H2StreamID,
 		Websocket:      f.Websocket,
 		WsMessageCount: f.WsMessageCount,
+		Error:          f.Error,
 	}
 	if f.Proxy != nil {
 		pf.Proxy = &trafficv1.Proxy{

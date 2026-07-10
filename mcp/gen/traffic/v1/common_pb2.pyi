@@ -95,7 +95,7 @@ class Body(_message.Message):
     def __init__(self, size: _Optional[int] = ..., content_type: _Optional[str] = ..., inline: _Optional[bytes] = ..., object_ref: _Optional[str] = ...) -> None: ...
 
 class Flow(_message.Message):
-    __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream", "h2_stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "ws_message_count", "proxy", "metadata")
+    __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream", "h2_stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "ws_message_count", "proxy", "metadata", "error")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -137,6 +137,7 @@ class Flow(_message.Message):
     WS_MESSAGE_COUNT_FIELD_NUMBER: _ClassVar[int]
     PROXY_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
     id: str
     session_id: str
     analysis_id: str
@@ -171,7 +172,8 @@ class Flow(_message.Message):
     ws_message_count: int
     proxy: Proxy
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: _Optional[bool] = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: _Optional[bool] = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: _Optional[bool] = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    error: str
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: _Optional[bool] = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: _Optional[bool] = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: _Optional[bool] = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ...) -> None: ...
 
 class Proxy(_message.Message):
     __slots__ = ("addr", "type", "username", "password")

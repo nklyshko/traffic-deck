@@ -172,11 +172,11 @@ def status_cell(f) -> Text:
     3xx yellow, 4xx/5xx red), or a red error marker for a request that failed / never
     got a response — so non-2xx and failed flows stand out and are easy to spot.
 
-    status 0 = no response yet: shown as a red 'err' when the capture recorded why
-    (mitmproxy failures land in metadata['error']), otherwise blank (still pending)."""
+    status 0 = no response: shown as a red 'err' when the capture recorded a failure
+    reason (flow.error), otherwise blank (the request may still be pending)."""
     s = f.status
     if s == 0:
-        if f.metadata.get("error"):
+        if f.error:
             return Text("✗ err", style="bold red")
         return Text("")
     if s >= 500:

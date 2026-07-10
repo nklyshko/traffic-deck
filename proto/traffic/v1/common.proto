@@ -111,6 +111,12 @@ message Flow {
   // region). Opaque key/value pairs the gateway stores and surfaces verbatim;
   // the gateway neither interprets nor validates them.
   map<string, string> metadata = 34;
+
+  // Failure reason for a flow that got no response or hit a transport/protocol error
+  // (e.g. "Connection timed out", "connection reset (TCP RST)",
+  // "HTTP/2 RST_STREAM: REFUSED_STREAM"). Empty when the request completed normally.
+  // Set by the capture source (mitmproxy flow.error) or derived from the pcap.
+  string error = 35;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

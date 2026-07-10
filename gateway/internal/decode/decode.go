@@ -62,6 +62,11 @@ type Flow struct {
 	// it nil. Persisted verbatim and surfaced in the viewer.
 	Metadata map[string]string
 
+	// Error is the failure reason when the flow got no response or hit a transport/
+	// protocol error (e.g. a TCP reset or HTTP/2 RST_STREAM); "" when it completed
+	// normally. The live decoder derives it from the pcap; pushed sources set it directly.
+	Error string
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool

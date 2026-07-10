@@ -836,16 +836,13 @@ class FlowDetailScreen(Screen):
                 type=f.proxy.type, addr=f.proxy.addr, creds=creds))
         # Explain what went wrong, prominently: a recorded failure reason (no response),
         # a bare no-response, or a non-2xx status.
-        err = f.metadata.get("error")
-        if err:
-            lines.append(Content.from_markup("[b red]✗ failed:[/b red] $e", e=err))
+        if f.error:
+            lines.append(Content.from_markup("[b red]✗ failed:[/b red] $e", e=f.error))
         elif f.status == 0:
             lines.append(Content.from_markup("[yellow]⏳ no response captured[/yellow]"))
         elif f.status >= 400:
             lines.append(Content.from_markup("[b red]⚠ HTTP $s[/b red]", s=str(f.status)))
         for k, v in f.metadata.items():
-            if k == "error":
-                continue  # rendered prominently above
             lines.append(Content.from_markup(
                 "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
         self._append_annotations(lines, f)
