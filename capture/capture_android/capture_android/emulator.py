@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from capture_android.adb import find_adb
+
 # A rootable default (google_apis, not _playstore — only google_apis allows `adb root`).
 DEFAULT_IMAGE = "system-images;android-34;google_apis;x86_64"
 DEFAULT_AVD = "retools"
@@ -58,9 +60,22 @@ class Sdk:
     """Locates SDK command-line tools and runs sdkmanager/avdmanager/emulator."""
 
     def __init__(self, root: str | Path | None = None) -> None:
-        self.root = Path(root) if root else _sdk_root()
+        if root:
+            self.root = Path(root)
+        else:
+            # An SDK root is only needed to manage emulators (sdkmanager/avdmanager/
+            # emulator). The real-device path just needs adb — resolved by the `adb`
+            # property via find_adb below — so tolerate a missing SDK here and fail only
+            # if an emulator-only tool is actually requested (see _tool).
+            try:
+                self.root = _sdk_root()
+            except RuntimeError:
+                self.root = None
 
     def _tool(self, *candidates: str) -> str:
+        if self.root is None:
+            raise RuntimeError("Android SDK not found; set ANDROID_HOME "
+                               "(needed to create or boot emulators)")
         for rel in candidates:
             p = self.root / rel
             if p.exists():
@@ -69,7 +84,14 @@ class Sdk:
 
     @property
     def adb(self) -> str:
-        return self._tool("platform-tools/adb")
+        # Prefer the SDK's own platform-tools adb when present, but fall back to
+        # $ADB / $ANDROID_HOME / PATH (find_adb) so the real-device path works with just
+        # adb installed — no SDK or platform-tools package required.
+        if self.root is not None:
+            p = self.root / "platform-tools" / "adb"
+            if p.exists():
+                return str(p)
+        return find_adb()
 
     @property
     def emulator(self) -> str:

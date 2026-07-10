@@ -16,6 +16,40 @@ def _sdk(monkeypatch) -> Sdk:
     return object.__new__(Sdk)
 
 
+def test_init_tolerates_missing_sdk(monkeypatch):
+    # No SDK on the host: construction must succeed (root=None) so the real-device path
+    # can still run — it only needs adb, not the SDK.
+    def _no_sdk():
+        raise RuntimeError("Android SDK not found; set ANDROID_HOME")
+
+    monkeypatch.setattr(emulator, "_sdk_root", _no_sdk)
+    assert Sdk().root is None
+    # An explicit --sdk root is always honoured verbatim.
+    assert Sdk("/opt/android-sdk").root == emulator.Path("/opt/android-sdk")
+
+
+def test_adb_falls_back_to_path_without_sdk(monkeypatch):
+    # Without an SDK root, adb comes from find_adb ($ADB / $ANDROID_HOME / PATH), and
+    # emulator-only tools raise a clear error instead of being (mis)usable.
+    monkeypatch.setattr(emulator, "find_adb", lambda: "/usr/bin/adb")
+    sdk = object.__new__(Sdk)
+    sdk.root = None
+    assert sdk.adb == "/usr/bin/adb"
+    with pytest.raises(RuntimeError, match="Android SDK not found"):
+        _ = sdk.emulator
+
+
+def test_adb_prefers_sdk_platform_tools(monkeypatch, tmp_path):
+    # With an SDK root that has platform-tools, its adb wins over PATH.
+    adb = tmp_path / "platform-tools" / "adb"
+    adb.parent.mkdir(parents=True)
+    adb.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(emulator, "find_adb", lambda: pytest.fail("should not hit PATH"))
+    sdk = object.__new__(Sdk)
+    sdk.root = tmp_path
+    assert sdk.adb == str(adb)
+
+
 def test_system_ready_waits_for_package_manager(monkeypatch):
     sdk = _sdk(monkeypatch)
     state = {"booted": "1", "pm_rc": 20, "pm_out": ""}
