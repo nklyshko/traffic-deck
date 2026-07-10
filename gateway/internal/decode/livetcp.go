@@ -252,8 +252,31 @@ func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 }
 
 // classify decides how to decode the connection from its first decrypted client bytes.
+//
+// Detection is by content, not just the connection's host. A host that speaks a custom
+// binary protocol (e.g. MAX) commonly also serves plain HTTP/2 and HTTP/1.1 on *other*
+// connections — static assets, images, a WebSocket upgrade. Matching the custom decoder by
+// host alone (as this used to) commits those HTTP connections to a decoder that frames none
+// of their bytes, so no flow is ever emitted and live silently drops them — while the batch
+// pass on close decodes them fine, which is exactly the live-vs-batch divergence. So sniff
+// HTTP first and fall back to a host-matched custom decoder only for a genuinely non-HTTP
+// byte stream (a raw MAX transport opens straight with binary frames, never an HTTP
+// request-line or the h2 preface, so this split is unambiguous). A WebSocket-transported
+// custom protocol still decodes: the HTTP/1.1 path hands the upgraded connection to a WS
+// decoder (e.g. MAX-over-WebSocket) after the 101.
 func (s *tcpStream) classify(firstClient []byte) {
 	s.decided = true
+	// HTTP/2 (ALPN h2) opens with the client connection preface.
+	if bytes.HasPrefix(firstClient, []byte("PRI * HTTP/2.0\r\n")) {
+		s.h2Sess = newH2Stream(s)
+		s.isH2 = true
+		return
+	}
+	if looksLikeHTTP1Request(firstClient) {
+		s.httpSess = newHTTPStream(s)
+		s.isHTTP = true
+		return
+	}
 	if m := decoders.Match(decoders.StreamMeta{
 		ServerHost: s.serverHost, ServerPort: s.serverPort, SNI: s.conn.SNI(),
 	}); len(m) > 0 {
@@ -263,14 +286,37 @@ func (s *tcpStream) classify(firstClient []byte) {
 		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
 		return
 	}
-	// HTTP/2 (ALPN h2) opens with the client connection preface.
-	if bytes.HasPrefix(firstClient, []byte("PRI * HTTP/2.0\r\n")) {
-		s.h2Sess = newH2Stream(s)
-		s.isH2 = true
-		return
-	}
 	s.httpSess = newHTTPStream(s)
 	s.isHTTP = true
+}
+
+// http1Methods are the HTTP/1.x request methods a decrypted client stream may open with —
+// used to tell a plaintext HTTP/1.1 connection (including a WebSocket upgrade) apart from a
+// binary custom protocol on the same host.
+var http1Methods = [][]byte{
+	[]byte("GET "), []byte("POST "), []byte("PUT "), []byte("HEAD "), []byte("DELETE "),
+	[]byte("OPTIONS "), []byte("PATCH "), []byte("CONNECT "), []byte("TRACE "),
+}
+
+// looksLikeHTTP1Request reports whether b begins with an HTTP/1.x request line
+// (METHOD SP request-target SP "HTTP/1."). The version token is checked too so a binary
+// custom-protocol frame that merely starts with these bytes isn't mistaken for HTTP.
+func looksLikeHTTP1Request(b []byte) bool {
+	hasMethod := false
+	for _, m := range http1Methods {
+		if bytes.HasPrefix(b, m) {
+			hasMethod = true
+			break
+		}
+	}
+	if !hasMethod {
+		return false
+	}
+	line := b
+	if i := bytes.IndexByte(b, '\n'); i >= 0 {
+		line = b[:i]
+	}
+	return bytes.Contains(line, []byte(" HTTP/1."))
 }
 
 func (s *tcpStream) dispatch(fromClient bool, plain []byte) {

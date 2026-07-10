@@ -25,7 +25,18 @@ func HasCustomDecoders() bool { return len(decoders.All()) > 0 }
 // by the stitcher, appending each decoded connection (a synthetic Flow + its messages)
 // to the dataset. Best-effort: a decoder or tshark error skips that stream.
 func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath string, st *stitcher) {
+	httpStreams := httpStreamSet(st.ds)
 	for tcp, info := range st.streamMeta {
+		if httpStreams[tcp] {
+			// tshark already dissected this connection as HTTP/HTTP2/WebSocket. A raw-TCP
+			// decoder claims connections by host (the mobile app's raw-TLS transport has no
+			// HTTP to sniff), so on a shared host it would also grab these HTTP connections
+			// and frame their bytes into a bogus flow — e.g. reading an HTTP/2 SETTINGS
+			// frame as a MAX frame. Skip them; the live path skips them the same way
+			// (HTTP-first classification), so the two decode paths agree. A WebSocket-carried
+			// custom protocol is still decoded — on the HTTP/1.1 upgrade flow, via the WS path.
+			continue
+		}
 		meta := decoders.StreamMeta{
 			TCPStream:  tcp,
 			ServerHost: info.serverHost,
@@ -67,6 +78,24 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 			})
 		}
 	}
+}
+
+// httpStreamSet returns the tcp.stream ids tshark dissected as HTTP-family (HTTP/1.1 or
+// HTTP/2, a WebSocket upgrade being an HTTP/1.1 flow). decodeCustomStreams uses it to
+// leave those connections to their HTTP decode instead of double-claiming them with a
+// host-matched raw-TCP decoder. HTTP/3 flows key on a "quic:" stream, never a bare tcp
+// id, so they don't appear here and don't matter (custom decoding is TCP-only).
+func httpStreamSet(ds *Dataset) map[string]bool {
+	out := map[string]bool{}
+	for _, f := range ds.Flows {
+		if f.TCPStream == "" {
+			continue
+		}
+		if f.Protocol == "HTTP/1.1" || f.Protocol == "HTTP/2" {
+			out[f.TCPStream] = true
+		}
+	}
+	return out
 }
 
 // customFlowMeta builds the synthetic Flow representing a decoded custom-protocol

@@ -19,6 +19,7 @@
 package tlsdecrypt
 
 import (
+	"bytes"
 	"encoding/hex"
 	"os"
 	"strings"
@@ -74,8 +75,19 @@ func (k *Keylog) reloadLocked() {
 	}
 	buf := make([]byte, fi.Size()-k.size)
 	n, _ := f.Read(buf)
-	k.size += int64(n)
-	for _, line := range strings.Split(string(buf[:n]), "\n") {
+	// The key-log grows by append and our read can land mid-line (the writer may not have
+	// flushed the terminating newline yet). Consume only through the last complete line and
+	// leave the trailing partial unconsumed, so its full form is re-read next time —
+	// advancing past a half-written secret would parse it truncated and cache a wrong
+	// (undecryptable) key permanently, surfacing as a spurious "no key-log secret".
+	chunk := buf[:n]
+	nl := bytes.LastIndexByte(chunk, '\n')
+	if nl < 0 {
+		return // no complete line yet
+	}
+	chunk = chunk[:nl+1]
+	k.size += int64(len(chunk))
+	for _, line := range strings.Split(string(chunk), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 {
 			continue

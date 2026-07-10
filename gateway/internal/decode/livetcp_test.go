@@ -15,6 +15,7 @@ import (
 	"github.com/google/gopacket/pcapgo"
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlstest"
 )
 
@@ -200,6 +201,55 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("msg %d = {%s,%dB}, want {%s,%dB}", i, got[i][0], len(got[i][1]), want[i][0], len(want[i][1]))
 		}
+	}
+}
+
+// hostEchoDecoder is a custom raw-TCP decoder that claims a connection by its server
+// host (like MAX's 155.212.* match) rather than by content — used to prove that HTTP
+// traffic to such a host is still classified as HTTP, not swallowed by the decoder.
+type hostEchoDecoder struct{}
+
+func (hostEchoDecoder) Name() string                       { return "hostecho" }
+func (hostEchoDecoder) Matches(m decoders.StreamMeta) bool { return m.ServerHost == "203.0.113.9" }
+func (hostEchoDecoder) NewSession() decoders.Session       { return &echoSession{bufs: map[bool][]byte{}} }
+
+// TestClassifyPrefersHTTPOverHostCustomDecoder is the regression for the live-vs-batch
+// gap: a host that matches a raw-TCP custom decoder also serves plain HTTP/2 and HTTP/1.1
+// on other connections. Those must classify as HTTP (and emit flows), not be committed to
+// the custom decoder — which would frame none of their bytes and drop the flow.
+func TestClassifyPrefersHTTPOverHostCustomDecoder(t *testing.T) {
+	decoders.Register(hostEchoDecoder{})
+	newStream := func() *tcpStream {
+		return &tcpStream{
+			lt:         &liveTCP{onFlow: func(*Flow, bool) {}, onMsg: func(*WsMessage) {}},
+			serverHost: "203.0.113.9", // matches hostEchoDecoder by host
+			serverPort: "443",
+			clientAddr: "198.51.100.2:52000",
+			conn:       tlsdecrypt.NewConn(tlsdecrypt.NewKeylog(""), nil),
+		}
+	}
+
+	// HTTP/2 preface on a custom-decoder host → HTTP/2, not the custom decoder.
+	s := newStream()
+	s.classify([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"))
+	if s.matched || !s.isH2 {
+		t.Errorf("h2 preface: matched=%v isH2=%v isHTTP=%v; want isH2", s.matched, s.isH2, s.isHTTP)
+	}
+	s.h2Sess.close()
+
+	// HTTP/1.1 request (e.g. a WebSocket upgrade) on a custom-decoder host → HTTP/1.1.
+	s = newStream()
+	s.classify([]byte("GET /websocket HTTP/1.1\r\nHost: a\r\n\r\n"))
+	if s.matched || !s.isHTTP {
+		t.Errorf("h1 request: matched=%v isHTTP=%v; want isHTTP", s.matched, s.isHTTP)
+	}
+	s.httpSess.close()
+
+	// Genuinely binary bytes (a raw custom-protocol frame) on that host → custom decoder.
+	s = newStream()
+	s.classify([]byte{0x01, 0x00, 0x12, 0x00, 0xff})
+	if !s.matched {
+		t.Errorf("binary frame: matched=%v; want matched (custom decoder)", s.matched)
 	}
 }
 

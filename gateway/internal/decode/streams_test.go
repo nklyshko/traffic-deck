@@ -66,6 +66,30 @@ func TestParseFollowRaw(t *testing.T) {
 	}
 }
 
+// TestHTTPStreamSet is the regression for the batch false-positive: a raw-TCP decoder
+// (e.g. MAX) matches by host, so on a host that also serves HTTP/2 it would fabricate a
+// bogus flow from HTTP bytes. decodeCustomStreams must skip any tcp.stream already
+// dissected as HTTP-family; httpStreamSet identifies them.
+func TestHTTPStreamSet(t *testing.T) {
+	ds := &Dataset{Flows: []*Flow{
+		{Protocol: "HTTP/2", TCPStream: "11"},                   // HTTP/2 to web.max.ru — skip custom
+		{Protocol: "HTTP/1.1", TCPStream: "8", Websocket: true}, // WS upgrade — MAX via WS path
+		{Protocol: "HTTP/3", TCPStream: "quic:abcd"},            // h3 — not a tcp stream
+		{Protocol: "MAX", TCPStream: "9"},                       // a genuine raw-TLS custom flow
+		{Protocol: "HTTP/2", TCPStream: ""},                     // no stream id — ignored
+	}}
+	got := httpStreamSet(ds)
+	if !got["11"] || !got["8"] {
+		t.Errorf("HTTP-family streams missing: %v", got)
+	}
+	if got["9"] || got["quic:abcd"] || got[""] {
+		t.Errorf("non-HTTP/tcp streams wrongly included: %v", got)
+	}
+	if len(got) != 2 {
+		t.Errorf("set = %v, want exactly {8,11}", got)
+	}
+}
+
 // parsed turns feed the registered MAX decoder end to end.
 func TestParsedTurnsDecodeMAX(t *testing.T) {
 	frame := maxFrame(t, 5, 0x10, map[string]interface{}{"hello": "world"})
