@@ -17,10 +17,11 @@ type Config struct {
 	// custom raw-TCP). When false, no live decode runs and the capture is decoded only
 	// by the batch tshark pass on session close (the pre-live behavior).
 	LiveDecode bool
-	// RecordLive persists the live-decoded flows on close and skips the authoritative
-	// batch tshark re-decode. Only takes effect when LiveDecode is on and the session has
-	// a live decode running. Default false: the batch pass runs on close (authoritative,
-	// full bodies) — useful for verifying the live decoder against tshark.
+	// RecordLive persists the live-decoded flows on close and skips the batch tshark
+	// re-decode. Only takes effect when LiveDecode is on and the session has a live decode
+	// running. Default true: the in-process live decode is authoritative and no batch
+	// tshark pass runs on close. Set GATEWAY_RECORD_LIVE=off to instead run the batch pass
+	// on close (authoritative, full bodies) — useful for verifying the live decoder.
 	RecordLive bool
 	// VerifyLive, on session close, compares the live-decoded flows against a batch
 	// (tshark) decode and logs any differences. Requires LiveDecode on. With RecordLive
@@ -75,7 +76,7 @@ func Load() Config {
 		DataRoot:      dataRoot,
 		TsharkPath:    getenv("TSHARK_PATH", "tshark"),
 		LiveDecode:    getbool("GATEWAY_LIVE_DECODE", true),
-		RecordLive:    getbool("GATEWAY_RECORD_LIVE", false),
+		RecordLive:    getbool("GATEWAY_RECORD_LIVE", true),
 		VerifyLive:    getbool("GATEWAY_VERIFY_LIVE", false),
 		LogFile:       getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
 		LogMaxSizeMB:  getint("GATEWAY_LOG_MAX_SIZE_MB", 50),

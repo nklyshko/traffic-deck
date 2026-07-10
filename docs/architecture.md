@@ -93,10 +93,13 @@ flowchart TD
 
 ## Live vs. batch decode
 
-A streaming capture is decoded **live** so flows appear while the user browses; on
-close an authoritative **batch** pass re-decodes the finalized capture. The live
-pipeline is toggleable (`GATEWAY_LIVE_DECODE`); when off, captures are archived and
-decoded only on close.
+A streaming capture is decoded **live** so flows appear while the user browses. By
+default the live decode is authoritative — its flows are persisted on close and no
+`tshark` batch pass runs (`GATEWAY_RECORD_LIVE`, on by default). Set
+`GATEWAY_RECORD_LIVE=off` to instead run an authoritative **batch** tshark pass that
+re-decodes the finalized capture on close (e.g. to verify the live decoder, or for
+full-fidelity bodies). The live pipeline itself is toggleable (`GATEWAY_LIVE_DECODE`);
+when off, captures are archived and decoded only by the batch pass on close.
 
 ```mermaid
 flowchart TD
@@ -107,8 +110,9 @@ flowchart TD
   pipe1 --> hub[live hub]
   pipe2 --> hub
   hub -- "StreamFlows / StreamMessages" --> client[viewer / mcp]
-  archive -. "on close" .-> batch["batch tshark decode"]
-  batch --> sqlite[(flows.sqlite)]
+  hub -. "on close (record-live, default)" .-> sqlite[(flows.sqlite)]
+  archive -. "on close (GATEWAY_RECORD_LIVE=off)" .-> batch["batch tshark decode"]
+  batch --> sqlite
 ```
 
 - HTTP/1.1, HTTP/2, HTTP/3 and WebSocket decode live through a single long-lived

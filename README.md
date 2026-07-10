@@ -294,10 +294,11 @@ mise exec -- go -C gateway run ./cmd/gateway import-session session.tar.gz [--ne
 - **Capture sources** — live Chrome (`dumpcap` + `SSLKEYLOGFILE`), mitmproxy (any
   device, incl. WireGuard), and per-app Android from a rooted device/emulator (Frida
   `libssl` key-log + UID→NFLOG `tcpdump`).
-- **Live + batch decode** — a streaming capture decodes live (tshark for HTTP/WS/HTTP3,
-  in-process Go TLS decryption for custom raw-TCP); an authoritative batch pass runs on
-  close. WebSocket and custom-protocol frames stream into a directional `M` timeline
-  live. Toggle with `GATEWAY_LIVE_DECODE`.
+- **Live decode** — a streaming capture decodes live (tshark for HTTP/WS/HTTP3,
+  in-process Go TLS decryption for custom raw-TCP). By default the live decode is
+  authoritative and persisted on close (record-live); set `GATEWAY_RECORD_LIVE=off` for
+  an authoritative batch tshark re-decode on close instead. WebSocket and custom-protocol
+  frames stream into a directional `M` timeline live. Toggle live with `GATEWAY_LIVE_DECODE`.
 - **TUI** — Textual viewer: session list → flow table → detail, body pretty-printing
   (JSON/forms), a mitmproxy-style filter DSL, cross-session compare, curl/raw export,
   and annotations (tags + Favorite, comments, color marks, groups).
