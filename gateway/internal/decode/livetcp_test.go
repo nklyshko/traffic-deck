@@ -256,6 +256,69 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 	}
 }
 
+// TestLiveTCPDecodePlaintextHTTPReset covers the TCP-reset failure signal: a request with
+// no response whose connection ends in a RST is marked "connection reset (TCP RST)".
+func TestLiveTCPDecodePlaintextHTTPReset(t *testing.T) {
+	req := []byte("GET /gone HTTP/1.1\r\nHost: plain.example.com\r\n\r\n")
+
+	var out bytes.Buffer
+	w := pcapgo.NewWriter(&out)
+	if err := w.WriteFileHeader(65535, gplayers.LinkTypeEthernet); err != nil {
+		t.Fatal(err)
+	}
+	cli, srv := net.IP{10, 0, 0, 1}, net.IP{10, 0, 0, 2}
+	writePkt := func(payload []byte, src, dst net.IP, sport, dport gplayers.TCPPort, seq uint32, rst bool) {
+		eth := &gplayers.Ethernet{SrcMAC: net.HardwareAddr{1, 1, 1, 1, 1, 1}, DstMAC: net.HardwareAddr{2, 2, 2, 2, 2, 2}, EthernetType: gplayers.EthernetTypeIPv4}
+		ip := &gplayers.IPv4{Version: 4, IHL: 5, TTL: 64, Protocol: gplayers.IPProtocolTCP, SrcIP: src, DstIP: dst}
+		tcp := &gplayers.TCP{SrcPort: sport, DstPort: dport, Seq: seq, ACK: true, PSH: len(payload) > 0, RST: rst, Window: 65535}
+		_ = tcp.SetNetworkLayerForChecksum(ip)
+		buf := gopacket.NewSerializeBuffer()
+		if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true},
+			eth, ip, tcp, gopacket.Payload(payload)); err != nil {
+			t.Fatal(err)
+		}
+		data := buf.Bytes()
+		if err := w.WritePacket(gopacket.CaptureInfo{Timestamp: time.Now(), CaptureLength: len(data), Length: len(data)}, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePkt(req, cli, srv, 40000, 443, 1000, false) // client request
+	writePkt(nil, srv, cli, 443, 40000, 5000, true)  // server RST, no response
+
+	var mu sync.Mutex
+	latest := map[string]*Flow{}
+	if err := LiveTCPDecode(bytes.NewReader(out.Bytes()), "",
+		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
+		func(*WsMessage) {}); err != nil {
+		t.Fatalf("LiveTCPDecode: %v", err)
+	}
+
+	var f *Flow
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		for _, x := range latest {
+			if x.Error != "" {
+				f = x
+			}
+		}
+		mu.Unlock()
+		if f != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if f == nil {
+		t.Fatal("no flow flagged with a reset error")
+	}
+	if f.Method != "GET" || f.Path != "/gone" || f.Status != 0 {
+		t.Errorf("flow: method=%q path=%q status=%d", f.Method, f.Path, f.Status)
+	}
+	if f.Error != "connection reset (TCP RST)" {
+		t.Errorf("error = %q, want connection reset (TCP RST)", f.Error)
+	}
+}
+
 // hostEchoDecoder is a custom raw-TCP decoder that claims a connection by its server
 // host (like MAX's 155.212.* match) rather than by content — used to prove that HTTP
 // traffic to such a host is still classified as HTTP, not swallowed by the decoder.

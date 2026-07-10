@@ -23,6 +23,7 @@ const h2HeaderTableSize = 4096
 // h2flow tracks one HTTP/2 stream's Flow plus the decode state the wire spreads across
 // frames (added-yet, response gzip, accumulated bodies).
 type h2flow struct {
+	id       uint32
 	flow     *Flow
 	added    bool
 	respGzip bool
@@ -40,15 +41,25 @@ type h2Stream struct {
 
 	mu    sync.Mutex
 	flows map[uint32]*h2flow
+
+	// Stream-level failures the peer signalled. Recorded here (not just applied to the
+	// flow) because the two directions decode concurrently, so a server RST_STREAM/GOAWAY
+	// can arrive before the client's request HEADERS created the flow; emitLocked applies
+	// them whenever the flow is (later) touched.
+	pendingRST   map[uint32]string // stream id -> RST_STREAM reason (non-NO_ERROR only)
+	goAwaySeen   bool
+	goAwayLastID uint32
+	goAwayErr    string
 }
 
 func newH2Stream(owner *tcpStream) *h2Stream {
 	h := &h2Stream{
-		owner:  owner,
-		onFlow: owner.lt.onFlow,
-		client: newByteStream(),
-		server: newByteStream(),
-		flows:  map[uint32]*h2flow{},
+		owner:      owner,
+		onFlow:     owner.lt.onFlow,
+		client:     newByteStream(),
+		server:     newByteStream(),
+		flows:      map[uint32]*h2flow{},
+		pendingRST: map[uint32]string{},
 	}
 	go h.read(h.client, true)
 	go h.read(h.server, false)
@@ -90,6 +101,43 @@ func (h *h2Stream) read(src *byteStream, fromClient bool) {
 			h.onHeaders(frm, fromClient)
 		case *http2.DataFrame:
 			h.onData(frm, fromClient)
+		case *http2.RSTStreamFrame:
+			h.onRSTStream(frm)
+		case *http2.GoAwayFrame:
+			h.onGoAway(frm)
+		}
+	}
+}
+
+// onRSTStream records a stream abort as its flow's failure reason. A NO_ERROR reset is a
+// clean cancellation, not a failure, so it's ignored; other codes (REFUSED_STREAM, CANCEL,
+// INTERNAL_ERROR, ENHANCE_YOUR_CALM, …) explain exactly why a request got no/partial
+// response. Recorded even if the request HEADERS haven't been decoded yet (the directions
+// race); emitLocked applies it when the flow appears.
+func (h *h2Stream) onRSTStream(rf *http2.RSTStreamFrame) {
+	if rf.ErrCode == http2.ErrCodeNo {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pendingRST[rf.StreamID] = "HTTP/2 RST_STREAM: " + rf.ErrCode.String()
+	if hf := h.flows[rf.StreamID]; hf != nil {
+		h.emitLocked(hf)
+	}
+}
+
+// onGoAway records that the peer is shutting the connection down: any stream past
+// LastStreamID was never processed, so a response-less flow there failed (the client would
+// retry it on a new connection).
+func (h *h2Stream) onGoAway(gf *http2.GoAwayFrame) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.goAwaySeen = true
+	h.goAwayLastID = gf.LastStreamID
+	h.goAwayErr = "HTTP/2 GOAWAY: " + gf.ErrCode.String() + " (stream not processed)"
+	for _, hf := range h.flows {
+		if hf.flow.Status == 0 {
+			h.emitLocked(hf)
 		}
 	}
 }
@@ -101,7 +149,7 @@ func (h *h2Stream) getLocked(id uint32) *h2flow {
 		f := h.owner.newHTTPFlow()
 		f.Protocol = "HTTP/2"
 		f.H2StreamID = strconv.FormatUint(uint64(id), 10)
-		hf = &h2flow{flow: f}
+		hf = &h2flow{id: id, flow: f}
 		h.flows[id] = hf
 	}
 	return hf
@@ -109,8 +157,16 @@ func (h *h2Stream) getLocked(id uint32) *h2flow {
 
 // emitLocked publishes the flow (added on first emit, update after). Caller holds mu;
 // onFlow converts to proto synchronously, so holding mu keeps the two directions from
-// racing on the shared Flow.
+// racing on the shared Flow. A stream-level failure recorded before the flow existed (a
+// RST_STREAM/GOAWAY that raced ahead of the request HEADERS) is applied here.
 func (h *h2Stream) emitLocked(hf *h2flow) {
+	if hf.flow.Status == 0 && hf.flow.Error == "" {
+		if r, ok := h.pendingRST[hf.id]; ok {
+			hf.flow.Error = r
+		} else if h.goAwaySeen && hf.id > h.goAwayLastID {
+			hf.flow.Error = h.goAwayErr
+		}
+	}
 	first := !hf.added
 	hf.added = true
 	h.onFlow(hf.flow, first)

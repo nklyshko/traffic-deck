@@ -143,7 +143,13 @@ func (h *httpStream) run() {
 
 		resp, err := http.ReadResponse(respBr, req)
 		if err != nil {
-			return // request seen but no parseable response (capture ended / closed)
+			// Request seen but no parseable response. A TCP reset explains the failure;
+			// a clean close / capture end leaves it blank (may just be pending).
+			if h.owner.reset.Load() {
+				f.Error = "connection reset (TCP RST)"
+				h.onFlow(f, false)
+			}
+			return // no response
 		}
 		f.Status = uint32(resp.StatusCode)
 		f.ResponseHeaders = headersOf(resp.Header)

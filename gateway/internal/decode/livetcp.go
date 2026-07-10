@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket"
@@ -146,12 +147,13 @@ type tcpStream struct {
 	serverHost, serverPort, clientAddr string
 	conn                               *tlsdecrypt.Conn
 
-	sniffed     bool // checked the first client bytes look like TLS
-	plaintext   bool // first client bytes weren't TLS → parse the stream as cleartext HTTP
-	decided     bool // classified the connection from its first decrypted client bytes
-	matched     bool // a custom decoder claimed it
-	isHTTP      bool // decoding as HTTP/1.1
-	isH2        bool // decoding as HTTP/2
+	reset       atomic.Bool // a TCP RST was seen (set on the packet loop, read by the HTTP parser)
+	sniffed     bool        // checked the first client bytes look like TLS
+	plaintext   bool        // first client bytes weren't TLS → parse the stream as cleartext HTTP
+	decided     bool        // classified the connection from its first decrypted client bytes
+	matched     bool        // a custom decoder claimed it
+	isHTTP      bool        // decoding as HTTP/1.1
+	isH2        bool        // decoding as HTTP/2
 	dropped     bool
 	flowEmitted bool
 	sess        decoders.Session
@@ -167,9 +169,12 @@ type appChunk struct {
 	data       []byte
 }
 
-func (s *tcpStream) Accept(_ *gplayers.TCP, _ gopacket.CaptureInfo, _ reassembly.TCPFlowDirection,
+func (s *tcpStream) Accept(tcp *gplayers.TCP, _ gopacket.CaptureInfo, _ reassembly.TCPFlowDirection,
 	_ reassembly.Sequence, start *bool, _ reassembly.AssemblerContext) bool {
 	*start = true // accept even if the SYN wasn't captured
+	if tcp.RST {
+		s.reset.Store(true) // a reset explains a request left without a response
+	}
 	return true
 }
 
@@ -213,6 +218,12 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 	}
 	if s.h2Sess != nil {
 		s.h2Sess.close()
+	}
+	// A reset on a custom-protocol connection (its flow lives on the stream) is a hard
+	// drop — record it. HTTP/1.1 is annotated in its own parser; h2 uses RST_STREAM/GOAWAY.
+	if s.reset.Load() && s.flowEmitted && s.flow != nil && s.flow.Error == "" {
+		s.flow.Error = "connection reset (TCP RST)"
+		s.lt.onFlow(s.flow, false)
 	}
 	// A TLS connection we never managed to decrypt (no key-log secret arrived, or the
 	// handshake never completed in the capture) yields no live flow — flag it so the gap
