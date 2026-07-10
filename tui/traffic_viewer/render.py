@@ -167,6 +167,31 @@ def editor_command(path: str) -> tuple[list[str], bool]:
     return [opener, path], False
 
 
+def status_cell(f) -> Text:
+    """The flow list's status column: the HTTP status coloured by class (2xx green,
+    3xx yellow, 4xx/5xx red), or a red error marker for a request that failed / never
+    got a response — so non-2xx and failed flows stand out and are easy to spot.
+
+    status 0 = no response yet: shown as a red 'err' when the capture recorded why
+    (mitmproxy failures land in metadata['error']), otherwise blank (still pending)."""
+    s = f.status
+    if s == 0:
+        if f.metadata.get("error"):
+            return Text("✗ err", style="bold red")
+        return Text("")
+    if s >= 500:
+        style = "bold red"
+    elif s >= 400:
+        style = "red"
+    elif s >= 300:
+        style = "yellow"
+    elif s >= 200:
+        style = "green"
+    else:
+        style = "white"
+    return Text(str(s), style=style)
+
+
 def flags_cell(f, selected: bool) -> Text:
     """Compact annotation indicators for the flow table: selection ✓, favorite ★,
     color mark ●, tag count #N, comment 💬, group ⬡, WebSocket ⇅N."""

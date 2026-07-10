@@ -20,10 +20,27 @@ def flow(**kw):
         method="GET", authority="api.example.com", path="/v1", query="", scheme="https",
         status=200, protocol="HTTP/2", request_headers=[], response_headers=[],
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
-        websocket=False, ws_message_count=0, proxy=proxy(),
+        websocket=False, ws_message_count=0, proxy=proxy(), metadata={},
     )
     d.update(kw)
     return types.SimpleNamespace(**d)
+
+
+def test_status_cell_colors_by_class():
+    cases = {200: "green", 302: "yellow", 404: "red", 500: "bold red"}
+    for status, style in cases.items():
+        cell = render.status_cell(flow(status=status))
+        assert cell.plain == str(status)
+        assert cell.style == style
+
+
+def test_status_cell_no_response():
+    # status 0 with no recorded error → blank (may still be pending).
+    assert render.status_cell(flow(status=0, metadata={})).plain == ""
+    # status 0 with a captured failure reason → red error marker.
+    cell = render.status_cell(flow(status=0, metadata={"error": "Connection timed out"}))
+    assert cell.plain == "✗ err"
+    assert cell.style == "bold red"
 
 
 # --- small helpers --------------------------------------------------------

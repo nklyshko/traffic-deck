@@ -36,6 +36,7 @@ from .render import (
     format_body,
     is_text,
     raw_message,
+    status_cell,
 )
 
 
@@ -340,7 +341,7 @@ class SessionPane(Vertical):
             flags_cell(f, f.id in self._selected),
             fmt_time(f.ts_unix_micros),
             f.method or "",
-            str(f.status) if f.status else "",
+            status_cell(f),
             f.protocol or "",
             f.authority or "",
             (f.path or "")[:80],
@@ -833,7 +834,18 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup(
                 "[yellow]⇄ via $type proxy $addr[/yellow]$creds",
                 type=f.proxy.type, addr=f.proxy.addr, creds=creds))
+        # Explain what went wrong, prominently: a recorded failure reason (no response),
+        # a bare no-response, or a non-2xx status.
+        err = f.metadata.get("error")
+        if err:
+            lines.append(Content.from_markup("[b red]✗ failed:[/b red] $e", e=err))
+        elif f.status == 0:
+            lines.append(Content.from_markup("[yellow]⏳ no response captured[/yellow]"))
+        elif f.status >= 400:
+            lines.append(Content.from_markup("[b red]⚠ HTTP $s[/b red]", s=str(f.status)))
         for k, v in f.metadata.items():
+            if k == "error":
+                continue  # rendered prominently above
             lines.append(Content.from_markup(
                 "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
         self._append_annotations(lines, f)
