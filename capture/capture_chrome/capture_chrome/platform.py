@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,47 @@ def chrome_binary() -> str:
     raise RuntimeError("Chrome/Chromium not found; set CHROME_BIN")
 
 
+def snap_name(binary: str) -> str | None:
+    """The snap name if `binary` is a snap-published browser, else None.
+
+    Snap confinement gives the browser a private /tmp mount namespace and blocks writes
+    outside a small allowed set — so an SSLKEYLOGFILE placed in the host's /tmp is either
+    denied or written to the snap's *private* /tmp, invisible to us, and the capture
+    decodes nothing. Callers must instead place the keylog and any tool-managed profile
+    under [snap_user_common][capture_chrome.platform.snap_user_common].
+
+    Detected two ways: the ``/snap/bin/<name>`` launcher (a symlink to ``/usr/bin/snap``),
+    and Ubuntu's transitional ``/usr/bin/chromium-browser`` shim (a shell script ending in
+    ``exec /snap/bin/<name>``). Always None on macOS (no snaps)."""
+    if sys.platform == "darwin":
+        return None
+    real = os.path.realpath(binary)
+    if real == "/usr/bin/snap":
+        # /snap/bin/<name> is a symlink to the snap launcher; the launcher name is the snap.
+        return os.path.basename(binary)
+    if real.startswith("/snap/"):
+        # A path inside a mounted snap, e.g. /snap/<name>/current/… — the 2nd part names it.
+        parts = real.split("/")
+        return parts[2] if len(parts) > 2 else os.path.basename(binary)
+    try:
+        with open(binary, encoding="utf-8", errors="replace") as f:
+            head = f.read(8192)
+    except OSError:
+        return None
+    m = re.search(r"/snap/bin/(\S+)", head)
+    return m.group(1) if m else None
+
+
+def snap_user_common(name: str) -> str:
+    """A snap's writable, non-namespaced ``$SNAP_USER_COMMON`` dir (``~/snap/<name>/common``).
+
+    Unlike /tmp (which confinement replaces with a private mount) this is the same real
+    path both inside the sandbox and on the host, so a keylog written here by the confined
+    browser is visible to the capture tool. It also survives snap refreshes (``common`` is
+    not tied to a revision, unlike ``current``)."""
+    return os.path.expanduser(os.path.join("~", "snap", name, "common"))
+
+
 # A Chrome binary keeps all its profiles under one user-data-dir, named by channel.
 # basename(binary) -> path relative to the platform's config root.
 _LINUX_USER_DATA = {
@@ -91,6 +133,11 @@ _MAC_USER_DATA = {
 def chrome_user_data_dir(binary: str) -> str | None:
     """The user-data-dir a Chrome binary stores its profiles in, or None if the binary
     isn't a known channel or the directory doesn't exist."""
+    # A snap browser ignores ~/.config and keeps its profiles under its own writable
+    # $SNAP_USER_COMMON (e.g. ~/snap/chromium/common/chromium), so look there instead.
+    if snap := snap_name(binary):
+        path = os.path.join(snap_user_common(snap), snap)
+        return path if os.path.isdir(path) else None
     name = os.path.basename(binary)
     if sys.platform == "darwin":
         rel = _MAC_USER_DATA.get(name)

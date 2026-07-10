@@ -58,9 +58,35 @@ _PROFILES_DIR = str(paths.home() / "chrome-profiles")
 _LEGACY_PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
 
 
-def _profiles_dir() -> str:
+def _snap_writable_base(chrome: str) -> str | None:
+    """The snap-writable dir that tool-managed files (the keylog and any throwaway or
+    persistent profile) must live in when `chrome` is a snap-confined browser — snap's
+    private /tmp and hidden-file restrictions otherwise swallow them so nothing decodes.
+    None for an unconfined browser (the usual /tmp and ~/.traffic-deck apply). Created on
+    demand."""
+    snap = platform.snap_name(chrome)
+    if not snap:
+        return None
+    base = platform.snap_user_common(snap)
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _temp_profile(chrome: str) -> str:
+    """A fresh throwaway --user-data-dir: under the snap's writable area for a snap
+    browser (confinement blocks /tmp), an ordinary tempdir otherwise."""
+    return tempfile.mkdtemp(prefix="chrome-capture-", dir=_snap_writable_base(chrome))
+
+
+def _profiles_dir(chrome: str) -> str:
     """The persistent-profiles dir, creating it and migrating any legacy profiles
-    (from ~/.capture-chrome/profiles) into it on first use."""
+    (from ~/.capture-chrome/profiles) into it on first use. For a snap browser this lives
+    under the snap's own writable area instead of the hidden ~/.traffic-deck (which
+    confinement blocks), so persistent profiles are separate per snap and not migrated."""
+    if base := _snap_writable_base(chrome):
+        path = os.path.join(base, "td-chrome-profiles")
+        os.makedirs(path, exist_ok=True)
+        return path
     os.makedirs(_PROFILES_DIR, exist_ok=True)
     if os.path.isdir(_LEGACY_PROFILES_DIR):
         for name in os.listdir(_LEGACY_PROFILES_DIR):
@@ -110,8 +136,8 @@ def _pick_profile(chrome: str, store: Store):
               "running instance of it first, or no TLS keys are logged")
         return _BUILTIN_PROFILE
     if choice == "temp":
-        return tempfile.mkdtemp(prefix="chrome-capture-")
-    return _pick_persistent_profile(store)
+        return _temp_profile(chrome)
+    return _pick_persistent_profile(chrome, store)
 
 
 def _pick_existing_profile(chrome: str, discovered: list[tuple[str, str, str]], store: Store):
@@ -126,9 +152,9 @@ def _pick_existing_profile(chrome: str, discovered: list[tuple[str, str, str]], 
     return choice
 
 
-def _pick_persistent_profile(store: Store) -> str:
+def _pick_persistent_profile(chrome: str, store: Store) -> str:
     """Choose one of the saved persistent profiles, or create a new named one."""
-    profiles_dir = _profiles_dir()
+    profiles_dir = _profiles_dir(chrome)
     existing = sorted(d for d in os.listdir(profiles_dir)
                       if os.path.isdir(os.path.join(profiles_dir, d)))
     choice = prompt.select("Custom persistent profile:", existing + [("＋ create new…", "__new__")],
@@ -255,13 +281,22 @@ def main(argv=None) -> None:
     elif interactive:
         profile = _pick_profile(chrome, store)
     else:
-        profile = tempfile.mkdtemp(prefix="chrome-capture-")
+        profile = _temp_profile(chrome)
 
     iface = args.iface or platform.default_interface()
     dumpcap = platform.dumpcap_binary()
+    # A snap-confined browser has a private /tmp and can't write outside its own writable
+    # area, so the keylog (and any tool-managed profile) must go under ~/snap/<name>/common
+    # or the TLS keys never reach us and nothing decodes.
+    snap = platform.snap_name(chrome)
+    if snap:
+        print(f"note: {os.path.basename(chrome)} is the '{snap}' snap — keeping keylog/profile "
+              f"under ~/snap/{snap}/common so confinement doesn't swallow the TLS keys",
+              flush=True)
     # Keep the keylog out of the profile dir so an existing user profile isn't
     # polluted (and stays valid even when --profile-dir points at a real one).
-    keylog = os.path.join(tempfile.mkdtemp(prefix="chrome-keylog-"), "key.log")
+    keylog = os.path.join(tempfile.mkdtemp(prefix="chrome-keylog-", dir=_snap_writable_base(chrome)),
+                          "key.log")
 
     chan = grpc.insecure_channel(args.gateway)
     ing = ig.IngestServiceStub(chan)
