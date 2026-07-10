@@ -204,6 +204,58 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 	}
 }
 
+// TestLiveTCPDecodePlaintextHTTP decodes a cleartext (non-TLS) HTTP/1.1 exchange straight
+// off the pcap — the tshark-free path for plaintext traffic. The connection never begins
+// with a TLS handshake, so it must be parsed as HTTP rather than dropped, and marked
+// http:// / not-decrypted.
+func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
+	req := []byte("GET /hello?x=1 HTTP/1.1\r\nHost: plain.example.com\r\n" +
+		"User-Agent: probe/1\r\n\r\n")
+	resp := []byte("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n" +
+		"Content-Length: 9\r\n\r\nnot found")
+	pcap := buildPcap(t, req, resp)
+
+	var mu sync.Mutex
+	latest := map[string]*Flow{}
+	err := LiveTCPDecode(bytes.NewReader(pcap), "",
+		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
+		func(*WsMessage) {})
+	if err != nil {
+		t.Fatalf("LiveTCPDecode: %v", err)
+	}
+
+	// The HTTP parser runs in a goroutine that finishes draining after FlushAll closes the
+	// stream; wait for the response to land.
+	var f *Flow
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		for _, x := range latest {
+			if x.Status != 0 {
+				f = x
+			}
+		}
+		mu.Unlock()
+		if f != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if f == nil {
+		t.Fatal("no plaintext HTTP flow with a response decoded")
+	}
+	if f.Protocol != "HTTP/1.1" || f.Method != "GET" || f.Path != "/hello" || f.Query != "x=1" {
+		t.Errorf("req: proto=%q method=%q path=%q query=%q", f.Protocol, f.Method, f.Path, f.Query)
+	}
+	if f.Authority != "plain.example.com" || f.Scheme != "http" || f.TLSDecrypted {
+		t.Errorf("meta: authority=%q scheme=%q tls=%v; want plain.example.com/http/false",
+			f.Authority, f.Scheme, f.TLSDecrypted)
+	}
+	if f.Status != 404 || string(f.ResponseBody) != "not found" {
+		t.Errorf("resp: status=%d body=%q", f.Status, f.ResponseBody)
+	}
+}
+
 // hostEchoDecoder is a custom raw-TCP decoder that claims a connection by its server
 // host (like MAX's 155.212.* match) rather than by content — used to prove that HTTP
 // traffic to such a host is still classified as HTTP, not swallowed by the decoder.

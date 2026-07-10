@@ -9,13 +9,17 @@ import (
 )
 
 type Config struct {
-	GRPCAddr   string // listen address for the gRPC server
-	DataRoot   string // root for session bundles + catalog.sqlite
-	TsharkPath string // path to the tshark binary (decode dependency)
+	GRPCAddr string // listen address for the gRPC server
+	DataRoot string // root for session bundles + catalog.sqlite
+	// TsharkPath is the tshark binary, used only for the optional batch decode: pcap
+	// import, and (record-live off) the authoritative batch pass / verify-live on close.
+	// The live decode needs no tshark.
+	TsharkPath string
 	// LiveDecode toggles the live pipeline. When true (default) a streaming session
-	// decodes flows live (tshark for HTTP/WS/HTTP3 + in-process Go TLS decryption for
-	// custom raw-TCP). When false, no live decode runs and the capture is decoded only
-	// by the batch tshark pass on session close (the pre-live behavior).
+	// decodes flows live, fully in-process in Go (no tshark): TCP/QUIC reassembly, TLS
+	// decryption from the key-log, and HTTP/1.1, HTTP/2, HTTP/3, WebSocket and custom
+	// raw-TCP framing — plaintext or TLS. When false, no live decode runs and the capture
+	// is decoded only by the batch tshark pass on session close (the pre-live behavior).
 	LiveDecode bool
 	// RecordLive persists the live-decoded flows on close and skips the batch tshark
 	// re-decode. Only takes effect when LiveDecode is on and the session has a live decode

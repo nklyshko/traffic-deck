@@ -105,23 +105,22 @@ when off, captures are archived and decoded only by the batch pass on close.
 flowchart TD
   up["UploadCapture chunks"] --> tee{tee}
   tee --> archive[(append to capture.pcap)]
-  tee --> pipe1["tshark -r - (live pipe)"]
-  tee --> pipe2["Go TLS pipeline"]
-  pipe1 --> hub[live hub]
-  pipe2 --> hub
+  tee --> pipe["Go decode pipeline"]
+  pipe --> hub[live hub]
   hub -- "StreamFlows / StreamMessages" --> client[viewer / mcp]
   hub -. "on close (record-live, default)" .-> sqlite[(flows.sqlite)]
   archive -. "on close (GATEWAY_RECORD_LIVE=off)" .-> batch["batch tshark decode"]
   batch --> sqlite
 ```
 
-- HTTP/1.1, HTTP/2, HTTP/3 and WebSocket decode live through a single long-lived
-  `tshark -r -` reading the streamed capture.
-- Custom raw-TCP protocols decode live **in-process in Go**: the gateway reassembles
-  TCP (`gopacket`, incl. the Android NFLOG link type) and decrypts TLS 1.3 from the
-  key-log itself, with no `tshark` re-run. See
+- The live decode is **fully in-process in Go — no tshark**. A single pipeline
+  reassembles TCP and QUIC (`gopacket`, incl. the Android NFLOG link type), decrypts TLS
+  (1.0–1.3 + SSL 3.0) and QUIC from the key-log, and frames HTTP/1.1, HTTP/2, HTTP/3,
+  WebSocket and custom raw-TCP protocols — plaintext or TLS. See
   [ADR-0006](adr/0006-in-process-tls-decryption.md).
-- Persistence is authoritative on close; the live path is for responsiveness.
+- `tshark` is used only for the **optional batch decode** on close (`GATEWAY_RECORD_LIVE=off`,
+  or `verify-live`) and for pcap import — never for the default live capture path.
+- In record-live mode (default) the live decode is authoritative and persisted on close.
 
 ## Capture sources
 

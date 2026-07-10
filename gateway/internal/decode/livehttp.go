@@ -254,9 +254,13 @@ func headersOf(h http.Header) []Header {
 }
 
 // newHTTPFlow seeds a Flow with this connection's TLS/addressing metadata; the caller
-// fills request/response specifics.
+// fills request/response specifics. A cleartext connection has no SNI/TLS, so it is
+// http:// and not marked decrypted (the Host header, filled by the caller, is authoritative).
 func (s *tcpStream) newHTTPFlow() *Flow {
-	host := s.conn.SNI()
+	scheme, host := "https", s.conn.SNI()
+	if s.plaintext {
+		scheme, host = "http", ""
+	}
 	if host == "" {
 		host = s.serverHost
 	}
@@ -264,10 +268,10 @@ func (s *tcpStream) newHTTPFlow() *Flow {
 		ID:           uuid.NewString(),
 		TSUnixMicros: time.Now().UnixMicro(),
 		Protocol:     "HTTP/1.1",
-		Scheme:       "https",
+		Scheme:       scheme,
 		Authority:    host,
 		SrcAddr:      s.clientAddr,
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
-		TLSDecrypted: true,
+		TLSDecrypted: !s.plaintext,
 	}
 }

@@ -245,7 +245,7 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string
 		// The persisted record is the live decode, so keep full bodies (not previews).
 		decode.SetUnlimitedLiveBodies()
 	}
-	hub := newLiveHub(tshark, recordLive)
+	hub := newLiveHub(recordLive)
 	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, verifyLive))

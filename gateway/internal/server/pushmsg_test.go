@@ -71,7 +71,7 @@ func TestPushFlowsWithMessages(t *testing.T) {
 	}
 
 	fid := uuid.NewString()
-	ing := &Ingest{st: st, hub: newLiveHub("", false)}
+	ing := &Ingest{st: st, hub: newLiveHub(false)}
 	stream := &fakePushStream{
 		ctx: ctx,
 		batches: []*trafficv1.FlowBatch{
@@ -131,7 +131,7 @@ func TestPushFlowsCustomWSDecode(t *testing.T) {
 	}
 
 	fid := uuid.NewString()
-	ing := &Ingest{st: st, hub: newLiveHub("", false)}
+	ing := &Ingest{st: st, hub: newLiveHub(false)}
 	stream := &fakePushStream{ctx: ctx, batches: []*trafficv1.FlowBatch{
 		{SessionId: sid, Flows: []*trafficv1.Flow{
 			{Id: fid, Protocol: "HTTP/1.1", Authority: "ws.custom.test", Websocket: true},

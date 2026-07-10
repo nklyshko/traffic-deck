@@ -31,7 +31,7 @@ func TestListSessionsLiveFlowCount(t *testing.T) {
 	}
 	t.Cleanup(st.Close)
 
-	hub := newLiveHub("", false)
+	hub := newLiveHub(false)
 	ing := &Ingest{st: st, hub: hub}
 	viewer := NewViewer(st, hub)
 

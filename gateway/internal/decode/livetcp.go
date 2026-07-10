@@ -147,6 +147,7 @@ type tcpStream struct {
 	conn                               *tlsdecrypt.Conn
 
 	sniffed     bool // checked the first client bytes look like TLS
+	plaintext   bool // first client bytes weren't TLS → parse the stream as cleartext HTTP
 	decided     bool // classified the connection from its first decrypted client bytes
 	matched     bool // a custom decoder claimed it
 	isHTTP      bool // decoding as HTTP/1.1
@@ -183,14 +184,18 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 	}
 	data := sg.Fetch(n)
 	fromClient := dir == reassembly.TCPDirClientToServer
-	// Cheap non-TLS filter: the first client→server bytes must begin a TLS handshake
-	// record (type 22, version 0x03xx); otherwise drop the connection.
+	// Classify the transport from the first client→server bytes: a TLS handshake record
+	// (type 22, version 0x03xx) is decrypted by the TLS layer; anything else is treated as
+	// cleartext HTTP and parsed directly (so plaintext HTTP/1.1, HTTP/2 and WebSocket decode
+	// in-process too — no tshark). Clients always speak first on HTTP, so this is decided
+	// before any server bytes arrive.
 	if fromClient && !s.sniffed {
 		s.sniffed = true
-		if len(data) < 2 || data[0] != 0x16 || data[1] != 0x03 {
-			s.dropped = true
-			return
-		}
+		s.plaintext = len(data) < 2 || data[0] != 0x16 || data[1] != 0x03
+	}
+	if s.plaintext {
+		s.onApp(fromClient, data) // the raw bytes are the application bytes
+		return
 	}
 	s.conn.Feed(fromClient, data)
 	if s.conn.Unsupported() {
@@ -227,9 +232,9 @@ func hostLabel(sni, host string) string {
 	return host
 }
 
-// onApp receives decrypted application bytes from the TLS layer. It buffers until the
-// first client bytes arrive, classifies the connection (custom decoder / HTTP/1.1 /
-// drop), then dispatches each chunk to the chosen decoder.
+// onApp receives application bytes — decrypted from the TLS layer, or raw for a cleartext
+// connection. It buffers until the first client bytes arrive, classifies the connection
+// (custom decoder / HTTP/2 / HTTP/1.1), then dispatches each chunk to the chosen decoder.
 func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 	if s.dropped {
 		return
@@ -288,6 +293,7 @@ func (s *tcpStream) classify(firstClient []byte) {
 		// live HTTP path (newHTTPFlow). Without it the persisted flow has time 0 and sorts
 		// to the top of the list with a blank time column.
 		s.flow.TSUnixMicros = time.Now().UnixMicro()
+		s.flow.TLSDecrypted = !s.plaintext
 		s.matched = true
 		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
 		return
