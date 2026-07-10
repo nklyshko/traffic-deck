@@ -55,6 +55,17 @@ func (h *liveHub) get(sessionID string) *liveSession {
 	return h.sessions[sessionID]
 }
 
+// liveFlowCount reports the running flow count for an in-progress session, or (0, false)
+// if no live session is registered (already closed, or never live). The catalog's
+// flow_count is only written on close, so this is the source of truth for an open
+// session's count.
+func (h *liveHub) liveFlowCount(sessionID string) (int, bool) {
+	if ls := h.get(sessionID); ls != nil {
+		return ls.flowCount(), true
+	}
+	return 0, false
+}
+
 // start spins up the live decode for sessionID, fed by the pipe(s) via write().
 // keylogPath must already exist (it may be empty and grow). The primary pipe feeds
 // tshark (plaintext HTTP/WS/HTTP3); a second copy feeds the in-process Go decoder
@@ -183,6 +194,14 @@ func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.WsMessage)
 		msgs = append(msgs, protoToDecodeWsMessage(pm))
 	}
 	return flows, msgs
+}
+
+// flowCount returns the number of distinct flows published so far — the live count for an
+// open session, shown until the catalog's stored count is finalized on close.
+func (ls *liveSession) flowCount() int {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	return len(ls.order)
 }
 
 // protoFlows returns the live-decoded flows (final state, arrival order) as protos — used

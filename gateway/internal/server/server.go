@@ -42,6 +42,17 @@ func (v *Viewer) ListSessions(ctx context.Context, req *trafficv1.ListSessionsRe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "list sessions: %v", err)
 	}
+	// The catalog's flow_count is only written on close, so a still-open session would
+	// report a stale 0. Surface the live hub's running count for open sessions instead,
+	// so the count grows as flows arrive (notably the pushed mitmproxy path).
+	for _, s := range sessions {
+		if s.GetStatus() != trafficv1.SessionStatus_SESSION_STATUS_OPEN {
+			continue
+		}
+		if n, ok := v.hub.liveFlowCount(s.GetId()); ok {
+			s.FlowCount = uint32(n)
+		}
+	}
 	return &trafficv1.SessionList{Sessions: sessions}, nil
 }
 
