@@ -69,6 +69,8 @@ type tlsStream struct {
 	clientAddr   string // client ip:port
 	serverHost   string // server ip
 	serverPort   string
+	tsMicros     int64  // ClientHello frame time — the custom flow's timestamp (follow,tls,raw carries none)
+	frameNumber  uint64 // ClientHello frame number
 }
 
 func newStitcher(ds *Dataset, onChange func(*Flow, bool)) *stitcher {
@@ -100,6 +102,8 @@ func (s *stitcher) addPacket(l layers) {
 			clientAddr:   addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort)),
 			serverHost:   firstNonEmpty(l.first(fIPDst), l.first(fIP6Dst)),
 			serverPort:   l.first(fTCPDstPort),
+			tsMicros:     epochToMicros(l.first(fFrameTime)),
+			frameNumber:  parseUint(l.first(fFrameNum)),
 		}
 	}
 	if l.first(fSocksVersion) != "" {

@@ -90,6 +90,24 @@ func TestHTTPStreamSet(t *testing.T) {
 	}
 }
 
+// TestCustomFlowCarriesStreamTimestamp guards the batch custom flow's timestamp: the
+// follow,tls,raw transport has no per-frame times, so the flow must take the connection's
+// ClientHello time from the stitcher, or it persists with time 0 (blank column, sorts to
+// the top of the list).
+func TestCustomFlowCarriesStreamTimestamp(t *testing.T) {
+	info := &tlsStream{
+		sni: "api.oneme.ru", serverHost: "1.2.3.4", serverPort: "443",
+		clientAddr: "5.6.7.8:5000", tsMicros: 1783685313000000, frameNumber: 42,
+	}
+	f := customFlow(info, "9", "max")
+	if f.TSUnixMicros != 1783685313000000 || f.FrameNumber != 42 {
+		t.Fatalf("ts=%d frame=%d, want 1783685313000000/42", f.TSUnixMicros, f.FrameNumber)
+	}
+	if f.Protocol != "MAX" || f.Authority != "api.oneme.ru" || f.TCPStream != "9" {
+		t.Fatalf("flow = %+v", f)
+	}
+}
+
 // parsed turns feed the registered MAX decoder end to end.
 func TestParsedTurnsDecodeMAX(t *testing.T) {
 	frame := maxFrame(t, 5, 0x10, map[string]interface{}{"hello": "world"})

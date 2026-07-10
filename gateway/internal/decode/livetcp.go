@@ -15,6 +15,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/google/gopacket"
 	gplayers "github.com/google/gopacket/layers"
@@ -282,6 +283,11 @@ func (s *tcpStream) classify(firstClient []byte) {
 	}); len(m) > 0 {
 		s.sess = m[0].NewSession()
 		s.flow = customFlowMeta(s.conn.SNI(), s.serverHost, s.serverPort, s.clientAddr, m[0].Name())
+		// Live has no per-packet time here (the decrypted bytes come from the TLS layer,
+		// not a timestamped frame), so use wall-clock at connection start — same as the
+		// live HTTP path (newHTTPFlow). Without it the persisted flow has time 0 and sorts
+		// to the top of the list with a blank time column.
+		s.flow.TSUnixMicros = time.Now().UnixMicro()
 		s.matched = true
 		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
 		return
@@ -348,11 +354,12 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 		}
 		s.flow.WsMessageCount++
 		s.lt.onMsg(&WsMessage{
-			ID:         uuid.NewString(),
-			FlowID:     s.flow.ID,
-			FromClient: msg.FromClient,
-			Opcode:     msg.Opcode,
-			Payload:    msg.Payload,
+			ID:           uuid.NewString(),
+			FlowID:       s.flow.ID,
+			TSUnixMicros: time.Now().UnixMicro(),
+			FromClient:   msg.FromClient,
+			Opcode:       msg.Opcode,
+			Payload:      msg.Payload,
 		})
 		s.lt.onFlow(s.flow, false) // refresh the row's ⇅ count
 	}

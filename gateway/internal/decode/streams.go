@@ -117,10 +117,14 @@ func customFlowMeta(sni, serverHost, serverPort, clientAddr, name string) *Flow 
 	}
 }
 
-// customFlow is the batch variant: it also records the tcp.stream index.
+// customFlow is the batch variant: it also records the tcp.stream index and stamps the
+// flow with the connection's ClientHello time (follow,tls,raw yields no per-frame times,
+// so without this the flow would sort to the top of the list with a blank time column).
 func customFlow(info *tlsStream, tcp, name string) *Flow {
 	f := customFlowMeta(info.sni, info.serverHost, info.serverPort, info.clientAddr, name)
 	f.TCPStream = tcp
+	f.TSUnixMicros = info.tsMicros
+	f.FrameNumber = info.frameNumber
 	return f
 }
 

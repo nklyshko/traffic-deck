@@ -251,6 +251,11 @@ func TestClassifyPrefersHTTPOverHostCustomDecoder(t *testing.T) {
 	if !s.matched {
 		t.Errorf("binary frame: matched=%v; want matched (custom decoder)", s.matched)
 	}
+	// The custom flow must carry a timestamp, or it persists with time 0 and sorts to the
+	// top of the flows list with a blank time column.
+	if s.flow == nil || s.flow.TSUnixMicros == 0 {
+		t.Errorf("custom flow timestamp not set: %+v", s.flow)
+	}
 }
 
 // buildNflogPcap wraps the directional streams in IPv4/TCP packets inside NFLOG records
