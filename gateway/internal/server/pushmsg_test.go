@@ -159,3 +159,62 @@ func TestPushFlowsCustomWSDecode(t *testing.T) {
 		t.Errorf("raw original bytes = %q, want hello", msgs[0].GetRaw().GetInline())
 	}
 }
+
+// TestPushFlowsUpsertsOnRepush covers the request-then-response push: a flow pushed
+// request-first (in-flight, no status) and again on response must upsert to one flow at
+// its final state, not duplicate or conflict.
+func TestPushFlowsUpsertsOnRepush(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, store.NewSession{
+		ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_MITMPROXY,
+		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fid := uuid.NewString()
+	ing := &Ingest{st: st, hub: newLiveHub(false)}
+	stream := &fakePushStream{ctx: ctx, batches: []*trafficv1.FlowBatch{
+		// Request seen: in-flight, no status yet.
+		{SessionId: sid, Flows: []*trafficv1.Flow{{
+			Id: fid, Method: "GET", Authority: "ex.com", Path: "/x", Protocol: "HTTP/1.1",
+			RequestHeaders: []*trafficv1.Header{{Name: "a", Value: "1"}},
+		}}},
+		// Response arrives: same id, now with status + duration.
+		{SessionId: sid, Flows: []*trafficv1.Flow{{
+			Id: fid, Method: "GET", Authority: "ex.com", Path: "/x", Protocol: "HTTP/1.1",
+			Status: 200, DurationMicros: 5000,
+			RequestHeaders:  []*trafficv1.Header{{Name: "a", Value: "1"}},
+			ResponseHeaders: []*trafficv1.Header{{Name: "b", Value: "2"}},
+		}}},
+	}}
+	if err := ing.PushFlows(stream); err != nil {
+		t.Fatalf("PushFlows: %v", err)
+	}
+
+	flows, err := st.ListFlows(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 1 {
+		t.Fatalf("got %d flows, want 1 (upsert, not duplicate)", len(flows))
+	}
+	if flows[0].GetStatus() != 200 || flows[0].GetDurationMicros() != 5000 {
+		t.Errorf("final flow: status=%d dur=%d, want 200/5000", flows[0].GetStatus(), flows[0].GetDurationMicros())
+	}
+	full, err := st.GetFlow(ctx, sid, fid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.GetRequestHeaders()) != 1 || len(full.GetResponseHeaders()) != 1 {
+		t.Errorf("headers duplicated across pushes: req=%d resp=%d",
+			len(full.GetRequestHeaders()), len(full.GetResponseHeaders()))
+	}
+}

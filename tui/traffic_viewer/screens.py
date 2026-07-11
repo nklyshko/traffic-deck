@@ -31,6 +31,7 @@ from .render import (
     curl,
     editor_command,
     editor_suffix,
+    duration_cell,
     flags_cell,
     fmt_time,
     format_body,
@@ -268,7 +269,8 @@ class SessionPane(Vertical):
         yield Label("", id="pane-status")
         yield Input(id="filter", placeholder="filter: ~m GET  ~d example.com  ~fav  ~tag auth  ~mark red  (f focus, Enter apply)")
         table = NavDataTable(id="flows", cursor_type="row", zebra_stripes=True)
-        self._cols = table.add_columns("", "Time", "Method", "Status", "Proto", "Authority", "Path")
+        self._cols = table.add_columns("", "Time", "Method", "Status", "Dur", "Proto", "Authority", "Path")
+        self._dur_col = self._cols[4]
         yield table
 
     def on_mount(self) -> None:
@@ -276,6 +278,21 @@ class SessionPane(Vertical):
         self.query_one("#flows", DataTable).focus()
         self.load_defs()
         self.load_flows()
+        # Tick in-flight requests' duration cells so they read as a live stopwatch.
+        self.set_interval(0.5, self._tick_durations)
+
+    def _tick_durations(self) -> None:
+        """Refresh the Dur cell of each still-pending request (no response, no error) so
+        the elapsed time updates live; completed flows are frozen at their final duration."""
+        table = self.query_one("#flows", DataTable)
+        for fid in list(self._rows):
+            f = self.flows.get(fid)
+            if f is None or f.status or f.error or f.duration_micros:
+                continue
+            try:
+                table.update_cell(fid, self._dur_col, duration_cell(f))
+            except Exception:  # noqa: BLE001 — row removed between snapshot and update
+                pass
 
     @work(exclusive=True, group="defs")
     async def load_defs(self) -> None:
@@ -342,6 +359,7 @@ class SessionPane(Vertical):
             fmt_time(f.ts_unix_micros),
             f.method or "",
             status_cell(f),
+            duration_cell(f),
             f.protocol or "",
             f.authority or "",
             (f.path or "")[:80],

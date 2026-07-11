@@ -67,6 +67,10 @@ type Flow struct {
 	// normally. The live decoder derives it from the pcap; pushed sources set it directly.
 	Error string
 
+	// DurationMicros is the request→response elapsed time in microseconds, set once the
+	// response arrives; 0 while the request is still in flight.
+	DurationMicros uint64
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool

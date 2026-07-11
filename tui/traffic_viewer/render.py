@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import sys
+import time
 import urllib.parse
 from datetime import datetime, timezone
 
@@ -190,6 +191,30 @@ def status_cell(f) -> Text:
     else:
         style = "white"
     return Text(str(s), style=style)
+
+
+def fmt_duration(seconds: float) -> str:
+    """Compact human duration: 42ms, 1.3s, 2m05s."""
+    if seconds < 0:
+        seconds = 0
+    if seconds < 1:
+        return f"{int(seconds * 1000)}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m{s:02d}s"
+
+
+def duration_cell(f) -> Text:
+    """The flow's duration column: the final request→response time once known, or a live
+    stopwatch (⏱ elapsed since the request) while the request is still in flight — so a
+    pending request is visibly ticking. Blank for a failed / response-less flow."""
+    if f.duration_micros:
+        return Text(fmt_duration(f.duration_micros / 1_000_000), style="dim")
+    if f.status == 0 and not f.error and f.ts_unix_micros:
+        elapsed = time.time() - f.ts_unix_micros / 1_000_000
+        return Text("⏱ " + fmt_duration(elapsed), style="yellow")
+    return Text("")
 
 
 def flags_cell(f, selected: bool) -> Text:

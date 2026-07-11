@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS flows (
     proxy_type    TEXT,           -- "http" | "socks"
     proxy_user    TEXT,
     proxy_pass    TEXT,
-    error         TEXT NOT NULL DEFAULT ''  -- failure reason (no response / transport error), "" if none
+    error         TEXT NOT NULL DEFAULT '',  -- failure reason (no response / transport error), "" if none
+    duration_micros INTEGER NOT NULL DEFAULT 0  -- request→response elapsed µs, 0 while pending
 );
 
 CREATE TABLE IF NOT EXISTS flow_headers (

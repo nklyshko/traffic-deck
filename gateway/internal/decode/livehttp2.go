@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -201,6 +202,7 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool) {
 		if v := mh.PseudoValue("status"); v != "" {
 			if code, err := strconv.Atoi(v); err == nil {
 				f.Status = uint32(code)
+				f.DurationMicros = uint64(max(time.Now().UnixMicro()-f.TSUnixMicros, 0))
 			}
 		}
 		for _, hd := range mh.RegularFields() {

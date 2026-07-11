@@ -117,6 +117,11 @@ message Flow {
   // "HTTP/2 RST_STREAM: REFUSED_STREAM"). Empty when the request completed normally.
   // Set by the capture source (mitmproxy flow.error) or derived from the pcap.
   string error = 35;
+
+  // Request→response elapsed time in microseconds, once the response is in. 0 while the
+  // request is still in flight (no response yet) — the viewer shows a live stopwatch from
+  // ts_unix_micros until this is set.
+  uint64 duration_micros = 36;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

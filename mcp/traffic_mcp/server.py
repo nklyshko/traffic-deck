@@ -85,6 +85,7 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "url": flow_url(f),
         "status": f.status or None,
         "error": f.error or None,
+        "duration_ms": round(f.duration_micros / 1000, 1) if f.duration_micros else None,
         "protocol": f.protocol,
         "content_type": f.content_type or None,
         "request_bytes": f.request_bytes,

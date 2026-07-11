@@ -107,6 +107,11 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     # `error` hook.
     if flow.error and flow.error.msg:
         pf.error = _s(flow.error.msg)
+
+    # Request→response elapsed, once the response is complete; left 0 while in flight so
+    # the viewer shows a live stopwatch from ts_unix_micros instead.
+    if resp and resp.timestamp_end and req.timestamp_start:
+        pf.duration_micros = max(int((resp.timestamp_end - req.timestamp_start) * 1_000_000), 0)
     return pf
 
 
@@ -171,6 +176,12 @@ class GatewayPusher:
         )
         self.session_id = handle.session_id
         ctx.log.info(f"gateway: session {self.session_id} @ {self.addr}")
+
+    async def request(self, flow: http.HTTPFlow) -> None:
+        # Push the flow as soon as the request is seen, so an in-flight request (no
+        # response yet) shows up immediately with a live stopwatch. response()/error()
+        # re-push the same flow id with the outcome (the gateway upserts by id).
+        await self._send(flows=[build_flow(flow)])
 
     async def response(self, flow: http.HTTPFlow) -> None:
         await self._send(flows=[build_flow(flow)])

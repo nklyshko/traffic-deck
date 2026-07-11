@@ -21,9 +21,37 @@ def flow(**kw):
         status=200, protocol="HTTP/2", request_headers=[], response_headers=[],
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
         websocket=False, ws_message_count=0, proxy=proxy(), metadata={}, error="",
+        ts_unix_micros=0, duration_micros=0,
     )
     d.update(kw)
     return types.SimpleNamespace(**d)
+
+
+def test_fmt_duration():
+    assert render.fmt_duration(0.042) == "42ms"
+    assert render.fmt_duration(1.3) == "1.3s"
+    assert render.fmt_duration(125) == "2m05s"
+
+
+def test_duration_cell_final():
+    # A completed flow shows its frozen request→response duration.
+    cell = render.duration_cell(flow(status=200, duration_micros=230_000))
+    assert cell.plain == "230ms"
+    assert cell.style == "dim"
+
+
+def test_duration_cell_live_stopwatch():
+    import time as _t
+    # An in-flight request (no response, no error) shows a ticking stopwatch.
+    f = flow(status=0, error="", duration_micros=0, ts_unix_micros=int((_t.time() - 1.5) * 1_000_000))
+    cell = render.duration_cell(f)
+    assert cell.plain.startswith("⏱ ")
+    assert cell.style == "yellow"
+
+
+def test_duration_cell_blank_when_failed():
+    # A failed / response-less flow with a reason shows no stopwatch (the status cell flags it).
+    assert render.duration_cell(flow(status=0, error="boom", duration_micros=0)).plain == ""
 
 
 def test_status_cell_colors_by_class():

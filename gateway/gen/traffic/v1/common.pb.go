@@ -549,9 +549,13 @@ type Flow struct {
 	// (e.g. "Connection timed out", "connection reset (TCP RST)",
 	// "HTTP/2 RST_STREAM: REFUSED_STREAM"). Empty when the request completed normally.
 	// Set by the capture source (mitmproxy flow.error) or derived from the pcap.
-	Error         string `protobuf:"bytes,35,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Error string `protobuf:"bytes,35,opt,name=error,proto3" json:"error,omitempty"`
+	// Request→response elapsed time in microseconds, once the response is in. 0 while the
+	// request is still in flight (no response yet) — the viewer shows a live stopwatch from
+	// ts_unix_micros until this is set.
+	DurationMicros uint64 `protobuf:"varint,36,opt,name=duration_micros,json=durationMicros,proto3" json:"duration_micros,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -827,6 +831,13 @@ func (x *Flow) GetError() string {
 		return x.Error
 	}
 	return ""
+}
+
+func (x *Flow) GetDurationMicros() uint64 {
+	if x != nil {
+		return x.DurationMicros
+	}
+	return 0
 }
 
 // A proxy a connection was observed to go through, detected from the captured
@@ -1341,7 +1352,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\x95\n" +
+	"\acontent\"\xbe\n" +
 	"\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
@@ -1385,7 +1396,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x10ws_message_count\x18  \x01(\rR\x0ewsMessageCount\x12'\n" +
 	"\x05proxy\x18! \x01(\v2\x11.traffic.v1.ProxyR\x05proxy\x12:\n" +
 	"\bmetadata\x18\" \x03(\v2\x1e.traffic.v1.Flow.MetadataEntryR\bmetadata\x12\x14\n" +
-	"\x05error\x18# \x01(\tR\x05error\x1a;\n" +
+	"\x05error\x18# \x01(\tR\x05error\x12'\n" +
+	"\x0fduration_micros\x18$ \x01(\x04R\x0edurationMicros\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +

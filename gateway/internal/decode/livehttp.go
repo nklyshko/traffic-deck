@@ -154,6 +154,7 @@ func (h *httpStream) run() {
 		f.Status = uint32(resp.StatusCode)
 		f.ResponseHeaders = headersOf(resp.Header)
 		f.ContentType = resp.Header.Get("Content-Type")
+		f.DurationMicros = uint64(max(time.Now().UnixMicro()-f.TSUnixMicros, 0))
 
 		if isWSUpgrade(resp) {
 			// The connection is now WebSocket; the "body" is RFC 6455 frames. Don't read
