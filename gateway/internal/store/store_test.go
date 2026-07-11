@@ -260,3 +260,33 @@ func TestRedirectChainLinking(t *testing.T) {
 		t.Errorf("GetFlow redirected_from_id = %q, want %q", one.GetRedirectedFromId(), src.ID)
 	}
 }
+
+// TestSessionGroup checks setting and reading a session's group label.
+func TestSessionGroup(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionGroup(ctx, sid, "login-flow"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetSession(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetGroup() != "login-flow" {
+		t.Errorf("group = %q, want login-flow", got.GetGroup())
+	}
+	// ListSessions carries it too; clearing sets it back to "".
+	if err := st.SetSessionGroup(ctx, sid, ""); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := st.ListSessions(ctx, 100, 0)
+	for _, s := range list {
+		if s.GetId() == sid && s.GetGroup() != "" {
+			t.Errorf("group not cleared: %q", s.GetGroup())
+		}
+	}
+}

@@ -56,6 +56,11 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.ExportSessionRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.ExportChunk.FromString,
                 _registered_method=True)
+        self.SetSessionGroup = channel.unary_unary(
+                '/traffic.v1.ControlService/SetSessionGroup',
+                request_serializer=traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                _registered_method=True)
         self.CreateTag = channel.unary_unary(
                 '/traffic.v1.ControlService/CreateTag',
                 request_serializer=traffic_dot_v1_dot_control__pb2.CreateTagRequest.SerializeToString,
@@ -158,6 +163,13 @@ class ControlServiceServicer(object):
     def ExportSession(self, request, context):
         """Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
         spilled blobs) as a self-contained .tar.gz, streamed in chunks.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def SetSessionGroup(self, request, context):
+        """Assign a session to a (free-text) group for organizing the session list; "" clears it.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -281,6 +293,11 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     servicer.ExportSession,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.ExportSessionRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.ExportChunk.SerializeToString,
+            ),
+            'SetSessionGroup': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetSessionGroup,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
             ),
             'CreateTag': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateTag,
@@ -467,6 +484,33 @@ class ControlService(object):
             '/traffic.v1.ControlService/ExportSession',
             traffic_dot_v1_dot_control__pb2.ExportSessionRequest.SerializeToString,
             traffic_dot_v1_dot_control__pb2.ExportChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def SetSessionGroup(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/SetSessionGroup',
+            traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,

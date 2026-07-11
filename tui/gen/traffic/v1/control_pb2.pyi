@@ -58,6 +58,14 @@ class ExportChunk(_message.Message):
     data: bytes
     def __init__(self, data: _Optional[bytes] = ...) -> None: ...
 
+class SetSessionGroupRequest(_message.Message):
+    __slots__ = ("session_id", "group")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    GROUP_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    group: str
+    def __init__(self, session_id: _Optional[str] = ..., group: _Optional[str] = ...) -> None: ...
+
 class ReDecodeRequest(_message.Message):
     __slots__ = ("session_id",)
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]

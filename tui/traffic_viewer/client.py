@@ -171,3 +171,8 @@ class GatewayClient:
         await self._ctrl().SetGroups(control_pb2.SetGroupsRequest(
             session_id=session_id, record_ids=list(record_ids),
             add_group_ids=list(add), remove_group_ids=list(remove)))
+
+    async def set_session_group(self, session_id: str, group: str) -> None:
+        """Assign the session to a free-text group ("" clears it)."""
+        await self._ctrl().SetSessionGroup(control_pb2.SetSessionGroupRequest(
+            session_id=session_id, group=group))

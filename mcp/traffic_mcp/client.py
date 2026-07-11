@@ -93,3 +93,7 @@ class GatewayClient:
     async def list_groups(self):
         resp = await self._c().ListGroups(control_pb2.ListGroupsRequest())
         return list(resp.groups)
+
+    async def set_session_group(self, session_id: str, group: str) -> None:
+        await self._c().SetSessionGroup(control_pb2.SetSessionGroupRequest(
+            session_id=session_id, group=group))

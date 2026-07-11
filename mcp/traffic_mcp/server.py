@@ -67,6 +67,7 @@ def _session_dict(s) -> dict:
     return {
         "id": s.id,
         "label": s.label,
+        "group": s.group or None,
         "source_kind": _SOURCE_KIND.get(s.source_kind, "?"),
         "status": _STATUS.get(s.status, "?"),
         "created_at_unix_ms": s.created_at_unix_ms,
@@ -257,8 +258,28 @@ def _timeline_row(seq: int, f, t0: int) -> dict:
 
 @mcp.tool()
 async def list_sessions() -> list[dict]:
-    """List all recorded capture sessions (id, label, status, flow count, sizes)."""
+    """List all recorded capture sessions (id, label, group, status, flow count, sizes)."""
     return [_session_dict(s) for s in await client().list_sessions()]
+
+
+@mcp.tool()
+async def list_session_groups() -> dict:
+    """Sessions organized by their group label. Returns {"groups": [{group, sessions:[…]}]}
+    with grouped sessions first (alphabetical) and ungrouped last (group=null)."""
+    sessions = [_session_dict(s) for s in await client().list_sessions()]
+    by_group: dict = {}
+    for s in sessions:
+        by_group.setdefault(s["group"], []).append(s)
+    ordered = sorted(by_group.keys(), key=lambda g: (g is None, (g or "").lower()))
+    return {"groups": [{"group": g, "sessions": by_group[g]} for g in ordered]}
+
+
+@mcp.tool()
+async def set_session_group(session_id: str, group: str) -> dict:
+    """Assign a session to a free-text group (organize the session list); "" clears it."""
+    sid = await _resolve_session(session_id)
+    await client().set_session_group(sid, group)
+    return {"session_id": sid, "group": group or None}
 
 
 @mcp.tool()

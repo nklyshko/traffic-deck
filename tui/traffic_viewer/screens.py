@@ -165,13 +165,14 @@ class SessionsScreen(Screen):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),
         Binding("e", "export", "Export"),
+        Binding("g", "set_group", "Group"),
         Binding("q", "quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
         yield Header()
         table = NavDataTable(id="sessions", cursor_type="row", zebra_stripes=True)
-        table.add_columns("Session", "Label", "Status", "Flows", "pcap", "Created")
+        table.add_columns("Group", "Session", "Label", "Status", "Flows", "pcap", "Created")
         yield table
         yield Footer()
 
@@ -194,9 +195,17 @@ class SessionsScreen(Screen):
             self.notify(f"list_sessions failed: {exc}", severity="error")
             return
         self._labels = {s.id: s.label for s in sessions}  # for the workspace tab title
+        # Cluster by group (grouped first, alphabetical; ungrouped last). Stable sort keeps
+        # the server's created-DESC order within each group and when nothing is grouped.
+        sessions = sorted(sessions, key=lambda s: (s.group == "", s.group.lower()))
+        prev_group = None
         for s in sessions:
             created = datetime.fromtimestamp(s.created_at_unix_ms / 1e3).strftime("%Y-%m-%d %H:%M")
+            # Only label the first row of each group, so the column reads like a header.
+            group_cell = (s.group or "—") if s.group != prev_group else ""
+            prev_group = s.group
             table.add_row(
+                group_cell,
                 s.id[:8],
                 s.label or "—",
                 SESSION_STATUS.get(s.status, "?"),
@@ -207,6 +216,32 @@ class SessionsScreen(Screen):
             )
         if not sessions:
             self.notify("no sessions — import one with `gateway import`")
+
+    def _selected_session(self) -> str | None:
+        table = self.query_one("#sessions", DataTable)
+        if table.row_count == 0:
+            return None
+        try:
+            return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def action_set_group(self) -> None:
+        sid = self._selected_session()
+        if sid is None:
+            return
+
+        async def _apply(name: str | None) -> None:
+            if name is None:
+                return
+            try:
+                await self.app.client.set_session_group(sid, name.strip())
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"set group failed: {exc}", severity="error")
+                return
+            self.load_sessions()
+
+        self.app.push_screen(TextPrompt("Group (empty to clear):"), _apply)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         sid = str(event.row_key.value)

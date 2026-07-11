@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     closed_at    INTEGER,                     -- unix millis, NULL until terminal
     pcap_bytes   INTEGER NOT NULL DEFAULT 0,
     keylog_bytes INTEGER NOT NULL DEFAULT 0,
-    flow_count   INTEGER NOT NULL DEFAULT 0
+    flow_count   INTEGER NOT NULL DEFAULT 0,
+    session_group TEXT NOT NULL DEFAULT ''    -- free-text group label for organizing sessions
 );
 
 -- Annotation definitions (plan §12): canonical here so tags/groups are consistent

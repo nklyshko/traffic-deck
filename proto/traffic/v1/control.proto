@@ -14,6 +14,9 @@ service ControlService {
   // spilled blobs) as a self-contained .tar.gz, streamed in chunks.
   rpc ExportSession(ExportSessionRequest) returns (stream ExportChunk);
 
+  // Assign a session to a (free-text) group for organizing the session list; "" clears it.
+  rpc SetSessionGroup(SetSessionGroupRequest) returns (Empty);
+
   // --- Annotations. Bulk ops take repeated record_ids. ---
 
   // Tags (defs are global; assignments per-session).
@@ -67,6 +70,11 @@ message ExportSessionRequest {
 // One chunk of the streamed .tar.gz session bundle.
 message ExportChunk {
   bytes data = 1;
+}
+
+message SetSessionGroupRequest {
+  string session_id = 1;
+  string group = 2;  // "" clears the group
 }
 
 message ReDecodeRequest {

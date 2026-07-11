@@ -197,8 +197,10 @@ type Session struct {
 	PcapBytes       uint64                 `protobuf:"varint,7,opt,name=pcap_bytes,json=pcapBytes,proto3" json:"pcap_bytes,omitempty"`
 	KeylogBytes     uint64                 `protobuf:"varint,8,opt,name=keylog_bytes,json=keylogBytes,proto3" json:"keylog_bytes,omitempty"`
 	FlowCount       uint32                 `protobuf:"varint,9,opt,name=flow_count,json=flowCount,proto3" json:"flow_count,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Free-text group label to organize sessions (a folder-like grouping); "" = ungrouped.
+	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -292,6 +294,13 @@ func (x *Session) GetFlowCount() uint32 {
 		return x.FlowCount
 	}
 	return 0
+}
+
+func (x *Session) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
 }
 
 type Header struct {
@@ -1455,7 +1464,7 @@ var File_traffic_v1_common_proto protoreflect.FileDescriptor
 const file_traffic_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"\x17traffic/v1/common.proto\x12\n" +
-	"traffic.v1\"\xd4\x02\n" +
+	"traffic.v1\"\xea\x02\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x127\n" +
@@ -1468,7 +1477,9 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"pcap_bytes\x18\a \x01(\x04R\tpcapBytes\x12!\n" +
 	"\fkeylog_bytes\x18\b \x01(\x04R\vkeylogBytes\x12\x1d\n" +
 	"\n" +
-	"flow_count\x18\t \x01(\rR\tflowCount\"2\n" +
+	"flow_count\x18\t \x01(\rR\tflowCount\x12\x14\n" +
+	"\x05group\x18\n" +
+	" \x01(\tR\x05group\"2\n" +
 	"\x06Header\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"\xe3\x01\n" +

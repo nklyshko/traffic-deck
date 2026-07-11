@@ -130,6 +130,13 @@ func (c *Control) ClearMark(ctx context.Context, req *trafficv1.ClearMarkRequest
 	return empty, ctrlErr("clear mark", c.st.ClearMark(ctx, req.GetSessionId(), req.GetRecordIds()))
 }
 
+func (c *Control) SetSessionGroup(ctx context.Context, req *trafficv1.SetSessionGroupRequest) (*trafficv1.Empty, error) {
+	if req.GetSessionId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id required")
+	}
+	return empty, ctrlErr("set session group", c.st.SetSessionGroup(ctx, req.GetSessionId(), req.GetGroup()))
+}
+
 // --- groups ---
 
 func (c *Control) CreateGroup(ctx context.Context, req *trafficv1.CreateGroupRequest) (*trafficv1.Group, error) {

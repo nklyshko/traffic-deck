@@ -72,7 +72,25 @@ func Open(ctx context.Context, dataRoot string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := migrateCatalog(ctx, cat); err != nil {
+		cat.Close()
+		return nil, err
+	}
 	return &Store{dataRoot: dataRoot, catalog: cat, sessions: map[string]*sql.DB{}}, nil
+}
+
+// migrateCatalog applies additive column migrations to an existing catalog — CREATE TABLE
+// IF NOT EXISTS never alters a table, so columns added over time need ALTER. Each is
+// idempotent: a duplicate-column error means it's already present.
+func migrateCatalog(ctx context.Context, db *sql.DB) error {
+	for _, stmt := range []string{
+		`ALTER TABLE sessions ADD COLUMN session_group TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() {
@@ -382,8 +400,7 @@ func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]*traffic
 		limit = 100
 	}
 	rows, err := s.catalog.QueryContext(ctx, `
-		SELECT id, label, source_kind, status, created_at, closed_at,
-		       pcap_bytes, keylog_bytes, flow_count
+		SELECT `+sessionCols+`
 		FROM sessions ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
@@ -401,7 +418,7 @@ func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]*traffic
 	return out, rows.Err()
 }
 
-const sessionCols = `id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count`
+const sessionCols = `id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count, session_group`
 
 func scanSession(row scannable) (*trafficv1.Session, error) {
 	var (
@@ -410,9 +427,10 @@ func scanSession(row scannable) (*trafficv1.Session, error) {
 		closedAt                   sql.NullInt64
 		pcapBytes, keylogBytes     int64
 		flowCount                  int64
+		group                      sql.NullString
 	)
 	if err := row.Scan(&id, &label, &srcKind, &status, &createdAt, &closedAt,
-		&pcapBytes, &keylogBytes, &flowCount); err != nil {
+		&pcapBytes, &keylogBytes, &flowCount, &group); err != nil {
 		return nil, err
 	}
 	return &trafficv1.Session{
@@ -425,7 +443,15 @@ func scanSession(row scannable) (*trafficv1.Session, error) {
 		PcapBytes:       uint64(pcapBytes),
 		KeylogBytes:     uint64(keylogBytes),
 		FlowCount:       uint32(flowCount),
+		Group:           group.String,
 	}, nil
+}
+
+// SetSessionGroup sets (or clears, with "") a session's free-text group label.
+func (s *Store) SetSessionGroup(ctx context.Context, sessionID, group string) error {
+	_, err := s.catalog.ExecContext(ctx,
+		`UPDATE sessions SET session_group=? WHERE id=?`, group, sessionID)
+	return err
 }
 
 // GetSession returns a single session from the catalog.

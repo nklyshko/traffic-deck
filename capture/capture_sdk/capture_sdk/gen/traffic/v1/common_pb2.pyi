@@ -45,7 +45,7 @@ SESSION_STATUS_CLOSED: SessionStatus
 SESSION_STATUS_ERROR: SessionStatus
 
 class Session(_message.Message):
-    __slots__ = ("id", "label", "source_kind", "status", "created_at_unix_ms", "closed_at_unix_ms", "pcap_bytes", "keylog_bytes", "flow_count")
+    __slots__ = ("id", "label", "source_kind", "status", "created_at_unix_ms", "closed_at_unix_ms", "pcap_bytes", "keylog_bytes", "flow_count", "group")
     ID_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
     SOURCE_KIND_FIELD_NUMBER: _ClassVar[int]
@@ -55,6 +55,7 @@ class Session(_message.Message):
     PCAP_BYTES_FIELD_NUMBER: _ClassVar[int]
     KEYLOG_BYTES_FIELD_NUMBER: _ClassVar[int]
     FLOW_COUNT_FIELD_NUMBER: _ClassVar[int]
+    GROUP_FIELD_NUMBER: _ClassVar[int]
     id: str
     label: str
     source_kind: SourceKind
@@ -64,7 +65,8 @@ class Session(_message.Message):
     pcap_bytes: int
     keylog_bytes: int
     flow_count: int
-    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., source_kind: _Optional[_Union[SourceKind, str]] = ..., status: _Optional[_Union[SessionStatus, str]] = ..., created_at_unix_ms: _Optional[int] = ..., closed_at_unix_ms: _Optional[int] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., flow_count: _Optional[int] = ...) -> None: ...
+    group: str
+    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., source_kind: _Optional[_Union[SourceKind, str]] = ..., status: _Optional[_Union[SessionStatus, str]] = ..., created_at_unix_ms: _Optional[int] = ..., closed_at_unix_ms: _Optional[int] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., flow_count: _Optional[int] = ..., group: _Optional[str] = ...) -> None: ...
 
 class Header(_message.Message):
     __slots__ = ("name", "value")

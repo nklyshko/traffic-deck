@@ -38,6 +38,8 @@ message Session {
   uint64 pcap_bytes = 7;
   uint64 keylog_bytes = 8;
   uint32 flow_count = 9;
+  // Free-text group label to organize sessions (a folder-like grouping); "" = ungrouped.
+  string group = 10;
 }
 
 message Header {

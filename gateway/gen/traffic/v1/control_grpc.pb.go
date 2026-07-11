@@ -19,25 +19,26 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ControlService_StartCapture_FullMethodName   = "/traffic.v1.ControlService/StartCapture"
-	ControlService_StopCapture_FullMethodName    = "/traffic.v1.ControlService/StopCapture"
-	ControlService_ReDecode_FullMethodName       = "/traffic.v1.ControlService/ReDecode"
-	ControlService_ExportSession_FullMethodName  = "/traffic.v1.ControlService/ExportSession"
-	ControlService_CreateTag_FullMethodName      = "/traffic.v1.ControlService/CreateTag"
-	ControlService_DeleteTag_FullMethodName      = "/traffic.v1.ControlService/DeleteTag"
-	ControlService_ListTags_FullMethodName       = "/traffic.v1.ControlService/ListTags"
-	ControlService_SetTags_FullMethodName        = "/traffic.v1.ControlService/SetTags"
-	ControlService_ToggleFavorite_FullMethodName = "/traffic.v1.ControlService/ToggleFavorite"
-	ControlService_AddComment_FullMethodName     = "/traffic.v1.ControlService/AddComment"
-	ControlService_EditComment_FullMethodName    = "/traffic.v1.ControlService/EditComment"
-	ControlService_DeleteComment_FullMethodName  = "/traffic.v1.ControlService/DeleteComment"
-	ControlService_SetMark_FullMethodName        = "/traffic.v1.ControlService/SetMark"
-	ControlService_ClearMark_FullMethodName      = "/traffic.v1.ControlService/ClearMark"
-	ControlService_CreateGroup_FullMethodName    = "/traffic.v1.ControlService/CreateGroup"
-	ControlService_UpdateGroup_FullMethodName    = "/traffic.v1.ControlService/UpdateGroup"
-	ControlService_DeleteGroup_FullMethodName    = "/traffic.v1.ControlService/DeleteGroup"
-	ControlService_ListGroups_FullMethodName     = "/traffic.v1.ControlService/ListGroups"
-	ControlService_SetGroups_FullMethodName      = "/traffic.v1.ControlService/SetGroups"
+	ControlService_StartCapture_FullMethodName    = "/traffic.v1.ControlService/StartCapture"
+	ControlService_StopCapture_FullMethodName     = "/traffic.v1.ControlService/StopCapture"
+	ControlService_ReDecode_FullMethodName        = "/traffic.v1.ControlService/ReDecode"
+	ControlService_ExportSession_FullMethodName   = "/traffic.v1.ControlService/ExportSession"
+	ControlService_SetSessionGroup_FullMethodName = "/traffic.v1.ControlService/SetSessionGroup"
+	ControlService_CreateTag_FullMethodName       = "/traffic.v1.ControlService/CreateTag"
+	ControlService_DeleteTag_FullMethodName       = "/traffic.v1.ControlService/DeleteTag"
+	ControlService_ListTags_FullMethodName        = "/traffic.v1.ControlService/ListTags"
+	ControlService_SetTags_FullMethodName         = "/traffic.v1.ControlService/SetTags"
+	ControlService_ToggleFavorite_FullMethodName  = "/traffic.v1.ControlService/ToggleFavorite"
+	ControlService_AddComment_FullMethodName      = "/traffic.v1.ControlService/AddComment"
+	ControlService_EditComment_FullMethodName     = "/traffic.v1.ControlService/EditComment"
+	ControlService_DeleteComment_FullMethodName   = "/traffic.v1.ControlService/DeleteComment"
+	ControlService_SetMark_FullMethodName         = "/traffic.v1.ControlService/SetMark"
+	ControlService_ClearMark_FullMethodName       = "/traffic.v1.ControlService/ClearMark"
+	ControlService_CreateGroup_FullMethodName     = "/traffic.v1.ControlService/CreateGroup"
+	ControlService_UpdateGroup_FullMethodName     = "/traffic.v1.ControlService/UpdateGroup"
+	ControlService_DeleteGroup_FullMethodName     = "/traffic.v1.ControlService/DeleteGroup"
+	ControlService_ListGroups_FullMethodName      = "/traffic.v1.ControlService/ListGroups"
+	ControlService_SetGroups_FullMethodName       = "/traffic.v1.ControlService/SetGroups"
 )
 
 // ControlServiceClient is the client API for ControlService service.
@@ -52,6 +53,8 @@ type ControlServiceClient interface {
 	// Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
 	// spilled blobs) as a self-contained .tar.gz, streamed in chunks.
 	ExportSession(ctx context.Context, in *ExportSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error)
+	// Assign a session to a (free-text) group for organizing the session list; "" clears it.
+	SetSessionGroup(ctx context.Context, in *SetSessionGroupRequest, opts ...grpc.CallOption) (*Empty, error)
 	// Tags (defs are global; assignments per-session).
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Empty, error)
@@ -138,6 +141,16 @@ func (c *controlServiceClient) ExportSession(ctx context.Context, in *ExportSess
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ExportSessionClient = grpc.ServerStreamingClient[ExportChunk]
+
+func (c *controlServiceClient) SetSessionGroup(ctx context.Context, in *SetSessionGroupRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, ControlService_SetSessionGroup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *controlServiceClient) CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -301,6 +314,8 @@ type ControlServiceServer interface {
 	// Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
 	// spilled blobs) as a self-contained .tar.gz, streamed in chunks.
 	ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error
+	// Assign a session to a (free-text) group for organizing the session list; "" clears it.
+	SetSessionGroup(context.Context, *SetSessionGroupRequest) (*Empty, error)
 	// Tags (defs are global; assignments per-session).
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
 	DeleteTag(context.Context, *DeleteTagRequest) (*Empty, error)
@@ -341,6 +356,9 @@ func (UnimplementedControlServiceServer) ReDecode(*ReDecodeRequest, grpc.ServerS
 }
 func (UnimplementedControlServiceServer) ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error {
 	return status.Error(codes.Unimplemented, "method ExportSession not implemented")
+}
+func (UnimplementedControlServiceServer) SetSessionGroup(context.Context, *SetSessionGroupRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSessionGroup not implemented")
 }
 func (UnimplementedControlServiceServer) CreateTag(context.Context, *CreateTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTag not implemented")
@@ -465,6 +483,24 @@ func _ControlService_ExportSession_Handler(srv interface{}, stream grpc.ServerSt
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ExportSessionServer = grpc.ServerStreamingServer[ExportChunk]
+
+func _ControlService_SetSessionGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSessionGroupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).SetSessionGroup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_SetSessionGroup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).SetSessionGroup(ctx, req.(*SetSessionGroupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _ControlService_CreateTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateTagRequest)
@@ -750,6 +786,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopCapture",
 			Handler:    _ControlService_StopCapture_Handler,
+		},
+		{
+			MethodName: "SetSessionGroup",
+			Handler:    _ControlService_SetSessionGroup_Handler,
 		},
 		{
 			MethodName: "CreateTag",
