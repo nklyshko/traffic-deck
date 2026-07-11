@@ -75,12 +75,26 @@ class Header(_message.Message):
     def __init__(self, name: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
 
 class Cookie(_message.Message):
-    __slots__ = ("name", "value")
+    __slots__ = ("name", "value", "domain", "path", "expires", "max_age", "secure", "http_only", "same_site")
     NAME_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
+    DOMAIN_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    EXPIRES_FIELD_NUMBER: _ClassVar[int]
+    MAX_AGE_FIELD_NUMBER: _ClassVar[int]
+    SECURE_FIELD_NUMBER: _ClassVar[int]
+    HTTP_ONLY_FIELD_NUMBER: _ClassVar[int]
+    SAME_SITE_FIELD_NUMBER: _ClassVar[int]
     name: str
     value: str
-    def __init__(self, name: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    domain: str
+    path: str
+    expires: str
+    max_age: int
+    secure: bool
+    http_only: bool
+    same_site: str
+    def __init__(self, name: _Optional[str] = ..., value: _Optional[str] = ..., domain: _Optional[str] = ..., path: _Optional[str] = ..., expires: _Optional[str] = ..., max_age: _Optional[int] = ..., secure: bool = ..., http_only: bool = ..., same_site: _Optional[str] = ...) -> None: ...
 
 class Body(_message.Message):
     __slots__ = ("size", "content_type", "inline", "object_ref")
@@ -95,7 +109,7 @@ class Body(_message.Message):
     def __init__(self, size: _Optional[int] = ..., content_type: _Optional[str] = ..., inline: _Optional[bytes] = ..., object_ref: _Optional[str] = ...) -> None: ...
 
 class Flow(_message.Message):
-    __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream", "h2_stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "ws_message_count", "proxy", "metadata", "error", "duration_micros", "http2_fingerprint", "ja3", "ja4", "tls_client_hello")
+    __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream", "h2_stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "ws_message_count", "proxy", "metadata", "error", "duration_micros", "http2_fingerprint", "ja3", "ja4", "tls_client_hello", "response_cookies")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -143,6 +157,7 @@ class Flow(_message.Message):
     JA3_FIELD_NUMBER: _ClassVar[int]
     JA4_FIELD_NUMBER: _ClassVar[int]
     TLS_CLIENT_HELLO_FIELD_NUMBER: _ClassVar[int]
+    RESPONSE_COOKIES_FIELD_NUMBER: _ClassVar[int]
     id: str
     session_id: str
     analysis_id: str
@@ -183,7 +198,8 @@ class Flow(_message.Message):
     ja3: str
     ja4: str
     tls_client_hello: str
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: bool = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: bool = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ..., duration_micros: _Optional[int] = ..., http2_fingerprint: _Optional[str] = ..., ja3: _Optional[str] = ..., ja4: _Optional[str] = ..., tls_client_hello: _Optional[str] = ...) -> None: ...
+    response_cookies: _containers.RepeatedCompositeFieldContainer[Cookie]
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: bool = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: bool = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ..., duration_micros: _Optional[int] = ..., http2_fingerprint: _Optional[str] = ..., ja3: _Optional[str] = ..., ja4: _Optional[str] = ..., tls_client_hello: _Optional[str] = ..., response_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ...) -> None: ...
 
 class Proxy(_message.Message):
     __slots__ = ("addr", "type", "username", "password")

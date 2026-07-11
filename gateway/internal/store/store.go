@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -580,7 +581,46 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 	if err := s.attachMetadata(ctx, db, single); err != nil {
 		return nil, err
 	}
+	attachCookies(f)
 	return f, nil
+}
+
+// attachCookies derives the request/response cookies from the flow's headers: bare
+// name=value from the Cookie request header, and full Set-Cookie attributes (domain,
+// path, expiry, secure, httpOnly, sameSite) for responses. Header names are lower-case
+// on the HTTP/2/3 paths, so canonicalize via http.Header before parsing.
+func attachCookies(f *trafficv1.Flow) {
+	reqHdr := http.Header{}
+	for _, h := range f.RequestHeaders {
+		reqHdr.Add(h.Name, h.Value)
+	}
+	for _, c := range (&http.Request{Header: reqHdr}).Cookies() {
+		f.RequestCookies = append(f.RequestCookies, &trafficv1.Cookie{Name: c.Name, Value: c.Value})
+	}
+	respHdr := http.Header{}
+	for _, h := range f.ResponseHeaders {
+		respHdr.Add(h.Name, h.Value)
+	}
+	for _, c := range (&http.Response{Header: respHdr}).Cookies() {
+		f.ResponseCookies = append(f.ResponseCookies, cookieToProto(c))
+	}
+}
+
+func cookieToProto(c *http.Cookie) *trafficv1.Cookie {
+	ss := ""
+	switch c.SameSite {
+	case http.SameSiteLaxMode:
+		ss = "Lax"
+	case http.SameSiteStrictMode:
+		ss = "Strict"
+	case http.SameSiteNoneMode:
+		ss = "None"
+	}
+	return &trafficv1.Cookie{
+		Name: c.Name, Value: c.Value, Domain: c.Domain, Path: c.Path,
+		Expires: c.RawExpires, MaxAge: int64(c.MaxAge),
+		Secure: c.Secure, HttpOnly: c.HttpOnly, SameSite: ss,
+	}
 }
 
 // loadBody returns body metadata for GetFlow: small bodies inline, large bodies

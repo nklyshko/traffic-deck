@@ -48,6 +48,15 @@ message Header {
 message Cookie {
   string name = 1;
   string value = 2;
+  // Set-Cookie attributes (populated for response cookies; empty/false for request
+  // cookies, which are bare name=value).
+  string domain = 3;
+  string path = 4;
+  string expires = 5;    // raw Expires value, if any
+  int64 max_age = 6;     // Max-Age seconds; 0 when absent
+  bool secure = 7;
+  bool http_only = 8;
+  string same_site = 9;  // "Strict" | "Lax" | "None" | ""
 }
 
 // A request or response body. Small bodies are inlined; large bodies carry only
@@ -137,6 +146,10 @@ message Flow {
   string ja3 = 38;
   string ja4 = 39;
   string tls_client_hello = 40;
+
+  // Response cookies parsed from Set-Cookie, with full attributes (request_cookies above
+  // are the bare name=value pairs from the Cookie request header). Derived from headers.
+  repeated Cookie response_cookies = 41;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

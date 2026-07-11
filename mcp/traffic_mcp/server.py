@@ -108,6 +108,26 @@ def _headers(hs) -> list[dict]:
     return [{"name": h.name, "value": h.value} for h in hs]
 
 
+def _set_cookie(c) -> dict:
+    """A response cookie with its Set-Cookie attributes (only the ones present)."""
+    d = {"name": c.name, "value": c.value}
+    if c.domain:
+        d["domain"] = c.domain
+    if c.path:
+        d["path"] = c.path
+    if c.expires:
+        d["expires"] = c.expires
+    if c.max_age:
+        d["max_age"] = c.max_age
+    if c.secure:
+        d["secure"] = True
+    if c.http_only:
+        d["http_only"] = True
+    if c.same_site:
+        d["same_site"] = c.same_site
+    return d
+
+
 def _short_type(ct: str) -> str:
     """Compact content-type for timeline rows: 'application/json; charset=…' → 'json'."""
     if not ct:
@@ -424,6 +444,7 @@ async def export_request(session_id: str, flow_id: str) -> dict:
             "status": f.status or None,
             "protocol": f.protocol,
             "headers": _headers(f.response_headers),
+            "cookies": [_set_cookie(c) for c in f.response_cookies],
             "body": _body_ref(f.response_body),
         },
     }

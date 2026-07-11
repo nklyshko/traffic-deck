@@ -221,6 +221,26 @@ def format_http2_fingerprint(fp: str) -> list[str]:
     return lines
 
 
+def format_cookie_attrs(c) -> str:
+    """Compact Set-Cookie attribute string (only the attributes present)."""
+    parts = []
+    if c.domain:
+        parts.append(f"Domain={c.domain}")
+    if c.path:
+        parts.append(f"Path={c.path}")
+    if c.expires:
+        parts.append(f"Expires={c.expires}")
+    if c.max_age:
+        parts.append(f"Max-Age={c.max_age}")
+    if c.secure:
+        parts.append("Secure")
+    if c.http_only:
+        parts.append("HttpOnly")
+    if c.same_site:
+        parts.append(f"SameSite={c.same_site}")
+    return "; ".join(parts)
+
+
 def fmt_duration(seconds: float) -> str:
     """Compact human duration: 42ms, 1.3s, 2m05s."""
     if seconds < 0:

@@ -169,3 +169,45 @@ func TestLargeBodySpill(t *testing.T) {
 		t.Fatalf("GetBodyBytes returned %d bytes", len(got))
 	}
 }
+
+// TestGetFlowParsesCookies checks GetFlow derives request cookies (name=value) and
+// response cookies with full Set-Cookie attributes from the stored headers.
+func TestGetFlowParsesCookies(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sid, aid := uuid.NewString(), uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
+		t.Fatal(err)
+	}
+	f := &decode.Flow{
+		ID:     uuid.NewString(),
+		Method: "GET", Authority: "example.com", Path: "/", Protocol: "HTTP/2", Status: 200,
+		RequestHeaders: []decode.Header{{Name: "cookie", Value: "sid=abc; theme=dark"}},
+		ResponseHeaders: []decode.Header{
+			{Name: "set-cookie", Value: "sid=xyz; Domain=example.com; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"},
+		},
+	}
+	if _, err := st.InsertFlows(ctx, sid, aid, []*decode.Flow{f}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.GetFlow(ctx, sid, f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.GetRequestCookies()) != 2 || got.GetRequestCookies()[0].GetName() != "sid" || got.GetRequestCookies()[0].GetValue() != "abc" {
+		t.Errorf("request cookies = %+v", got.GetRequestCookies())
+	}
+	rc := got.GetResponseCookies()
+	if len(rc) != 1 {
+		t.Fatalf("response cookies = %+v, want 1", rc)
+	}
+	c := rc[0]
+	if c.GetName() != "sid" || c.GetValue() != "xyz" || c.GetDomain() != "example.com" || c.GetPath() != "/" ||
+		!c.GetSecure() || !c.GetHttpOnly() || c.GetSameSite() != "Lax" || c.GetMaxAge() != 3600 {
+		t.Errorf("response cookie = %+v", c)
+	}
+}

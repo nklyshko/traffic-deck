@@ -35,6 +35,7 @@ from .render import (
     flags_cell,
     fmt_time,
     format_body,
+    format_cookie_attrs,
     format_http2_fingerprint,
     is_text,
     raw_message,
@@ -921,6 +922,15 @@ class FlowDetailScreen(Screen):
         for h in f.response_headers:
             lines.append(Content.from_markup("  [green]$n[/green]: $val", n=h.name, val=h.value))
         cls._append_body(lines, "Response body", f.response_body, "s", "B")
+        if f.request_cookies or f.response_cookies:
+            lines.append(Content(""))
+            lines.append(Content.from_markup("[b u]Cookies[/b u]"))
+            for c in f.request_cookies:
+                lines.append(Content.from_markup("  [dim]→[/dim] [cyan]$n[/cyan]=$v", n=c.name, v=c.value))
+            for c in f.response_cookies:
+                lines.append(Content.from_markup(
+                    "  [dim]←[/dim] [green]$n[/green]=$v  [dim]$a[/dim]",
+                    n=c.name, v=c.value, a=format_cookie_attrs(c)))
         return Content("\n").join(lines)
 
     def _append_annotations(self, lines: list[Content], f) -> None:

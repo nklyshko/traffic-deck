@@ -347,9 +347,18 @@ func (x *Header) GetValue() string {
 }
 
 type Cookie struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Value string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	// Set-Cookie attributes (populated for response cookies; empty/false for request
+	// cookies, which are bare name=value).
+	Domain        string `protobuf:"bytes,3,opt,name=domain,proto3" json:"domain,omitempty"`
+	Path          string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	Expires       string `protobuf:"bytes,5,opt,name=expires,proto3" json:"expires,omitempty"`              // raw Expires value, if any
+	MaxAge        int64  `protobuf:"varint,6,opt,name=max_age,json=maxAge,proto3" json:"max_age,omitempty"` // Max-Age seconds; 0 when absent
+	Secure        bool   `protobuf:"varint,7,opt,name=secure,proto3" json:"secure,omitempty"`
+	HttpOnly      bool   `protobuf:"varint,8,opt,name=http_only,json=httpOnly,proto3" json:"http_only,omitempty"`
+	SameSite      string `protobuf:"bytes,9,opt,name=same_site,json=sameSite,proto3" json:"same_site,omitempty"` // "Strict" | "Lax" | "None" | ""
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -394,6 +403,55 @@ func (x *Cookie) GetName() string {
 func (x *Cookie) GetValue() string {
 	if x != nil {
 		return x.Value
+	}
+	return ""
+}
+
+func (x *Cookie) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *Cookie) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *Cookie) GetExpires() string {
+	if x != nil {
+		return x.Expires
+	}
+	return ""
+}
+
+func (x *Cookie) GetMaxAge() int64 {
+	if x != nil {
+		return x.MaxAge
+	}
+	return 0
+}
+
+func (x *Cookie) GetSecure() bool {
+	if x != nil {
+		return x.Secure
+	}
+	return false
+}
+
+func (x *Cookie) GetHttpOnly() bool {
+	if x != nil {
+		return x.HttpOnly
+	}
+	return false
+}
+
+func (x *Cookie) GetSameSite() string {
+	if x != nil {
+		return x.SameSite
 	}
 	return ""
 }
@@ -567,8 +625,11 @@ type Flow struct {
 	Ja3            string `protobuf:"bytes,38,opt,name=ja3,proto3" json:"ja3,omitempty"`
 	Ja4            string `protobuf:"bytes,39,opt,name=ja4,proto3" json:"ja4,omitempty"`
 	TlsClientHello string `protobuf:"bytes,40,opt,name=tls_client_hello,json=tlsClientHello,proto3" json:"tls_client_hello,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Response cookies parsed from Set-Cookie, with full attributes (request_cookies above
+	// are the bare name=value pairs from the Cookie request header). Derived from headers.
+	ResponseCookies []*Cookie `protobuf:"bytes,41,rep,name=response_cookies,json=responseCookies,proto3" json:"response_cookies,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -879,6 +940,13 @@ func (x *Flow) GetTlsClientHello() string {
 		return x.TlsClientHello
 	}
 	return ""
+}
+
+func (x *Flow) GetResponseCookies() []*Cookie {
+	if x != nil {
+		return x.ResponseCookies
+	}
+	return nil
 }
 
 // A proxy a connection was observed to go through, detected from the captured
@@ -1383,17 +1451,24 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"flow_count\x18\t \x01(\rR\tflowCount\"2\n" +
 	"\x06Header\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"2\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\xe3\x01\n" +
 	"\x06Cookie\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\x83\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\x12\x16\n" +
+	"\x06domain\x18\x03 \x01(\tR\x06domain\x12\x12\n" +
+	"\x04path\x18\x04 \x01(\tR\x04path\x12\x18\n" +
+	"\aexpires\x18\x05 \x01(\tR\aexpires\x12\x17\n" +
+	"\amax_age\x18\x06 \x01(\x03R\x06maxAge\x12\x16\n" +
+	"\x06secure\x18\a \x01(\bR\x06secure\x12\x1b\n" +
+	"\thttp_only\x18\b \x01(\bR\bhttpOnly\x12\x1b\n" +
+	"\tsame_site\x18\t \x01(\tR\bsameSite\"\x83\x01\n" +
 	"\x04Body\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x04R\x04size\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x18\n" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\xb9\v\n" +
+	"\acontent\"\xf8\v\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1441,7 +1516,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x11http2_fingerprint\x18% \x01(\tR\x10http2Fingerprint\x12\x10\n" +
 	"\x03ja3\x18& \x01(\tR\x03ja3\x12\x10\n" +
 	"\x03ja4\x18' \x01(\tR\x03ja4\x12(\n" +
-	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x1a;\n" +
+	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x12=\n" +
+	"\x10response_cookies\x18) \x03(\v2\x12.traffic.v1.CookieR\x0fresponseCookies\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +
@@ -1551,13 +1627,14 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	11, // 7: traffic.v1.Flow.comments:type_name -> traffic.v1.Comment
 	8,  // 8: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
 	14, // 9: traffic.v1.Flow.metadata:type_name -> traffic.v1.Flow.MetadataEntry
-	6,  // 10: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
-	6,  // 11: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
-	12, // [12:12] is the sub-list for method output_type
-	12, // [12:12] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	5,  // 10: traffic.v1.Flow.response_cookies:type_name -> traffic.v1.Cookie
+	6,  // 11: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
+	6,  // 12: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }
