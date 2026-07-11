@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS flows (
     h2_fingerprint TEXT NOT NULL DEFAULT '',  -- HTTP/2 client fingerprint (Akamai format), "" if n/a
     ja3 TEXT NOT NULL DEFAULT '',              -- TLS JA3 (MD5)
     ja4 TEXT NOT NULL DEFAULT '',              -- TLS JA4
-    tls_client_hello TEXT NOT NULL DEFAULT ''  -- readable ClientHello (JA3 text + ALPN), for export
+    tls_client_hello TEXT NOT NULL DEFAULT '', -- readable ClientHello (JA3 text + ALPN), for export
+    redirect_location TEXT NOT NULL DEFAULT '' -- absolute Location URL for a 3xx, "" otherwise
 );
 
 CREATE TABLE IF NOT EXISTS flow_headers (

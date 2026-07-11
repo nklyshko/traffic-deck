@@ -287,6 +287,8 @@ def flags_cell(f, selected: bool) -> Text:
         t.append(f"⇅{f.ws_message_count} ", style="bold magenta")
     if f.proxy.addr:
         t.append("⇄ ", style="yellow")  # went through a proxy
+    if getattr(f, "redirect_location", "") or getattr(f, "redirected_from_id", ""):
+        t.append("↪ ", style="blue")  # part of a redirect chain
     return t
 
 

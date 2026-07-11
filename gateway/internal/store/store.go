@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ var requiredFlowColumns = []string{
 	"user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream",
 	"h2_stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
 	"proxy_user", "proxy_pass", "error", "duration_micros", "h2_fingerprint",
-	"ja3", "ja4", "tls_client_hello",
+	"ja3", "ja4", "tls_client_hello", "redirect_location",
 }
 
 // dsnPragmas are applied to every pooled connection (unlike `PRAGMA` run via Exec, which
@@ -273,8 +274,8 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
 			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref,
 			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
-			    ja3, ja4, tls_client_hello)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			    ja3, ja4, tls_client_hello, redirect_location)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
@@ -282,7 +283,7 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 			nullIfEmpty(reqRef), nullIfEmpty(respRef),
 			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass),
 			f.Error, int64(f.DurationMicros), f.Http2Fingerprint,
-			f.JA3, f.JA4, f.TLSClientHello); err != nil {
+			f.JA3, f.JA4, f.TLSClientHello, resolveRedirect(f)); err != nil {
 			return 0, err
 		}
 		if err := insertHeaders(ctx, tx, id, 0, f.RequestHeaders); err != nil {
@@ -448,7 +449,7 @@ const flowCols = `id, session_id, analysis_id, frame_number, ts_micros, method, 
 	authority, path, query, protocol, status, src_addr, dst_addr,
 	user_agent, content_type, request_bytes, tls_decrypted, tcp_stream, h2_stream_id,
 	proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
-	ja3, ja4, tls_client_hello`
+	ja3, ja4, tls_client_hello, redirect_location`
 
 // ListFlows returns flow summaries (no headers/bodies) for backfill.
 func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.Flow, error) {
@@ -485,7 +486,67 @@ func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.F
 	if err := s.attachMetadata(ctx, db, byID); err != nil {
 		return nil, err
 	}
+	linkRedirects(out)
 	return out, nil
+}
+
+// linkRedirects sets redirected_from_id on each flow whose request URL is the target of an
+// earlier flow's redirect_location — so a redirect chain can be traced across the session.
+func linkRedirects(flows []*trafficv1.Flow) {
+	source := map[string]string{} // absolute redirect target URL -> the redirecting flow id
+	for _, f := range flows {
+		if loc := f.GetRedirectLocation(); loc != "" {
+			if _, ok := source[loc]; !ok { // first redirect to this URL wins
+				source[loc] = f.GetId()
+			}
+		}
+	}
+	for _, f := range flows {
+		if src, ok := source[flowURL(f)]; ok && src != f.GetId() {
+			f.RedirectedFromId = src
+		}
+	}
+}
+
+// flowURL is a flow's absolute request URL (scheme://authority/path?query).
+func flowURL(f *trafficv1.Flow) string {
+	scheme := f.GetScheme()
+	if scheme == "" {
+		scheme = "https"
+	}
+	u := scheme + "://" + f.GetAuthority() + f.GetPath()
+	if f.GetQuery() != "" {
+		u += "?" + f.GetQuery()
+	}
+	return u
+}
+
+// resolveRedirect returns the absolute Location URL a 3xx response redirects to, resolved
+// against the request URL; "" for non-redirects or when there's no Location.
+func resolveRedirect(f *decode.Flow) string {
+	if f.Status < 300 || f.Status >= 400 {
+		return ""
+	}
+	var loc string
+	for _, h := range f.ResponseHeaders {
+		if strings.EqualFold(h.Name, "location") {
+			loc = h.Value
+			break
+		}
+	}
+	if loc == "" {
+		return ""
+	}
+	scheme := f.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	base := &url.URL{Scheme: scheme, Host: f.Authority, Path: f.Path}
+	ref, err := url.Parse(loc)
+	if err != nil {
+		return loc
+	}
+	return base.ResolveReference(ref).String()
 }
 
 // attachMetadata fills each flow's Metadata map from the flow_metadata side table.
@@ -582,6 +643,13 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		return nil, err
 	}
 	attachCookies(f)
+	// Link the redirect chain: which flow (if any) redirected to this one.
+	var srcID string
+	if err := db.QueryRowContext(ctx,
+		`SELECT id FROM flows WHERE redirect_location=? AND id!=? LIMIT 1`, flowURL(f), f.Id).
+		Scan(&srcID); err == nil {
+		f.RedirectedFromId = srcID
+	}
 	return f, nil
 }
 
@@ -697,14 +765,14 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		method, scheme, authority, path, query, protocol           sql.NullString
 		srcAddr, dstAddr, userAgent, contentType, tcpStream, h2sid sql.NullString
 		proxyAddr, proxyType, proxyUser, proxyPass, flowError      sql.NullString
-		h2Fingerprint, ja3, ja4, tlsClientHello                    sql.NullString
+		h2Fingerprint, ja3, ja4, tlsClientHello, redirectLocation  sql.NullString
 		tlsDecrypted                                               int64
 	)
 	if err := row.Scan(&id, &sessionID, &analysisID, &frameNumber, &tsMicros, &method, &scheme,
 		&authority, &path, &query, &protocol, &status, &srcAddr, &dstAddr,
 		&userAgent, &contentType, &requestBytes, &tlsDecrypted, &tcpStream, &h2sid,
 		&proxyAddr, &proxyType, &proxyUser, &proxyPass, &flowError, &durationMicros, &h2Fingerprint,
-		&ja3, &ja4, &tlsClientHello); err != nil {
+		&ja3, &ja4, &tlsClientHello, &redirectLocation); err != nil {
 		return nil, err
 	}
 	f := &trafficv1.Flow{
@@ -734,6 +802,7 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		Ja3:              ja3.String,
 		Ja4:              ja4.String,
 		TlsClientHello:   tlsClientHello.String,
+		RedirectLocation: redirectLocation.String,
 	}
 	if proxyAddr.String != "" {
 		f.Proxy = &trafficv1.Proxy{

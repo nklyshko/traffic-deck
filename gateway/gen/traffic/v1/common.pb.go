@@ -628,8 +628,14 @@ type Flow struct {
 	// Response cookies parsed from Set-Cookie, with full attributes (request_cookies above
 	// are the bare name=value pairs from the Cookie request header). Derived from headers.
 	ResponseCookies []*Cookie `protobuf:"bytes,41,rep,name=response_cookies,json=responseCookies,proto3" json:"response_cookies,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Redirect chain linking. redirect_location is the absolute Location URL this flow
+	// redirects to (set for a 3xx response with a Location header, resolved against the
+	// request URL). redirected_from_id is the id of the flow that redirected *to* this one
+	// (its redirect_location matched this flow's request URL); computed across the session.
+	RedirectLocation string `protobuf:"bytes,42,opt,name=redirect_location,json=redirectLocation,proto3" json:"redirect_location,omitempty"`
+	RedirectedFromId string `protobuf:"bytes,43,opt,name=redirected_from_id,json=redirectedFromId,proto3" json:"redirected_from_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -947,6 +953,20 @@ func (x *Flow) GetResponseCookies() []*Cookie {
 		return x.ResponseCookies
 	}
 	return nil
+}
+
+func (x *Flow) GetRedirectLocation() string {
+	if x != nil {
+		return x.RedirectLocation
+	}
+	return ""
+}
+
+func (x *Flow) GetRedirectedFromId() string {
+	if x != nil {
+		return x.RedirectedFromId
+	}
+	return ""
 }
 
 // A proxy a connection was observed to go through, detected from the captured
@@ -1468,7 +1488,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\xf8\v\n" +
+	"\acontent\"\xd3\f\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1517,7 +1537,9 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x03ja3\x18& \x01(\tR\x03ja3\x12\x10\n" +
 	"\x03ja4\x18' \x01(\tR\x03ja4\x12(\n" +
 	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x12=\n" +
-	"\x10response_cookies\x18) \x03(\v2\x12.traffic.v1.CookieR\x0fresponseCookies\x1a;\n" +
+	"\x10response_cookies\x18) \x03(\v2\x12.traffic.v1.CookieR\x0fresponseCookies\x12+\n" +
+	"\x11redirect_location\x18* \x01(\tR\x10redirectLocation\x12,\n" +
+	"\x12redirected_from_id\x18+ \x01(\tR\x10redirectedFromId\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +

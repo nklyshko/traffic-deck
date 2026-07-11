@@ -893,6 +893,11 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup("[yellow]⏳ no response captured[/yellow]"))
         elif f.status >= 400:
             lines.append(Content.from_markup("[b red]⚠ HTTP $s[/b red]", s=str(f.status)))
+        if f.redirect_location:
+            lines.append(Content.from_markup("[blue]↪ redirects to:[/blue] $v", v=f.redirect_location))
+        if f.redirected_from_id:
+            lines.append(Content.from_markup("[blue]↩ redirected from flow[/blue] $v",
+                                             v=f.redirected_from_id[:8]))
         for k, v in f.metadata.items():
             lines.append(Content.from_markup(
                 "[magenta]◆ $k:[/magenta] $v", k=k, v=v))

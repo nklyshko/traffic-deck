@@ -22,7 +22,7 @@ def flow(**kw):
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
         websocket=False, ws_message_count=0, proxy=proxy(), metadata={}, error="",
         ts_unix_micros=0, duration_micros=0, http2_fingerprint="",
-        ja3="", ja4="", tls_client_hello="",
+        ja3="", ja4="", tls_client_hello="", redirect_location="", redirected_from_id="",
     )
     d.update(kw)
     return types.SimpleNamespace(**d)

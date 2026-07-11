@@ -211,3 +211,52 @@ func TestGetFlowParsesCookies(t *testing.T) {
 		t.Errorf("response cookie = %+v", c)
 	}
 }
+
+// TestRedirectChainLinking checks a 3xx flow's resolved Location is stored and the flow it
+// redirects to is linked back via redirected_from_id.
+func TestRedirectChainLinking(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sid, aid := uuid.NewString(), uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
+		t.Fatal(err)
+	}
+	src := &decode.Flow{
+		ID: uuid.NewString(), TSUnixMicros: 1, Scheme: "https", Authority: "example.com", Path: "/old",
+		Method: "GET", Protocol: "HTTP/2", Status: 302,
+		ResponseHeaders: []decode.Header{{Name: "location", Value: "/new"}}, // relative → resolved
+	}
+	dst := &decode.Flow{
+		ID: uuid.NewString(), TSUnixMicros: 2, Scheme: "https", Authority: "example.com", Path: "/new",
+		Method: "GET", Protocol: "HTTP/2", Status: 200,
+	}
+	if _, err := st.InsertFlows(ctx, sid, aid, []*decode.Flow{src, dst}); err != nil {
+		t.Fatal(err)
+	}
+
+	flows, err := st.ListFlows(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]*trafficv1.Flow{}
+	for _, f := range flows {
+		byID[f.GetId()] = f
+	}
+	if got := byID[src.ID].GetRedirectLocation(); got != "https://example.com/new" {
+		t.Errorf("redirect_location = %q", got)
+	}
+	if got := byID[dst.ID].GetRedirectedFromId(); got != src.ID {
+		t.Errorf("redirected_from_id = %q, want %q", got, src.ID)
+	}
+	// GetFlow links the single flow too.
+	one, err := st.GetFlow(ctx, sid, dst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.GetRedirectedFromId() != src.ID {
+		t.Errorf("GetFlow redirected_from_id = %q, want %q", one.GetRedirectedFromId(), src.ID)
+	}
+}

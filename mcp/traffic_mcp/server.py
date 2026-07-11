@@ -101,6 +101,8 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "ja3": f.ja3 or None,
         "ja4": f.ja4 or None,
         "tls_client_hello": f.tls_client_hello or None,
+        "redirect_location": f.redirect_location or None,
+        "redirected_from_id": f.redirected_from_id or None,
     }
 
 

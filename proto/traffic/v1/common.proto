@@ -150,6 +150,13 @@ message Flow {
   // Response cookies parsed from Set-Cookie, with full attributes (request_cookies above
   // are the bare name=value pairs from the Cookie request header). Derived from headers.
   repeated Cookie response_cookies = 41;
+
+  // Redirect chain linking. redirect_location is the absolute Location URL this flow
+  // redirects to (set for a 3xx response with a Location header, resolved against the
+  // request URL). redirected_from_id is the id of the flow that redirected *to* this one
+  // (its redirect_location matched this flow's request URL); computed across the session.
+  string redirect_location = 42;
+  string redirected_from_id = 43;
 }
 
 // A proxy a connection was observed to go through, detected from the captured
