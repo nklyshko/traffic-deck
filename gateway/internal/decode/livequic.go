@@ -276,7 +276,7 @@ func (s *quicSession) newFlow(streamID uint64) *Flow {
 	if host == "" {
 		host = s.serverHost
 	}
-	return &Flow{
+	f := &Flow{
 		ID:           uuid.NewString(),
 		TSUnixMicros: time.Now().UnixMicro(),
 		Protocol:     "HTTP/3",
@@ -287,6 +287,15 @@ func (s *quicSession) newFlow(streamID uint64) *Flow {
 		TLSDecrypted: true,
 		H2StreamID:   strconv.FormatUint(streamID, 10),
 	}
+	if ch := s.conn.ClientHello; ch != nil {
+		f.JA3, f.JA4 = ch.JA3, ch.JA4
+		text := ch.JA3Text
+		if len(ch.ALPN) > 0 {
+			text += " alpn=" + strings.Join(ch.ALPN, ",")
+		}
+		f.TLSClientHello = text
+	}
+	return f
 }
 
 // uvarint decodes a QUIC variable-length integer; n is 0 if truncated.

@@ -28,6 +28,7 @@ type ClientHelloInfo struct {
 	JA3           string   // md5 hex
 	JA3Text       string   // the pre-hash JA3 string (exportable ClientHello)
 	JA4           string
+	transport     byte // JA4 transport marker: 't' (TLS/TCP) or 'q' (QUIC)
 }
 
 // isGREASE reports whether v is a GREASE value (RFC 8701): both bytes equal and of form 0x?A.
@@ -35,14 +36,20 @@ func isGREASE(v uint16) bool {
 	return v&0xff == v>>8 && v&0x0f == 0x0a
 }
 
-// parseClientHelloInfo parses a ClientHello handshake body (starting at legacy_version) and
-// computes the fingerprints. Returns nil on a malformed structure.
-func parseClientHelloInfo(b []byte) *ClientHelloInfo {
+// parseClientHelloInfo parses a TLS-over-TCP ClientHello body (starting at legacy_version)
+// and computes JA3/JA4. Returns nil on a malformed structure.
+func parseClientHelloInfo(b []byte) *ClientHelloInfo { return parseCH(b, 't') }
+
+// ParseClientHelloInfoQUIC is parseClientHelloInfo for a ClientHello carried in a QUIC
+// Initial — same parsing, but JA4 marks the transport as QUIC ('q').
+func ParseClientHelloInfoQUIC(b []byte) *ClientHelloInfo { return parseCH(b, 'q') }
+
+func parseCH(b []byte, transport byte) *ClientHelloInfo {
 	// legacy_version(2) random(32) session_id<1> cipher_suites<2> compression<1> extensions<2>
 	if len(b) < 2+32+1 {
 		return nil
 	}
-	ci := &ClientHelloInfo{LegacyVersion: be16(b, 0)}
+	ci := &ClientHelloInfo{LegacyVersion: be16(b, 0), transport: transport}
 	ci.Version = ci.LegacyVersion
 	p := 2 + 32
 	sidLen := int(b[p])
@@ -135,7 +142,11 @@ func (ci *ClientHelloInfo) ja4() string {
 		a := ci.ALPN[0]
 		alpn = string(a[0]) + string(a[len(a)-1])
 	}
-	ja4a := "t" + ja4Version(ci.Version) + sniChar +
+	transport := ci.transport
+	if transport == 0 {
+		transport = 't'
+	}
+	ja4a := string(transport) + ja4Version(ci.Version) + sniChar +
 		twoDigit(len(ciphers)) + twoDigit(len(exts)) + alpn
 
 	ja4b := sha12(hexCSVSorted(ciphers))

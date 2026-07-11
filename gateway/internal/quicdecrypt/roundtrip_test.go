@@ -172,6 +172,13 @@ func TestConnRoundTrip(t *testing.T) {
 	if c.SNI != "example.com" {
 		t.Fatalf("SNI = %q after client Initial", c.SNI)
 	}
+	// The QUIC ClientHello parses into a JA3/JA4 fingerprint, marked as QUIC transport.
+	if c.ClientHello == nil {
+		t.Fatal("ClientHello fingerprint not parsed from QUIC Initial")
+	}
+	if len(c.ClientHello.JA4) == 0 || c.ClientHello.JA4[0] != 'q' {
+		t.Errorf("QUIC JA4 = %q, want a 'q…' fingerprint", c.ClientHello.JA4)
+	}
 	// 2) server Initial with the ServerHello → Conn learns the cipher suite + serverSCID.
 	si := buildInitial(svInit, clientSCID, serverSCID, 0, cryptoFrameBytes(serverHelloMsg(0x1301)))
 	c.Feed(false, si)

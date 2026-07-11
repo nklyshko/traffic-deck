@@ -35,6 +35,9 @@ type Conn struct {
 
 	// SNI is the ClientHello server name, available after the client Initial.
 	SNI string
+	// ClientHello is the parsed ClientHello fingerprint (JA3/JA4 with QUIC transport),
+	// available after the client Initial; nil if it couldn't be parsed.
+	ClientHello *tlsdecrypt.ClientHelloInfo
 }
 
 // Unsupported reports that the ServerHello negotiated a suite this decryptor can't handle;
@@ -178,6 +181,13 @@ func (c *Conn) onHandshake(fromClient bool, msg []byte) {
 		if ch, ok := parseClientHello(msg); ok {
 			c.clientRandom = ch.random
 			c.SNI = ch.sni
+			// TLS fingerprint (JA3/JA4, transport = QUIC), from the ClientHello body.
+			if len(msg) >= 4 {
+				bodyLen := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3])
+				if 4+bodyLen <= len(msg) {
+					c.ClientHello = tlsdecrypt.ParseClientHelloInfoQUIC(msg[4 : 4+bodyLen])
+				}
+			}
 		}
 	} else {
 		if id, ok := parseServerHello(msg); ok {
