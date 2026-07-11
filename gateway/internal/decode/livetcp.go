@@ -362,6 +362,15 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 		s.flow.RequestBytes = uint64(len(s.flow.RequestBody))
 	} else {
 		s.flow.ResponseBody = appendCapped(s.flow.ResponseBody, plain)
+		// A raw/custom connection has no request→response boundary and lives for a long
+		// time, so stop the viewer's stopwatch at the first server byte (time-to-first-byte)
+		// instead of ticking for the connection's whole lifetime. Re-emit so it propagates.
+		if s.flow.DurationMicros == 0 {
+			s.flow.DurationMicros = uint64(max(time.Now().UnixMicro()-s.flow.TSUnixMicros, 0))
+			if s.flowEmitted {
+				s.lt.onFlow(s.flow, false)
+			}
+		}
 	}
 	for _, msg := range s.sess.Feed(fromClient, plain) {
 		if !s.flowEmitted {

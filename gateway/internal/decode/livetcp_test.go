@@ -105,6 +105,11 @@ func TestLiveTCPDecodeEndToEnd(t *testing.T) {
 	if len(flows) != 1 || flows[0].Protocol != "ECHOTEST" || flows[0].Authority != "svc.echo.test" {
 		t.Fatalf("flow = %+v", flows)
 	}
+	// A raw/custom connection freezes its "duration" at the first server byte, so the
+	// viewer's stopwatch stops instead of ticking for the connection's lifetime.
+	if flows[0].DurationMicros == 0 {
+		t.Errorf("custom flow duration not set (would tick forever in the viewer)")
+	}
 	want := [][2]string{
 		{"C", "alpha"}, {"C", "beta"}, {"C", "gamma"},
 		{"S", "RESP-1"}, {"S", string(serverMsgs[1])},

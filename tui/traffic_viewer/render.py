@@ -205,13 +205,15 @@ def fmt_duration(seconds: float) -> str:
     return f"{m}m{s:02d}s"
 
 
-def duration_cell(f) -> Text:
+def duration_cell(f, live: bool = True) -> Text:
     """The flow's duration column: the final request→response time once known, or a live
-    stopwatch (⏱ elapsed since the request) while the request is still in flight — so a
-    pending request is visibly ticking. Blank for a failed / response-less flow."""
+    stopwatch (⏱ elapsed since the request) while the request is still in flight in an open
+    session — so a pending request is visibly ticking. The stopwatch is only shown while
+    `live` (the session is open); once the session closes a still-pending flow goes blank
+    rather than ticking forever. Blank too for a failed / response-less flow."""
     if f.duration_micros:
         return Text(fmt_duration(f.duration_micros / 1_000_000), style="dim")
-    if f.status == 0 and not f.error and f.ts_unix_micros:
+    if live and f.status == 0 and not f.error and f.ts_unix_micros:
         elapsed = time.time() - f.ts_unix_micros / 1_000_000
         return Text("⏱ " + fmt_duration(elapsed), style="yellow")
     return Text("")

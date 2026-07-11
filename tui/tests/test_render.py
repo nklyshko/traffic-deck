@@ -42,11 +42,13 @@ def test_duration_cell_final():
 
 def test_duration_cell_live_stopwatch():
     import time as _t
-    # An in-flight request (no response, no error) shows a ticking stopwatch.
+    # An in-flight request (no response, no error) in an open session shows a ticking
+    # stopwatch; once the session closes it goes blank rather than ticking forever.
     f = flow(status=0, error="", duration_micros=0, ts_unix_micros=int((_t.time() - 1.5) * 1_000_000))
-    cell = render.duration_cell(f)
+    cell = render.duration_cell(f, live=True)
     assert cell.plain.startswith("⏱ ")
     assert cell.style == "yellow"
+    assert render.duration_cell(f, live=False).plain == ""
 
 
 def test_duration_cell_blank_when_failed():

@@ -264,6 +264,8 @@ class SessionPane(Vertical):
         self._groups: list = []                # group defs (catalog)
         self._tagnames: dict[str, str] = {}
         self._groupnames: dict[str, str] = {}
+        self._live = True                       # session open → tick in-flight stopwatches
+        self._dur_timer = None
 
     def compose(self) -> ComposeResult:
         yield Label("", id="pane-status")
@@ -279,19 +281,43 @@ class SessionPane(Vertical):
         self.load_defs()
         self.load_flows()
         # Tick in-flight requests' duration cells so they read as a live stopwatch.
-        self.set_interval(0.5, self._tick_durations)
+        self._dur_timer = self.set_interval(0.5, self._tick_durations)
 
     def _tick_durations(self) -> None:
         """Refresh the Dur cell of each still-pending request (no response, no error) so
-        the elapsed time updates live; completed flows are frozen at their final duration."""
+        the elapsed time updates live; completed flows are frozen at their final duration.
+        Once the session is closed nothing is pending anymore, so this stops."""
+        if not self._live:
+            return
         table = self.query_one("#flows", DataTable)
         for fid in list(self._rows):
             f = self.flows.get(fid)
             if f is None or f.status or f.error or f.duration_micros:
                 continue
             try:
-                table.update_cell(fid, self._dur_col, duration_cell(f))
+                table.update_cell(fid, self._dur_col, duration_cell(f, self._live))
             except Exception:  # noqa: BLE001 — row removed between snapshot and update
+                pass
+
+    def _finalize_live(self) -> None:
+        """The session closed: stop the stopwatch. Clear the ⏱ from any flow still pending
+        (its request never got a response) so it doesn't tick forever, and stop the timer."""
+        if not self._live:
+            return
+        self._live = False
+        if self._dur_timer is not None:
+            self._dur_timer.stop()
+        try:
+            table = self.query_one("#flows", DataTable)
+        except Exception:  # noqa: BLE001 — screen torn down; nothing to refresh
+            return
+        for fid in list(self._rows):
+            f = self.flows.get(fid)
+            if f is None or f.status or f.error or f.duration_micros:
+                continue
+            try:
+                table.update_cell(fid, self._dur_col, duration_cell(f, live=False))
+            except Exception:  # noqa: BLE001
                 pass
 
     @work(exclusive=True, group="defs")
@@ -359,7 +385,7 @@ class SessionPane(Vertical):
             fmt_time(f.ts_unix_micros),
             f.method or "",
             status_cell(f),
-            duration_cell(f),
+            duration_cell(f, self._live),
             f.protocol or "",
             f.authority or "",
             (f.path or "")[:80],
@@ -397,8 +423,13 @@ class SessionPane(Vertical):
                     self._upsert(ev.flow_updated)
                 elif kind == "session_event":
                     self.notify("session closed — live capture ended")
+                    self._finalize_live()
         except Exception as exc:  # noqa: BLE001
             self.notify(f"stream_flows failed: {exc}", severity="error")
+        finally:
+            # The stream ended: either the session closed, or it was already closed when we
+            # opened it (backfill only). Either way nothing is in flight — stop ticking.
+            self._finalize_live()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         fid = str(event.row_key.value)
