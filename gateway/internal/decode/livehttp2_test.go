@@ -140,6 +140,57 @@ func TestLiveHTTP2RequestResponse(t *testing.T) {
 	}
 }
 
+func TestLiveHTTP2Fingerprint(t *testing.T) {
+	// Client: preface + SETTINGS + connection WINDOW_UPDATE + a request whose pseudo
+	// headers are in :method,:authority,:scheme,:path order.
+	var cbuf bytes.Buffer
+	cbuf.WriteString(http2.ClientPreface)
+	cf := http2.NewFramer(&cbuf, nil)
+	if err := cf.WriteSettings(
+		http2.Setting{ID: http2.SettingHeaderTableSize, Val: 65536},
+		http2.Setting{ID: http2.SettingMaxConcurrentStreams, Val: 1000},
+		http2.Setting{ID: http2.SettingInitialWindowSize, Val: 6291456},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := cf.WriteWindowUpdate(0, 15663105); err != nil {
+		t.Fatal(err)
+	}
+	if err := cf.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1,
+		BlockFragment: h2encode(
+			hpack.HeaderField{Name: ":method", Value: "GET"},
+			hpack.HeaderField{Name: ":authority", Value: "example.com"},
+			hpack.HeaderField{Name: ":scheme", Value: "https"},
+			hpack.HeaderField{Name: ":path", Value: "/x"},
+		),
+		EndStream: true, EndHeaders: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var sbuf bytes.Buffer
+	sf := http2.NewFramer(&sbuf, nil)
+	if err := sf.WriteSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sf.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1, BlockFragment: h2encode(hpack.HeaderField{Name: ":status", Value: "200"}),
+		EndStream: true, EndHeaders: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	flows := feedH2(t, cbuf.Bytes(), sbuf.Bytes())
+	if len(flows) != 1 {
+		t.Fatalf("got %d flows, want 1", len(flows))
+	}
+	want := "1:65536;3:1000;4:6291456|15663105|0|m,a,s,p"
+	if flows[0].Http2Fingerprint != want {
+		t.Errorf("fingerprint = %q, want %q", flows[0].Http2Fingerprint, want)
+	}
+}
+
 // h2Request builds a client preface + SETTINGS + a HEADERS request on streamID.
 func h2Request(t *testing.T, streamID uint32, path string) []byte {
 	t.Helper()

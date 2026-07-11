@@ -9,6 +9,7 @@ package decode
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -51,6 +52,11 @@ type h2Stream struct {
 	goAwaySeen   bool
 	goAwayLastID uint32
 	goAwayErr    string
+
+	// Client HTTP/2 fingerprint inputs, captured from the connection's client frames.
+	settings     []string // SETTINGS as "id:value", in order
+	windowUpdate uint32   // connection-level (stream 0) WINDOW_UPDATE increment
+	priorities   []string // PRIORITY frames as "streamID:exclusive:dependsOn:weight"
 }
 
 func newH2Stream(owner *tcpStream) *h2Stream {
@@ -106,8 +112,73 @@ func (h *h2Stream) read(src *byteStream, fromClient bool) {
 			h.onRSTStream(frm)
 		case *http2.GoAwayFrame:
 			h.onGoAway(frm)
+		case *http2.SettingsFrame:
+			if fromClient && !frm.IsAck() {
+				h.onSettings(frm)
+			}
+		case *http2.WindowUpdateFrame:
+			if fromClient && frm.Header().StreamID == 0 {
+				h.mu.Lock()
+				h.windowUpdate = frm.Increment
+				h.mu.Unlock()
+			}
+		case *http2.PriorityFrame:
+			if fromClient {
+				h.onPriority(frm)
+			}
 		}
 	}
+}
+
+// onSettings records the client's SETTINGS (id:value, in order) for the connection's
+// HTTP/2 fingerprint.
+func (h *h2Stream) onSettings(sf *http2.SettingsFrame) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_ = sf.ForeachSetting(func(s http2.Setting) error {
+		h.settings = append(h.settings, fmt.Sprintf("%d:%d", uint16(s.ID), s.Val))
+		return nil
+	})
+}
+
+// onPriority records a client PRIORITY frame (streamID:exclusive:dependsOn:weight).
+func (h *h2Stream) onPriority(pf *http2.PriorityFrame) {
+	excl := 0
+	if pf.Exclusive {
+		excl = 1
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.priorities = append(h.priorities, fmt.Sprintf("%d:%d:%d:%d", pf.StreamID, excl, pf.StreamDep, pf.Weight))
+}
+
+// akamaiFingerprint builds the Akamai HTTP/2 fingerprint from the connection's captured
+// client frames plus this request's pseudo-header order: "settings|window|priority|order".
+// Caller holds mu.
+func (h *h2Stream) akamaiFingerprint(mh *http2.MetaHeadersFrame) string {
+	settings := strings.Join(h.settings, ";")
+	window := "0"
+	if h.windowUpdate > 0 {
+		window = strconv.FormatUint(uint64(h.windowUpdate), 10)
+	}
+	priority := "0"
+	if len(h.priorities) > 0 {
+		priority = strings.Join(h.priorities, ",")
+	}
+	var order []string
+	for _, pf := range mh.PseudoFields() {
+		switch pf.Name {
+		case ":method":
+			order = append(order, "m")
+		case ":authority":
+			order = append(order, "a")
+		case ":scheme":
+			order = append(order, "s")
+		case ":path":
+			order = append(order, "p")
+		}
+	}
+	return settings + "|" + window + "|" + priority + "|" + strings.Join(order, ",")
 }
 
 // onRSTStream records a stream abort as its flow's failure reason. A NO_ERROR reset is a
@@ -179,6 +250,9 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool) {
 	hf := h.getLocked(mh.StreamID)
 	f := hf.flow
 	if fromClient {
+		// The client fingerprint (SETTINGS/WINDOW_UPDATE/PRIORITY already captured on the
+		// connection) plus this request's pseudo-header order.
+		f.Http2Fingerprint = h.akamaiFingerprint(mh)
 		if v := mh.PseudoValue("method"); v != "" {
 			f.Method = v
 		}

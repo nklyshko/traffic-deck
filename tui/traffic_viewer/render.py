@@ -193,6 +193,34 @@ def status_cell(f) -> Text:
     return Text(str(s), style=style)
 
 
+_H2_SETTINGS = {
+    "1": "HEADER_TABLE_SIZE", "2": "ENABLE_PUSH", "3": "MAX_CONCURRENT_STREAMS",
+    "4": "INITIAL_WINDOW_SIZE", "5": "MAX_FRAME_SIZE", "6": "MAX_HEADER_LIST_SIZE",
+}
+_H2_PSEUDO = {"m": ":method", "a": ":authority", "s": ":scheme", "p": ":path"}
+
+
+def format_http2_fingerprint(fp: str) -> list[str]:
+    """Break the Akamai HTTP/2 fingerprint (settings|window|priority|order) into readable
+    lines, naming the SETTINGS ids and pseudo-header order."""
+    parts = fp.split("|")
+    if len(parts) != 4:
+        return [fp]
+    settings, window, priority, order = parts
+    lines = []
+    if settings:
+        named = ", ".join(
+            f"{_H2_SETTINGS.get(k, k)}={v}"
+            for k, _, v in (s.partition(":") for s in settings.split(";")) if k
+        )
+        lines.append(f"SETTINGS: {named}")
+    lines.append(f"WINDOW_UPDATE: {window}")
+    lines.append(f"PRIORITY: {'none' if priority in ('', '0') else priority}")
+    if order:
+        lines.append("pseudo-header order: " + ", ".join(_H2_PSEUDO.get(c, c) for c in order.split(",")))
+    return lines
+
+
 def fmt_duration(seconds: float) -> str:
     """Compact human duration: 42ms, 1.3s, 2m05s."""
     if seconds < 0:

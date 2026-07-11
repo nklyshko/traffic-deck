@@ -122,6 +122,13 @@ message Flow {
   // request is still in flight (no response yet) — the viewer shows a live stopwatch from
   // ts_unix_micros until this is set.
   uint64 duration_micros = 36;
+
+  // HTTP/2 client fingerprint (Akamai format): the connection's client SETTINGS, the
+  // connection-level WINDOW_UPDATE increment, PRIORITY frames, and the request's pseudo-
+  // header order, as "s1:v1;s2:v2|window|prio|m,a,s,p". Empty for non-HTTP/2 flows (and
+  // for pushed/proxy sources, which don't see the raw frames). Anti-bot analysis compares
+  // this against a real browser's stack.
+  string http2_fingerprint = 37;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

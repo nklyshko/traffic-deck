@@ -71,6 +71,11 @@ type Flow struct {
 	// response arrives; 0 while the request is still in flight.
 	DurationMicros uint64
 
+	// Http2Fingerprint is the client's HTTP/2 fingerprint (Akamai format) — the connection
+	// SETTINGS, WINDOW_UPDATE, PRIORITY and the request's pseudo-header order. "" for
+	// non-HTTP/2 flows.
+	Http2Fingerprint string
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool

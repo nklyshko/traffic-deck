@@ -21,10 +21,22 @@ def flow(**kw):
         status=200, protocol="HTTP/2", request_headers=[], response_headers=[],
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
         websocket=False, ws_message_count=0, proxy=proxy(), metadata={}, error="",
-        ts_unix_micros=0, duration_micros=0,
+        ts_unix_micros=0, duration_micros=0, http2_fingerprint="",
     )
     d.update(kw)
     return types.SimpleNamespace(**d)
+
+
+def test_format_http2_fingerprint():
+    lines = render.format_http2_fingerprint("1:65536;3:1000;4:6291456|15663105|0|m,a,s,p")
+    assert lines == [
+        "SETTINGS: HEADER_TABLE_SIZE=65536, MAX_CONCURRENT_STREAMS=1000, INITIAL_WINDOW_SIZE=6291456",
+        "WINDOW_UPDATE: 15663105",
+        "PRIORITY: none",
+        "pseudo-header order: :method, :authority, :scheme, :path",
+    ]
+    # A malformed value is returned as-is (never raises).
+    assert render.format_http2_fingerprint("garbage") == ["garbage"]
 
 
 def test_fmt_duration():

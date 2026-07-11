@@ -554,8 +554,14 @@ type Flow struct {
 	// request is still in flight (no response yet) — the viewer shows a live stopwatch from
 	// ts_unix_micros until this is set.
 	DurationMicros uint64 `protobuf:"varint,36,opt,name=duration_micros,json=durationMicros,proto3" json:"duration_micros,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// HTTP/2 client fingerprint (Akamai format): the connection's client SETTINGS, the
+	// connection-level WINDOW_UPDATE increment, PRIORITY frames, and the request's pseudo-
+	// header order, as "s1:v1;s2:v2|window|prio|m,a,s,p". Empty for non-HTTP/2 flows (and
+	// for pushed/proxy sources, which don't see the raw frames). Anti-bot analysis compares
+	// this against a real browser's stack.
+	Http2Fingerprint string `protobuf:"bytes,37,opt,name=http2_fingerprint,json=http2Fingerprint,proto3" json:"http2_fingerprint,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -838,6 +844,13 @@ func (x *Flow) GetDurationMicros() uint64 {
 		return x.DurationMicros
 	}
 	return 0
+}
+
+func (x *Flow) GetHttp2Fingerprint() string {
+	if x != nil {
+		return x.Http2Fingerprint
+	}
+	return ""
 }
 
 // A proxy a connection was observed to go through, detected from the captured
@@ -1352,7 +1365,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\xbe\n" +
+	"\acontent\"\xeb\n" +
 	"\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
@@ -1397,7 +1410,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x05proxy\x18! \x01(\v2\x11.traffic.v1.ProxyR\x05proxy\x12:\n" +
 	"\bmetadata\x18\" \x03(\v2\x1e.traffic.v1.Flow.MetadataEntryR\bmetadata\x12\x14\n" +
 	"\x05error\x18# \x01(\tR\x05error\x12'\n" +
-	"\x0fduration_micros\x18$ \x01(\x04R\x0edurationMicros\x1a;\n" +
+	"\x0fduration_micros\x18$ \x01(\x04R\x0edurationMicros\x12+\n" +
+	"\x11http2_fingerprint\x18% \x01(\tR\x10http2Fingerprint\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +

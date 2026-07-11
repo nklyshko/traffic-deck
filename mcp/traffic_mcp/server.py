@@ -97,6 +97,7 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "tags": [tagnames.get(t, t) for t in f.tag_ids],
         "groups": [groupnames.get(g, g) for g in f.group_ids],
         "comments": [c.body for c in f.comments],
+        "http2_fingerprint": f.http2_fingerprint or None,
     }
 
 

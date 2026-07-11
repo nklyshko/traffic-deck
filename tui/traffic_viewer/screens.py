@@ -35,6 +35,7 @@ from .render import (
     flags_cell,
     fmt_time,
     format_body,
+    format_http2_fingerprint,
     is_text,
     raw_message,
     status_cell,
@@ -895,6 +896,12 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup(
                 "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
         self._append_annotations(lines, f)
+        if f.http2_fingerprint:
+            lines.append(Content(""))
+            lines.append(Content.from_markup("[b u]HTTP/2 fingerprint[/b u]"))
+            lines.append(Content.from_markup("  [dim]$fp[/dim]", fp=f.http2_fingerprint))
+            for line in format_http2_fingerprint(f.http2_fingerprint):
+                lines.append(Content.from_markup("  [cyan]$l[/cyan]", l=line))
         lines.append(Content(""))
         lines.append(Content.from_markup("[b u]Request headers[/b u]"))
         for h in f.request_headers:
