@@ -166,8 +166,19 @@ def _body_meta(body) -> dict | None:
 
 def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     d = _flow_summary(f, tagnames, groupnames)
+    # Connection-level params (kept out of the list summary to keep it lean).
+    d["src_addr"] = f.src_addr or None
+    d["dst_addr"] = f.dst_addr or None
+    d["user_agent"] = f.user_agent or None
+    d["tcp_stream"] = f.tcp_stream or None
+    d["h2_stream_id"] = f.h2_stream_id or None
+    if f.proxy.addr:
+        d["proxy"] = {"addr": f.proxy.addr, "type": f.proxy.type,
+                      "username": f.proxy.username or None, "password": f.proxy.password or None}
     d["request_headers"] = _headers(f.request_headers)
     d["response_headers"] = _headers(f.response_headers)
+    d["request_cookies"] = [{"name": c.name, "value": c.value} for c in f.request_cookies]
+    d["response_cookies"] = [_set_cookie(c) for c in f.response_cookies]
     d["request_body"] = _body_meta(f.request_body)
     d["response_body"] = _body_meta(f.response_body)
     return d
