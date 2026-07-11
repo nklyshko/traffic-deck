@@ -29,7 +29,7 @@ class StreamFlowsRequest(_message.Message):
     session_id: str
     include_backfill: bool
     follow: bool
-    def __init__(self, session_id: _Optional[str] = ..., include_backfill: _Optional[bool] = ..., follow: _Optional[bool] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., include_backfill: bool = ..., follow: bool = ...) -> None: ...
 
 class SessionEvent(_message.Message):
     __slots__ = ("session_id", "status")
@@ -67,7 +67,7 @@ class GetBodyRequest(_message.Message):
     session_id: str
     flow_id: str
     response: bool
-    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., response: _Optional[bool] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., response: bool = ...) -> None: ...
 
 class BodyChunk(_message.Message):
     __slots__ = ("payload",)
@@ -97,7 +97,7 @@ class StreamMessagesRequest(_message.Message):
     session_id: str
     flow_id: str
     follow: bool
-    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., follow: _Optional[bool] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., follow: bool = ...) -> None: ...
 
 class MessageEvent(_message.Message):
     __slots__ = ("message_added", "session_event")
@@ -115,4 +115,4 @@ class GetMessageBodyRequest(_message.Message):
     session_id: str
     message_id: str
     raw: bool
-    def __init__(self, session_id: _Optional[str] = ..., message_id: _Optional[str] = ..., raw: _Optional[bool] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., message_id: _Optional[str] = ..., raw: bool = ...) -> None: ...

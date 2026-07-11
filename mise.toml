@@ -22,9 +22,14 @@ description = "Generate gRPC stubs (Go via buf; Python via grpcio-tools)"
 run = [
   "buf generate proto",
   "mkdir -p capture/capture_sdk/capture_sdk/gen tui/gen mcp/gen",
-  "uv run --project capture/capture_sdk --with grpcio-tools python -m grpc_tools.protoc -Iproto --python_out=capture/capture_sdk/capture_sdk/gen --grpc_python_out=capture/capture_sdk/capture_sdk/gen --pyi_out=capture/capture_sdk/capture_sdk/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
-  "uv run --project tui python -m grpc_tools.protoc -Iproto --python_out=tui/gen --grpc_python_out=tui/gen --pyi_out=tui/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
-  "uv run --project mcp python -m grpc_tools.protoc -Iproto --python_out=mcp/gen --grpc_python_out=mcp/gen --pyi_out=mcp/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  # Pin grpcio-tools to the grpcio floor the projects declare (>=1.76): the generated
+  # _grpc.py stamps a GRPC_GENERATED_VERSION and refuses to run on an older grpcio, so
+  # generating with a newer tools than the runtime grpcio (e.g. 1.82 tools vs a 1.81
+  # runtime) breaks capture at import. Matching the floor keeps the stubs runnable on any
+  # grpcio>=1.76.
+  "uv run --project capture/capture_sdk --with 'grpcio-tools==1.76.*' python -m grpc_tools.protoc -Iproto --python_out=capture/capture_sdk/capture_sdk/gen --grpc_python_out=capture/capture_sdk/capture_sdk/gen --pyi_out=capture/capture_sdk/capture_sdk/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "uv run --with 'grpcio-tools==1.76.*' python -m grpc_tools.protoc -Iproto --python_out=tui/gen --grpc_python_out=tui/gen --pyi_out=tui/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
+  "uv run --with 'grpcio-tools==1.76.*' python -m grpc_tools.protoc -Iproto --python_out=mcp/gen --grpc_python_out=mcp/gen --pyi_out=mcp/gen proto/traffic/v1/common.proto proto/traffic/v1/ingest.proto proto/traffic/v1/viewer.proto proto/traffic/v1/control.proto",
 ]
 
 [tasks.lint-proto]

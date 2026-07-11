@@ -6,7 +6,7 @@ import warnings
 from traffic.v1 import common_pb2 as traffic_dot_v1_dot_common__pb2
 from traffic.v1 import control_pb2 as traffic_dot_v1_dot_control__pb2
 
-GRPC_GENERATED_VERSION = '1.81.1'
+GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -26,7 +26,7 @@ if _version_not_supported:
     )
 
 
-class ControlServiceStub:
+class ControlServiceStub(object):
     """viewer -> gateway -> tools. Capture control, re-decode, annotations.
     """
 
@@ -133,7 +133,7 @@ class ControlServiceStub:
                 _registered_method=True)
 
 
-class ControlServiceServicer:
+class ControlServiceServicer(object):
     """viewer -> gateway -> tools. Capture control, re-decode, annotations.
     """
 
@@ -365,7 +365,7 @@ def add_ControlServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ControlService:
+class ControlService(object):
     """viewer -> gateway -> tools. Capture control, re-decode, annotations.
     """
 

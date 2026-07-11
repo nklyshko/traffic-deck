@@ -175,7 +175,7 @@ class Flow(_message.Message):
     metadata: _containers.ScalarMap[str, str]
     error: str
     duration_micros: int
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: _Optional[bool] = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: _Optional[bool] = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: _Optional[bool] = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ..., duration_micros: _Optional[int] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: bool = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: bool = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ..., duration_micros: _Optional[int] = ...) -> None: ...
 
 class Proxy(_message.Message):
     __slots__ = ("addr", "type", "username", "password")
@@ -209,7 +209,7 @@ class WsMessage(_message.Message):
     opcode: str
     payload: Body
     raw: Body
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., from_client: _Optional[bool] = ..., opcode: _Optional[str] = ..., payload: _Optional[_Union[Body, _Mapping]] = ..., raw: _Optional[_Union[Body, _Mapping]] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., from_client: bool = ..., opcode: _Optional[str] = ..., payload: _Optional[_Union[Body, _Mapping]] = ..., raw: _Optional[_Union[Body, _Mapping]] = ...) -> None: ...
 
 class Tag(_message.Message):
     __slots__ = ("id", "name", "color", "is_favorite", "created_at_unix_ms")
@@ -223,7 +223,7 @@ class Tag(_message.Message):
     color: str
     is_favorite: bool
     created_at_unix_ms: int
-    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., color: _Optional[str] = ..., is_favorite: _Optional[bool] = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., color: _Optional[str] = ..., is_favorite: bool = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
 
 class Comment(_message.Message):
     __slots__ = ("id", "record_id", "body", "created_at_unix_ms", "updated_at_unix_ms")
@@ -263,4 +263,4 @@ class DecodeProgress(_message.Message):
     percent: int
     stage: str
     done: bool
-    def __init__(self, session_id: _Optional[str] = ..., percent: _Optional[int] = ..., stage: _Optional[str] = ..., done: _Optional[bool] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., percent: _Optional[int] = ..., stage: _Optional[str] = ..., done: bool = ...) -> None: ...

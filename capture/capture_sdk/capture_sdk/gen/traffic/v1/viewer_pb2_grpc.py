@@ -6,7 +6,7 @@ import warnings
 from traffic.v1 import common_pb2 as traffic_dot_v1_dot_common__pb2
 from traffic.v1 import viewer_pb2 as traffic_dot_v1_dot_viewer__pb2
 
-GRPC_GENERATED_VERSION = '1.82.1'
+GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -26,7 +26,7 @@ if _version_not_supported:
     )
 
 
-class ViewerServiceStub:
+class ViewerServiceStub(object):
     """viewer <-> gateway. Read side: list sessions, stream/inspect flows.
     """
 
@@ -73,7 +73,7 @@ class ViewerServiceStub:
                 _registered_method=True)
 
 
-class ViewerServiceServicer:
+class ViewerServiceServicer(object):
     """viewer <-> gateway. Read side: list sessions, stream/inspect flows.
     """
 
@@ -169,7 +169,7 @@ def add_ViewerServiceServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class ViewerService:
+class ViewerService(object):
     """viewer <-> gateway. Read side: list sessions, stream/inspect flows.
     """
 
