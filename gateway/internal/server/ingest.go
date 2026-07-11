@@ -310,6 +310,9 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 		Error:            pf.GetError(),
 		DurationMicros:   pf.GetDurationMicros(),
 		Http2Fingerprint: pf.GetHttp2Fingerprint(),
+		JA3:              pf.GetJa3(),
+		JA4:              pf.GetJa4(),
+		TLSClientHello:   pf.GetTlsClientHello(),
 	}
 	for _, h := range pf.GetRequestHeaders() {
 		df.RequestHeaders = append(df.RequestHeaders, decode.Header{Name: h.GetName(), Value: h.GetValue()})

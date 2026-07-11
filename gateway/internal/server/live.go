@@ -346,6 +346,9 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		Error:            f.Error,
 		DurationMicros:   f.DurationMicros,
 		Http2Fingerprint: f.Http2Fingerprint,
+		Ja3:              f.JA3,
+		Ja4:              f.JA4,
+		TlsClientHello:   f.TLSClientHello,
 	}
 	if f.Proxy != nil {
 		pf.Proxy = &trafficv1.Proxy{

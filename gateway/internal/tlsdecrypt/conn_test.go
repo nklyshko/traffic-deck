@@ -38,6 +38,20 @@ func TestDecryptAgainstCryptoTLS(t *testing.T) {
 	if conn.SNI() != "api.oneme.ru" {
 		t.Fatalf("SNI = %q, want api.oneme.ru", conn.SNI())
 	}
+	// The real crypto/tls ClientHello parses into a JA3/JA4 fingerprint.
+	ch := conn.ClientHello()
+	if ch == nil {
+		t.Fatal("ClientHello not parsed")
+	}
+	if ch.SNI != "api.oneme.ru" || len(ch.Ciphers) == 0 || len(ch.Extensions) == 0 {
+		t.Errorf("ClientHello = %+v", ch)
+	}
+	if len(ch.JA3) != 32 { // md5 hex
+		t.Errorf("JA3 = %q, want 32 hex chars", ch.JA3)
+	}
+	if len(ch.JA4) < 10 || ch.JA4[0] != 't' {
+		t.Errorf("JA4 = %q", ch.JA4)
+	}
 	if conn.Unsupported() {
 		t.Fatal("reported unsupported for a TLS 1.3 connection")
 	}

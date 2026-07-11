@@ -48,8 +48,9 @@ type Conn struct {
 	clientRandom []byte
 	serverRandom []byte // TLS 1.2 key expansion needs both randoms
 	sni          string
-	suite        *suite      // TLS 1.3 suite
-	suite12      *tls12Suite // TLS 1.2 AEAD suite
+	chInfo       *ClientHelloInfo // parsed ClientHello (JA3/JA4 fingerprint)
+	suite        *suite           // TLS 1.3 suite
+	suite12      *tls12Suite      // TLS 1.2 AEAD suite
 	haveCH       bool
 	haveSH       bool
 	unsupported  bool   // ServerHello seen but not a supported version/suite
@@ -80,6 +81,10 @@ func dirIdx(fromClient bool) int {
 
 // SNI returns the ClientHello server name (empty until the ClientHello is seen).
 func (c *Conn) SNI() string { return c.sni }
+
+// ClientHello returns the parsed ClientHello fingerprint (JA3/JA4, ALPN, …), or nil until
+// the ClientHello is seen / if it couldn't be parsed.
+func (c *Conn) ClientHello() *ClientHelloInfo { return c.chInfo }
 
 // Unsupported reports that the ServerHello negotiated something this decryptor can't
 // handle (an unknown version or suite) — the caller should stop and leave the stream to
@@ -290,6 +295,8 @@ func (c *Conn) parseHandshake(fromClient bool, frag []byte) {
 }
 
 func (c *Conn) parseClientHello(b []byte) {
+	// Full fingerprint (JA3/JA4, ALPN, …) — best-effort; nil on a malformed hello.
+	c.chInfo = parseClientHelloInfo(b)
 	// legacy_version(2) random(32) session_id<1> cipher_suites<2> compression<1> extensions<2>
 	p := 2
 	if len(b) < p+32 {

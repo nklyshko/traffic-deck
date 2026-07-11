@@ -98,6 +98,9 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "groups": [groupnames.get(g, g) for g in f.group_ids],
         "comments": [c.body for c in f.comments],
         "http2_fingerprint": f.http2_fingerprint or None,
+        "ja3": f.ja3 or None,
+        "ja4": f.ja4 or None,
+        "tls_client_hello": f.tls_client_hello or None,
     }
 
 

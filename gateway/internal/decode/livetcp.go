@@ -305,6 +305,7 @@ func (s *tcpStream) classify(firstClient []byte) {
 		// to the top of the list with a blank time column.
 		s.flow.TSUnixMicros = time.Now().UnixMicro()
 		s.flow.TLSDecrypted = !s.plaintext
+		s.applyTLSFingerprint(s.flow)
 		s.matched = true
 		log.Printf("live decode: matched %s decoder for %s (%s)", m[0].Name(), s.conn.SNI(), s.serverHost)
 		return

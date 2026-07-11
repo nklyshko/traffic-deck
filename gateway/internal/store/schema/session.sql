@@ -38,7 +38,10 @@ CREATE TABLE IF NOT EXISTS flows (
     proxy_pass    TEXT,
     error         TEXT NOT NULL DEFAULT '',  -- failure reason (no response / transport error), "" if none
     duration_micros INTEGER NOT NULL DEFAULT 0,  -- request→response elapsed µs, 0 while pending
-    h2_fingerprint TEXT NOT NULL DEFAULT ''  -- HTTP/2 client fingerprint (Akamai format), "" if n/a
+    h2_fingerprint TEXT NOT NULL DEFAULT '',  -- HTTP/2 client fingerprint (Akamai format), "" if n/a
+    ja3 TEXT NOT NULL DEFAULT '',              -- TLS JA3 (MD5)
+    ja4 TEXT NOT NULL DEFAULT '',              -- TLS JA4
+    tls_client_hello TEXT NOT NULL DEFAULT ''  -- readable ClientHello (JA3 text + ALPN), for export
 );
 
 CREATE TABLE IF NOT EXISTS flow_headers (

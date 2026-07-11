@@ -271,7 +271,7 @@ func (s *tcpStream) newHTTPFlow() *Flow {
 	if host == "" {
 		host = s.serverHost
 	}
-	return &Flow{
+	f := &Flow{
 		ID:           uuid.NewString(),
 		TSUnixMicros: time.Now().UnixMicro(),
 		Protocol:     "HTTP/1.1",
@@ -281,4 +281,22 @@ func (s *tcpStream) newHTTPFlow() *Flow {
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
 		TLSDecrypted: !s.plaintext,
 	}
+	s.applyTLSFingerprint(f)
+	return f
+}
+
+// applyTLSFingerprint copies the connection's ClientHello fingerprint (JA3/JA4 + the
+// readable ClientHello with offered ALPN) onto a decoded flow, when the TLS handshake was
+// seen. No-op for a plaintext connection.
+func (s *tcpStream) applyTLSFingerprint(f *Flow) {
+	ch := s.conn.ClientHello()
+	if ch == nil {
+		return
+	}
+	f.JA3, f.JA4 = ch.JA3, ch.JA4
+	text := ch.JA3Text
+	if len(ch.ALPN) > 0 {
+		text += " alpn=" + strings.Join(ch.ALPN, ",")
+	}
+	f.TLSClientHello = text
 }

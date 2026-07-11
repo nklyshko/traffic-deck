@@ -129,6 +129,14 @@ message Flow {
   // for pushed/proxy sources, which don't see the raw frames). Anti-bot analysis compares
   // this against a real browser's stack.
   string http2_fingerprint = 37;
+
+  // TLS ClientHello fingerprints, from the connection's decrypted handshake (empty for
+  // plaintext / pushed-proxy flows). ja3 is the JA3 MD5; ja4 is the FoxIO JA4. tls_client_hello
+  // is the human-readable ClientHello for export (the JA3 string — version,ciphers,
+  // extensions,curves,point-formats — plus the offered ALPN).
+  string ja3 = 38;
+  string ja4 = 39;
+  string tls_client_hello = 40;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

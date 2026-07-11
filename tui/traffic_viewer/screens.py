@@ -896,6 +896,15 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup(
                 "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
         self._append_annotations(lines, f)
+        if f.ja3 or f.ja4:
+            lines.append(Content(""))
+            lines.append(Content.from_markup("[b u]TLS ClientHello[/b u]"))
+            if f.ja4:
+                lines.append(Content.from_markup("  [cyan]JA4:[/cyan] $v", v=f.ja4))
+            if f.ja3:
+                lines.append(Content.from_markup("  [cyan]JA3:[/cyan] $v", v=f.ja3))
+            if f.tls_client_hello:
+                lines.append(Content.from_markup("  [dim]$v[/dim]", v=f.tls_client_hello))
         if f.http2_fingerprint:
             lines.append(Content(""))
             lines.append(Content.from_markup("[b u]HTTP/2 fingerprint[/b u]"))

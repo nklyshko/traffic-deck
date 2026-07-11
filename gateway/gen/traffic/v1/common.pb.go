@@ -560,8 +560,15 @@ type Flow struct {
 	// for pushed/proxy sources, which don't see the raw frames). Anti-bot analysis compares
 	// this against a real browser's stack.
 	Http2Fingerprint string `protobuf:"bytes,37,opt,name=http2_fingerprint,json=http2Fingerprint,proto3" json:"http2_fingerprint,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// TLS ClientHello fingerprints, from the connection's decrypted handshake (empty for
+	// plaintext / pushed-proxy flows). ja3 is the JA3 MD5; ja4 is the FoxIO JA4. tls_client_hello
+	// is the human-readable ClientHello for export (the JA3 string — version,ciphers,
+	// extensions,curves,point-formats — plus the offered ALPN).
+	Ja3            string `protobuf:"bytes,38,opt,name=ja3,proto3" json:"ja3,omitempty"`
+	Ja4            string `protobuf:"bytes,39,opt,name=ja4,proto3" json:"ja4,omitempty"`
+	TlsClientHello string `protobuf:"bytes,40,opt,name=tls_client_hello,json=tlsClientHello,proto3" json:"tls_client_hello,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -849,6 +856,27 @@ func (x *Flow) GetDurationMicros() uint64 {
 func (x *Flow) GetHttp2Fingerprint() string {
 	if x != nil {
 		return x.Http2Fingerprint
+	}
+	return ""
+}
+
+func (x *Flow) GetJa3() string {
+	if x != nil {
+		return x.Ja3
+	}
+	return ""
+}
+
+func (x *Flow) GetJa4() string {
+	if x != nil {
+		return x.Ja4
+	}
+	return ""
+}
+
+func (x *Flow) GetTlsClientHello() string {
+	if x != nil {
+		return x.TlsClientHello
 	}
 	return ""
 }
@@ -1365,8 +1393,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\xeb\n" +
-	"\n" +
+	"\acontent\"\xb9\v\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1411,7 +1438,10 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\bmetadata\x18\" \x03(\v2\x1e.traffic.v1.Flow.MetadataEntryR\bmetadata\x12\x14\n" +
 	"\x05error\x18# \x01(\tR\x05error\x12'\n" +
 	"\x0fduration_micros\x18$ \x01(\x04R\x0edurationMicros\x12+\n" +
-	"\x11http2_fingerprint\x18% \x01(\tR\x10http2Fingerprint\x1a;\n" +
+	"\x11http2_fingerprint\x18% \x01(\tR\x10http2Fingerprint\x12\x10\n" +
+	"\x03ja3\x18& \x01(\tR\x03ja3\x12\x10\n" +
+	"\x03ja4\x18' \x01(\tR\x03ja4\x12(\n" +
+	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +

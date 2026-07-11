@@ -76,6 +76,12 @@ type Flow struct {
 	// non-HTTP/2 flows.
 	Http2Fingerprint string
 
+	// TLS ClientHello fingerprints (empty for plaintext connections): JA3 (MD5), JA4, and
+	// TLSClientHello — the readable ClientHello (JA3 string + offered ALPN) for export.
+	JA3            string
+	JA4            string
+	TLSClientHello string
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool

@@ -43,6 +43,7 @@ var requiredFlowColumns = []string{
 	"user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream",
 	"h2_stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
 	"proxy_user", "proxy_pass", "error", "duration_micros", "h2_fingerprint",
+	"ja3", "ja4", "tls_client_hello",
 }
 
 // dsnPragmas are applied to every pooled connection (unlike `PRAGMA` run via Exec, which
@@ -270,15 +271,17 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 			    method, scheme, authority, path, query, protocol, status,
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
 			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref,
-			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
+			    ja3, ja4, tls_client_hello)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
 			boolToInt(f.TLSDecrypted), f.TCPStream, f.H2StreamID,
 			nullIfEmpty(reqRef), nullIfEmpty(respRef),
 			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass),
-			f.Error, int64(f.DurationMicros), f.Http2Fingerprint); err != nil {
+			f.Error, int64(f.DurationMicros), f.Http2Fingerprint,
+			f.JA3, f.JA4, f.TLSClientHello); err != nil {
 			return 0, err
 		}
 		if err := insertHeaders(ctx, tx, id, 0, f.RequestHeaders); err != nil {
@@ -443,7 +446,8 @@ func (s *Store) SetSessionBytes(ctx context.Context, id string, pcapBytes, keylo
 const flowCols = `id, session_id, analysis_id, frame_number, ts_micros, method, scheme,
 	authority, path, query, protocol, status, src_addr, dst_addr,
 	user_agent, content_type, request_bytes, tls_decrypted, tcp_stream, h2_stream_id,
-	proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint`
+	proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
+	ja3, ja4, tls_client_hello`
 
 // ListFlows returns flow summaries (no headers/bodies) for backfill.
 func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.Flow, error) {
@@ -653,13 +657,14 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		method, scheme, authority, path, query, protocol           sql.NullString
 		srcAddr, dstAddr, userAgent, contentType, tcpStream, h2sid sql.NullString
 		proxyAddr, proxyType, proxyUser, proxyPass, flowError      sql.NullString
-		h2Fingerprint                                              sql.NullString
+		h2Fingerprint, ja3, ja4, tlsClientHello                    sql.NullString
 		tlsDecrypted                                               int64
 	)
 	if err := row.Scan(&id, &sessionID, &analysisID, &frameNumber, &tsMicros, &method, &scheme,
 		&authority, &path, &query, &protocol, &status, &srcAddr, &dstAddr,
 		&userAgent, &contentType, &requestBytes, &tlsDecrypted, &tcpStream, &h2sid,
-		&proxyAddr, &proxyType, &proxyUser, &proxyPass, &flowError, &durationMicros, &h2Fingerprint); err != nil {
+		&proxyAddr, &proxyType, &proxyUser, &proxyPass, &flowError, &durationMicros, &h2Fingerprint,
+		&ja3, &ja4, &tlsClientHello); err != nil {
 		return nil, err
 	}
 	f := &trafficv1.Flow{
@@ -686,6 +691,9 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		Error:            flowError.String,
 		DurationMicros:   uint64(durationMicros),
 		Http2Fingerprint: h2Fingerprint.String,
+		Ja3:              ja3.String,
+		Ja4:              ja4.String,
+		TlsClientHello:   tlsClientHello.String,
 	}
 	if proxyAddr.String != "" {
 		f.Proxy = &trafficv1.Proxy{
