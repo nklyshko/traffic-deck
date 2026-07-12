@@ -55,6 +55,11 @@ class IngestServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_ingest__pb2.CloseSessionRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_ingest__pb2.SessionSummary.FromString,
                 _registered_method=True)
+        self.ForceCloseSession = channel.unary_unary(
+                '/traffic.v1.IngestService/ForceCloseSession',
+                request_serializer=traffic_dot_v1_dot_ingest__pb2.CloseSessionRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_ingest__pb2.SessionSummary.FromString,
+                _registered_method=True)
 
 
 class IngestServiceServicer(object):
@@ -85,6 +90,15 @@ class IngestServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ForceCloseSession(self, request, context):
+        """Force-close a session stuck open (e.g. a capture that died without sending
+        CloseSession): run the same finalization (decode/persist whatever was captured) and
+        mark it closed. Refused if the session is already finalized.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_IngestServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -105,6 +119,11 @@ def add_IngestServiceServicer_to_server(servicer, server):
             ),
             'CloseSession': grpc.unary_unary_rpc_method_handler(
                     servicer.CloseSession,
+                    request_deserializer=traffic_dot_v1_dot_ingest__pb2.CloseSessionRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_ingest__pb2.SessionSummary.SerializeToString,
+            ),
+            'ForceCloseSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.ForceCloseSession,
                     request_deserializer=traffic_dot_v1_dot_ingest__pb2.CloseSessionRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_ingest__pb2.SessionSummary.SerializeToString,
             ),
@@ -216,6 +235,33 @@ class IngestService(object):
             request,
             target,
             '/traffic.v1.IngestService/CloseSession',
+            traffic_dot_v1_dot_ingest__pb2.CloseSessionRequest.SerializeToString,
+            traffic_dot_v1_dot_ingest__pb2.SessionSummary.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ForceCloseSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.IngestService/ForceCloseSession',
             traffic_dot_v1_dot_ingest__pb2.CloseSessionRequest.SerializeToString,
             traffic_dot_v1_dot_ingest__pb2.SessionSummary.FromString,
             options,

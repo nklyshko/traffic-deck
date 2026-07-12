@@ -826,12 +826,13 @@ const file_traffic_v1_ingest_proto_rawDesc = "" +
 	"\vCaptureMode\x12\x1c\n" +
 	"\x18CAPTURE_MODE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCAPTURE_MODE_STREAMING_LIVE\x10\x01\x12\x1f\n" +
-	"\x1bCAPTURE_MODE_BATCH_ON_CLOSE\x10\x022\xa5\x02\n" +
+	"\x1bCAPTURE_MODE_BATCH_ON_CLOSE\x10\x022\xf7\x02\n" +
 	"\rIngestService\x12H\n" +
 	"\vOpenSession\x12\x1e.traffic.v1.OpenSessionRequest\x1a\x19.traffic.v1.SessionHandle\x12B\n" +
 	"\rUploadCapture\x12\x18.traffic.v1.CaptureChunk\x1a\x15.traffic.v1.UploadAck(\x01\x129\n" +
 	"\tPushFlows\x12\x15.traffic.v1.FlowBatch\x1a\x13.traffic.v1.PushAck(\x01\x12K\n" +
-	"\fCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummaryB\xa9\x01\n" +
+	"\fCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummary\x12P\n" +
+	"\x11ForceCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummaryB\xa9\x01\n" +
 	"\x0ecom.traffic.v1B\vIngestProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
 	"Traffic.V1\xca\x02\n" +
 	"Traffic\\V1\xe2\x02\x16Traffic\\V1\\GPBMetadata\xea\x02\vTraffic::V1b\x06proto3"
@@ -888,12 +889,14 @@ var file_traffic_v1_ingest_proto_depIdxs = []int32{
 	7,  // 13: traffic.v1.IngestService.UploadCapture:input_type -> traffic.v1.CaptureChunk
 	9,  // 14: traffic.v1.IngestService.PushFlows:input_type -> traffic.v1.FlowBatch
 	11, // 15: traffic.v1.IngestService.CloseSession:input_type -> traffic.v1.CloseSessionRequest
-	2,  // 16: traffic.v1.IngestService.OpenSession:output_type -> traffic.v1.SessionHandle
-	8,  // 17: traffic.v1.IngestService.UploadCapture:output_type -> traffic.v1.UploadAck
-	10, // 18: traffic.v1.IngestService.PushFlows:output_type -> traffic.v1.PushAck
-	12, // 19: traffic.v1.IngestService.CloseSession:output_type -> traffic.v1.SessionSummary
-	16, // [16:20] is the sub-list for method output_type
-	12, // [12:16] is the sub-list for method input_type
+	11, // 16: traffic.v1.IngestService.ForceCloseSession:input_type -> traffic.v1.CloseSessionRequest
+	2,  // 17: traffic.v1.IngestService.OpenSession:output_type -> traffic.v1.SessionHandle
+	8,  // 18: traffic.v1.IngestService.UploadCapture:output_type -> traffic.v1.UploadAck
+	10, // 19: traffic.v1.IngestService.PushFlows:output_type -> traffic.v1.PushAck
+	12, // 20: traffic.v1.IngestService.CloseSession:output_type -> traffic.v1.SessionSummary
+	12, // 21: traffic.v1.IngestService.ForceCloseSession:output_type -> traffic.v1.SessionSummary
+	17, // [17:22] is the sub-list for method output_type
+	12, // [12:17] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name

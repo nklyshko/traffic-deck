@@ -175,6 +175,7 @@ class SessionsScreen(Screen):
         Binding("g", "set_group", "Group"),
         Binding("e", "export", "Export"),
         Binding("i", "import_session", "Import"),
+        Binding("c", "force_close", "Close"),
         Binding("d", "delete", "Delete"),
         Binding("q", "quit", "Quit"),
     ]
@@ -270,6 +271,30 @@ class SessionsScreen(Screen):
             self.load_sessions()
 
         self.app.push_screen(TextPrompt("Rename session:", current), _apply)
+
+    def action_force_close(self) -> None:
+        """Finalize a session stuck open (a capture that died without CloseSession)."""
+        sid = self._selected_session()
+        if sid is None:
+            return
+        label = getattr(self, "_labels", {}).get(sid, "") or sid[:8]
+
+        async def _confirm(ok: bool | None) -> None:
+            if not ok:
+                return
+            self.notify(f"closing session {label} …")
+            try:
+                await self.app.client.force_close_session(sid)
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"force-close failed: {exc}", severity="error")
+                return
+            self.notify(f"closed session {label}")
+            self.load_sessions()
+
+        self.app.push_screen(
+            ConfirmScreen(f"Force-close session {label}? Finalizes a stuck/interrupted capture."),
+            _confirm,
+        )
 
     def action_delete(self) -> None:
         sid = self._selected_session()

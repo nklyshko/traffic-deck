@@ -326,8 +326,30 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 // CloseSession finalizes a session: record sizes, batch-decode the bundle, and
 // return the closed session summary.
 func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRequest) (*trafficv1.SessionSummary, error) {
-	sid := req.GetSessionId()
+	return i.finalizeSession(ctx, req.GetSessionId())
+}
 
+// ForceCloseSession finalizes a session that's stuck open — a capture that died without
+// sending CloseSession leaves the session OPEN forever. It runs the same finalization
+// (decode/persist whatever was captured) and marks it closed, refusing a session that's
+// already terminal.
+func (i *Ingest) ForceCloseSession(ctx context.Context, req *trafficv1.CloseSessionRequest) (*trafficv1.SessionSummary, error) {
+	sid := req.GetSessionId()
+	sess, err := i.st.GetSession(ctx, sid)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "force close: session not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "force close: %v", err)
+	}
+	if s := sess.GetStatus(); s == trafficv1.SessionStatus_SESSION_STATUS_CLOSED ||
+		s == trafficv1.SessionStatus_SESSION_STATUS_ERROR {
+		return nil, status.Errorf(codes.FailedPrecondition, "session already finalized (%s)", s)
+	}
+	return i.finalizeSession(ctx, sid)
+}
+
+func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.SessionSummary, error) {
 	// Stop live decode (if any); ls holds the accumulated live flows for record-live mode.
 	ls := i.hub.stop(sid)
 

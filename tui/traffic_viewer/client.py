@@ -18,6 +18,8 @@ import grpc  # noqa: E402
 from traffic.v1 import (  # noqa: E402
     control_pb2,
     control_pb2_grpc,
+    ingest_pb2,
+    ingest_pb2_grpc,
     viewer_pb2,
     viewer_pb2_grpc,
 )
@@ -34,6 +36,7 @@ class GatewayClient:
         self._channel: grpc.aio.Channel | None = None
         self._stub: viewer_pb2_grpc.ViewerServiceStub | None = None
         self._control: control_pb2_grpc.ControlServiceStub | None = None
+        self._ingest: ingest_pb2_grpc.IngestServiceStub | None = None
 
     def _ensure(self) -> viewer_pb2_grpc.ViewerServiceStub:
         # Lazily create the aio channel/stub on first use (inside the event loop).
@@ -47,6 +50,16 @@ class GatewayClient:
             self._ensure()  # shares the channel
             self._control = control_pb2_grpc.ControlServiceStub(self._channel)
         return self._control
+
+    def _ing(self) -> ingest_pb2_grpc.IngestServiceStub:
+        if self._ingest is None:
+            self._ensure()  # shares the channel
+            self._ingest = ingest_pb2_grpc.IngestServiceStub(self._channel)
+        return self._ingest
+
+    async def force_close_session(self, session_id: str) -> None:
+        """Finalize a session stuck open (capture died without CloseSession)."""
+        await self._ing().ForceCloseSession(ingest_pb2.CloseSessionRequest(session_id=session_id))
 
     async def close(self) -> None:
         if self._channel is not None:

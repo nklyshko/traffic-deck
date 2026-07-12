@@ -75,6 +75,7 @@ class FakeClient:
 
     def __init__(self):
         self._sessions = [_session(), _session2()]
+        self.force_closed = []
 
     async def list_sessions(self, limit=200):
         return list(self._sessions)
@@ -91,6 +92,9 @@ class FakeClient:
         s = cp.Session(id="imported-1", label="imported", status=3, flow_count=0)
         self._sessions.append(s)
         return s
+
+    async def force_close_session(self, session_id):
+        self.force_closed.append(session_id)
 
     async def stream_flows(self, session_id, follow=False):
         for f in _BY_SESSION.get(session_id, _FLOWS):
@@ -163,6 +167,18 @@ async def test_delete_session():
         await pilot.press("y")   # confirm
         await settle(pilot)
         assert app.screen.query_one("#sessions", DataTable).row_count == 1
+
+
+async def test_force_close_session():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("c")   # force-close the focused session
+        await settle(pilot)
+        await pilot.press("y")   # confirm
+        await settle(pilot)
+        assert app.client.force_closed == [SESSION_ID]
 
 
 async def test_rename_session():

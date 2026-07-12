@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	IngestService_OpenSession_FullMethodName   = "/traffic.v1.IngestService/OpenSession"
-	IngestService_UploadCapture_FullMethodName = "/traffic.v1.IngestService/UploadCapture"
-	IngestService_PushFlows_FullMethodName     = "/traffic.v1.IngestService/PushFlows"
-	IngestService_CloseSession_FullMethodName  = "/traffic.v1.IngestService/CloseSession"
+	IngestService_OpenSession_FullMethodName       = "/traffic.v1.IngestService/OpenSession"
+	IngestService_UploadCapture_FullMethodName     = "/traffic.v1.IngestService/UploadCapture"
+	IngestService_PushFlows_FullMethodName         = "/traffic.v1.IngestService/PushFlows"
+	IngestService_CloseSession_FullMethodName      = "/traffic.v1.IngestService/CloseSession"
+	IngestService_ForceCloseSession_FullMethodName = "/traffic.v1.IngestService/ForceCloseSession"
 )
 
 // IngestServiceClient is the client API for IngestService service.
@@ -35,6 +36,10 @@ type IngestServiceClient interface {
 	UploadCapture(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[CaptureChunk, UploadAck], error)
 	PushFlows(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[FlowBatch, PushAck], error)
 	CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*SessionSummary, error)
+	// Force-close a session stuck open (e.g. a capture that died without sending
+	// CloseSession): run the same finalization (decode/persist whatever was captured) and
+	// mark it closed. Refused if the session is already finalized.
+	ForceCloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*SessionSummary, error)
 }
 
 type ingestServiceClient struct {
@@ -91,6 +96,16 @@ func (c *ingestServiceClient) CloseSession(ctx context.Context, in *CloseSession
 	return out, nil
 }
 
+func (c *ingestServiceClient) ForceCloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*SessionSummary, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionSummary)
+	err := c.cc.Invoke(ctx, IngestService_ForceCloseSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IngestServiceServer is the server API for IngestService service.
 // All implementations must embed UnimplementedIngestServiceServer
 // for forward compatibility.
@@ -101,6 +116,10 @@ type IngestServiceServer interface {
 	UploadCapture(grpc.ClientStreamingServer[CaptureChunk, UploadAck]) error
 	PushFlows(grpc.ClientStreamingServer[FlowBatch, PushAck]) error
 	CloseSession(context.Context, *CloseSessionRequest) (*SessionSummary, error)
+	// Force-close a session stuck open (e.g. a capture that died without sending
+	// CloseSession): run the same finalization (decode/persist whatever was captured) and
+	// mark it closed. Refused if the session is already finalized.
+	ForceCloseSession(context.Context, *CloseSessionRequest) (*SessionSummary, error)
 	mustEmbedUnimplementedIngestServiceServer()
 }
 
@@ -122,6 +141,9 @@ func (UnimplementedIngestServiceServer) PushFlows(grpc.ClientStreamingServer[Flo
 }
 func (UnimplementedIngestServiceServer) CloseSession(context.Context, *CloseSessionRequest) (*SessionSummary, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloseSession not implemented")
+}
+func (UnimplementedIngestServiceServer) ForceCloseSession(context.Context, *CloseSessionRequest) (*SessionSummary, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForceCloseSession not implemented")
 }
 func (UnimplementedIngestServiceServer) mustEmbedUnimplementedIngestServiceServer() {}
 func (UnimplementedIngestServiceServer) testEmbeddedByValue()                       {}
@@ -194,6 +216,24 @@ func _IngestService_CloseSession_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IngestService_ForceCloseSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloseSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IngestServiceServer).ForceCloseSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IngestService_ForceCloseSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IngestServiceServer).ForceCloseSession(ctx, req.(*CloseSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IngestService_ServiceDesc is the grpc.ServiceDesc for IngestService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -208,6 +248,10 @@ var IngestService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CloseSession",
 			Handler:    _IngestService_CloseSession_Handler,
+		},
+		{
+			MethodName: "ForceCloseSession",
+			Handler:    _IngestService_ForceCloseSession_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

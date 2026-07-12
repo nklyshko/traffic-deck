@@ -10,6 +10,10 @@ service IngestService {
   rpc UploadCapture(stream CaptureChunk) returns (UploadAck);
   rpc PushFlows(stream FlowBatch) returns (PushAck);
   rpc CloseSession(CloseSessionRequest) returns (SessionSummary);
+  // Force-close a session stuck open (e.g. a capture that died without sending
+  // CloseSession): run the same finalization (decode/persist whatever was captured) and
+  // mark it closed. Refused if the session is already finalized.
+  rpc ForceCloseSession(CloseSessionRequest) returns (SessionSummary);
 }
 
 message OpenSessionRequest {
