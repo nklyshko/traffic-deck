@@ -737,6 +737,58 @@ func (*MessageEvent_MessageAdded) isMessageEvent_Event() {}
 
 func (*MessageEvent_SessionEvent) isMessageEvent_Event() {}
 
+type GetMessageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	MessageId     string                 `protobuf:"bytes,2,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetMessageRequest) Reset() {
+	*x = GetMessageRequest{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetMessageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetMessageRequest) ProtoMessage() {}
+
+func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetMessageRequest.ProtoReflect.Descriptor instead.
+func (*GetMessageRequest) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetMessageRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *GetMessageRequest) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
 type GetMessageBodyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -748,7 +800,7 @@ type GetMessageBodyRequest struct {
 
 func (x *GetMessageBodyRequest) Reset() {
 	*x = GetMessageBodyRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -760,7 +812,7 @@ func (x *GetMessageBodyRequest) String() string {
 func (*GetMessageBodyRequest) ProtoMessage() {}
 
 func (x *GetMessageBodyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -773,7 +825,7 @@ func (x *GetMessageBodyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageBodyRequest.ProtoReflect.Descriptor instead.
 func (*GetMessageBodyRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{12}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetMessageBodyRequest) GetSessionId() string {
@@ -849,19 +901,26 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\fMessageEvent\x12<\n" +
 	"\rmessage_added\x18\x01 \x01(\v2\x15.traffic.v1.WsMessageH\x00R\fmessageAdded\x12?\n" +
 	"\rsession_event\x18\x02 \x01(\v2\x18.traffic.v1.SessionEventH\x00R\fsessionEventB\a\n" +
-	"\x05event\"g\n" +
+	"\x05event\"Q\n" +
+	"\x11GetMessageRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x02 \x01(\tR\tmessageId\"g\n" +
 	"\x15GetMessageBodyRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x02 \x01(\tR\tmessageId\x12\x10\n" +
-	"\x03raw\x18\x03 \x01(\bR\x03raw2\x83\x04\n" +
+	"\x03raw\x18\x03 \x01(\bR\x03raw2\xc7\x04\n" +
 	"\rViewerService\x12H\n" +
 	"\fListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12F\n" +
 	"\vStreamFlows\x12\x1e.traffic.v1.StreamFlowsRequest\x1a\x15.traffic.v1.FlowEvent0\x01\x127\n" +
 	"\aGetFlow\x12\x1a.traffic.v1.GetFlowRequest\x1a\x10.traffic.v1.Flow\x12>\n" +
 	"\aGetBody\x12\x1a.traffic.v1.GetBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12H\n" +
-	"\fListMessages\x12\x1f.traffic.v1.ListMessagesRequest\x1a\x17.traffic.v1.MessageList\x12O\n" +
+	"\fListMessages\x12\x1f.traffic.v1.ListMessagesRequest\x1a\x17.traffic.v1.MessageList\x12B\n" +
+	"\n" +
+	"GetMessage\x12\x1d.traffic.v1.GetMessageRequest\x1a\x15.traffic.v1.WsMessage\x12O\n" +
 	"\x0eStreamMessages\x12!.traffic.v1.StreamMessagesRequest\x1a\x18.traffic.v1.MessageEvent0\x01\x12L\n" +
 	"\x0eGetMessageBody\x12!.traffic.v1.GetMessageBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01B\xa9\x01\n" +
 	"\x0ecom.traffic.v1B\vViewerProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
@@ -880,7 +939,7 @@ func file_traffic_v1_viewer_proto_rawDescGZIP() []byte {
 	return file_traffic_v1_viewer_proto_rawDescData
 }
 
-var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*ListSessionsRequest)(nil),   // 0: traffic.v1.ListSessionsRequest
 	(*SessionList)(nil),           // 1: traffic.v1.SessionList
@@ -894,39 +953,42 @@ var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*MessageList)(nil),           // 9: traffic.v1.MessageList
 	(*StreamMessagesRequest)(nil), // 10: traffic.v1.StreamMessagesRequest
 	(*MessageEvent)(nil),          // 11: traffic.v1.MessageEvent
-	(*GetMessageBodyRequest)(nil), // 12: traffic.v1.GetMessageBodyRequest
-	(*Session)(nil),               // 13: traffic.v1.Session
-	(SessionStatus)(0),            // 14: traffic.v1.SessionStatus
-	(*Flow)(nil),                  // 15: traffic.v1.Flow
-	(*DecodeProgress)(nil),        // 16: traffic.v1.DecodeProgress
-	(*WsMessage)(nil),             // 17: traffic.v1.WsMessage
+	(*GetMessageRequest)(nil),     // 12: traffic.v1.GetMessageRequest
+	(*GetMessageBodyRequest)(nil), // 13: traffic.v1.GetMessageBodyRequest
+	(*Session)(nil),               // 14: traffic.v1.Session
+	(SessionStatus)(0),            // 15: traffic.v1.SessionStatus
+	(*Flow)(nil),                  // 16: traffic.v1.Flow
+	(*DecodeProgress)(nil),        // 17: traffic.v1.DecodeProgress
+	(*WsMessage)(nil),             // 18: traffic.v1.WsMessage
 }
 var file_traffic_v1_viewer_proto_depIdxs = []int32{
-	13, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
-	14, // 1: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
-	15, // 2: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
-	15, // 3: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
+	14, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
+	15, // 1: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
+	16, // 2: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
+	16, // 3: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
 	3,  // 4: traffic.v1.FlowEvent.session_event:type_name -> traffic.v1.SessionEvent
-	16, // 5: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
-	17, // 6: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
-	17, // 7: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
+	17, // 5: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
+	18, // 6: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
+	18, // 7: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
 	3,  // 8: traffic.v1.MessageEvent.session_event:type_name -> traffic.v1.SessionEvent
 	0,  // 9: traffic.v1.ViewerService.ListSessions:input_type -> traffic.v1.ListSessionsRequest
 	2,  // 10: traffic.v1.ViewerService.StreamFlows:input_type -> traffic.v1.StreamFlowsRequest
 	5,  // 11: traffic.v1.ViewerService.GetFlow:input_type -> traffic.v1.GetFlowRequest
 	6,  // 12: traffic.v1.ViewerService.GetBody:input_type -> traffic.v1.GetBodyRequest
 	8,  // 13: traffic.v1.ViewerService.ListMessages:input_type -> traffic.v1.ListMessagesRequest
-	10, // 14: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
-	12, // 15: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
-	1,  // 16: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
-	4,  // 17: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
-	15, // 18: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
-	7,  // 19: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
-	9,  // 20: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
-	11, // 21: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
-	7,  // 22: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
-	16, // [16:23] is the sub-list for method output_type
-	9,  // [9:16] is the sub-list for method input_type
+	12, // 14: traffic.v1.ViewerService.GetMessage:input_type -> traffic.v1.GetMessageRequest
+	10, // 15: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
+	13, // 16: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
+	1,  // 17: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
+	4,  // 18: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
+	16, // 19: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
+	7,  // 20: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
+	9,  // 21: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
+	18, // 22: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
+	11, // 23: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
+	7,  // 24: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
+	17, // [17:25] is the sub-list for method output_type
+	9,  // [9:17] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -954,7 +1016,7 @@ func file_traffic_v1_viewer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_viewer_proto_rawDesc), len(file_traffic_v1_viewer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

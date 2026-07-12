@@ -24,6 +24,7 @@ const (
 	ViewerService_GetFlow_FullMethodName        = "/traffic.v1.ViewerService/GetFlow"
 	ViewerService_GetBody_FullMethodName        = "/traffic.v1.ViewerService/GetBody"
 	ViewerService_ListMessages_FullMethodName   = "/traffic.v1.ViewerService/ListMessages"
+	ViewerService_GetMessage_FullMethodName     = "/traffic.v1.ViewerService/GetMessage"
 	ViewerService_StreamMessages_FullMethodName = "/traffic.v1.ViewerService/StreamMessages"
 	ViewerService_GetMessageBody_FullMethodName = "/traffic.v1.ViewerService/GetMessageBody"
 )
@@ -40,6 +41,9 @@ type ViewerServiceClient interface {
 	GetBody(ctx context.Context, in *GetBodyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BodyChunk], error)
 	// WebSocket message timeline for an Upgrade flow.
 	ListMessages(ctx context.Context, in *ListMessagesRequest, opts ...grpc.CallOption) (*MessageList, error)
+	// GetMessage returns one message with its annotations (for refreshing a row after an
+	// annotation change), the message-side counterpart of GetFlow.
+	GetMessage(ctx context.Context, in *GetMessageRequest, opts ...grpc.CallOption) (*WsMessage, error)
 	// StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
 	// and the session is live) streams new frames as they're decoded, until the
 	// session closes or the client disconnects — the live WebSocket timeline.
@@ -123,6 +127,16 @@ func (c *viewerServiceClient) ListMessages(ctx context.Context, in *ListMessages
 	return out, nil
 }
 
+func (c *viewerServiceClient) GetMessage(ctx context.Context, in *GetMessageRequest, opts ...grpc.CallOption) (*WsMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WsMessage)
+	err := c.cc.Invoke(ctx, ViewerService_GetMessage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *viewerServiceClient) StreamMessages(ctx context.Context, in *StreamMessagesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MessageEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &ViewerService_ServiceDesc.Streams[2], ViewerService_StreamMessages_FullMethodName, cOpts...)
@@ -173,6 +187,9 @@ type ViewerServiceServer interface {
 	GetBody(*GetBodyRequest, grpc.ServerStreamingServer[BodyChunk]) error
 	// WebSocket message timeline for an Upgrade flow.
 	ListMessages(context.Context, *ListMessagesRequest) (*MessageList, error)
+	// GetMessage returns one message with its annotations (for refreshing a row after an
+	// annotation change), the message-side counterpart of GetFlow.
+	GetMessage(context.Context, *GetMessageRequest) (*WsMessage, error)
 	// StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
 	// and the session is live) streams new frames as they're decoded, until the
 	// session closes or the client disconnects — the live WebSocket timeline.
@@ -202,6 +219,9 @@ func (UnimplementedViewerServiceServer) GetBody(*GetBodyRequest, grpc.ServerStre
 }
 func (UnimplementedViewerServiceServer) ListMessages(context.Context, *ListMessagesRequest) (*MessageList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMessages not implemented")
+}
+func (UnimplementedViewerServiceServer) GetMessage(context.Context, *GetMessageRequest) (*WsMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMessage not implemented")
 }
 func (UnimplementedViewerServiceServer) StreamMessages(*StreamMessagesRequest, grpc.ServerStreamingServer[MessageEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamMessages not implemented")
@@ -306,6 +326,24 @@ func _ViewerService_ListMessages_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ViewerService_GetMessage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMessageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ViewerServiceServer).GetMessage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ViewerService_GetMessage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ViewerServiceServer).GetMessage(ctx, req.(*GetMessageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ViewerService_StreamMessages_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamMessagesRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -346,6 +384,10 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListMessages",
 			Handler:    _ViewerService_ListMessages_Handler,
+		},
+		{
+			MethodName: "GetMessage",
+			Handler:    _ViewerService_GetMessage_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

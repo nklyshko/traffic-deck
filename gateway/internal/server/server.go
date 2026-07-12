@@ -158,6 +158,17 @@ func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRe
 	return &trafficv1.MessageList{Messages: msgs}, nil
 }
 
+func (v *Viewer) GetMessage(ctx context.Context, req *trafficv1.GetMessageRequest) (*trafficv1.WsMessage, error) {
+	m, err := v.st.GetMessage(ctx, req.GetSessionId(), req.GetMessageId())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "message not found")
+	}
+	if err != nil {
+		return nil, storeStatus(err, "get message")
+	}
+	return m, nil
+}
+
 // StreamMessages replays an Upgrade flow's stored frames, then — if follow is set and
 // the session is live — streams newly decoded frames until the session closes or the
 // client disconnects (the live WebSocket timeline, mirroring StreamFlows;).

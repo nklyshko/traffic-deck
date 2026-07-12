@@ -1071,16 +1071,23 @@ func (x *Proxy) GetPassword() string {
 // One decoded WebSocket frame — a message-shaped record, distinct from
 // the request/response Flow. Belongs to the Upgrade flow (flow_id) on its connection.
 type WsMessage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	SessionId     string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	FlowId        string                 `protobuf:"bytes,3,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // parent Upgrade flow
-	FrameNumber   uint64                 `protobuf:"varint,4,opt,name=frame_number,json=frameNumber,proto3" json:"frame_number,omitempty"`
-	TsUnixMicros  int64                  `protobuf:"varint,5,opt,name=ts_unix_micros,json=tsUnixMicros,proto3" json:"ts_unix_micros,omitempty"`
-	FromClient    bool                   `protobuf:"varint,6,opt,name=from_client,json=fromClient,proto3" json:"from_client,omitempty"` // direction: true = client→server
-	Opcode        string                 `protobuf:"bytes,7,opt,name=opcode,proto3" json:"opcode,omitempty"`                            // text|binary|close|ping|pong|continuation
-	Payload       *Body                  `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`                          // inline (small) or object_ref (large)
-	Raw           *Body                  `protobuf:"bytes,9,opt,name=raw,proto3" json:"raw,omitempty"`                                  // original undecoded frame bytes, set when a custom decoder
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SessionId    string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	FlowId       string                 `protobuf:"bytes,3,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // parent Upgrade flow
+	FrameNumber  uint64                 `protobuf:"varint,4,opt,name=frame_number,json=frameNumber,proto3" json:"frame_number,omitempty"`
+	TsUnixMicros int64                  `protobuf:"varint,5,opt,name=ts_unix_micros,json=tsUnixMicros,proto3" json:"ts_unix_micros,omitempty"`
+	FromClient   bool                   `protobuf:"varint,6,opt,name=from_client,json=fromClient,proto3" json:"from_client,omitempty"` // direction: true = client→server
+	Opcode       string                 `protobuf:"bytes,7,opt,name=opcode,proto3" json:"opcode,omitempty"`                            // text|binary|close|ping|pong|continuation
+	Payload      *Body                  `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`                          // inline (small) or object_ref (large)
+	Raw          *Body                  `protobuf:"bytes,9,opt,name=raw,proto3" json:"raw,omitempty"`                                  // original undecoded frame bytes, set when a custom decoder
+	// Annotations, mirroring Flow — a WebSocket/TCP-parsed message is an annotatable record
+	// too (the annotation store is keyed on record_id, which is this message's id).
+	MarkColor     string     `protobuf:"bytes,10,opt,name=mark_color,json=markColor,proto3" json:"mark_color,omitempty"`
+	Favorite      bool       `protobuf:"varint,11,opt,name=favorite,proto3" json:"favorite,omitempty"`
+	TagIds        []string   `protobuf:"bytes,12,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`
+	GroupIds      []string   `protobuf:"bytes,13,rep,name=group_ids,json=groupIds,proto3" json:"group_ids,omitempty"`
+	Comments      []*Comment `protobuf:"bytes,14,rep,name=comments,proto3" json:"comments,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1174,6 +1181,41 @@ func (x *WsMessage) GetPayload() *Body {
 func (x *WsMessage) GetRaw() *Body {
 	if x != nil {
 		return x.Raw
+	}
+	return nil
+}
+
+func (x *WsMessage) GetMarkColor() string {
+	if x != nil {
+		return x.MarkColor
+	}
+	return ""
+}
+
+func (x *WsMessage) GetFavorite() bool {
+	if x != nil {
+		return x.Favorite
+	}
+	return false
+}
+
+func (x *WsMessage) GetTagIds() []string {
+	if x != nil {
+		return x.TagIds
+	}
+	return nil
+}
+
+func (x *WsMessage) GetGroupIds() []string {
+	if x != nil {
+		return x.GroupIds
+	}
+	return nil
+}
+
+func (x *WsMessage) GetComments() []*Comment {
+	if x != nil {
+		return x.Comments
 	}
 	return nil
 }
@@ -1580,7 +1622,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
 	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xa5\x02\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xc7\x03\n" +
 	"\tWsMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1592,7 +1634,14 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"fromClient\x12\x16\n" +
 	"\x06opcode\x18\a \x01(\tR\x06opcode\x12*\n" +
 	"\apayload\x18\b \x01(\v2\x10.traffic.v1.BodyR\apayload\x12\"\n" +
-	"\x03raw\x18\t \x01(\v2\x10.traffic.v1.BodyR\x03raw\"\x8d\x01\n" +
+	"\x03raw\x18\t \x01(\v2\x10.traffic.v1.BodyR\x03raw\x12\x1d\n" +
+	"\n" +
+	"mark_color\x18\n" +
+	" \x01(\tR\tmarkColor\x12\x1a\n" +
+	"\bfavorite\x18\v \x01(\bR\bfavorite\x12\x17\n" +
+	"\atag_ids\x18\f \x03(\tR\x06tagIds\x12\x1b\n" +
+	"\tgroup_ids\x18\r \x03(\tR\bgroupIds\x12/\n" +
+	"\bcomments\x18\x0e \x03(\v2\x13.traffic.v1.CommentR\bcomments\"\x8d\x01\n" +
 	"\x03Tag\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -1685,11 +1734,12 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	5,  // 10: traffic.v1.Flow.response_cookies:type_name -> traffic.v1.Cookie
 	6,  // 11: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
 	6,  // 12: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	11, // 13: traffic.v1.WsMessage.comments:type_name -> traffic.v1.Comment
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }

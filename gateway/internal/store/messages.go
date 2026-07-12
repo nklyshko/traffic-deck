@@ -93,7 +93,60 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	byID := make(map[string]*trafficv1.WsMessage, len(out))
+	for _, m := range out {
+		byID[m.Id] = m
+	}
+	if err := s.attachAnnotations(ctx, db, msgRecords(byID)); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetMessage returns a single WebSocket/parsed message with its annotations attached — the
+// message-side counterpart of GetFlow, used to refresh a row after an annotation change.
+func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*trafficv1.WsMessage, error) {
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		id, flow           string
+		frameNumber, ts    int64
+		fromClient         int64
+		opcode             sql.NullString
+		payloadRef, rawRef sql.NullString
+	)
+	err = db.QueryRowContext(ctx, `
+		SELECT id, flow_id, frame_number, ts_micros, from_client, opcode, payload_ref, raw_ref
+		FROM ws_messages WHERE id=?`, messageID).
+		Scan(&id, &flow, &frameNumber, &ts, &fromClient, &opcode, &payloadRef, &rawRef)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	m := &trafficv1.WsMessage{
+		Id:           id,
+		SessionId:    sessionID,
+		FlowId:       flow,
+		FrameNumber:  uint64(frameNumber),
+		TsUnixMicros: ts,
+		FromClient:   fromClient != 0,
+		Opcode:       opcode.String,
+		Payload:      s.loadBody(ctx, db, payloadRef.String),
+	}
+	if rawRef.Valid && rawRef.String != "" {
+		m.Raw = s.loadBody(ctx, db, rawRef.String)
+	}
+	if err := s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.WsMessage{m.Id: m})); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // GetWsMessageBody returns the full payload bytes of one WebSocket message. When raw is

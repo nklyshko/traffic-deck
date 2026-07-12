@@ -325,8 +325,55 @@ func (s *Store) SetGroups(ctx context.Context, sessionID string, recordIDs, addI
 // attachAnnotations fills the annotation fields (tag_ids, favorite, mark_color,
 // group_ids, comments) on the given flows, keyed by id. Whole-table scans are fine
 // for a single session's bundle; callers pass the subset they care about.
-func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
-	if len(flows) == 0 {
+// annotatable is a record that can carry annotations — a Flow or a WsMessage. The
+// annotation store is keyed on record_id (the flow/message id), so one attach path serves
+// both; the adapters below bridge to the generated proto structs, which share no methods.
+type annotatable interface {
+	addTag(id string)
+	setFavorite()
+	setMark(color string)
+	addGroup(id string)
+	addComment(*trafficv1.Comment)
+}
+
+type flowRecord struct{ f *trafficv1.Flow }
+
+func (r flowRecord) addTag(id string)                { r.f.TagIds = append(r.f.TagIds, id) }
+func (r flowRecord) setFavorite()                    { r.f.Favorite = true }
+func (r flowRecord) setMark(color string)            { r.f.MarkColor = color }
+func (r flowRecord) addGroup(id string)              { r.f.GroupIds = append(r.f.GroupIds, id) }
+func (r flowRecord) addComment(c *trafficv1.Comment) { r.f.Comments = append(r.f.Comments, c) }
+
+type msgRecord struct{ m *trafficv1.WsMessage }
+
+func (r msgRecord) addTag(id string)                { r.m.TagIds = append(r.m.TagIds, id) }
+func (r msgRecord) setFavorite()                    { r.m.Favorite = true }
+func (r msgRecord) setMark(color string)            { r.m.MarkColor = color }
+func (r msgRecord) addGroup(id string)              { r.m.GroupIds = append(r.m.GroupIds, id) }
+func (r msgRecord) addComment(c *trafficv1.Comment) { r.m.Comments = append(r.m.Comments, c) }
+
+// flowRecords / msgRecords wrap a typed record map as the annotatable map attachAnnotations
+// expects, keyed by record id.
+func flowRecords(flows map[string]*trafficv1.Flow) map[string]annotatable {
+	out := make(map[string]annotatable, len(flows))
+	for id, f := range flows {
+		out[id] = flowRecord{f}
+	}
+	return out
+}
+
+func msgRecords(msgs map[string]*trafficv1.WsMessage) map[string]annotatable {
+	out := make(map[string]annotatable, len(msgs))
+	for id, m := range msgs {
+		out[id] = msgRecord{m}
+	}
+	return out
+}
+
+// attachAnnotations folds tags, favorites, marks, groups and comments onto the given
+// records (flows or messages), keyed by record id.
+func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, records map[string]annotatable) error {
+	if len(records) == 0 {
 		return nil
 	}
 	favTags := map[string]bool{}
@@ -346,10 +393,10 @@ func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, flows map[str
 
 	if err := scanPairs(ctx, db, `SELECT record_id, tag_id FROM record_tags`,
 		func(rid, tid string) {
-			if f := flows[rid]; f != nil {
-				f.TagIds = append(f.TagIds, tid)
+			if r := records[rid]; r != nil {
+				r.addTag(tid)
 				if favTags[tid] {
-					f.Favorite = true
+					r.setFavorite()
 				}
 			}
 		}); err != nil {
@@ -357,16 +404,16 @@ func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, flows map[str
 	}
 	if err := scanPairs(ctx, db, `SELECT record_id, color FROM record_marks`,
 		func(rid, color string) {
-			if f := flows[rid]; f != nil {
-				f.MarkColor = color
+			if r := records[rid]; r != nil {
+				r.setMark(color)
 			}
 		}); err != nil {
 		return err
 	}
 	if err := scanPairs(ctx, db, `SELECT record_id, group_id FROM group_members`,
 		func(rid, gid string) {
-			if f := flows[rid]; f != nil {
-				f.GroupIds = append(f.GroupIds, gid)
+			if r := records[rid]; r != nil {
+				r.addGroup(gid)
 			}
 		}); err != nil {
 		return err
@@ -383,8 +430,8 @@ func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, flows map[str
 		if err := rows.Scan(&c.Id, &c.RecordId, &c.Body, &c.CreatedAtUnixMs, &c.UpdatedAtUnixMs); err != nil {
 			return err
 		}
-		if f := flows[c.RecordId]; f != nil {
-			f.Comments = append(f.Comments, &c)
+		if r := records[c.RecordId]; r != nil {
+			r.addComment(&c)
 		}
 	}
 	return rows.Err()

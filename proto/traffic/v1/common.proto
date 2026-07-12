@@ -190,6 +190,14 @@ message WsMessage {
   Body payload = 8;              // inline (small) or object_ref (large)
   Body raw = 9;                  // original undecoded frame bytes, set when a custom decoder
                                  // produced this message; fetch full bytes via GetMessageBody raw=true
+
+  // Annotations, mirroring Flow — a WebSocket/TCP-parsed message is an annotatable record
+  // too (the annotation store is keyed on record_id, which is this message's id).
+  string mark_color = 10;
+  bool favorite = 11;
+  repeated string tag_ids = 12;
+  repeated string group_ids = 13;
+  repeated Comment comments = 14;
 }
 
 // A named, colored label. Definitions are global (catalog) and mirrored

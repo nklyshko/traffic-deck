@@ -99,6 +99,12 @@ class GatewayClient:
         )
         return list(resp.messages)
 
+    async def get_message(self, session_id: str, message_id: str):
+        """One message with its annotations attached (for refreshing a row)."""
+        return await self._ensure().GetMessage(
+            viewer_pb2.GetMessageRequest(session_id=session_id, message_id=message_id)
+        )
+
     async def stream_messages(self, session_id: str, flow_id: str, follow: bool = True):
         """Yield MessageEvents for an Upgrade flow: backfill of stored frames, then
         (if follow and the session is live) new frames until the session closes."""

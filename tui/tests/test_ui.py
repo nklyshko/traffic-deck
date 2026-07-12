@@ -80,6 +80,8 @@ class FakeClient:
     def __init__(self):
         self._sessions = [_session(), _session2()]
         self.force_closed = []
+        self.marks = []     # recorded (record_ids, color|None) from set_mark/clear_mark
+        self.comments = []  # recorded (record_id, body) from add_comment
 
     async def list_sessions(self, limit=200):
         return list(self._sessions)
@@ -117,8 +119,24 @@ class FakeClient:
         for m in _ws_messages():
             yield vp.MessageEvent(message_added=m)
 
+    async def get_message(self, session_id, message_id):
+        for m in _ws_messages():
+            if m.id == message_id:
+                return m
+        raise KeyError(message_id)
+
     async def get_message_body(self, session_id, message_id):
         return b"hello"
+
+    async def set_mark(self, session_id, ids, color):
+        self.marks.append((tuple(ids), color))
+
+    async def clear_mark(self, session_id, ids):
+        self.marks.append((tuple(ids), None))
+
+    async def add_comment(self, session_id, record_id, body):
+        self.comments.append((record_id, body))
+        return cp.Comment(id="c1", record_id=record_id, body=body)
 
     async def list_tags(self):
         return []
@@ -418,6 +436,46 @@ async def test_open_ws_message_timeline():
         assert app.screen.query_one("#msgs", DataTable).row_count == len(_ws_messages())
 
 
+async def _open_ws_timeline(pilot):
+    """Navigate sessions → flows → the WebSocket flow (f3) → its message timeline."""
+    await settle(pilot)
+    await focus(pilot, "#sessions")
+    await pilot.press("enter")
+    await settle(pilot)
+    await focus(pilot, "#flows")
+    await pilot.press("down", "down", "M")
+    await settle(pilot)
+
+
+async def test_ws_message_mark():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        assert isinstance(app.screen, WsMessagesScreen)
+        await focus(pilot, "#msgs")
+        await pilot.press("m")        # mark → opens the color SelectPrompt
+        await settle(pilot)
+        await pilot.press("enter")    # pick the first color
+        await settle(pilot)
+        # The mark reached the gateway keyed on the focused message id (m1).
+        assert app.client.marks and app.client.marks[0][0] == ("m1",)
+        assert app.client.marks[0][1] is not None  # a color, not a clear
+
+
+async def test_ws_message_comment():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        assert isinstance(app.screen, WsMessagesScreen)
+        await focus(pilot, "#msgs")
+        await pilot.press("n")        # comment → opens the text prompt
+        await settle(pilot)
+        app.screen.query_one("#prompt-input", Input).value = "look here"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.client.comments == [("m1", "look here")]
+
+
 async def test_quit_asks_for_confirmation():
     app = make_app()
     async with app.run_test() as pilot:
@@ -537,14 +595,14 @@ async def test_ws_messages_follow_mode():
         await pilot.press("l")     # enable follow: jump to the newest frame
         await pilot.pause()
         assert table.follow and table.cursor_coordinate.row == 1
-        screen._add_message(cp.WsMessage(
+        screen._upsert_msg(cp.WsMessage(
             id="m3", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=4))
         await pilot.pause()
         assert table.cursor_coordinate.row == 2
 
         await pilot.press("l")     # disable: new frames no longer move the cursor
         await pilot.pause()
-        screen._add_message(cp.WsMessage(
+        screen._upsert_msg(cp.WsMessage(
             id="m4", flow_id="f3", from_client=False, opcode="text", ts_unix_micros=5))
         await pilot.pause()
         assert table.cursor_coordinate.row == 2

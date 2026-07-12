@@ -61,6 +61,11 @@ class ViewerServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.ListMessagesRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_viewer__pb2.MessageList.FromString,
                 _registered_method=True)
+        self.GetMessage = channel.unary_unary(
+                '/traffic.v1.ViewerService/GetMessage',
+                request_serializer=traffic_dot_v1_dot_viewer__pb2.GetMessageRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_common__pb2.WsMessage.FromString,
+                _registered_method=True)
         self.StreamMessages = channel.unary_stream(
                 '/traffic.v1.ViewerService/StreamMessages',
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.StreamMessagesRequest.SerializeToString,
@@ -108,6 +113,14 @@ class ViewerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetMessage(self, request, context):
+        """GetMessage returns one message with its annotations (for refreshing a row after an
+        annotation change), the message-side counterpart of GetFlow.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def StreamMessages(self, request, context):
         """StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
         and the session is live) streams new frames as they're decoded, until the
@@ -150,6 +163,11 @@ def add_ViewerServiceServicer_to_server(servicer, server):
                     servicer.ListMessages,
                     request_deserializer=traffic_dot_v1_dot_viewer__pb2.ListMessagesRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_viewer__pb2.MessageList.SerializeToString,
+            ),
+            'GetMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetMessage,
+                    request_deserializer=traffic_dot_v1_dot_viewer__pb2.GetMessageRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_common__pb2.WsMessage.SerializeToString,
             ),
             'StreamMessages': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamMessages,
@@ -298,6 +316,33 @@ class ViewerService(object):
             '/traffic.v1.ViewerService/ListMessages',
             traffic_dot_v1_dot_viewer__pb2.ListMessagesRequest.SerializeToString,
             traffic_dot_v1_dot_viewer__pb2.MessageList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ViewerService/GetMessage',
+            traffic_dot_v1_dot_viewer__pb2.GetMessageRequest.SerializeToString,
+            traffic_dot_v1_dot_common__pb2.WsMessage.FromString,
             options,
             channel_credentials,
             insecure,

@@ -367,7 +367,214 @@ class SessionsScreen(Screen):
         self.app.push_screen(TextPrompt("Import bundle (.tar.gz path):"), _do)
 
 
-class SessionPane(Vertical):
+class AnnotatableTable:
+    """Shared annotation behavior for a record table — flows (SessionPane) or messages
+    (WsMessagesScreen). The annotation store is keyed on record_id, so the same mark / tag /
+    comment / favorite / group actions and bulk-selection work for both, given a few hooks
+    the host supplies. Mixed into a Textual widget/screen (so self.app, self.notify, and
+    @work are available).
+
+    Host must provide: `session_id`, a `_selected: set[str]`, `_tags`/`_groups` lists, and
+    implement `_focused_record_id`, `_record`, `_apply_record`, `_fetch_record`, and
+    `_update_subtitle`."""
+
+    # --- hooks the host implements -------------------------------------------
+    def _focused_record_id(self) -> "str | None":
+        raise NotImplementedError
+
+    def _record(self, rid: str):
+        """The cached record for rid, or None."""
+        raise NotImplementedError
+
+    def _apply_record(self, rec) -> None:
+        """Store the record in the cache and (re-)render its row."""
+        raise NotImplementedError
+
+    async def _fetch_record(self, rid: str):
+        """Fetch a fresh record from the server (raises if unavailable)."""
+        raise NotImplementedError
+
+    # --- shared behavior -----------------------------------------------------
+    @work(exclusive=True, group="defs")
+    async def load_defs(self) -> None:
+        """Load tag/group definitions for the palette + name resolution."""
+        try:
+            self._tags = await self.app.client.list_tags()
+            self._groups = await self.app.client.list_groups()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"load annotations failed: {exc}", severity="warning")
+            return
+        self._tagnames = {t.id: t.name for t in self._tags}
+        self._groupnames = {g.id: g.name for g in self._groups}
+
+    def action_select(self) -> None:
+        """Toggle the focused row's membership in the bulk-annotation selection."""
+        rid = self._focused_record_id()
+        if rid is None:
+            return
+        if rid in self._selected:
+            self._selected.discard(rid)
+        else:
+            self._selected.add(rid)
+        rec = self._record(rid)
+        if rec is not None:
+            self._apply_record(rec)  # re-render the flags cell
+        self._update_subtitle()
+
+    def action_clear_selection(self) -> None:
+        """Reset the whole bulk-annotation selection in one keystroke."""
+        if not self._selected:
+            return
+        cleared, self._selected = self._selected, set()
+        for rid in cleared:
+            rec = self._record(rid)
+            if rec is not None:
+                self._apply_record(rec)  # re-render the (now unselected) flags cell
+        self._update_subtitle()
+
+    def _targets(self) -> list[str]:
+        """Records an annotation applies to: the selection if any, else the focus."""
+        if self._selected:
+            return list(self._selected)
+        rid = self._focused_record_id()
+        return [rid] if rid else []
+
+    async def _refresh(self, ids: list[str]) -> None:
+        """Re-fetch annotated records so their row/cache reflect the change."""
+        for rid in ids:
+            try:
+                rec = await self._fetch_record(rid)
+            except Exception:  # noqa: BLE001 (live/unpersisted record — best effort)
+                continue
+            self._apply_record(rec)
+
+    @work(exclusive=True, group="annotate")
+    async def action_mark(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        opts = [(c, Text("● " + c, style=c)) for c in MARK_COLORS] + [("__clear__", "✕ clear")]
+        choice = await self.app.push_screen_wait(SelectPrompt("Color mark", opts))
+        if choice is None:
+            return
+        try:
+            if choice == "__clear__":
+                await self.app.client.clear_mark(self.session_id, targets)
+            else:
+                await self.app.client.set_mark(self.session_id, targets, choice)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"mark failed: {exc}", severity="error")
+            return
+        await self._refresh(targets)
+
+    @work(exclusive=True, group="annotate")
+    async def action_tag(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        opts = [(t.id, Text(("★ " if t.is_favorite else "") + t.name, style=t.color or "white"))
+                for t in self._tags]
+        opts.append(("__new__", "＋ new tag…"))
+        choice = await self.app.push_screen_wait(SelectPrompt("Toggle tag", opts))
+        if choice is None:
+            return
+        if choice == "__new__":
+            name = await self.app.push_screen_wait(TextPrompt("New tag name"))
+            if not name:
+                return
+            color = await self.app.push_screen_wait(
+                SelectPrompt("Tag color", [(c, Text("● " + c, style=c)) for c in MARK_COLORS]))
+            try:
+                tag = await self.app.client.create_tag(name, color or "")
+                await self.app.client.set_tags(self.session_id, targets, add=[tag.id])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"tag failed: {exc}", severity="error")
+                return
+            self.load_defs()
+        else:
+            present = all(choice in (self._record(r).tag_ids if self._record(r) else []) for r in targets)
+            try:
+                if present:
+                    await self.app.client.set_tags(self.session_id, targets, remove=[choice])
+                else:
+                    await self.app.client.set_tags(self.session_id, targets, add=[choice])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"tag failed: {exc}", severity="error")
+                return
+        await self._refresh(targets)
+
+    @work(exclusive=True, group="annotate")
+    async def action_favorite(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        try:
+            await self.app.client.toggle_favorite(self.session_id, targets)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"favorite failed: {exc}", severity="error")
+            return
+        await self._refresh(targets)
+
+    @work(exclusive=True, group="annotate")
+    async def action_comment(self) -> None:
+        rid = self._focused_record_id()  # comments target a single record
+        if rid is None:
+            return
+        rec = self._record(rid)
+        existing = rec.comments[0] if (rec and rec.comments) else None
+        body = await self.app.push_screen_wait(
+            TextPrompt("Comment (empty to delete)", existing.body if existing else ""))
+        if body is None:
+            return
+        try:
+            if existing and body == "":
+                await self.app.client.delete_comment(self.session_id, existing.id)
+            elif existing:
+                await self.app.client.edit_comment(self.session_id, existing.id, body)
+            elif body:
+                await self.app.client.add_comment(self.session_id, rid, body)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"comment failed: {exc}", severity="error")
+            return
+        await self._refresh([rid])
+
+    @work(exclusive=True, group="annotate")
+    async def action_group(self) -> None:
+        targets = self._targets()
+        if not targets:
+            return
+        opts = [(g.id, Text(g.name, style=g.color or "white")) for g in self._groups]
+        opts.append(("__new__", "＋ new group…"))
+        choice = await self.app.push_screen_wait(SelectPrompt("Toggle group", opts))
+        if choice is None:
+            return
+        if choice == "__new__":
+            name = await self.app.push_screen_wait(TextPrompt("New group name"))
+            if not name:
+                return
+            color = await self.app.push_screen_wait(
+                SelectPrompt("Group color", [(c, Text("● " + c, style=c)) for c in MARK_COLORS]))
+            try:
+                grp = await self.app.client.create_group(name, color or "")
+                await self.app.client.set_groups(self.session_id, targets, add=[grp.id])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"group failed: {exc}", severity="error")
+                return
+            self.load_defs()
+        else:
+            present = all(choice in (self._record(r).group_ids if self._record(r) else []) for r in targets)
+            try:
+                if present:
+                    await self.app.client.set_groups(self.session_id, targets, remove=[choice])
+                else:
+                    await self.app.client.set_groups(self.session_id, targets, add=[choice])
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"group failed: {exc}", severity="error")
+                return
+        await self._refresh(targets)
+
+
+class SessionPane(AnnotatableTable, Vertical):
     """One session's live flow table + filtering + annotations. Hosted as a tab in the
     WorkspaceScreen so several sessions can be open and compared side by side. (Was a
     full Screen; the shared Header/Footer now live on the workspace.)"""
@@ -454,18 +661,6 @@ class SessionPane(Vertical):
                 table.update_cell(fid, self._dur_col, duration_cell(f, live=False))
             except Exception:  # noqa: BLE001
                 pass
-
-    @work(exclusive=True, group="defs")
-    async def load_defs(self) -> None:
-        """Load tag/group definitions for the palette + filter name resolution."""
-        try:
-            self._tags = await self.app.client.list_tags()
-            self._groups = await self.app.client.list_groups()
-        except Exception as exc:  # noqa: BLE001
-            self.notify(f"load annotations failed: {exc}", severity="warning")
-            return
-        self._tagnames = {t.id: t.name for t in self._tags}
-        self._groupnames = {g.id: g.name for g in self._groups}
 
     def _update_subtitle(self) -> None:
         base = f"{len(self.flows)} flows"
@@ -604,174 +799,18 @@ class SessionPane(Vertical):
             return
         self.app.push_screen(WsMessagesScreen(self.session_id, fid))
 
-    # --- annotations ----------------------------------------------
+    # --- annotation hooks (see AnnotatableTable) -------------------
+    def _focused_record_id(self):
+        return self._focused_flow_id()
 
-    def action_select(self) -> None:
-        """Toggle the focused row's membership in the bulk-annotation selection."""
-        fid = self._focused_flow_id()
-        if fid is None:
-            return
-        if fid in self._selected:
-            self._selected.discard(fid)
-        else:
-            self._selected.add(fid)
-        f = self.flows.get(fid)
-        if f is not None:
-            self._upsert(f)  # re-render the flags cell
-        self._update_subtitle()
+    def _record(self, rid):
+        return self.flows.get(rid)
 
-    def action_clear_selection(self) -> None:
-        """Reset the whole bulk-annotation selection in one keystroke."""
-        if not self._selected:
-            return
-        cleared, self._selected = self._selected, set()
-        for fid in cleared:
-            f = self.flows.get(fid)
-            if f is not None:
-                self._upsert(f)  # re-render the (now unselected) flags cell
-        self._update_subtitle()
+    def _apply_record(self, rec) -> None:
+        self._upsert(rec)
 
-    def _targets(self) -> list[str]:
-        """Records an annotation applies to: the selection if any, else the focus."""
-        if self._selected:
-            return list(self._selected)
-        fid = self._focused_flow_id()
-        return [fid] if fid else []
-
-    async def _refresh(self, ids: list[str]) -> None:
-        """Re-fetch annotated flows so their row/cache reflect the change."""
-        for rid in ids:
-            try:
-                f = await self.app.client.get_flow(self.session_id, rid)
-            except Exception:  # noqa: BLE001 (live/unpersisted record — best effort)
-                continue
-            self._upsert(f)
-
-    @work(exclusive=True, group="annotate")
-    async def action_mark(self) -> None:
-        targets = self._targets()
-        if not targets:
-            return
-        opts = [(c, Text("● " + c, style=c)) for c in MARK_COLORS] + [("__clear__", "✕ clear")]
-        choice = await self.app.push_screen_wait(SelectPrompt("Color mark", opts))
-        if choice is None:
-            return
-        try:
-            if choice == "__clear__":
-                await self.app.client.clear_mark(self.session_id, targets)
-            else:
-                await self.app.client.set_mark(self.session_id, targets, choice)
-        except Exception as exc:  # noqa: BLE001
-            self.notify(f"mark failed: {exc}", severity="error")
-            return
-        await self._refresh(targets)
-
-    @work(exclusive=True, group="annotate")
-    async def action_tag(self) -> None:
-        targets = self._targets()
-        if not targets:
-            return
-        opts = [(t.id, Text(("★ " if t.is_favorite else "") + t.name, style=t.color or "white"))
-                for t in self._tags]
-        opts.append(("__new__", "＋ new tag…"))
-        choice = await self.app.push_screen_wait(SelectPrompt("Toggle tag", opts))
-        if choice is None:
-            return
-        if choice == "__new__":
-            name = await self.app.push_screen_wait(TextPrompt("New tag name"))
-            if not name:
-                return
-            color = await self.app.push_screen_wait(
-                SelectPrompt("Tag color", [(c, Text("● " + c, style=c)) for c in MARK_COLORS]))
-            try:
-                tag = await self.app.client.create_tag(name, color or "")
-                await self.app.client.set_tags(self.session_id, targets, add=[tag.id])
-            except Exception as exc:  # noqa: BLE001
-                self.notify(f"tag failed: {exc}", severity="error")
-                return
-            self.load_defs()
-        else:
-            present = all(choice in (self.flows[r].tag_ids if r in self.flows else []) for r in targets)
-            try:
-                if present:
-                    await self.app.client.set_tags(self.session_id, targets, remove=[choice])
-                else:
-                    await self.app.client.set_tags(self.session_id, targets, add=[choice])
-            except Exception as exc:  # noqa: BLE001
-                self.notify(f"tag failed: {exc}", severity="error")
-                return
-        await self._refresh(targets)
-
-    @work(exclusive=True, group="annotate")
-    async def action_favorite(self) -> None:
-        targets = self._targets()
-        if not targets:
-            return
-        try:
-            await self.app.client.toggle_favorite(self.session_id, targets)
-        except Exception as exc:  # noqa: BLE001
-            self.notify(f"favorite failed: {exc}", severity="error")
-            return
-        await self._refresh(targets)
-
-    @work(exclusive=True, group="annotate")
-    async def action_comment(self) -> None:
-        fid = self._focused_flow_id()  # comments target a single record
-        if fid is None:
-            return
-        f = self.flows.get(fid)
-        existing = f.comments[0] if (f and f.comments) else None
-        body = await self.app.push_screen_wait(
-            TextPrompt("Comment (empty to delete)", existing.body if existing else ""))
-        if body is None:
-            return
-        try:
-            if existing and body == "":
-                await self.app.client.delete_comment(self.session_id, existing.id)
-            elif existing:
-                await self.app.client.edit_comment(self.session_id, existing.id, body)
-            elif body:
-                await self.app.client.add_comment(self.session_id, fid, body)
-        except Exception as exc:  # noqa: BLE001
-            self.notify(f"comment failed: {exc}", severity="error")
-            return
-        await self._refresh([fid])
-
-    @work(exclusive=True, group="annotate")
-    async def action_group(self) -> None:
-        targets = self._targets()
-        if not targets:
-            return
-        opts = [(g.id, Text(g.name, style=g.color or "white")) for g in self._groups]
-        opts.append(("__new__", "＋ new group…"))
-        choice = await self.app.push_screen_wait(SelectPrompt("Toggle group", opts))
-        if choice is None:
-            return
-        if choice == "__new__":
-            name = await self.app.push_screen_wait(TextPrompt("New group name"))
-            if not name:
-                return
-            color = await self.app.push_screen_wait(
-                SelectPrompt("Group color", [(c, Text("● " + c, style=c)) for c in MARK_COLORS]))
-            try:
-                grp = await self.app.client.create_group(name, color or "")
-                await self.app.client.set_groups(self.session_id, targets, add=[grp.id])
-            except Exception as exc:  # noqa: BLE001
-                self.notify(f"group failed: {exc}", severity="error")
-                return
-            self.load_defs()
-        else:
-            present = all(choice in (self.flows[r].group_ids if r in self.flows else []) for r in targets)
-            try:
-                if present:
-                    await self.app.client.set_groups(self.session_id, targets, remove=[choice])
-                else:
-                    await self.app.client.set_groups(self.session_id, targets, add=[choice])
-            except Exception as exc:  # noqa: BLE001
-                self.notify(f"group failed: {exc}", severity="error")
-                return
-        await self._refresh(targets)
-
+    async def _fetch_record(self, rid):
+        return await self.app.client.get_flow(self.session_id, rid)
 
 class WorkspaceScreen(Screen):
     """Tabbed workspace: one SessionPane per open session, so several sessions can be
@@ -1326,12 +1365,20 @@ class BodyScreen(_PayloadView):
         return f"{self._id_prefix}-{self._label}"
 
 
-class WsMessagesScreen(Screen):
-    """WebSocket message timeline for an Upgrade flow — directional
-    frames in time order, distinct from the request/response view."""
+class WsMessagesScreen(AnnotatableTable, Screen):
+    """WebSocket / TCP-parsed message timeline for a flow — directional frames in time
+    order, distinct from the request/response view. Messages are annotatable records: the
+    same mark/comment/tag/favorite/group actions as the flow table (via AnnotatableTable)."""
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("space", "select", "Select"),
+        Binding("D", "clear_selection", "Deselect"),
+        Binding("m", "mark", "Mark"),
+        Binding("t", "tag", "Tag"),
+        Binding("F", "favorite", "Favorite"),
+        Binding("n", "comment", "Comment"),
+        Binding("g", "group", "Group"),
         Binding("l", "follow", "Follow new"),
         Binding("q", "quit", "Quit"),
     ]
@@ -1341,11 +1388,18 @@ class WsMessagesScreen(Screen):
         self.session_id = session_id
         self.flow_id = flow_id
         self._msgs: dict[str, object] = {}
+        self._rows: set[str] = set()
+        self._cols: list = []
+        self._selected: set[str] = set()       # multi-selection for bulk annotation
+        self._tags: list = []
+        self._groups: list = []
+        self._tagnames: dict[str, str] = {}
+        self._groupnames: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
         table = NavDataTable(id="msgs", cursor_type="row", zebra_stripes=True)
-        table.add_columns("Time", "Dir", "Opcode", "Len", "Preview")
+        self._cols = table.add_columns("", "Time", "Dir", "Opcode", "Len", "Preview")
         yield table
         yield Footer()
 
@@ -1353,10 +1407,13 @@ class WsMessagesScreen(Screen):
         self.title = "TrafficDeck"
         self._update_subtitle()
         self.query_one("#msgs", DataTable).focus()
+        self.load_defs()
         self.load()
 
     def _update_subtitle(self) -> None:
         base = f"websocket · {self.flow_id[:8]}"
+        if self._selected:
+            base += f" · {len(self._selected)} selected"
         if self.query_one("#msgs", NavDataTable).follow:
             base += " · ⇣ follow"
         self.sub_title = base
@@ -1367,17 +1424,29 @@ class WsMessagesScreen(Screen):
         table.set_follow(not table.follow)
         self._update_subtitle()
 
-    def _add_message(self, m) -> None:
-        if m.id in self._msgs:
-            return
-        self._msgs[m.id] = m
+    def _msg_cells(self, m) -> tuple:
         arrow = "[cyan]C→S[/cyan]" if m.from_client else "[magenta]S→C[/magenta]"
         size = m.payload.size if m.payload else 0
         inline = m.payload.inline if (m.payload and m.payload.WhichOneof("content") == "inline") else b""
         preview = bytes_preview(inline) if inline else (f"[dim]{size} bytes[/dim]" if size else "")
-        self.query_one("#msgs", DataTable).add_row(
+        return (
+            flags_cell(m, m.id in self._selected),
             fmt_time(m.ts_unix_micros), arrow, m.opcode, str(size),
-            Text.from_markup(preview), key=m.id)
+            Text.from_markup(preview),
+        )
+
+    def _upsert_msg(self, m) -> None:
+        """Add a new frame row or update an existing one in place (annotation refresh)."""
+        self._msgs[m.id] = m
+        table = self.query_one("#msgs", DataTable)
+        cells = self._msg_cells(m)
+        if m.id in self._rows:
+            for col, val in zip(self._cols, cells):
+                table.update_cell(m.id, col, val)
+        else:
+            table.add_row(*cells, key=m.id)
+            self._rows.add(m.id)
+            self._update_subtitle()
 
     @work(exclusive=True)
     async def load(self) -> None:
@@ -1387,7 +1456,7 @@ class WsMessagesScreen(Screen):
             async for ev in self.app.client.stream_messages(self.session_id, self.flow_id, follow=True):
                 kind = ev.WhichOneof("event")
                 if kind == "message_added":
-                    self._add_message(ev.message_added)
+                    self._upsert_msg(ev.message_added)
                 elif kind == "session_event":
                     self.notify("session closed — live capture ended")
         except Exception as exc:  # noqa: BLE001
@@ -1399,6 +1468,22 @@ class WsMessagesScreen(Screen):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         mid = str(event.row_key.value)
         self.app.push_screen(WsPayloadScreen(self.session_id, self._msgs[mid]))
+
+    # --- annotation hooks (see AnnotatableTable) -------------------
+    def _focused_record_id(self) -> "str | None":
+        table = self.query_one("#msgs", DataTable)
+        if table.cursor_coordinate is None or table.row_count == 0:
+            return None
+        return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+
+    def _record(self, rid):
+        return self._msgs.get(rid)
+
+    def _apply_record(self, rec) -> None:
+        self._upsert_msg(rec)
+
+    async def _fetch_record(self, rid):
+        return await self.app.client.get_message(self.session_id, rid)
 
 
 class WsPayloadScreen(_PayloadView):

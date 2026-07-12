@@ -563,7 +563,7 @@ func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.F
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.attachAnnotations(ctx, db, byID); err != nil {
+	if err := s.attachAnnotations(ctx, db, flowRecords(byID)); err != nil {
 		return nil, err
 	}
 	if err := s.attachWsCounts(ctx, db, byID); err != nil {
@@ -737,7 +737,7 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		f.ResponseBody = s.loadBody(ctx, db, respRef.String)
 	}
 	single := map[string]*trafficv1.Flow{f.Id: f}
-	if err := s.attachAnnotations(ctx, db, single); err != nil {
+	if err := s.attachAnnotations(ctx, db, flowRecords(single)); err != nil {
 		return nil, err
 	}
 	if err := s.attachWsCounts(ctx, db, single); err != nil {
