@@ -100,6 +100,18 @@ def _session_dict(s) -> dict:
     }
 
 
+def _annotations(rec, tagnames: dict, groupnames: dict) -> dict:
+    """Annotation fields shared by flows and messages (both are record_id-keyed records):
+    favorite, color mark, tag/group names, and comment bodies."""
+    return {
+        "favorite": rec.favorite,
+        "mark_color": rec.mark_color or None,
+        "tags": [tagnames.get(t, t) for t in rec.tag_ids],
+        "groups": [groupnames.get(g, g) for g in rec.group_ids],
+        "comments": [c.body for c in rec.comments],
+    }
+
+
 def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
     return {
         "id": f.id,
@@ -115,11 +127,7 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "tls_decrypted": f.tls_decrypted,
         "websocket": f.websocket,
         "ws_message_count": f.ws_message_count,
-        "favorite": f.favorite,
-        "mark_color": f.mark_color or None,
-        "tags": [tagnames.get(t, t) for t in f.tag_ids],
-        "groups": [groupnames.get(g, g) for g in f.group_ids],
-        "comments": [c.body for c in f.comments],
+        **_annotations(f, tagnames, groupnames),
         "http2_fingerprint": f.http2_fingerprint or None,
         "ja3": f.ja3 or None,
         "ja4": f.ja4 or None,
@@ -501,10 +509,14 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
     page with `offset`/`limit` (default 100) to avoid huge responses. Large payloads
     carry a note; fetch them in full with get_ws_message_body using the message `id`.
 
+    Each frame carries its annotations (favorite, mark_color, tags, groups, comments) —
+    messages are annotatable records just like flows.
+
     When a custom decoder handled the connection, a message's payload is the decoded form
     and `has_raw` is true — fetch the original undecoded bytes with
     get_ws_message_body(message_id, raw=True)."""
     sid = await _resolve_session(session_id)
+    tagnames, groupnames = await _name_maps()
     msgs = await client().list_messages(sid, flow_id)
     total = len(msgs)
     out = []
@@ -516,6 +528,8 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
             "direction": "client->server" if m.from_client else "server->client",
             "opcode": m.opcode,
             "size": size,
+            # Messages are annotatable records, like flows.
+            **_annotations(m, tagnames, groupnames),
         }
         if m.raw and m.raw.size:
             item["has_raw"] = True  # original undecoded bytes; fetch with get_ws_message_body(raw=True)

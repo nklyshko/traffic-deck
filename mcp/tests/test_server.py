@@ -134,6 +134,57 @@ def test_bytes_payload_hex_and_offset():
     assert w["hex"] == "0102030405" and w["offset"] == 2 and w["size"] == 7
 
 
+# --- message annotations --------------------------------------------------
+
+def test_annotations_shared_by_flows_and_messages():
+    tagnames = {"t1": "auth"}
+    groupnames = {"g1": "login"}
+    # A message carries the same annotation fields as a flow (record_id-keyed store).
+    m = cp.WsMessage(id="m1", mark_color="red", favorite=True, tag_ids=["t1"], group_ids=["g1"])
+    m.comments.append(cp.Comment(id="c1", record_id="m1", body="look"))
+    a = S._annotations(m, tagnames, groupnames)
+    assert a == {
+        "favorite": True,
+        "mark_color": "red",
+        "tags": ["auth"],
+        "groups": ["login"],
+        "comments": ["look"],
+    }
+    # Same helper resolves a flow identically.
+    f = _flow(id="f1", mark_color="blue", tag_ids=["t1"])
+    assert S._annotations(f, tagnames, groupnames)["mark_color"] == "blue"
+    assert S._annotations(f, tagnames, groupnames)["tags"] == ["auth"]
+
+
+def test_list_ws_messages_includes_annotations(monkeypatch):
+    import asyncio
+
+    m = cp.WsMessage(id="m1", from_client=True, opcode="text", ts_unix_micros=5,
+                     mark_color="red", tag_ids=["t1"])
+    m.comments.append(cp.Comment(id="c1", record_id="m1", body="note"))
+    m.payload.CopyFrom(cp.Body(size=2, inline=b"hi"))
+
+    class FakeClient:
+        async def list_messages(self, sid, fid):
+            return [m]
+
+    async def _resolve(sid):
+        return sid
+
+    async def _names():
+        return {"t1": "auth"}, {}
+
+    monkeypatch.setattr(S, "client", lambda: FakeClient())
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    monkeypatch.setattr(S, "_name_maps", _names)
+
+    out = asyncio.run(S.list_ws_messages("s", "f"))
+    item = out["messages"][0]
+    assert item["mark_color"] == "red"
+    assert item["tags"] == ["auth"]
+    assert item["comments"] == ["note"]
+
+
 # --- ClientHello export ---------------------------------------------------
 
 def test_flow_detail_notes_client_hellos_and_hrr():
