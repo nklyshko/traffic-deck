@@ -5,7 +5,7 @@ covered by test_render.py / test_filters.py."""
 
 from __future__ import annotations
 
-from textual.widgets import DataTable, Input, Static, TabPane
+from textual.widgets import DataTable, Input, OptionList, Static, TabPane
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
 from traffic.v1 import common_pb2 as cp
@@ -50,6 +50,9 @@ def _flow(fid, method, status, websocket=False):
         f.ja3 = "a" * 32
         f.tls_hrr = True
         f.client_hellos.extend([b"\x01\x00\x00\x02\x03\x03", b"\x01\x00\x00\x01\x03"])
+    if fid == "f2":  # source metadata (as a scrape manager would attach)
+        f.metadata["proxy_provider"] = "brightdata"
+        f.metadata["scrape_group"] = "us-1"
     return f
 
 
@@ -303,6 +306,57 @@ async def test_filter_help_shown_only_while_filter_focused():
         await pilot.press("escape")        # leave the filter
         await settle(pilot)
         assert help_.display is False      # hidden again
+
+
+async def _open_flows(pilot):
+    """Navigate sessions → the first session's flow table."""
+    await settle(pilot)
+    await focus(pilot, "#sessions")
+    await pilot.press("enter")
+    await settle(pilot)
+
+
+async def test_metadata_column_picker_toggles_column():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_flows(pilot)
+        pane = app.screen.query_one(SessionPane)
+        table = pane.query_one("#flows", DataTable)
+        base_cols = len(table.ordered_columns)
+        assert pane._meta_cols == []            # nothing shown by default
+
+        await focus(pilot, "#flows")
+        await pilot.press("C")                  # open the column picker
+        await settle(pilot)
+        # Options are the discovered metadata keys, sorted: proxy_provider, scrape_group.
+        app.screen.query_one(OptionList).highlighted = 0
+        await pilot.press("enter")              # toggle proxy_provider on
+        await settle(pilot)
+
+        assert pane._meta_cols == ["proxy_provider"]
+        assert len(table.ordered_columns) == base_cols + 1
+        # f2 carries proxy_provider=brightdata; its row shows it in the new column.
+        assert str(table.get_cell("f2", pane._meta_col_keys["proxy_provider"])) == "brightdata"
+
+        # Toggling the same key again removes the column.
+        await pilot.press("C")
+        await settle(pilot)
+        app.screen.query_one(OptionList).highlighted = 0
+        await pilot.press("enter")
+        await settle(pilot)
+        assert pane._meta_cols == []
+        assert len(table.ordered_columns) == base_cols
+
+
+async def test_metadata_column_from_env(monkeypatch):
+    monkeypatch.setenv("TRAFFICDECK_META_COLUMNS", "proxy_provider")
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_flows(pilot)
+        pane = app.screen.query_one(SessionPane)
+        assert pane._meta_cols == ["proxy_provider"]
+        table = pane.query_one("#flows", DataTable)
+        assert str(table.get_cell("f2", pane._meta_col_keys["proxy_provider"])) == "brightdata"
 
 
 async def test_drill_flow_to_detail():

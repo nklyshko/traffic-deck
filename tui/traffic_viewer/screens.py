@@ -367,6 +367,18 @@ class SessionsScreen(Screen):
         self.app.push_screen(TextPrompt("Import bundle (.tar.gz path):"), _do)
 
 
+def _env_meta_columns() -> list[str]:
+    """Metadata keys to show as flow-table columns by default, from
+    TRAFFICDECK_META_COLUMNS (comma-separated). A source may also declare defaults
+    per session (viewer.columns); the pane unions both."""
+    raw = os.environ.get("TRAFFICDECK_META_COLUMNS", "")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+# How wide a metadata value cell may get before it's truncated in the table.
+_META_CELL_MAX = 24
+
+
 class AnnotatableTable:
     """Shared annotation behavior for a record table — flows (SessionPane) or messages
     (WsMessagesScreen). The annotation store is keyed on record_id, so the same mark / tag /
@@ -589,6 +601,7 @@ class SessionPane(AnnotatableTable, Vertical):
         Binding("F", "favorite", "Favorite"),
         Binding("n", "comment", "Comment"),
         Binding("g", "group", "Group"),
+        Binding("C", "columns", "Columns"),
         Binding("M", "messages", "WS msgs"),
         Binding("l", "follow", "Follow new"),
     ]
@@ -599,7 +612,9 @@ class SessionPane(AnnotatableTable, Vertical):
         self.label = label
         self.flows: dict[str, object] = {}  # flow id -> cached Flow (for live detail)
         self._rows: set[str] = set()
-        self._cols: list = []
+        self._cols: list = []                   # base (fixed) column keys
+        self._meta_cols: list[str] = _env_meta_columns()  # metadata keys shown as columns
+        self._meta_col_keys: dict[str, object] = {}       # metadata key -> DataTable ColumnKey
         self._predicate = None  # active filter
         self._selected: set[str] = set()       # multi-selection for bulk annotation
         self._tags: list = []                  # tag defs (catalog)
@@ -615,9 +630,36 @@ class SessionPane(AnnotatableTable, Vertical):
         table = NavDataTable(id="flows", cursor_type="row", zebra_stripes=True)
         self._cols = table.add_columns("", "Time", "Method", "Status", "Dur", "Proto", "Authority", "Path")
         self._dur_col = self._cols[4]
+        for key in self._meta_cols:  # source metadata shown as extra columns
+            self._meta_col_keys[key] = table.add_column(key, key=f"meta:{key}")
         yield table
         # Filter cheat sheet, docked at the bottom; only shown while the filter is focused.
         yield Static(FILTER_HELP, id="filter-help")
+
+    def _ordered_cols(self) -> list:
+        """All column keys in display order: the fixed base columns then metadata columns."""
+        return [*self._cols, *(self._meta_col_keys[k] for k in self._meta_cols)]
+
+    def _meta_value(self, f, key: str) -> str:
+        return (f.metadata.get(key, "") or "")[:_META_CELL_MAX]
+
+    def _add_meta_column(self, key: str) -> None:
+        if key in self._meta_cols:
+            return
+        table = self.query_one("#flows", DataTable)
+        self._meta_cols.append(key)
+        self._meta_col_keys[key] = table.add_column(key, default="", key=f"meta:{key}")
+        for fid in self._rows:  # backfill the new cell for rows already on screen
+            f = self.flows.get(fid)
+            if f is not None:
+                table.update_cell(fid, self._meta_col_keys[key], self._meta_value(f, key))
+
+    def _remove_meta_column(self, key: str) -> None:
+        if key not in self._meta_cols:
+            return
+        table = self.query_one("#flows", DataTable)
+        table.remove_column(self._meta_col_keys.pop(key))
+        self._meta_cols.remove(key)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         # Reveal the filter help only while the filter input is being edited.
@@ -730,6 +772,7 @@ class SessionPane(AnnotatableTable, Vertical):
             f.protocol or "",
             f.authority or "",
             (f.path or "")[:80],
+            *(self._meta_value(f, k) for k in self._meta_cols),
         )
 
     def _upsert(self, f) -> None:
@@ -743,7 +786,7 @@ class SessionPane(AnnotatableTable, Vertical):
             return
         cells = self._cells(f)
         if f.id in self._rows:
-            for col, val in zip(self._cols, cells):
+            for col, val in zip(self._ordered_cols(), cells):
                 table.update_cell(f.id, col, val)
         else:
             table.add_row(*cells, key=f.id)
@@ -783,6 +826,26 @@ class SessionPane(AnnotatableTable, Vertical):
         if table.cursor_coordinate is None or table.row_count == 0:
             return None
         return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+
+    @work(exclusive=True)
+    async def action_columns(self) -> None:
+        """Toggle a source-metadata key as a table column. Keys are discovered from the
+        loaded flows (plus any already shown); ✓ marks columns currently displayed."""
+        keys = sorted({k for f in self.flows.values() for k in f.metadata.keys()})
+        for k in self._meta_cols:  # keep a shown column listed even if no loaded flow has it
+            if k not in keys:
+                keys.append(k)
+        if not keys:
+            self.notify("no source metadata on these flows", severity="warning")
+            return
+        opts = [(k, Text(("✓ " if k in self._meta_cols else "  ") + k)) for k in keys]
+        choice = await self.app.push_screen_wait(SelectPrompt("Toggle column", opts))
+        if choice is None:
+            return
+        if choice in self._meta_cols:
+            self._remove_meta_column(choice)
+        else:
+            self._add_meta_column(choice)
 
     def action_compare(self) -> None:
         fid = self._focused_flow_id()

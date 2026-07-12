@@ -18,6 +18,7 @@ def flow(**kw):
         method="GET", authority="api.example.com", path="/v1", query="", scheme="https",
         status=200, content_type="application/json",
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
+        metadata={},
     )
     d.update(kw)
     return types.SimpleNamespace(**d)
@@ -73,6 +74,28 @@ def test_negation_both_forms():
     assert compile_filter("!~m POST")(f) is True
     assert compile_filter("! ~m POST")(f) is True
     assert compile_filter("!~m GET")(f) is False
+
+
+def test_meta_field():
+    a = flow(metadata={"proxy_provider": "brightdata", "scrape_group": "us-1"})
+    b = flow(metadata={"proxy_provider": "oxylabs"})
+    c = flow(metadata={})
+    # value regex
+    assert compile_filter("~meta proxy_provider=bright")(a) is True
+    assert compile_filter("~meta proxy_provider=bright")(b) is False
+    assert compile_filter("~meta proxy_provider=bright")(c) is False
+    assert compile_filter("~meta scrape_group=us-.*")(a) is True
+    # presence (no =)
+    assert compile_filter("~meta scrape_group")(a) is True
+    assert compile_filter("~meta scrape_group")(b) is False
+    # negation + AND with another term
+    assert compile_filter("!~meta proxy_provider=bright")(b) is True
+    assert compile_filter("~m GET ~meta proxy_provider=oxy")(b) is True
+
+
+def test_meta_needs_argument():
+    with pytest.raises(ValueError):
+        compile_filter("~meta")
 
 
 def test_terms_are_anded():

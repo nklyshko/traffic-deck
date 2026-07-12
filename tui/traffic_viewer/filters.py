@@ -23,6 +23,7 @@ FILTER_HELP = (
     "  ~m <re> method     ~d <re> domain      ~u <re> url        ~c <re> status\n"
     "  ~t <re> type       ~mark <re> color    ~tag <re> name     ~group <re> name\n"
     "  ~comment <re>      ~s has response     ~q no response     ~fav favorited\n"
+    "  ~meta <key>=<re>   (source metadata; ~meta <key> alone matches presence)\n"
     "  <re>  a bare regex matches the URL           Enter apply · Esc cancel"
 )
 
@@ -36,8 +37,9 @@ def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | N
 
     Terms (space-separated, ANDed): `~m/~d/~u/~c/~t <regex>`, `~s`/`~q` (has/no
     response), `~fav` (favorited), annotation fields `~mark/~tag/~group/~comment
-    <regex>`, a naked regex (matches the URL), and a leading `!` negates a term.
-    Raises ValueError on a bad regex. (Full `& | ()` grammar is future.)
+    <regex>`, `~meta <key>=<regex>` (a source metadata value; `~meta <key>` alone
+    matches presence), a naked regex (matches the URL), and a leading `!` negates a
+    term. Raises ValueError on a bad regex. (Full `& | ()` grammar is future.)
     """
     tagnames = tagnames or {}
     groupnames = groupnames or {}
@@ -77,6 +79,17 @@ def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | N
         elif t == "~fav":
             base = lambda f: f.favorite
             i += 1
+        elif t == "~meta":
+            i += 1
+            if i >= len(toks):
+                raise ValueError("~meta needs a key=regex (or key) argument")
+            key, _, pat = toks[i].partition("=")
+            i += 1
+            if pat:
+                rx = _rx(pat)
+                base = lambda f, rx=rx, k=key: bool(rx.search(f.metadata.get(k, "")))
+            else:  # `~meta key` (no =) matches flows that have the key at all
+                base = lambda f, k=key: k in f.metadata
         elif t in fields:
             i += 1
             if i >= len(toks):
