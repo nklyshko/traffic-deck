@@ -161,6 +161,13 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class QuitConfirmScreen(ConfirmScreen):
+    """Quit confirmation where a second Ctrl+C also confirms (the app-level Ctrl+C binding
+    doesn't reach through a modal, so the dialog handles the repeat press itself)."""
+
+    BINDINGS = [Binding("ctrl+c", "confirm", "Quit", show=False)]
+
+
 class SessionsScreen(Screen):
     BINDINGS = [
         Binding("r", "refresh", "Refresh"),

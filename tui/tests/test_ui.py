@@ -14,6 +14,7 @@ from traffic_viewer.app import TrafficViewerApp
 from traffic_viewer.screens import (
     BodyScreen,
     ConfirmScreen,
+    QuitConfirmScreen,
     FlowDetailScreen,
     SessionPane,
     WorkspaceScreen,
@@ -152,6 +153,36 @@ async def test_delete_session():
         await pilot.press("y")   # confirm
         await settle(pilot)
         assert app.screen.query_one("#sessions", DataTable).row_count == 1
+
+
+async def test_ctrl_c_opens_quit_dialog_then_confirms():
+    app = make_app()
+    exits = []
+    app.exit = lambda *a, **k: exits.append(True)  # spy: don't actually tear down
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("ctrl+c")           # first: open the quit dialog
+        await settle(pilot)
+        assert isinstance(app.screen, QuitConfirmScreen)
+        assert not exits                      # first press must not quit
+        await pilot.press("ctrl+c")           # second: confirm quit
+        await settle(pilot)
+        assert exits == [True]
+
+
+async def test_ctrl_c_can_be_cancelled():
+    app = make_app()
+    exits = []
+    app.exit = lambda *a, **k: exits.append(True)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("ctrl+c")
+        await settle(pilot)
+        assert isinstance(app.screen, QuitConfirmScreen)
+        await pilot.press("n")                # decline
+        await settle(pilot)
+        assert isinstance(app.screen, SessionsScreen)
+        assert not exits
 
 
 async def test_drill_session_to_flows():
