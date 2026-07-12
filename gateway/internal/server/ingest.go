@@ -133,6 +133,7 @@ func (i *Ingest) OpenSession(ctx context.Context, req *trafficv1.OpenSessionRequ
 		Label:      req.GetLabel(),
 		SourceKind: req.GetSourceKind(),
 		Status:     trafficv1.SessionStatus_SESSION_STATUS_OPEN,
+		Metadata:   req.GetMetadata(),
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
 	}

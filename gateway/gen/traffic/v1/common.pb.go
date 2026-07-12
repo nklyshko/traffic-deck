@@ -198,7 +198,11 @@ type Session struct {
 	KeylogBytes     uint64                 `protobuf:"varint,8,opt,name=keylog_bytes,json=keylogBytes,proto3" json:"keylog_bytes,omitempty"`
 	FlowCount       uint32                 `protobuf:"varint,9,opt,name=flow_count,json=flowCount,proto3" json:"flow_count,omitempty"`
 	// Free-text group label to organize sessions (a folder-like grouping); "" = ungrouped.
-	Group         string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
+	Group string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
+	// Opaque metadata the capture source supplied at OpenSession — verbatim key/value
+	// pairs the gateway stores and surfaces. A source can declare `viewer.columns`
+	// (comma-separated flow-metadata keys) to seed the viewer's default table columns.
+	Metadata      map[string]string `protobuf:"bytes,11,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -301,6 +305,13 @@ func (x *Session) GetGroup() string {
 		return x.Group
 	}
 	return ""
+}
+
+func (x *Session) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
 }
 
 type Header struct {
@@ -1526,7 +1537,7 @@ var File_traffic_v1_common_proto protoreflect.FileDescriptor
 const file_traffic_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"\x17traffic/v1/common.proto\x12\n" +
-	"traffic.v1\"\xea\x02\n" +
+	"traffic.v1\"\xe6\x03\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x127\n" +
@@ -1541,7 +1552,11 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"flow_count\x18\t \x01(\rR\tflowCount\x12\x14\n" +
 	"\x05group\x18\n" +
-	" \x01(\tR\x05group\"2\n" +
+	" \x01(\tR\x05group\x12=\n" +
+	"\bmetadata\x18\v \x03(\v2!.traffic.v1.Session.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"2\n" +
 	"\x06Header\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"\xe3\x01\n" +
@@ -1702,7 +1717,7 @@ func file_traffic_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_traffic_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_traffic_v1_common_proto_goTypes = []any{
 	(SourceKind)(0),        // 0: traffic.v1.SourceKind
 	(FileKind)(0),          // 1: traffic.v1.FileKind
@@ -1718,28 +1733,30 @@ var file_traffic_v1_common_proto_goTypes = []any{
 	(*Comment)(nil),        // 11: traffic.v1.Comment
 	(*Group)(nil),          // 12: traffic.v1.Group
 	(*DecodeProgress)(nil), // 13: traffic.v1.DecodeProgress
-	nil,                    // 14: traffic.v1.Flow.MetadataEntry
+	nil,                    // 14: traffic.v1.Session.MetadataEntry
+	nil,                    // 15: traffic.v1.Flow.MetadataEntry
 }
 var file_traffic_v1_common_proto_depIdxs = []int32{
 	0,  // 0: traffic.v1.Session.source_kind:type_name -> traffic.v1.SourceKind
 	2,  // 1: traffic.v1.Session.status:type_name -> traffic.v1.SessionStatus
-	4,  // 2: traffic.v1.Flow.request_headers:type_name -> traffic.v1.Header
-	4,  // 3: traffic.v1.Flow.response_headers:type_name -> traffic.v1.Header
-	5,  // 4: traffic.v1.Flow.request_cookies:type_name -> traffic.v1.Cookie
-	6,  // 5: traffic.v1.Flow.request_body:type_name -> traffic.v1.Body
-	6,  // 6: traffic.v1.Flow.response_body:type_name -> traffic.v1.Body
-	11, // 7: traffic.v1.Flow.comments:type_name -> traffic.v1.Comment
-	8,  // 8: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
-	14, // 9: traffic.v1.Flow.metadata:type_name -> traffic.v1.Flow.MetadataEntry
-	5,  // 10: traffic.v1.Flow.response_cookies:type_name -> traffic.v1.Cookie
-	6,  // 11: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
-	6,  // 12: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
-	11, // 13: traffic.v1.WsMessage.comments:type_name -> traffic.v1.Comment
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	14, // 2: traffic.v1.Session.metadata:type_name -> traffic.v1.Session.MetadataEntry
+	4,  // 3: traffic.v1.Flow.request_headers:type_name -> traffic.v1.Header
+	4,  // 4: traffic.v1.Flow.response_headers:type_name -> traffic.v1.Header
+	5,  // 5: traffic.v1.Flow.request_cookies:type_name -> traffic.v1.Cookie
+	6,  // 6: traffic.v1.Flow.request_body:type_name -> traffic.v1.Body
+	6,  // 7: traffic.v1.Flow.response_body:type_name -> traffic.v1.Body
+	11, // 8: traffic.v1.Flow.comments:type_name -> traffic.v1.Comment
+	8,  // 9: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
+	15, // 10: traffic.v1.Flow.metadata:type_name -> traffic.v1.Flow.MetadataEntry
+	5,  // 11: traffic.v1.Flow.response_cookies:type_name -> traffic.v1.Cookie
+	6,  // 12: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
+	6,  // 13: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
+	11, // 14: traffic.v1.WsMessage.comments:type_name -> traffic.v1.Comment
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }
@@ -1757,7 +1774,7 @@ func file_traffic_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_common_proto_rawDesc), len(file_traffic_v1_common_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

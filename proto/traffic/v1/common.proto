@@ -40,6 +40,11 @@ message Session {
   uint32 flow_count = 9;
   // Free-text group label to organize sessions (a folder-like grouping); "" = ungrouped.
   string group = 10;
+
+  // Opaque metadata the capture source supplied at OpenSession — verbatim key/value
+  // pairs the gateway stores and surfaces. A source can declare `viewer.columns`
+  // (comma-separated flow-metadata keys) to seed the viewer's default table columns.
+  map<string, string> metadata = 11;
 }
 
 message Header {

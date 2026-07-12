@@ -12,6 +12,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_group TEXT NOT NULL DEFAULT ''    -- free-text group label for organizing sessions
 );
 
+-- Opaque per-session metadata supplied by the capture source at OpenSession (e.g.
+-- viewer.columns declaring the viewer's default table columns). A side table so
+-- existing catalogs keep reading cleanly (it's just empty for them).
+CREATE TABLE IF NOT EXISTS session_metadata (
+    session_id TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    PRIMARY KEY (session_id, key)
+);
+
 -- Annotation definitions (plan §12): canonical here so tags/groups are consistent
 -- and selectable across sessions; mirrored into each bundle that uses them. The
 -- built-in Favorite tag is seeded with a fixed id.

@@ -201,6 +201,7 @@ type NewSession struct {
 	Status      trafficv1.SessionStatus
 	PcapBytes   int64
 	KeylogBytes int64
+	Metadata    map[string]string // opaque source-supplied metadata (e.g. viewer.columns)
 }
 
 func (s *Store) CreateSession(ctx context.Context, ns NewSession) error {
@@ -211,9 +212,41 @@ func (s *Store) CreateSession(ctx context.Context, ns NewSession) error {
 		time.Now().UnixMilli(), ns.PcapBytes, ns.KeylogBytes); err != nil {
 		return err
 	}
+	for k, v := range ns.Metadata {
+		if _, err := s.catalog.ExecContext(ctx,
+			`INSERT OR REPLACE INTO session_metadata (session_id, key, value) VALUES (?,?,?)`,
+			ns.ID, k, v); err != nil {
+			return err
+		}
+	}
 	// Materialize the per-session bundle DB up front.
 	_, err := s.sessionDB(ctx, ns.ID)
 	return err
+}
+
+// attachSessionMetadata fills each session's Metadata map from the session_metadata table.
+func (s *Store) attachSessionMetadata(ctx context.Context, sessions map[string]*trafficv1.Session) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	rows, err := s.catalog.QueryContext(ctx, `SELECT session_id, key, value FROM session_metadata`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid, k, v string
+		if err := rows.Scan(&sid, &k, &v); err != nil {
+			return err
+		}
+		if ss := sessions[sid]; ss != nil {
+			if ss.Metadata == nil {
+				ss.Metadata = map[string]string{}
+			}
+			ss.Metadata[k] = v
+		}
+	}
+	return rows.Err()
 }
 
 // FinishSession sets the terminal status, closed_at, and flow_count in the catalog.
@@ -426,14 +459,22 @@ func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]*traffic
 	defer rows.Close()
 
 	var out []*trafficv1.Session
+	byID := map[string]*trafficv1.Session{}
 	for rows.Next() {
-		s, err := scanSession(rows)
+		sess, err := scanSession(rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, s)
+		out = append(out, sess)
+		byID[sess.Id] = sess
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachSessionMetadata(ctx, byID); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 const sessionCols = `id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count, session_group`
@@ -511,6 +552,9 @@ func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
 	if _, err := s.catalog.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, sessionID); err != nil {
 		return err
 	}
+	if _, err := s.catalog.ExecContext(ctx, `DELETE FROM session_metadata WHERE session_id=?`, sessionID); err != nil {
+		return err
+	}
 	return os.RemoveAll(filepath.Join(s.dataRoot, "sessions", sessionID))
 }
 
@@ -521,7 +565,13 @@ func (s *Store) GetSession(ctx context.Context, id string) (*trafficv1.Session, 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return sess, err
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachSessionMetadata(ctx, map[string]*trafficv1.Session{sess.Id: sess}); err != nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 // SetSessionBytes records the captured pcap/key.log sizes in the catalog.

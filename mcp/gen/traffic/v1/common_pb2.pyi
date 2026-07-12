@@ -45,7 +45,14 @@ SESSION_STATUS_CLOSED: SessionStatus
 SESSION_STATUS_ERROR: SessionStatus
 
 class Session(_message.Message):
-    __slots__ = ("id", "label", "source_kind", "status", "created_at_unix_ms", "closed_at_unix_ms", "pcap_bytes", "keylog_bytes", "flow_count", "group")
+    __slots__ = ("id", "label", "source_kind", "status", "created_at_unix_ms", "closed_at_unix_ms", "pcap_bytes", "keylog_bytes", "flow_count", "group", "metadata")
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ID_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
     SOURCE_KIND_FIELD_NUMBER: _ClassVar[int]
@@ -56,6 +63,7 @@ class Session(_message.Message):
     KEYLOG_BYTES_FIELD_NUMBER: _ClassVar[int]
     FLOW_COUNT_FIELD_NUMBER: _ClassVar[int]
     GROUP_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     id: str
     label: str
     source_kind: SourceKind
@@ -66,7 +74,8 @@ class Session(_message.Message):
     keylog_bytes: int
     flow_count: int
     group: str
-    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., source_kind: _Optional[_Union[SourceKind, str]] = ..., status: _Optional[_Union[SessionStatus, str]] = ..., created_at_unix_ms: _Optional[int] = ..., closed_at_unix_ms: _Optional[int] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., flow_count: _Optional[int] = ..., group: _Optional[str] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., source_kind: _Optional[_Union[SourceKind, str]] = ..., status: _Optional[_Union[SessionStatus, str]] = ..., created_at_unix_ms: _Optional[int] = ..., closed_at_unix_ms: _Optional[int] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., flow_count: _Optional[int] = ..., group: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class Header(_message.Message):
     __slots__ = ("name", "value")

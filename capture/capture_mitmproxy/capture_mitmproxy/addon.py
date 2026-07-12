@@ -158,6 +158,9 @@ class GatewayPusher:
     def __init__(self) -> None:
         self.addr = os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080")
         self.label = os.environ.get("CAPTURE_LABEL", "mitmproxy")
+        # Metadata keys this source stashes on flows that the viewer should show as table
+        # columns by default (comma-separated); declared to the gateway at OpenSession.
+        self.viewer_columns = os.environ.get("VIEWER_COLUMNS", "")
         self._channel: grpc.aio.Channel | None = None
         self._stub: ig.IngestServiceStub | None = None
         self.session_id: str | None = None
@@ -171,8 +174,10 @@ class GatewayPusher:
             ("grpc.max_receive_message_length", 256 * 1024 * 1024),
         ])
         self._stub = ig.IngestServiceStub(self._channel)
+        metadata = {"viewer.columns": self.viewer_columns} if self.viewer_columns else {}
         handle = await self._stub.OpenSession(
-            ip.OpenSessionRequest(label=self.label, source_kind=cp.SOURCE_KIND_MITMPROXY)
+            ip.OpenSessionRequest(label=self.label, source_kind=cp.SOURCE_KIND_MITMPROXY,
+                                  metadata=metadata)
         )
         self.session_id = handle.session_id
         ctx.log.info(f"gateway: session {self.session_id} @ {self.addr}")

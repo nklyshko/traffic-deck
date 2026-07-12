@@ -348,6 +348,33 @@ async def test_metadata_column_picker_toggles_column():
         assert len(table.ordered_columns) == base_cols
 
 
+async def test_source_declared_columns_seed_table():
+    # A capture source declaring viewer.columns seeds the pane's default columns.
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(WorkspaceScreen(SESSION_ID, "demo", source_columns=["proxy_provider"]))
+        await settle(pilot)
+        pane = app.screen.query_one(SessionPane)
+        assert pane._meta_cols == ["proxy_provider"]
+        table = pane.query_one("#flows", DataTable)
+        assert str(table.get_cell("f2", pane._meta_col_keys["proxy_provider"])) == "brightdata"
+
+
+def test_resolve_meta_columns_unions_env_and_source(monkeypatch):
+    from traffic_viewer.screens import _resolve_meta_columns, _session_view_columns
+
+    monkeypatch.setenv("TRAFFICDECK_META_COLUMNS", "region, proxy_provider")
+    # env first, then source-declared, de-duplicated and order-preserving.
+    assert _resolve_meta_columns(["proxy_provider", "scrape_group"]) == \
+        ["region", "proxy_provider", "scrape_group"]
+
+    s = cp.Session(id="s1")
+    s.metadata["viewer.columns"] = "scrape_group, proxy_provider"
+    assert _session_view_columns(s) == ["scrape_group", "proxy_provider"]
+    assert _session_view_columns(cp.Session(id="s2")) == []
+
+
 async def test_metadata_column_from_env(monkeypatch):
     monkeypatch.setenv("TRAFFICDECK_META_COLUMNS", "proxy_provider")
     app = make_app()

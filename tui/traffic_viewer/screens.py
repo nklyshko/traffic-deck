@@ -206,6 +206,8 @@ class SessionsScreen(Screen):
             self.notify(f"list_sessions failed: {exc}", severity="error")
             return
         self._labels = {s.id: s.label for s in sessions}  # for the workspace tab title
+        # Source-declared default table columns (viewer.columns), by session.
+        self._source_columns = {s.id: _session_view_columns(s) for s in sessions}
         # Cluster by group (grouped first, alphabetical; ungrouped last). Stable sort keeps
         # the server's created-DESC order within each group and when nothing is grouped.
         sessions = sorted(sessions, key=lambda s: (s.group == "", s.group.lower()))
@@ -321,7 +323,8 @@ class SessionsScreen(Screen):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         sid = str(event.row_key.value)
         label = getattr(self, "_labels", {}).get(sid, "")
-        self.app.push_screen(WorkspaceScreen(sid, label))
+        cols = getattr(self, "_source_columns", {}).get(sid, [])
+        self.app.push_screen(WorkspaceScreen(sid, label, source_columns=cols))
 
     def _focused_session_id(self) -> str | None:
         table = self.query_one("#sessions", DataTable)
@@ -373,6 +376,23 @@ def _env_meta_columns() -> list[str]:
     per session (viewer.columns); the pane unions both."""
     raw = os.environ.get("TRAFFICDECK_META_COLUMNS", "")
     return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _session_view_columns(session) -> list[str]:
+    """Metadata keys the capture source declared as default table columns for a session,
+    via the `viewer.columns` session metadata (comma-separated)."""
+    raw = session.metadata.get("viewer.columns", "") if session.metadata else ""
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+
+def _resolve_meta_columns(source_columns) -> list[str]:
+    """The pane's initial metadata columns: env-configured keys unioned with the source-
+    declared ones (order-preserving, de-duplicated)."""
+    out: list[str] = []
+    for k in [*_env_meta_columns(), *(source_columns or [])]:
+        if k not in out:
+            out.append(k)
+    return out
 
 
 # How wide a metadata value cell may get before it's truncated in the table.
@@ -606,14 +626,15 @@ class SessionPane(AnnotatableTable, Vertical):
         Binding("l", "follow", "Follow new"),
     ]
 
-    def __init__(self, session_id: str, label: str = "") -> None:
+    def __init__(self, session_id: str, label: str = "", source_columns=None) -> None:
         super().__init__()
         self.session_id = session_id
         self.label = label
         self.flows: dict[str, object] = {}  # flow id -> cached Flow (for live detail)
         self._rows: set[str] = set()
         self._cols: list = []                   # base (fixed) column keys
-        self._meta_cols: list[str] = _env_meta_columns()  # metadata keys shown as columns
+        # Metadata columns: env default unioned with the source-declared ones (viewer.columns).
+        self._meta_cols: list[str] = _resolve_meta_columns(source_columns)
         self._meta_col_keys: dict[str, object] = {}       # metadata key -> DataTable ColumnKey
         self._predicate = None  # active filter
         self._selected: set[str] = set()       # multi-selection for bulk annotation
@@ -902,9 +923,9 @@ class WorkspaceScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, session_id: str, label: str = "") -> None:
+    def __init__(self, session_id: str, label: str = "", source_columns=None) -> None:
         super().__init__()
-        self._first = (session_id, label)
+        self._first = (session_id, label, source_columns or [])
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -919,14 +940,16 @@ class WorkspaceScreen(Screen):
     def _tab_id(session_id: str) -> str:
         return "t" + session_id.replace("-", "")[:16]
 
-    async def open_session(self, session_id: str, label: str = "") -> None:
+    async def open_session(self, session_id: str, label: str = "", source_columns=None) -> None:
         """Open the session in a tab, or focus its existing tab."""
         tabs = self.query_one(TabbedContent)
         tid = self._tab_id(session_id)
         if any(p.id == tid for p in tabs.query(TabPane)):
             tabs.active = tid
         else:
-            await tabs.add_pane(TabPane(label or session_id[:8], SessionPane(session_id, label), id=tid))
+            await tabs.add_pane(TabPane(
+                label or session_id[:8],
+                SessionPane(session_id, label, source_columns=source_columns), id=tid))
             tabs.active = tid
         self._sync_subtitle()
         self.call_after_refresh(self._focus_active)
@@ -987,10 +1010,11 @@ class WorkspaceScreen(Screen):
             self.notify("no sessions")
             return
         labels = {s.id: s.label for s in sessions}
+        cols = {s.id: _session_view_columns(s) for s in sessions}
         opts = [(s.id, f"{s.label or '—'}  ({s.id[:8]}, {s.flow_count} flows)") for s in sessions]
         choice = await self.app.push_screen_wait(SelectPrompt("Open session", opts))
         if choice:
-            await self.open_session(choice, labels.get(choice, ""))
+            await self.open_session(choice, labels.get(choice, ""), source_columns=cols.get(choice, []))
 
 
 class FlowDetailScreen(Screen):
