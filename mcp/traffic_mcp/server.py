@@ -377,6 +377,66 @@ async def get_flow(session_id: str, flow_id: str) -> dict:
     return _flow_detail(f, tagnames, groupnames)
 
 
+def _cmp(a, b) -> dict:
+    return {"a": a or None, "b": b or None, "equal": (a or "") == (b or "")}
+
+
+def _compare_flows(fa, fb) -> dict:
+    """Diff two flows' request/connection parameters (pure; no RPC). See compare_flows."""
+    params = {
+        "method": _cmp(fa.method, fb.method),
+        "url": _cmp(flow_url(fa), flow_url(fb)),
+        "status": {"a": fa.status or None, "b": fb.status or None, "equal": fa.status == fb.status},
+        "protocol": _cmp(fa.protocol, fb.protocol),
+        "user_agent": _cmp(fa.user_agent, fb.user_agent),
+        "ja3": _cmp(fa.ja3, fb.ja3),
+        "ja4": _cmp(fa.ja4, fb.ja4),
+        "http2_fingerprint": _cmp(fa.http2_fingerprint, fb.http2_fingerprint),
+        "tls_client_hello": _cmp(fa.tls_client_hello, fb.tls_client_hello),
+    }
+
+    def order(hs):
+        return [h.name.lower() for h in hs]
+
+    req_order = {"a": order(fa.request_headers), "b": order(fb.request_headers),
+                 "equal": order(fa.request_headers) == order(fb.request_headers)}
+    resp_order = {"a": order(fa.response_headers), "b": order(fb.response_headers),
+                  "equal": order(fa.response_headers) == order(fb.response_headers)}
+
+    differences = [k for k, v in params.items() if not v["equal"]]
+    if not req_order["equal"]:
+        differences.append("request_header_order")
+    if not resp_order["equal"]:
+        differences.append("response_header_order")
+
+    return {
+        "params": params,
+        "request_header_order": req_order,
+        "response_header_order": resp_order,
+        "differences": differences,
+        "identical": not differences,
+    }
+
+
+@mcp.tool()
+async def compare_flows(session_a: str, flow_a: str, session_b: str, flow_b: str) -> dict:
+    """Compare two flows' request/connection parameters — across different sessions or
+    within one (pass the same session id) — for fingerprint / anti-bot analysis.
+
+    Returns per-parameter {a, b, equal} for the request line and the connection
+    fingerprints (JA3, JA4, HTTP/2 fingerprint, ClientHello, user-agent), the request/
+    response header name order (an anti-bot signal on its own), and a `differences` list
+    naming every parameter that differs (empty ⇒ the two are identical)."""
+    sa = await _resolve_session(session_a)
+    sb = await _resolve_session(session_b)
+    fa = await client().get_flow(sa, flow_a)
+    fb = await client().get_flow(sb, flow_b)
+    out = _compare_flows(fa, fb)
+    out["a"] = {"session_id": sa, "flow_id": flow_a, "url": flow_url(fa)}
+    out["b"] = {"session_id": sb, "flow_id": flow_b, "url": flow_url(fb)}
+    return out
+
+
 @mcp.tool()
 async def get_body(session_id: str, flow_id: str, response: bool = True,
                    as_hex: bool = False, offset: int = 0) -> dict:

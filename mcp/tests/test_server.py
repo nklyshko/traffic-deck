@@ -106,3 +106,33 @@ def test_bytes_payload_hex_and_offset():
     # windowed hex from an offset
     w = S._bytes_payload(data, as_hex=True, start=2)
     assert w["hex"] == "0102030405" and w["offset"] == 2 and w["size"] == 7
+
+
+# --- compare_flows --------------------------------------------------------
+
+def _hdr(name, value):
+    return cp.Header(name=name, value=value)
+
+
+def test_compare_flows_diff_and_identical():
+    a = _flow(method="GET", scheme="https", authority="ex.com", path="/", status=200,
+              ja4="t13d1516h2_abc_def", http2_fingerprint="1:65536|0|0|m,a,s,p",
+              user_agent="UA/1",
+              request_headers=[_hdr("user-agent", "UA/1"), _hdr("accept", "*/*")])
+    b = _flow(method="GET", scheme="https", authority="ex.com", path="/", status=200,
+              ja4="t13d1517h2_xyz_ghi", http2_fingerprint="1:65536|0|0|m,a,s,p",
+              user_agent="UA/2",
+              request_headers=[_hdr("accept", "*/*"), _hdr("user-agent", "UA/2")])
+
+    d = S._compare_flows(a, b)
+    assert d["params"]["ja4"]["equal"] is False
+    assert d["params"]["http2_fingerprint"]["equal"] is True
+    assert d["params"]["user_agent"]["equal"] is False
+    # Header name order differs (ua/accept swapped).
+    assert d["request_header_order"]["equal"] is False
+    assert set(d["differences"]) == {"ja4", "user_agent", "request_header_order"}
+    assert d["identical"] is False
+
+    # A flow compared with itself is identical.
+    same = S._compare_flows(a, a)
+    assert same["identical"] is True and same["differences"] == []
