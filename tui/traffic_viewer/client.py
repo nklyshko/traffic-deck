@@ -177,6 +177,24 @@ class GatewayClient:
         await self._ctrl().SetSessionGroup(control_pb2.SetSessionGroupRequest(
             session_id=session_id, group=group))
 
+    async def set_session_label(self, session_id: str, label: str) -> None:
+        """Rename a session."""
+        await self._ctrl().SetSessionLabel(control_pb2.SetSessionLabelRequest(
+            session_id=session_id, label=label))
+
     async def delete_session(self, session_id: str) -> None:
         """Permanently delete a recorded session (catalog row + bundle)."""
         await self._ctrl().DeleteSession(control_pb2.DeleteSessionRequest(session_id=session_id))
+
+    async def import_session(self, src_path: str):
+        """Upload a .tar.gz session bundle; returns the imported Session."""
+        call = self._ctrl().ImportSession()
+        with open(src_path, "rb") as fp:
+            while True:
+                b = fp.read(1 << 16)
+                if not b:
+                    break
+                await call.write(control_pb2.ImportChunk(data=b))
+        await call.done_writing()
+        resp = await call
+        return resp.session

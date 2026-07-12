@@ -97,3 +97,7 @@ class GatewayClient:
     async def set_session_group(self, session_id: str, group: str) -> None:
         await self._c().SetSessionGroup(control_pb2.SetSessionGroupRequest(
             session_id=session_id, group=group))
+
+    async def set_session_label(self, session_id: str, label: str) -> None:
+        await self._c().SetSessionLabel(control_pb2.SetSessionLabelRequest(
+            session_id=session_id, label=label))

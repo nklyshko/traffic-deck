@@ -17,9 +17,16 @@ service ControlService {
   // Assign a session to a (free-text) group for organizing the session list; "" clears it.
   rpc SetSessionGroup(SetSessionGroupRequest) returns (Empty);
 
+  // Rename a session (set its label).
+  rpc SetSessionLabel(SetSessionLabelRequest) returns (Empty);
+
   // Permanently delete a recorded session: its catalog entry and its whole bundle
   // (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open.
   rpc DeleteSession(DeleteSessionRequest) returns (Empty);
+
+  // Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
+  // The session is registered under a fresh id; returns the imported session.
+  rpc ImportSession(stream ImportChunk) returns (ImportSessionResponse);
 
   // --- Annotations. Bulk ops take repeated record_ids. ---
 
@@ -81,8 +88,22 @@ message SetSessionGroupRequest {
   string group = 2;  // "" clears the group
 }
 
+message SetSessionLabelRequest {
+  string session_id = 1;
+  string label = 2;
+}
+
 message DeleteSessionRequest {
   string session_id = 1;
+}
+
+// One chunk of an uploaded .tar.gz session bundle (client-streamed to ImportSession).
+message ImportChunk {
+  bytes data = 1;
+}
+
+message ImportSessionResponse {
+  Session session = 1;
 }
 
 message ReDecodeRequest {

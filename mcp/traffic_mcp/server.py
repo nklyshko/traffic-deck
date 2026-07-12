@@ -283,6 +283,14 @@ async def set_session_group(session_id: str, group: str) -> dict:
 
 
 @mcp.tool()
+async def rename_session(session_id: str, label: str) -> dict:
+    """Rename a session (set its label)."""
+    sid = await _resolve_session(session_id)
+    await client().set_session_label(sid, label)
+    return {"session_id": sid, "label": label}
+
+
+@mcp.tool()
 async def network_timeline(session_id: str, limit: int = 200, offset: int = 0) -> dict:
     """The request sequence for a session, like the Chrome DevTools Network tab.
 

@@ -66,11 +66,31 @@ class SetSessionGroupRequest(_message.Message):
     group: str
     def __init__(self, session_id: _Optional[str] = ..., group: _Optional[str] = ...) -> None: ...
 
+class SetSessionLabelRequest(_message.Message):
+    __slots__ = ("session_id", "label")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    label: str
+    def __init__(self, session_id: _Optional[str] = ..., label: _Optional[str] = ...) -> None: ...
+
 class DeleteSessionRequest(_message.Message):
     __slots__ = ("session_id",)
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
+class ImportChunk(_message.Message):
+    __slots__ = ("data",)
+    DATA_FIELD_NUMBER: _ClassVar[int]
+    data: bytes
+    def __init__(self, data: _Optional[bytes] = ...) -> None: ...
+
+class ImportSessionResponse(_message.Message):
+    __slots__ = ("session",)
+    SESSION_FIELD_NUMBER: _ClassVar[int]
+    session: _common_pb2.Session
+    def __init__(self, session: _Optional[_Union[_common_pb2.Session, _Mapping]] = ...) -> None: ...
 
 class ReDecodeRequest(_message.Message):
     __slots__ = ("session_id",)

@@ -82,6 +82,16 @@ class FakeClient:
     async def delete_session(self, session_id):
         self._sessions = [s for s in self._sessions if s.id != session_id]
 
+    async def set_session_label(self, session_id, label):
+        for s in self._sessions:
+            if s.id == session_id:
+                s.label = label
+
+    async def import_session(self, src_path):
+        s = cp.Session(id="imported-1", label="imported", status=3, flow_count=0)
+        self._sessions.append(s)
+        return s
+
     async def stream_flows(self, session_id, follow=False):
         for f in _BY_SESSION.get(session_id, _FLOWS):
             yield vp.FlowEvent(flow_added=f)
@@ -153,6 +163,33 @@ async def test_delete_session():
         await pilot.press("y")   # confirm
         await settle(pilot)
         assert app.screen.query_one("#sessions", DataTable).row_count == 1
+
+
+async def test_rename_session():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("n")   # rename
+        await settle(pilot)
+        app.screen.query_one("#prompt-input", Input).value = "new-name"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.client._sessions[0].label == "new-name"
+
+
+async def test_import_session():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        assert app.screen.query_one("#sessions", DataTable).row_count == 2
+        await pilot.press("i")   # import
+        await settle(pilot)
+        app.screen.query_one("#prompt-input", Input).value = "/tmp/bundle.tar.gz"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.screen.query_one("#sessions", DataTable).row_count == 3
 
 
 async def test_ctrl_c_opens_quit_dialog_then_confirms():

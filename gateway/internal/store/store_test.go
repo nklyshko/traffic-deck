@@ -335,3 +335,23 @@ func TestDeleteSession(t *testing.T) {
 		t.Errorf("delete missing = %v, want ErrNotFound", err)
 	}
 }
+
+// TestSetSessionLabel renames a session and errors on a missing one.
+func TestSetSessionLabel(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Label: "old", SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_CLOSED}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionLabel(ctx, sid, "renamed"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetSession(ctx, sid)
+	if got.GetLabel() != "renamed" {
+		t.Errorf("label = %q, want renamed", got.GetLabel())
+	}
+	if err := st.SetSessionLabel(ctx, uuid.NewString(), "x"); err != ErrNotFound {
+		t.Errorf("rename missing = %v, want ErrNotFound", err)
+	}
+}

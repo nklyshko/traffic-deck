@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -137,11 +139,56 @@ func (c *Control) SetSessionGroup(ctx context.Context, req *trafficv1.SetSession
 	return empty, ctrlErr("set session group", c.st.SetSessionGroup(ctx, req.GetSessionId(), req.GetGroup()))
 }
 
+func (c *Control) SetSessionLabel(ctx context.Context, req *trafficv1.SetSessionLabelRequest) (*trafficv1.Empty, error) {
+	if req.GetSessionId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id required")
+	}
+	return empty, ctrlErr("set session label", c.st.SetSessionLabel(ctx, req.GetSessionId(), req.GetLabel()))
+}
+
 func (c *Control) DeleteSession(ctx context.Context, req *trafficv1.DeleteSessionRequest) (*trafficv1.Empty, error) {
 	if req.GetSessionId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "session_id required")
 	}
 	return empty, ctrlErr("delete session", c.st.DeleteSession(ctx, req.GetSessionId()))
+}
+
+// ImportSession receives a streamed .tar.gz session bundle, extracts it under a fresh id,
+// and returns the imported session. The upload is buffered to a temp file so the bundle
+// reader can seek/stream it.
+func (c *Control) ImportSession(stream grpc.ClientStreamingServer[trafficv1.ImportChunk, trafficv1.ImportSessionResponse]) error {
+	ctx := stream.Context()
+	tmp, err := os.CreateTemp("", "td-import-*.tar.gz")
+	if err != nil {
+		return status.Errorf(codes.Internal, "import session: temp file: %v", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+
+	for {
+		chunk, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tmp.Write(chunk.GetData()); err != nil {
+			return status.Errorf(codes.Internal, "import session: write: %v", err)
+		}
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return status.Errorf(codes.Internal, "import session: %v", err)
+	}
+	sid, err := bundle.Import(ctx, c.st, c.dataRoot, tmp, bundle.ImportOptions{NewID: true})
+	if err != nil {
+		return status.Errorf(codes.InvalidArgument, "import session: %v", err)
+	}
+	sess, err := c.st.GetSession(ctx, sid)
+	if err != nil {
+		return storeStatus(err, "import session")
+	}
+	return stream.SendAndClose(&trafficv1.ImportSessionResponse{Session: sess})
 }
 
 // --- groups ---

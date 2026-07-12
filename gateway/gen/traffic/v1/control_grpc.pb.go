@@ -24,7 +24,9 @@ const (
 	ControlService_ReDecode_FullMethodName        = "/traffic.v1.ControlService/ReDecode"
 	ControlService_ExportSession_FullMethodName   = "/traffic.v1.ControlService/ExportSession"
 	ControlService_SetSessionGroup_FullMethodName = "/traffic.v1.ControlService/SetSessionGroup"
+	ControlService_SetSessionLabel_FullMethodName = "/traffic.v1.ControlService/SetSessionLabel"
 	ControlService_DeleteSession_FullMethodName   = "/traffic.v1.ControlService/DeleteSession"
+	ControlService_ImportSession_FullMethodName   = "/traffic.v1.ControlService/ImportSession"
 	ControlService_CreateTag_FullMethodName       = "/traffic.v1.ControlService/CreateTag"
 	ControlService_DeleteTag_FullMethodName       = "/traffic.v1.ControlService/DeleteTag"
 	ControlService_ListTags_FullMethodName        = "/traffic.v1.ControlService/ListTags"
@@ -56,9 +58,14 @@ type ControlServiceClient interface {
 	ExportSession(ctx context.Context, in *ExportSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error)
 	// Assign a session to a (free-text) group for organizing the session list; "" clears it.
 	SetSessionGroup(ctx context.Context, in *SetSessionGroupRequest, opts ...grpc.CallOption) (*Empty, error)
+	// Rename a session (set its label).
+	SetSessionLabel(ctx context.Context, in *SetSessionLabelRequest, opts ...grpc.CallOption) (*Empty, error)
 	// Permanently delete a recorded session: its catalog entry and its whole bundle
 	// (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open.
 	DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*Empty, error)
+	// Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
+	// The session is registered under a fresh id; returns the imported session.
+	ImportSession(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse], error)
 	// Tags (defs are global; assignments per-session).
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Empty, error)
@@ -156,6 +163,16 @@ func (c *controlServiceClient) SetSessionGroup(ctx context.Context, in *SetSessi
 	return out, nil
 }
 
+func (c *controlServiceClient) SetSessionLabel(ctx context.Context, in *SetSessionLabelRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, ControlService_SetSessionLabel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlServiceClient) DeleteSession(ctx context.Context, in *DeleteSessionRequest, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
@@ -165,6 +182,19 @@ func (c *controlServiceClient) DeleteSession(ctx context.Context, in *DeleteSess
 	}
 	return out, nil
 }
+
+func (c *controlServiceClient) ImportSession(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[2], ControlService_ImportSession_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ImportChunk, ImportSessionResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_ImportSessionClient = grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse]
 
 func (c *controlServiceClient) CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -330,9 +360,14 @@ type ControlServiceServer interface {
 	ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error
 	// Assign a session to a (free-text) group for organizing the session list; "" clears it.
 	SetSessionGroup(context.Context, *SetSessionGroupRequest) (*Empty, error)
+	// Rename a session (set its label).
+	SetSessionLabel(context.Context, *SetSessionLabelRequest) (*Empty, error)
 	// Permanently delete a recorded session: its catalog entry and its whole bundle
 	// (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open.
 	DeleteSession(context.Context, *DeleteSessionRequest) (*Empty, error)
+	// Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
+	// The session is registered under a fresh id; returns the imported session.
+	ImportSession(grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]) error
 	// Tags (defs are global; assignments per-session).
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
 	DeleteTag(context.Context, *DeleteTagRequest) (*Empty, error)
@@ -377,8 +412,14 @@ func (UnimplementedControlServiceServer) ExportSession(*ExportSessionRequest, gr
 func (UnimplementedControlServiceServer) SetSessionGroup(context.Context, *SetSessionGroupRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetSessionGroup not implemented")
 }
+func (UnimplementedControlServiceServer) SetSessionLabel(context.Context, *SetSessionLabelRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetSessionLabel not implemented")
+}
 func (UnimplementedControlServiceServer) DeleteSession(context.Context, *DeleteSessionRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSession not implemented")
+}
+func (UnimplementedControlServiceServer) ImportSession(grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]) error {
+	return status.Error(codes.Unimplemented, "method ImportSession not implemented")
 }
 func (UnimplementedControlServiceServer) CreateTag(context.Context, *CreateTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTag not implemented")
@@ -522,6 +563,24 @@ func _ControlService_SetSessionGroup_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlService_SetSessionLabel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetSessionLabelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).SetSessionLabel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_SetSessionLabel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).SetSessionLabel(ctx, req.(*SetSessionLabelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ControlService_DeleteSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteSessionRequest)
 	if err := dec(in); err != nil {
@@ -539,6 +598,13 @@ func _ControlService_DeleteSession_Handler(srv interface{}, ctx context.Context,
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _ControlService_ImportSession_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ControlServiceServer).ImportSession(&grpc.GenericServerStream[ImportChunk, ImportSessionResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_ImportSessionServer = grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]
 
 func _ControlService_CreateTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateTagRequest)
@@ -830,6 +896,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ControlService_SetSessionGroup_Handler,
 		},
 		{
+			MethodName: "SetSessionLabel",
+			Handler:    _ControlService_SetSessionLabel_Handler,
+		},
+		{
 			MethodName: "DeleteSession",
 			Handler:    _ControlService_DeleteSession_Handler,
 		},
@@ -904,6 +974,11 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "ExportSession",
 			Handler:       _ControlService_ExportSession_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "ImportSession",
+			Handler:       _ControlService_ImportSession_Handler,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "traffic/v1/control.proto",

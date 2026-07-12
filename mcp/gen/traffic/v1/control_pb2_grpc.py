@@ -61,10 +61,20 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
                 _registered_method=True)
+        self.SetSessionLabel = channel.unary_unary(
+                '/traffic.v1.ControlService/SetSessionLabel',
+                request_serializer=traffic_dot_v1_dot_control__pb2.SetSessionLabelRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                _registered_method=True)
         self.DeleteSession = channel.unary_unary(
                 '/traffic.v1.ControlService/DeleteSession',
                 request_serializer=traffic_dot_v1_dot_control__pb2.DeleteSessionRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                _registered_method=True)
+        self.ImportSession = channel.stream_unary(
+                '/traffic.v1.ControlService/ImportSession',
+                request_serializer=traffic_dot_v1_dot_control__pb2.ImportChunk.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.ImportSessionResponse.FromString,
                 _registered_method=True)
         self.CreateTag = channel.unary_unary(
                 '/traffic.v1.ControlService/CreateTag',
@@ -180,9 +190,24 @@ class ControlServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def SetSessionLabel(self, request, context):
+        """Rename a session (set its label).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def DeleteSession(self, request, context):
         """Permanently delete a recorded session: its catalog entry and its whole bundle
         (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ImportSession(self, request_iterator, context):
+        """Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
+        The session is registered under a fresh id; returns the imported session.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -312,10 +337,20 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     request_deserializer=traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
             ),
+            'SetSessionLabel': grpc.unary_unary_rpc_method_handler(
+                    servicer.SetSessionLabel,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.SetSessionLabelRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            ),
             'DeleteSession': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteSession,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.DeleteSessionRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            ),
+            'ImportSession': grpc.stream_unary_rpc_method_handler(
+                    servicer.ImportSession,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.ImportChunk.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.ImportSessionResponse.SerializeToString,
             ),
             'CreateTag': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateTag,
@@ -540,6 +575,33 @@ class ControlService(object):
             _registered_method=True)
 
     @staticmethod
+    def SetSessionLabel(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/SetSessionLabel',
+            traffic_dot_v1_dot_control__pb2.SetSessionLabelRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def DeleteSession(request,
             target,
             options=(),
@@ -556,6 +618,33 @@ class ControlService(object):
             '/traffic.v1.ControlService/DeleteSession',
             traffic_dot_v1_dot_control__pb2.DeleteSessionRequest.SerializeToString,
             traffic_dot_v1_dot_control__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ImportSession(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_unary(
+            request_iterator,
+            target,
+            '/traffic.v1.ControlService/ImportSession',
+            traffic_dot_v1_dot_control__pb2.ImportChunk.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.ImportSessionResponse.FromString,
             options,
             channel_credentials,
             insecure,

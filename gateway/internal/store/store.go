@@ -454,6 +454,19 @@ func (s *Store) SetSessionGroup(ctx context.Context, sessionID, group string) er
 	return err
 }
 
+// SetSessionLabel renames a session.
+func (s *Store) SetSessionLabel(ctx context.Context, sessionID, label string) error {
+	res, err := s.catalog.ExecContext(ctx,
+		`UPDATE sessions SET label=? WHERE id=?`, label, sessionID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteSession permanently removes a session: its catalog row and its whole bundle dir
 // (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open
 // (capturing) — stop it first. All per-session data lives in the bundle, so there's no
