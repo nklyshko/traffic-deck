@@ -454,6 +454,35 @@ func (s *Store) SetSessionGroup(ctx context.Context, sessionID, group string) er
 	return err
 }
 
+// DeleteSession permanently removes a session: its catalog row and its whole bundle dir
+// (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open
+// (capturing) — stop it first. All per-session data lives in the bundle, so there's no
+// other catalog table to clean.
+func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
+	var status string
+	err := s.catalog.QueryRowContext(ctx, `SELECT status FROM sessions WHERE id=?`, sessionID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status == trafficv1.SessionStatus_SESSION_STATUS_OPEN.String() {
+		return fmt.Errorf("session is still open (capturing) — stop it before deleting")
+	}
+	// Drop the cached bundle DB handle so the file can be removed.
+	s.mu.Lock()
+	if db, ok := s.sessions[sessionID]; ok {
+		db.Close()
+		delete(s.sessions, sessionID)
+	}
+	s.mu.Unlock()
+	if _, err := s.catalog.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, sessionID); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(s.dataRoot, "sessions", sessionID))
+}
+
 // GetSession returns a single session from the catalog.
 func (s *Store) GetSession(ctx context.Context, id string) (*trafficv1.Session, error) {
 	sess, err := scanSession(s.catalog.QueryRowContext(ctx,

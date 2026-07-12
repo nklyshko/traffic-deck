@@ -66,6 +66,12 @@ class SetSessionGroupRequest(_message.Message):
     group: str
     def __init__(self, session_id: _Optional[str] = ..., group: _Optional[str] = ...) -> None: ...
 
+class DeleteSessionRequest(_message.Message):
+    __slots__ = ("session_id",)
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
 class ReDecodeRequest(_message.Message):
     __slots__ = ("session_id",)
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]

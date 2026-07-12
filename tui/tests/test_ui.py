@@ -72,8 +72,14 @@ def _ws_messages():
 class FakeClient:
     """Implements the async surface the screens call, served from memory."""
 
+    def __init__(self):
+        self._sessions = [_session(), _session2()]
+
     async def list_sessions(self, limit=200):
-        return [_session(), _session2()]
+        return list(self._sessions)
+
+    async def delete_session(self, session_id):
+        self._sessions = [s for s in self._sessions if s.id != session_id]
 
     async def stream_flows(self, session_id, follow=False):
         for f in _BY_SESSION.get(session_id, _FLOWS):
@@ -132,6 +138,20 @@ async def test_sessions_screen_lists():
         assert isinstance(app.screen, SessionsScreen)
         table = app.screen.query_one("#sessions", DataTable)
         assert table.row_count == 2  # two sessions in the fixture
+
+
+async def test_delete_session():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        table = app.screen.query_one("#sessions", DataTable)
+        assert table.row_count == 2
+        await focus(pilot, "#sessions")
+        await pilot.press("d")   # delete the focused session
+        await settle(pilot)
+        await pilot.press("y")   # confirm
+        await settle(pilot)
+        assert app.screen.query_one("#sessions", DataTable).row_count == 1
 
 
 async def test_drill_session_to_flows():

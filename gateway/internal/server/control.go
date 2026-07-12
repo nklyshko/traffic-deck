@@ -137,6 +137,13 @@ func (c *Control) SetSessionGroup(ctx context.Context, req *trafficv1.SetSession
 	return empty, ctrlErr("set session group", c.st.SetSessionGroup(ctx, req.GetSessionId(), req.GetGroup()))
 }
 
+func (c *Control) DeleteSession(ctx context.Context, req *trafficv1.DeleteSessionRequest) (*trafficv1.Empty, error) {
+	if req.GetSessionId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "session_id required")
+	}
+	return empty, ctrlErr("delete session", c.st.DeleteSession(ctx, req.GetSessionId()))
+}
+
 // --- groups ---
 
 func (c *Control) CreateGroup(ctx context.Context, req *trafficv1.CreateGroupRequest) (*trafficv1.Group, error) {

@@ -166,6 +166,7 @@ class SessionsScreen(Screen):
         Binding("r", "refresh", "Refresh"),
         Binding("e", "export", "Export"),
         Binding("g", "set_group", "Group"),
+        Binding("d", "delete", "Delete"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -242,6 +243,28 @@ class SessionsScreen(Screen):
             self.load_sessions()
 
         self.app.push_screen(TextPrompt("Group (empty to clear):"), _apply)
+
+    def action_delete(self) -> None:
+        sid = self._selected_session()
+        if sid is None:
+            return
+        label = getattr(self, "_labels", {}).get(sid, "") or sid[:8]
+
+        async def _confirm(ok: bool | None) -> None:
+            if not ok:
+                return
+            try:
+                await self.app.client.delete_session(sid)
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"delete failed: {exc}", severity="error")
+                return
+            self.notify(f"deleted session {label}")
+            self.load_sessions()
+
+        self.app.push_screen(
+            ConfirmScreen(f"Delete session {label}? This erases its capture permanently."),
+            _confirm,
+        )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         sid = str(event.row_key.value)

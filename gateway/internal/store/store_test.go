@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -288,5 +290,48 @@ func TestSessionGroup(t *testing.T) {
 		if s.GetId() == sid && s.GetGroup() != "" {
 			t.Errorf("group not cleared: %q", s.GetGroup())
 		}
+	}
+}
+
+// TestDeleteSession checks a closed session's catalog row and bundle dir are removed, and
+// that an open (capturing) session is refused.
+func TestDeleteSession(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+	sid, aid := uuid.NewString(), uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.InsertFlows(ctx, sid, aid, []*decode.Flow{{ID: uuid.NewString(), Method: "GET", Authority: "x", Protocol: "HTTP/2", Status: 200}}); err != nil {
+		t.Fatal(err)
+	}
+	bundle := filepath.Join(st.dataRoot, "sessions", sid)
+	if _, err := os.Stat(bundle); err != nil {
+		t.Fatalf("bundle should exist: %v", err)
+	}
+
+	// Open session → refused.
+	if err := st.DeleteSession(ctx, sid); err == nil {
+		t.Fatal("deleting an open session should be refused")
+	}
+	// Close, then delete.
+	if err := st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSession(ctx, sid); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := st.GetSession(ctx, sid); err != ErrNotFound {
+		t.Errorf("session should be gone: %v", err)
+	}
+	if _, err := os.Stat(bundle); !os.IsNotExist(err) {
+		t.Errorf("bundle dir should be removed: %v", err)
+	}
+	// Deleting a missing session → ErrNotFound.
+	if err := st.DeleteSession(ctx, uuid.NewString()); err != ErrNotFound {
+		t.Errorf("delete missing = %v, want ErrNotFound", err)
 	}
 }

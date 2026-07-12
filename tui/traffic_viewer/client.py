@@ -176,3 +176,7 @@ class GatewayClient:
         """Assign the session to a free-text group ("" clears it)."""
         await self._ctrl().SetSessionGroup(control_pb2.SetSessionGroupRequest(
             session_id=session_id, group=group))
+
+    async def delete_session(self, session_id: str) -> None:
+        """Permanently delete a recorded session (catalog row + bundle)."""
+        await self._ctrl().DeleteSession(control_pb2.DeleteSessionRequest(session_id=session_id))

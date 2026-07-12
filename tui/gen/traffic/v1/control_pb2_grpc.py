@@ -61,6 +61,11 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
                 _registered_method=True)
+        self.DeleteSession = channel.unary_unary(
+                '/traffic.v1.ControlService/DeleteSession',
+                request_serializer=traffic_dot_v1_dot_control__pb2.DeleteSessionRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                _registered_method=True)
         self.CreateTag = channel.unary_unary(
                 '/traffic.v1.ControlService/CreateTag',
                 request_serializer=traffic_dot_v1_dot_control__pb2.CreateTagRequest.SerializeToString,
@@ -170,6 +175,14 @@ class ControlServiceServicer(object):
 
     def SetSessionGroup(self, request, context):
         """Assign a session to a (free-text) group for organizing the session list; "" clears it.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteSession(self, request, context):
+        """Permanently delete a recorded session: its catalog entry and its whole bundle
+        (flows.sqlite, pcap/key.log, spilled blobs). Refused while the session is still open.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -297,6 +310,11 @@ def add_ControlServiceServicer_to_server(servicer, server):
             'SetSessionGroup': grpc.unary_unary_rpc_method_handler(
                     servicer.SetSessionGroup,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            ),
+            'DeleteSession': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteSession,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.DeleteSessionRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
             ),
             'CreateTag': grpc.unary_unary_rpc_method_handler(
@@ -510,6 +528,33 @@ class ControlService(object):
             target,
             '/traffic.v1.ControlService/SetSessionGroup',
             traffic_dot_v1_dot_control__pb2.SetSessionGroupRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteSession(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/DeleteSession',
+            traffic_dot_v1_dot_control__pb2.DeleteSessionRequest.SerializeToString,
             traffic_dot_v1_dot_control__pb2.Empty.FromString,
             options,
             channel_credentials,
