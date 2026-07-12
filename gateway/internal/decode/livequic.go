@@ -242,6 +242,9 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 			if hf.Name == ":status" {
 				if code, e := strconv.Atoi(hf.Value); e == nil {
 					f.Status = uint32(code)
+					// Response headers mark completion — record request→response elapsed,
+					// as the H1/H2 live paths do (the QUIC path had been leaving it 0).
+					f.DurationMicros = uint64(max(time.Now().UnixMicro()-f.TSUnixMicros, 0))
 				}
 			} else if !strings.HasPrefix(hf.Name, ":") {
 				f.ResponseHeaders = append(f.ResponseHeaders, Header{Name: hf.Name, Value: hf.Value})

@@ -394,6 +394,7 @@ func (s *stitcher) addHTTP3(l layers, conn string) {
 	}
 	if status != "" {
 		f.Status = uint32(parseUint(status))
+		setDuration(f, epochToMicros(l.first(fFrameTime)))
 		f.ResponseHeaders = zipHeaders(l.all(fH3HdrName), l.all(fH3HdrValue))
 		if ct := pickHeader("", f.ResponseHeaders, "content-type"); ct != "" {
 			f.ContentType = ct
@@ -486,6 +487,7 @@ func (s *stitcher) fillRequest(f *Flow, l layers, method string) {
 
 func (s *stitcher) fillResponse(f *Flow, l layers, status string) {
 	f.Status = uint32(parseUint(status))
+	setDuration(f, epochToMicros(l.first(fFrameTime)))
 	f.ResponseHeaders = headersFor(l, false)
 	// Response content-type wins for the flow's content-type column.
 	if ct := pickHeader(l.first(fH1ContentType), f.ResponseHeaders, "content-type"); ct != "" {
@@ -563,6 +565,16 @@ func addr(ip4, ip6, port string) string {
 func parseUint(s string) uint64 {
 	n, _ := strconv.ParseUint(s, 10, 64)
 	return n
+}
+
+// setDuration records the request→response elapsed time from the response frame's
+// timestamp, mirroring the live paths (which diff wall-clock). It's a no-op unless the
+// request frame's timestamp is known and precedes the response, so out-of-order or
+// request-less flows keep a 0 (blank) duration rather than a bogus one.
+func setDuration(f *Flow, respMicros int64) {
+	if f.TSUnixMicros > 0 && respMicros > f.TSUnixMicros {
+		f.DurationMicros = uint64(respMicros - f.TSUnixMicros)
+	}
 }
 
 // epochToMicros converts a tshark frame.time_epoch ("seconds.fraction") to micros.

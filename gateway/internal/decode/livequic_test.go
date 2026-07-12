@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/quic-go/qpack"
 
@@ -50,6 +51,8 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	))
 	s.onStream(0, true, reqHdr)
 
+	time.Sleep(2 * time.Millisecond) // ensure a measurable request→response gap for DurationMicros
+
 	respHdr := h3Frame(h3FrameHeaders, qpackSection(
 		qpack.HeaderField{Name: ":status", Value: "200"},
 		qpack.HeaderField{Name: "content-type", Value: "application/json"},
@@ -76,6 +79,11 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	}
 	if string(flow.ResponseBody) != `{"ok":true}` {
 		t.Errorf("body=%q", flow.ResponseBody)
+	}
+	// The response headers set a request→response duration (like H1/H2), so HTTP/3 flows
+	// aren't left with a blank duration in the TUI/MCP.
+	if flow.DurationMicros == 0 {
+		t.Error("DurationMicros = 0, want it set once the response :status arrives")
 	}
 }
 

@@ -37,13 +37,16 @@ func TestDecodeSample(t *testing.T) {
 		t.Fatal("no flows decoded")
 	}
 
-	var withReq, withResp, decrypted, withHdrs int
+	var withReq, withResp, decrypted, withHdrs, withDuration int
 	for _, f := range ds.Flows {
 		if f.Method != "" {
 			withReq++
 		}
 		if f.Status != 0 {
 			withResp++
+		}
+		if f.DurationMicros > 0 {
+			withDuration++
 		}
 		if f.TLSDecrypted {
 			decrypted++
@@ -63,6 +66,10 @@ func TestDecodeSample(t *testing.T) {
 	}
 	if decrypted == 0 {
 		t.Error("no TLS-decrypted flows (keylog not applied?)")
+	}
+	// Stitched (request+response) flows carry a request→response duration.
+	if withDuration == 0 {
+		t.Error("no flows with a duration (stitch path not computing DurationMicros?)")
 	}
 
 	// Spot-check a known TikTok request from the sample (tcp.stream 5, h2 stream 1).
@@ -98,4 +105,29 @@ func TestDecodeSample(t *testing.T) {
 		t.Error("no response bodies extracted")
 	}
 	t.Logf("flows with response body: %d", withRespBody)
+}
+
+// TestSetDuration covers the stitch-path duration guard: a normal request→response gap is
+// recorded, while a request-less or out-of-order (response-before-request) flow keeps 0.
+func TestSetDuration(t *testing.T) {
+	cases := []struct {
+		name         string
+		tsMicros     int64
+		respMicros   int64
+		wantDuration uint64
+	}{
+		{"normal gap", 1_000_000, 1_012_500, 12_500},
+		{"no request timestamp", 0, 1_012_500, 0},
+		{"response before request", 1_020_000, 1_000_000, 0},
+		{"same instant", 1_000_000, 1_000_000, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Flow{TSUnixMicros: tc.tsMicros}
+			setDuration(f, tc.respMicros)
+			if f.DurationMicros != tc.wantDuration {
+				t.Errorf("DurationMicros = %d, want %d", f.DurationMicros, tc.wantDuration)
+			}
+		})
+	}
 }
