@@ -346,7 +346,25 @@ func (i *Ingest) ForceCloseSession(ctx context.Context, req *trafficv1.CloseSess
 		s == trafficv1.SessionStatus_SESSION_STATUS_ERROR {
 		return nil, status.Errorf(codes.FailedPrecondition, "session already finalized (%s)", s)
 	}
-	return i.finalizeSession(ctx, sid)
+
+	// Try the normal finalization (decode/persist whatever was captured). If it fails —
+	// e.g. the bundle has an outdated schema (an old stale session), or a partial/corrupt
+	// pcap — force-close must still unstick the session, so fall back to marking it closed
+	// in the catalog only (which doesn't touch the bundle DB). Live decode was already
+	// stopped inside finalizeSession.
+	if summary, err := i.finalizeSession(ctx, sid); err == nil {
+		return summary, nil
+	} else {
+		log.Printf("force close %s: finalize failed (%v); marking closed in the catalog", sid, err)
+	}
+	if err := i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, int(sess.GetFlowCount())); err != nil {
+		return nil, status.Errorf(codes.Internal, "force close: mark closed: %v", err)
+	}
+	closed, err := i.st.GetSession(ctx, sid)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "force close: %v", err)
+	}
+	return &trafficv1.SessionSummary{Session: closed}, nil
 }
 
 func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.SessionSummary, error) {
