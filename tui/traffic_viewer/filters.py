@@ -16,6 +16,17 @@ _FILTER_FIELDS = {
 }
 
 
+# Cheat sheet for the filter DSL, shown in the TUI while the filter input is focused.
+# Kept next to the operators above so it stays in sync as they change.
+FILTER_HELP = (
+    "Filter terms are space-separated and ANDed; prefix ! to negate a term.\n"
+    "  ~m <re> method     ~d <re> domain      ~u <re> url        ~c <re> status\n"
+    "  ~t <re> type       ~mark <re> color    ~tag <re> name     ~group <re> name\n"
+    "  ~comment <re>      ~s has response     ~q no response     ~fav favorited\n"
+    "  <re>  a bare regex matches the URL           Enter apply · Esc cancel"
+)
+
+
 def _comment_text(f) -> str:
     return " ".join(c.body for c in f.comments)
 

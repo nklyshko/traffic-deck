@@ -288,6 +288,23 @@ async def test_filter_reduces_rows():
         assert app.screen.query_one("#flows", DataTable).row_count == 1  # only f2
 
 
+async def test_filter_help_shown_only_while_filter_focused():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("enter")
+        await settle(pilot)
+        help_ = app.screen.query_one("#filter-help", Static)
+        assert help_.display is False      # hidden while browsing the table
+        await pilot.press("f")             # focus the filter input
+        await settle(pilot)
+        assert help_.display is True       # cheat sheet revealed
+        await pilot.press("escape")        # leave the filter
+        await settle(pilot)
+        assert help_.display is False      # hidden again
+
+
 async def test_drill_flow_to_detail():
     app = make_app()
     async with app.run_test() as pilot:

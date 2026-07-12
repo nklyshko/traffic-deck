@@ -21,6 +21,11 @@ class TrafficViewerApp(App):
     TabbedContent { height: 1fr; }
     SessionPane { height: 1fr; }
     #pane-status { color: $text-muted; }
+    #filter-help {
+        display: none;               /* revealed only while the filter input is focused */
+        dock: bottom; height: auto; padding: 0 1;
+        color: $text-muted; background: $panel; border-top: tall $accent;
+    }
     TextPrompt, SelectPrompt, ConfirmScreen { align: center middle; }
     #prompt {
         width: 60; height: auto; max-height: 80%;

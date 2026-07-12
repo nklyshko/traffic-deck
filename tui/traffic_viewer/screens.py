@@ -9,7 +9,7 @@ import os
 import tempfile
 from datetime import datetime
 
-from textual import work
+from textual import events, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -22,7 +22,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from rich.text import Text
 
-from .filters import compile_filter
+from .filters import FILTER_HELP, compile_filter
 from .render import (
     MARK_COLORS,
     SESSION_STATUS,
@@ -616,6 +616,17 @@ class SessionPane(AnnotatableTable, Vertical):
         self._cols = table.add_columns("", "Time", "Method", "Status", "Dur", "Proto", "Authority", "Path")
         self._dur_col = self._cols[4]
         yield table
+        # Filter cheat sheet, docked at the bottom; only shown while the filter is focused.
+        yield Static(FILTER_HELP, id="filter-help")
+
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        # Reveal the filter help only while the filter input is being edited.
+        if event.widget.id == "filter":
+            self.query_one("#filter-help", Static).display = True
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        if event.widget.id == "filter":
+            self.query_one("#filter-help", Static).display = False
 
     def on_mount(self) -> None:
         self._update_subtitle()
