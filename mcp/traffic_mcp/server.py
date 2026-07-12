@@ -23,6 +23,28 @@ _SOURCE_KIND = {0: "unspecified", 1: "chrome", 2: "mitmproxy",
                 3: "android_emulator", 4: "android_device", 5: "generic"}
 _STATUS = {0: "unspecified", 1: "open", 2: "decoding", 3: "closed", 4: "error"}
 
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Parse a boolean env var; unset -> default. Off values: 0/false/no/off/"" (any case)."""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.strip().lower() not in ("0", "false", "no", "off", "")
+
+
+# Read-only by default: the mutating tools (rename_session, set_session_group) are only
+# exposed when MCP_READONLY is explicitly disabled (e.g. MCP_READONLY=0), so an agent
+# can inspect recorded traffic but can't rename or regroup sessions unless the operator
+# opts in.
+READONLY = _env_flag("MCP_READONLY", True)
+
+
+def _write_tool():
+    """Like @mcp.tool(), but registers the tool only when the server is writable — in the
+    default read-only mode the decorated function is left unregistered (a no-op decorator)
+    so it never appears in the tool list."""
+    return (lambda fn: fn) if READONLY else mcp.tool()
+
 # Cap inline text returned to the model so a huge body can't blow the context.
 _PREVIEW_MAX = 4096
 _BODY_MAX = 256 * 1024
@@ -274,7 +296,7 @@ async def list_session_groups() -> dict:
     return {"groups": [{"group": g, "sessions": by_group[g]} for g in ordered]}
 
 
-@mcp.tool()
+@_write_tool()
 async def set_session_group(session_id: str, group: str) -> dict:
     """Assign a session to a free-text group (organize the session list); "" clears it."""
     sid = await _resolve_session(session_id)
@@ -282,7 +304,7 @@ async def set_session_group(session_id: str, group: str) -> dict:
     return {"session_id": sid, "group": group or None}
 
 
-@mcp.tool()
+@_write_tool()
 async def rename_session(session_id: str, label: str) -> dict:
     """Rename a session (set its label)."""
     sid = await _resolve_session(session_id)
@@ -559,6 +581,8 @@ def main() -> None:
     # MCP_TRANSPORT: streamable-http (default), sse, or stdio. The HTTP transports bind
     # MCP_HOST:MCP_PORT (default 127.0.0.1:8765) and serve at /mcp; set stdio to speak
     # the protocol over stdin/stdout instead.
+    # MCP_READONLY (default on): expose only read tools; set MCP_READONLY=0 to also allow
+    # the mutating rename_session / set_session_group tools.
     transport = os.environ.get("MCP_TRANSPORT", "streamable-http")
     mcp.run(transport=transport)
 

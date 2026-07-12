@@ -74,6 +74,10 @@ DSL), `get_flow`, `get_body` (text/base64/`as_hex`), `export_request` (request+r
 headers, no bodies), `list_ws_messages` (paginated) + `get_ws_message_body` (WebSocket
 frames; `as_hex` for byte inspection). Session args accept an id prefix.
 
+It runs **read-only by default**: only the inspection tools above are exposed. Set
+`MCP_READONLY=0` to additionally expose the mutating tools `rename_session` and
+`set_session_group` (relabel / regroup a recorded session).
+
 Run it (defaults to the `streamable-http` transport, binding `MCP_HOST:MCP_PORT` =
 `127.0.0.1:8765` and serving the MCP endpoint at `/mcp`):
 

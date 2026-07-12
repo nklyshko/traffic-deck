@@ -7,6 +7,9 @@
 # transports bind $MCP_HOST:$MCP_PORT (default 127.0.0.1:8765) and serve at /mcp; set
 # MCP_TRANSPORT=stdio to speak the protocol over stdin/stdout instead.
 #
+# Read-only by default: set $MCP_READONLY=0 to also expose the mutating rename_session /
+# set_session_group tools.
+#
 # Needs the gRPC stubs generated once (`mise run gen`) and the gateway running.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

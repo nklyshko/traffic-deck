@@ -14,6 +14,32 @@ def _flow(**kw):
     return cp.Flow(**kw)
 
 
+# --- read-only mode -------------------------------------------------------
+
+def test_env_flag_defaults_and_off_values(monkeypatch):
+    monkeypatch.delenv("MCP_READONLY", raising=False)
+    assert S._env_flag("MCP_READONLY", True) is True     # unset -> default
+    assert S._env_flag("MCP_READONLY", False) is False
+    for off in ("0", "false", "FALSE", "no", "off", "", "  Off "):
+        monkeypatch.setenv("MCP_READONLY", off)
+        assert S._env_flag("MCP_READONLY", True) is False
+    for on in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("MCP_READONLY", on)
+        assert S._env_flag("MCP_READONLY", False) is True
+
+
+def test_write_tools_hidden_in_readonly_mode():
+    # Read-only is the default, so the mutating tools are not registered while the
+    # read-only inspection tools are. (Registration happens at import against S.READONLY.)
+    import asyncio
+
+    names = {t.name for t in asyncio.run(S.mcp.list_tools())}
+    assert S.READONLY is True
+    assert "list_sessions" in names and "get_flow" in names
+    assert "rename_session" not in names
+    assert "set_session_group" not in names
+
+
 # --- search matching ------------------------------------------------------
 
 CRIT0 = dict(domain="", method="", content_type="", status=0, path_contains="",
