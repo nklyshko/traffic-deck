@@ -36,8 +36,13 @@ type Conn struct {
 	// SNI is the ClientHello server name, available after the client Initial.
 	SNI string
 	// ClientHello is the parsed ClientHello fingerprint (JA3/JA4 with QUIC transport),
-	// available after the client Initial; nil if it couldn't be parsed.
+	// from the first ClientHello; nil if it couldn't be parsed.
 	ClientHello *tlsdecrypt.ClientHelloInfo
+	// ClientHellos holds every ClientHello handshake message (verbatim), in wire order.
+	// There's more than one only after a HelloRetryRequest.
+	ClientHellos [][]byte
+	// HRRSeen reports whether the server sent a HelloRetryRequest (⇒ a second ClientHello).
+	HRRSeen bool
 }
 
 // Unsupported reports that the ServerHello negotiated a suite this decryptor can't handle;
@@ -185,11 +190,21 @@ func (c *Conn) onHandshake(fromClient bool, msg []byte) {
 			if len(msg) >= 4 {
 				bodyLen := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3])
 				if 4+bodyLen <= len(msg) {
-					c.ClientHello = tlsdecrypt.ParseClientHelloInfoQUIC(msg[4 : 4+bodyLen])
+					// Keep the ClientHello verbatim, in wire order; JA3/JA4 come from the
+					// first one (don't let a post-HRR retry overwrite the fingerprint).
+					c.ClientHellos = append(c.ClientHellos, append([]byte(nil), msg[:4+bodyLen]...))
+					if c.ClientHello == nil {
+						c.ClientHello = tlsdecrypt.ParseClientHelloInfoQUIC(msg[4 : 4+bodyLen])
+					}
 				}
 			}
 		}
 	} else {
+		// A HelloRetryRequest is a ServerHello with the fixed HRR random (msg[6:38]); note
+		// it — the client will follow with a second ClientHello.
+		if len(msg) >= 38 && msg[0] == 2 && tlsdecrypt.IsHelloRetryRandom(msg[6:38]) {
+			c.HRRSeen = true
+		}
 		if id, ok := parseServerHello(msg); ok {
 			if s, found := suiteByID(id); found {
 				c.suite = s

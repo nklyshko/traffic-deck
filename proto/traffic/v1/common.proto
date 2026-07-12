@@ -159,6 +159,13 @@ message Flow {
   // (its redirect_location matched this flow's request URL); computed across the session.
   string redirect_location = 42;
   string redirected_from_id = 43;
+
+  // Raw TLS ClientHello handshake messages captured from the decrypted handshake, verbatim
+  // (msg_type + length + body), in wire order — for export/replay. There is more than one
+  // entry only when the server sent a HelloRetryRequest (tls_hrr), which makes the client
+  // resend a second ClientHello. Empty for plaintext / pushed-proxy flows.
+  repeated bytes client_hellos = 44;
+  bool tls_hrr = 45;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

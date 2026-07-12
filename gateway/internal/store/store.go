@@ -45,7 +45,7 @@ var requiredFlowColumns = []string{
 	"user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream",
 	"h2_stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
 	"proxy_user", "proxy_pass", "error", "duration_micros", "h2_fingerprint",
-	"ja3", "ja4", "tls_client_hello", "redirect_location",
+	"ja3", "ja4", "tls_client_hello", "redirect_location", "tls_hrr",
 }
 
 // dsnPragmas are applied to every pooled connection (unlike `PRAGMA` run via Exec, which
@@ -286,14 +286,17 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 		if _, err := tx.ExecContext(ctx, `DELETE FROM flow_metadata WHERE flow_id=?`, id); err != nil {
 			return 0, err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM flow_client_hellos WHERE flow_id=?`, id); err != nil {
+			return 0, err
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR REPLACE INTO flows (id, session_id, analysis_id, frame_number, ts_micros,
 			    method, scheme, authority, path, query, protocol, status,
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
 			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref,
 			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
-			    ja3, ja4, tls_client_hello, redirect_location)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			    ja3, ja4, tls_client_hello, redirect_location, tls_hrr)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
@@ -301,7 +304,10 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 			nullIfEmpty(reqRef), nullIfEmpty(respRef),
 			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass),
 			f.Error, int64(f.DurationMicros), f.Http2Fingerprint,
-			f.JA3, f.JA4, f.TLSClientHello, resolveRedirect(f)); err != nil {
+			f.JA3, f.JA4, f.TLSClientHello, resolveRedirect(f), boolToInt(f.TLSHRR)); err != nil {
+			return 0, err
+		}
+		if err := insertClientHellos(ctx, tx, id, f.ClientHellos); err != nil {
 			return 0, err
 		}
 		if err := insertHeaders(ctx, tx, id, 0, f.RequestHeaders); err != nil {
@@ -326,6 +332,18 @@ func insertMetadata(ctx context.Context, tx *sql.Tx, flowID string, md map[strin
 		if _, err := tx.ExecContext(ctx,
 			`INSERT OR REPLACE INTO flow_metadata (flow_id, key, value) VALUES (?,?,?)`,
 			flowID, k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// insertClientHellos writes a flow's raw ClientHello handshake messages in wire order.
+func insertClientHellos(ctx context.Context, tx *sql.Tx, flowID string, hellos [][]byte) error {
+	for i, raw := range hellos {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR REPLACE INTO flow_client_hellos (flow_id, ord, raw) VALUES (?,?,?)`,
+			flowID, i, raw); err != nil {
 			return err
 		}
 	}
@@ -517,7 +535,7 @@ const flowCols = `id, session_id, analysis_id, frame_number, ts_micros, method, 
 	authority, path, query, protocol, status, src_addr, dst_addr,
 	user_agent, content_type, request_bytes, tls_decrypted, tcp_stream, h2_stream_id,
 	proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
-	ja3, ja4, tls_client_hello, redirect_location`
+	ja3, ja4, tls_client_hello, redirect_location, tls_hrr`
 
 // ListFlows returns flow summaries (no headers/bodies) for backfill.
 func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.Flow, error) {
@@ -693,6 +711,24 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		return nil, err
 	}
 
+	// Raw ClientHello handshake messages (for export/replay), in wire order.
+	chrows, err := db.QueryContext(ctx,
+		`SELECT raw FROM flow_client_hellos WHERE flow_id=? ORDER BY ord`, flowID)
+	if err != nil {
+		return nil, err
+	}
+	defer chrows.Close()
+	for chrows.Next() {
+		var raw []byte
+		if err := chrows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		f.ClientHellos = append(f.ClientHellos, raw)
+	}
+	if err := chrows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Attach bodies (inlined; capped at decode.MaxBodyBytes).
 	var reqRef, respRef sql.NullString
 	if err := db.QueryRowContext(ctx, `SELECT req_body_ref, resp_body_ref FROM flows WHERE id=?`, flowID).
@@ -834,13 +870,13 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		srcAddr, dstAddr, userAgent, contentType, tcpStream, h2sid sql.NullString
 		proxyAddr, proxyType, proxyUser, proxyPass, flowError      sql.NullString
 		h2Fingerprint, ja3, ja4, tlsClientHello, redirectLocation  sql.NullString
-		tlsDecrypted                                               int64
+		tlsDecrypted, tlsHRR                                       int64
 	)
 	if err := row.Scan(&id, &sessionID, &analysisID, &frameNumber, &tsMicros, &method, &scheme,
 		&authority, &path, &query, &protocol, &status, &srcAddr, &dstAddr,
 		&userAgent, &contentType, &requestBytes, &tlsDecrypted, &tcpStream, &h2sid,
 		&proxyAddr, &proxyType, &proxyUser, &proxyPass, &flowError, &durationMicros, &h2Fingerprint,
-		&ja3, &ja4, &tlsClientHello, &redirectLocation); err != nil {
+		&ja3, &ja4, &tlsClientHello, &redirectLocation, &tlsHRR); err != nil {
 		return nil, err
 	}
 	f := &trafficv1.Flow{
@@ -871,6 +907,7 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		Ja4:              ja4.String,
 		TlsClientHello:   tlsClientHello.String,
 		RedirectLocation: redirectLocation.String,
+		TlsHrr:           tlsHRR != 0,
 	}
 	if proxyAddr.String != "" {
 		f.Proxy = &trafficv1.Proxy{

@@ -6,7 +6,10 @@ package tlsdecrypt
 // records using key material from the key-log, delivering application plaintext via
 // onApp. The negotiated version (from the ServerHello) selects the record layer.
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+)
 
 const (
 	recHeaderLen   = 5
@@ -15,6 +18,20 @@ const (
 	ctAlert        = 21
 	ctAppData      = 23
 )
+
+// helloRetryRequestRandom is the fixed ServerHello.random that marks a message as a
+// HelloRetryRequest rather than a real ServerHello (RFC 8446 §4.1.3).
+var helloRetryRequestRandom = []byte{
+	0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+	0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
+}
+
+// IsHelloRetryRandom reports whether a 32-byte ServerHello.random is the special value that
+// distinguishes a HelloRetryRequest from a real ServerHello (RFC 8446 §4.1.3). Shared with
+// the QUIC decoder, which sees the same TLS 1.3 handshake messages.
+func IsHelloRetryRandom(random []byte) bool {
+	return bytes.Equal(random, helloRetryRequestRandom)
+}
 
 // Negotiated protocol versions (ProtocolVersion on the wire).
 const (
@@ -48,7 +65,9 @@ type Conn struct {
 	clientRandom []byte
 	serverRandom []byte // TLS 1.2 key expansion needs both randoms
 	sni          string
-	chInfo       *ClientHelloInfo // parsed ClientHello (JA3/JA4 fingerprint)
+	chInfo       *ClientHelloInfo // parsed ClientHello (JA3/JA4 fingerprint), from the first CH
+	clientHellos [][]byte         // every ClientHello handshake message (verbatim), in wire order
+	hrrSeen      bool             // the server sent a HelloRetryRequest (⇒ a second ClientHello)
 	suite        *suite           // TLS 1.3 suite
 	suite12      *tls12Suite      // TLS 1.2 AEAD suite
 	haveCH       bool
@@ -83,8 +102,18 @@ func dirIdx(fromClient bool) int {
 func (c *Conn) SNI() string { return c.sni }
 
 // ClientHello returns the parsed ClientHello fingerprint (JA3/JA4, ALPN, …), or nil until
-// the ClientHello is seen / if it couldn't be parsed.
+// the ClientHello is seen / if it couldn't be parsed. The fingerprint is from the first
+// ClientHello (the one JA3/JA4 are defined over), even when a HelloRetryRequest prompts a
+// second one.
 func (c *Conn) ClientHello() *ClientHelloInfo { return c.chInfo }
+
+// ClientHellos returns every ClientHello handshake message seen on the connection, verbatim
+// and in wire order. There is more than one only when the server sent a HelloRetryRequest.
+func (c *Conn) ClientHellos() [][]byte { return c.clientHellos }
+
+// HRRSeen reports whether the server sent a HelloRetryRequest (RFC 8446 §4.1.4), which makes
+// the client resend a second ClientHello on the same connection.
+func (c *Conn) HRRSeen() bool { return c.hrrSeen }
 
 // Unsupported reports that the ServerHello negotiated something this decryptor can't
 // handle (an unknown version or suite) — the caller should stop and leave the stream to
@@ -288,15 +317,21 @@ func (c *Conn) parseHandshake(fromClient bool, frag []byte) {
 
 	switch {
 	case fromClient && msgType == 1: // ClientHello
+		// Keep the ClientHello verbatim (handshake header + body), in wire order. There's
+		// more than one only after a HelloRetryRequest; the first is the JA3/JA4 subject.
+		c.clientHellos = append(c.clientHellos, append([]byte(nil), frag[:4+bodyLen]...))
 		c.parseClientHello(body)
-	case !fromClient && msgType == 2: // ServerHello
+	case !fromClient && msgType == 2: // ServerHello / HelloRetryRequest
 		c.parseServerHello(body)
 	}
 }
 
 func (c *Conn) parseClientHello(b []byte) {
-	// Full fingerprint (JA3/JA4, ALPN, …) — best-effort; nil on a malformed hello.
-	c.chInfo = parseClientHelloInfo(b)
+	// Full fingerprint (JA3/JA4, ALPN, …) — best-effort; nil on a malformed hello. JA3/JA4
+	// are defined over the first ClientHello, so don't let a post-HRR retry overwrite it.
+	if c.chInfo == nil {
+		c.chInfo = parseClientHelloInfo(b)
+	}
 	// legacy_version(2) random(32) session_id<1> cipher_suites<2> compression<1> extensions<2>
 	p := 2
 	if len(b) < p+32 {
@@ -327,6 +362,11 @@ func (c *Conn) parseServerHello(b []byte) {
 		return
 	}
 	c.serverRandom = append([]byte(nil), b[2:2+32]...)
+	// A HelloRetryRequest is a ServerHello carrying this fixed random; note it (the client
+	// will follow with a second ClientHello) but otherwise parse it like a ServerHello.
+	if IsHelloRetryRandom(c.serverRandom) {
+		c.hrrSeen = true
+	}
 	legacy := uint16(b[0])<<8 | uint16(b[1])
 	p := 2 + 32
 	var ok bool

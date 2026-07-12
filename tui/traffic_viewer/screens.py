@@ -376,6 +376,7 @@ class SessionPane(Vertical):
         Binding("f", "filter", "Filter"),
         Binding("c", "compare", "Compare A/B"),
         Binding("space", "select", "Select"),
+        Binding("D", "clear_selection", "Deselect"),
         Binding("m", "mark", "Mark"),
         Binding("t", "tag", "Tag"),
         Binding("F", "favorite", "Favorite"),
@@ -619,6 +620,17 @@ class SessionPane(Vertical):
             self._upsert(f)  # re-render the flags cell
         self._update_subtitle()
 
+    def action_clear_selection(self) -> None:
+        """Reset the whole bulk-annotation selection in one keystroke."""
+        if not self._selected:
+            return
+        cleared, self._selected = self._selected, set()
+        for fid in cleared:
+            f = self.flows.get(fid)
+            if f is not None:
+                self._upsert(f)  # re-render the (now unselected) flags cell
+        self._update_subtitle()
+
     def _targets(self) -> list[str]:
         """Records an annotation applies to: the selection if any, else the focus."""
         if self._selected:
@@ -766,7 +778,7 @@ class WorkspaceScreen(Screen):
     viewed and compared side by side. Compare A/B (c) works across tabs via app.compare_a."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Sessions"),
+        Binding("escape", "app.pop_screen", "Sessions", show=False),
         Binding("o", "open_session", "Open session"),
         Binding("w", "close_tab", "Close tab"),
         Binding("ctrl+w", "close_tab", "Close tab", show=False),
@@ -870,13 +882,14 @@ class WorkspaceScreen(Screen):
 
 class FlowDetailScreen(Screen):
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back", show=False),
         Binding("b", "view_request", "View req body"),
         Binding("B", "view_response", "View resp body"),
         Binding("r", "save_request", "Save req body"),
         Binding("s", "save_response", "Save resp body"),
         Binding("x", "export_curl", "Export curl"),
         Binding("w", "export_raw", "Export raw"),
+        Binding("H", "export_client_hellos", "Export CHs"),
         Binding("M", "messages", "WS msgs"),
         Binding("q", "quit", "Quit"),
     ]
@@ -933,29 +946,75 @@ class FlowDetailScreen(Screen):
     async def action_export_curl(self) -> None:
         if self._flow is None:
             return
+        dest = await self.app.push_screen_wait(
+            TextPrompt("Export curl to:", os.path.abspath(f"{self.flow_id[:8]}.curl")))
+        if not dest:
+            return
+        path = os.path.abspath(os.path.expanduser(dest.strip()))
+        # The bodyfile (if any) lives next to the .curl and is referenced by the
+        # command, so derive the id-prefix from the chosen destination.
+        prefix = path[:-len(".curl")] if path.endswith(".curl") else path
         body = await self._full_body(response=False)
-        cmd, bodyfile = curl(self._flow, self.flow_id[:8], body)
-        if bodyfile:
-            with open(bodyfile, "wb") as fp:
-                fp.write(body)
-        path = os.path.abspath(f"{self.flow_id[:8]}.curl")
-        with open(path, "w") as fp:
-            fp.write(cmd + "\n")
+        cmd, bodyfile = curl(self._flow, prefix, body)
+        try:
+            if bodyfile:
+                with open(bodyfile, "wb") as fp:
+                    fp.write(body)
+            with open(path, "w") as fp:
+                fp.write(cmd + "\n")
+        except OSError as exc:
+            self.notify(f"export failed: {exc}", severity="error")
+            return
         self.notify(f"wrote {path}" + (f" (+ {bodyfile})" if bodyfile else ""))
 
     @work(exclusive=True)
     async def action_export_raw(self) -> None:
         if self._flow is None:
             return
+        dest = await self.app.push_screen_wait(
+            TextPrompt("Export raw to (prefix):", os.path.abspath(self.flow_id[:8])))
+        if not dest:
+            return
+        prefix = os.path.abspath(os.path.expanduser(dest.strip()))
         req = raw_message(self._flow, await self._full_body(response=False), response=False)
         resp = raw_message(self._flow, await self._full_body(response=True), response=True)
-        rp = os.path.abspath(f"{self.flow_id[:8]}-request.http")
-        sp = os.path.abspath(f"{self.flow_id[:8]}-response.http")
-        with open(rp, "wb") as fp:
-            fp.write(req)
-        with open(sp, "wb") as fp:
-            fp.write(resp)
+        rp = f"{prefix}-request.http"
+        sp = f"{prefix}-response.http"
+        try:
+            with open(rp, "wb") as fp:
+                fp.write(req)
+            with open(sp, "wb") as fp:
+                fp.write(resp)
+        except OSError as exc:
+            self.notify(f"export failed: {exc}", severity="error")
+            return
         self.notify(f"wrote {rp} and {sp}")
+
+    @work(exclusive=True)
+    async def action_export_client_hellos(self) -> None:
+        """Export the raw TLS ClientHello(s) as hex text, one per line (in wire order).
+        There's more than one line only when the server sent a HelloRetryRequest."""
+        if self._flow is None:
+            return
+        hellos = list(self._flow.client_hellos)
+        if not hellos:
+            self.notify("no raw ClientHello for this flow (plaintext / pushed source)",
+                        severity="warning")
+            return
+        dest = await self.app.push_screen_wait(
+            TextPrompt("Export ClientHello(s) to:", os.path.abspath(f"{self.flow_id[:8]}.clienthello.hex")))
+        if not dest:
+            return
+        path = os.path.abspath(os.path.expanduser(dest.strip()))
+        text = "\n".join(ch.hex() for ch in hellos) + "\n"
+        try:
+            with open(path, "w") as fp:
+                fp.write(text)
+        except OSError as exc:
+            self.notify(f"export failed: {exc}", severity="error")
+            return
+        n = len(hellos)
+        self.notify(f"wrote {n} ClientHello{'' if n == 1 else 's'} → {path}")
 
     def action_view_request(self) -> None:
         self._view_body(response=False)
@@ -1043,6 +1102,14 @@ class FlowDetailScreen(Screen):
                 lines.append(Content.from_markup("  [cyan]JA3:[/cyan] $v", v=f.ja3))
             if f.tls_client_hello:
                 lines.append(Content.from_markup("  [dim]$v[/dim]", v=f.tls_client_hello))
+            if f.client_hellos:
+                n = len(f.client_hellos)
+                hrr = "  [yellow](HelloRetryRequest)[/yellow]" if f.tls_hrr else ""
+                lines.append(Content.from_markup(
+                    "  [cyan]Raw:[/cyan] $n ClientHello$s captured — press [b]H[/b] to export$hrr",
+                    n=str(n), s="" if n == 1 else "s", hrr=hrr))
+            elif f.tls_hrr:
+                lines.append(Content.from_markup("  [yellow](HelloRetryRequest seen)[/yellow]"))
         if f.http2_fingerprint:
             lines.append(Content(""))
             lines.append(Content.from_markup("[b u]HTTP/2 fingerprint[/b u]"))
@@ -1126,7 +1193,7 @@ class _PayloadView(Screen):
     content-type, and naming (`_what` / `_subtitle` / `_file_stem`)."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back", show=False),
         Binding("o", "open_editor", "Open in editor"),
         Binding("s", "save", "Save"),
         Binding("q", "quit", "Quit"),
@@ -1264,7 +1331,7 @@ class WsMessagesScreen(Screen):
     frames in time order, distinct from the request/response view."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back", show=False),
         Binding("l", "follow", "Follow new"),
         Binding("q", "quit", "Quit"),
     ]
@@ -1387,7 +1454,7 @@ class CompareScreen(Screen):
     """
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back", show=False),
         Binding("s", "switch_side", "Switch A/B"),
         Binding("h", "copy_headers", "Copy header order"),
         Binding("p", "copy_pseudo", "Copy pseudo order"),

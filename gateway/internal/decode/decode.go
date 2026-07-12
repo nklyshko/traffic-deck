@@ -82,6 +82,12 @@ type Flow struct {
 	JA4            string
 	TLSClientHello string
 
+	// ClientHellos holds every ClientHello handshake message seen on the connection,
+	// verbatim and in wire order (more than one only after a HelloRetryRequest). TLSHRR
+	// records whether the server sent a HelloRetryRequest. Empty/false for plaintext flows.
+	ClientHellos [][]byte
+	TLSHRR       bool
+
 	// internal: set once a reassembled (complete) body has been captured, so raw
 	// per-frame chunks no longer append.
 	reqBodyFinal  bool

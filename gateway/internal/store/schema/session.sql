@@ -42,7 +42,17 @@ CREATE TABLE IF NOT EXISTS flows (
     ja3 TEXT NOT NULL DEFAULT '',              -- TLS JA3 (MD5)
     ja4 TEXT NOT NULL DEFAULT '',              -- TLS JA4
     tls_client_hello TEXT NOT NULL DEFAULT '', -- readable ClientHello (JA3 text + ALPN), for export
-    redirect_location TEXT NOT NULL DEFAULT '' -- absolute Location URL for a 3xx, "" otherwise
+    redirect_location TEXT NOT NULL DEFAULT '', -- absolute Location URL for a 3xx, "" otherwise
+    tls_hrr INTEGER NOT NULL DEFAULT 0          -- server sent a HelloRetryRequest (⇒ a second ClientHello)
+);
+
+-- Raw ClientHello handshake messages (verbatim, msg_type+length+body), for export/replay.
+-- More than one row per flow only after a HelloRetryRequest; ord is wire order.
+CREATE TABLE IF NOT EXISTS flow_client_hellos (
+    flow_id TEXT NOT NULL,
+    ord     INTEGER NOT NULL,
+    raw     BLOB NOT NULL,
+    PRIMARY KEY (flow_id, ord)
 );
 
 CREATE TABLE IF NOT EXISTS flow_headers (
@@ -89,6 +99,7 @@ CREATE TABLE IF NOT EXISTS ws_messages (
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
 CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
+CREATE INDEX IF NOT EXISTS flow_client_hellos_flow_idx ON flow_client_hellos (flow_id);
 CREATE INDEX IF NOT EXISTS flow_metadata_flow_idx ON flow_metadata (flow_id);
 CREATE INDEX IF NOT EXISTS ws_messages_flow_idx  ON ws_messages (flow_id, ts_micros, frame_number);
 

@@ -204,6 +204,12 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     d["response_cookies"] = [_set_cookie(c) for c in f.response_cookies]
     d["request_body"] = _body_meta(f.request_body)
     d["response_body"] = _body_meta(f.response_body)
+    # Raw ClientHello(s): note their presence + the HelloRetryRequest flag here; fetch the
+    # bytes (hex) with export_client_hellos. More than one only after a HelloRetryRequest.
+    if f.client_hellos:
+        d["client_hello_count"] = len(f.client_hellos)
+    if f.tls_hrr:
+        d["tls_hrr"] = True
     return d
 
 
@@ -575,6 +581,24 @@ async def export_request(session_id: str, flow_id: str) -> dict:
     if f.websocket:
         out["websocket"] = {"message_count": f.ws_message_count}
     return out
+
+
+@mcp.tool()
+async def export_client_hellos(session_id: str, flow_id: str) -> dict:
+    """Export a flow's raw TLS ClientHello handshake message(s) as hex, in wire order.
+
+    Each entry is one ClientHello (handshake header + body) exactly as captured —
+    suitable for replay/fingerprinting. There is more than one entry only when the server
+    sent a HelloRetryRequest (`tls_hrr`), which makes the client resend a ClientHello.
+    `client_hellos` is empty for plaintext connections and pushed/proxy sources (which
+    don't expose the raw handshake).
+    """
+    f = await client().get_flow(await _resolve_session(session_id), flow_id)
+    return {
+        "flow_id": f.id,
+        "tls_hrr": f.tls_hrr,
+        "client_hellos": [ch.hex() for ch in f.client_hellos],
+    }
 
 
 def main() -> None:

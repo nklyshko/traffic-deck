@@ -299,4 +299,6 @@ func (s *tcpStream) applyTLSFingerprint(f *Flow) {
 		text += " alpn=" + strings.Join(ch.ALPN, ",")
 	}
 	f.TLSClientHello = text
+	f.ClientHellos = s.conn.ClientHellos()
+	f.TLSHRR = s.conn.HRRSeen()
 }

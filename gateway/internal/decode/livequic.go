@@ -294,6 +294,8 @@ func (s *quicSession) newFlow(streamID uint64) *Flow {
 			text += " alpn=" + strings.Join(ch.ALPN, ",")
 		}
 		f.TLSClientHello = text
+		f.ClientHellos = s.conn.ClientHellos
+		f.TLSHRR = s.conn.HRRSeen
 	}
 	return f
 }

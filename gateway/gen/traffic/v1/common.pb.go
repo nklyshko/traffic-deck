@@ -643,8 +643,14 @@ type Flow struct {
 	// (its redirect_location matched this flow's request URL); computed across the session.
 	RedirectLocation string `protobuf:"bytes,42,opt,name=redirect_location,json=redirectLocation,proto3" json:"redirect_location,omitempty"`
 	RedirectedFromId string `protobuf:"bytes,43,opt,name=redirected_from_id,json=redirectedFromId,proto3" json:"redirected_from_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Raw TLS ClientHello handshake messages captured from the decrypted handshake, verbatim
+	// (msg_type + length + body), in wire order — for export/replay. There is more than one
+	// entry only when the server sent a HelloRetryRequest (tls_hrr), which makes the client
+	// resend a second ClientHello. Empty for plaintext / pushed-proxy flows.
+	ClientHellos  [][]byte `protobuf:"bytes,44,rep,name=client_hellos,json=clientHellos,proto3" json:"client_hellos,omitempty"`
+	TlsHrr        bool     `protobuf:"varint,45,opt,name=tls_hrr,json=tlsHrr,proto3" json:"tls_hrr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Flow) Reset() {
@@ -976,6 +982,20 @@ func (x *Flow) GetRedirectedFromId() string {
 		return x.RedirectedFromId
 	}
 	return ""
+}
+
+func (x *Flow) GetClientHellos() [][]byte {
+	if x != nil {
+		return x.ClientHellos
+	}
+	return nil
+}
+
+func (x *Flow) GetTlsHrr() bool {
+	if x != nil {
+		return x.TlsHrr
+	}
+	return false
 }
 
 // A proxy a connection was observed to go through, detected from the captured
@@ -1499,7 +1519,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
-	"\acontent\"\xd3\f\n" +
+	"\acontent\"\x91\r\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1550,7 +1570,9 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x12=\n" +
 	"\x10response_cookies\x18) \x03(\v2\x12.traffic.v1.CookieR\x0fresponseCookies\x12+\n" +
 	"\x11redirect_location\x18* \x01(\tR\x10redirectLocation\x12,\n" +
-	"\x12redirected_from_id\x18+ \x01(\tR\x10redirectedFromId\x1a;\n" +
+	"\x12redirected_from_id\x18+ \x01(\tR\x10redirectedFromId\x12#\n" +
+	"\rclient_hellos\x18, \x03(\fR\fclientHellos\x12\x17\n" +
+	"\atls_hrr\x18- \x01(\bR\x06tlsHrr\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +

@@ -46,6 +46,10 @@ def _flow(fid, method, status, websocket=False):
     if websocket:
         f.websocket = True
         f.ws_message_count = 2
+    if fid == "f1":  # a TLS flow with two captured ClientHellos (as after a HelloRetryRequest)
+        f.ja3 = "a" * 32
+        f.tls_hrr = True
+        f.client_hellos.extend([b"\x01\x00\x00\x02\x03\x03", b"\x01\x00\x00\x01\x03"])
     return f
 
 
@@ -302,6 +306,39 @@ async def test_detail_view_request_body_opens_body_screen():
         assert isinstance(app.screen, BodyScreen)
         assert app.screen._label == "request"
         assert app.screen._data == b'{"k":1}'
+
+
+async def test_export_client_hellos_writes_hex_lines(tmp_path):
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_first_flow_detail(pilot)  # f1 has two captured ClientHellos + HRR
+        assert isinstance(app.screen, FlowDetailScreen)
+        await pilot.press("H")  # export ClientHellos
+        await settle(pilot)
+        out = tmp_path / "hellos.hex"
+        app.screen.query_one("#prompt-input", Input).value = str(out)
+        await pilot.press("enter")
+        await settle(pilot)
+        # One hex line per ClientHello, in wire order.
+        assert out.read_text() == "010000020303\n0100000103\n"
+
+
+async def test_export_client_hellos_noop_without_hellos(tmp_path):
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("enter")
+        await settle(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("down")  # move to f2 (no ClientHellos)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, FlowDetailScreen)
+        await pilot.press("H")  # should notify + no prompt
+        await settle(pilot)
+        # No TextPrompt was pushed (still on the detail screen).
+        assert isinstance(app.screen, FlowDetailScreen)
 
 
 async def test_body_view_renders_small_body_inline():

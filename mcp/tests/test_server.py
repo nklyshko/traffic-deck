@@ -134,6 +134,62 @@ def test_bytes_payload_hex_and_offset():
     assert w["hex"] == "0102030405" and w["offset"] == 2 and w["size"] == 7
 
 
+# --- ClientHello export ---------------------------------------------------
+
+def test_flow_detail_notes_client_hellos_and_hrr():
+    f = _flow(id="f1", tls_hrr=True)
+    f.client_hellos.extend([b"\x01\x00\x00\x02\x03\x03", b"\x01\x00\x00\x01\x03"])
+    d = S._flow_detail(f, {}, {})
+    assert d["client_hello_count"] == 2
+    assert d["tls_hrr"] is True
+
+    # A plaintext flow carries neither key (kept lean).
+    plain = S._flow_detail(_flow(id="f2"), {}, {})
+    assert "client_hello_count" not in plain and "tls_hrr" not in plain
+
+
+def test_export_client_hellos_tool(monkeypatch):
+    import asyncio
+
+    f = _flow(id="f1", tls_hrr=True)
+    f.client_hellos.extend([b"\x01\x00\x00\x02\x03\x03", b"\x01\x00\x00\x01\x03"])
+
+    class FakeClient:
+        async def get_flow(self, sid, fid):
+            assert (sid, fid) == ("s1", "f1")
+            return f
+
+    async def _resolve(sid):
+        return "s1"
+
+    monkeypatch.setattr(S, "client", lambda: FakeClient())
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+
+    out = asyncio.run(S.export_client_hellos("s1", "f1"))
+    assert out == {
+        "flow_id": "f1",
+        "tls_hrr": True,
+        "client_hellos": ["010000020303", "0100000103"],
+    }
+
+
+def test_export_client_hellos_empty_for_plaintext(monkeypatch):
+    import asyncio
+
+    class FakeClient:
+        async def get_flow(self, sid, fid):
+            return _flow(id="p")
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: FakeClient())
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+
+    out = asyncio.run(S.export_client_hellos("s", "p"))
+    assert out == {"flow_id": "p", "tls_hrr": False, "client_hellos": []}
+
+
 # --- compare_flows --------------------------------------------------------
 
 def _hdr(name, value):
