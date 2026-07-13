@@ -48,8 +48,9 @@ type CaptureSourceServiceClient interface {
 	// (its `source` field is ignored here — the source is known by the connection).
 	StartCapture(ctx context.Context, in *StartCaptureRequest, opts ...grpc.CallOption) (*StartCaptureResponse, error)
 	// End the given session; a source that keeps a warm resource stays up (see keep_warm in
-	// ADR-0010) and returns to READY.
-	StopCapture(ctx context.Context, in *StopCaptureRequest, opts ...grpc.CallOption) (*StopCaptureResponse, error)
+	// ADR-0010) and returns to READY. Returns Empty — the source closes the session
+	// (CloseSession) but doesn't hold the Session; the gateway owns session state.
+	StopCapture(ctx context.Context, in *StopCaptureRequest, opts ...grpc.CallOption) (*Empty, error)
 	// Drop any warm resource (e.g. shut an emulator this source booted). A source with
 	// nothing to hold treats it as a no-op. Teardown follows provisioning ownership: a
 	// resource the source only attached to must be left running.
@@ -86,9 +87,9 @@ func (c *captureSourceServiceClient) StartCapture(ctx context.Context, in *Start
 	return out, nil
 }
 
-func (c *captureSourceServiceClient) StopCapture(ctx context.Context, in *StopCaptureRequest, opts ...grpc.CallOption) (*StopCaptureResponse, error) {
+func (c *captureSourceServiceClient) StopCapture(ctx context.Context, in *StopCaptureRequest, opts ...grpc.CallOption) (*Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(StopCaptureResponse)
+	out := new(Empty)
 	err := c.cc.Invoke(ctx, CaptureSourceService_StopCapture_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -138,8 +139,9 @@ type CaptureSourceServiceServer interface {
 	// (its `source` field is ignored here — the source is known by the connection).
 	StartCapture(context.Context, *StartCaptureRequest) (*StartCaptureResponse, error)
 	// End the given session; a source that keeps a warm resource stays up (see keep_warm in
-	// ADR-0010) and returns to READY.
-	StopCapture(context.Context, *StopCaptureRequest) (*StopCaptureResponse, error)
+	// ADR-0010) and returns to READY. Returns Empty — the source closes the session
+	// (CloseSession) but doesn't hold the Session; the gateway owns session state.
+	StopCapture(context.Context, *StopCaptureRequest) (*Empty, error)
 	// Drop any warm resource (e.g. shut an emulator this source booted). A source with
 	// nothing to hold treats it as a no-op. Teardown follows provisioning ownership: a
 	// resource the source only attached to must be left running.
@@ -162,7 +164,7 @@ func (UnimplementedCaptureSourceServiceServer) Describe(context.Context, *Descri
 func (UnimplementedCaptureSourceServiceServer) StartCapture(context.Context, *StartCaptureRequest) (*StartCaptureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartCapture not implemented")
 }
-func (UnimplementedCaptureSourceServiceServer) StopCapture(context.Context, *StopCaptureRequest) (*StopCaptureResponse, error) {
+func (UnimplementedCaptureSourceServiceServer) StopCapture(context.Context, *StopCaptureRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopCapture not implemented")
 }
 func (UnimplementedCaptureSourceServiceServer) ReleaseSource(context.Context, *ReleaseSourceRequest) (*Empty, error) {

@@ -56,7 +56,7 @@ class CaptureSourceServiceStub(object):
         self.StopCapture = channel.unary_unary(
                 '/traffic.v1.CaptureSourceService/StopCapture',
                 request_serializer=traffic_dot_v1_dot_control__pb2.StopCaptureRequest.SerializeToString,
-                response_deserializer=traffic_dot_v1_dot_control__pb2.StopCaptureResponse.FromString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
                 _registered_method=True)
         self.ReleaseSource = channel.unary_unary(
                 '/traffic.v1.CaptureSourceService/ReleaseSource',
@@ -101,7 +101,8 @@ class CaptureSourceServiceServicer(object):
 
     def StopCapture(self, request, context):
         """End the given session; a source that keeps a warm resource stays up (see keep_warm in
-        ADR-0010) and returns to READY.
+        ADR-0010) and returns to READY. Returns Empty — the source closes the session
+        (CloseSession) but doesn't hold the Session; the gateway owns session state.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -139,7 +140,7 @@ def add_CaptureSourceServiceServicer_to_server(servicer, server):
             'StopCapture': grpc.unary_unary_rpc_method_handler(
                     servicer.StopCapture,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.StopCaptureRequest.FromString,
-                    response_serializer=traffic_dot_v1_dot_control__pb2.StopCaptureResponse.SerializeToString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
             ),
             'ReleaseSource': grpc.unary_unary_rpc_method_handler(
                     servicer.ReleaseSource,
@@ -240,7 +241,7 @@ class CaptureSourceService(object):
             target,
             '/traffic.v1.CaptureSourceService/StopCapture',
             traffic_dot_v1_dot_control__pb2.StopCaptureRequest.SerializeToString,
-            traffic_dot_v1_dot_control__pb2.StopCaptureResponse.FromString,
+            traffic_dot_v1_dot_control__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,

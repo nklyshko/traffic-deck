@@ -604,11 +604,11 @@ const file_traffic_v1_source_proto_rawDesc = "" +
 	"\x18SOURCE_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SOURCE_STATE_PROVISIONING\x10\x01\x12\x16\n" +
 	"\x12SOURCE_STATE_READY\x10\x02\x12\x1a\n" +
-	"\x16SOURCE_STATE_CAPTURING\x10\x032\x85\x03\n" +
+	"\x16SOURCE_STATE_CAPTURING\x10\x032\xf7\x02\n" +
 	"\x14CaptureSourceService\x12E\n" +
 	"\bDescribe\x12\x1b.traffic.v1.DescribeRequest\x1a\x1c.traffic.v1.SourceDescriptor\x12Q\n" +
-	"\fStartCapture\x12\x1f.traffic.v1.StartCaptureRequest\x1a .traffic.v1.StartCaptureResponse\x12N\n" +
-	"\vStopCapture\x12\x1e.traffic.v1.StopCaptureRequest\x1a\x1f.traffic.v1.StopCaptureResponse\x12D\n" +
+	"\fStartCapture\x12\x1f.traffic.v1.StartCaptureRequest\x1a .traffic.v1.StartCaptureResponse\x12@\n" +
+	"\vStopCapture\x12\x1e.traffic.v1.StopCaptureRequest\x1a\x11.traffic.v1.Empty\x12D\n" +
 	"\rReleaseSource\x12 .traffic.v1.ReleaseSourceRequest\x1a\x11.traffic.v1.Empty\x12=\n" +
 	"\x06Status\x12\x19.traffic.v1.StatusRequest\x1a\x18.traffic.v1.SourceStatusB\xa9\x01\n" +
 	"\x0ecom.traffic.v1B\vSourceProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
@@ -644,8 +644,7 @@ var file_traffic_v1_source_proto_goTypes = []any{
 	(*StartCaptureRequest)(nil),  // 11: traffic.v1.StartCaptureRequest
 	(*StopCaptureRequest)(nil),   // 12: traffic.v1.StopCaptureRequest
 	(*StartCaptureResponse)(nil), // 13: traffic.v1.StartCaptureResponse
-	(*StopCaptureResponse)(nil),  // 14: traffic.v1.StopCaptureResponse
-	(*Empty)(nil),                // 15: traffic.v1.Empty
+	(*Empty)(nil),                // 14: traffic.v1.Empty
 }
 var file_traffic_v1_source_proto_depIdxs = []int32{
 	10, // 0: traffic.v1.DescribeRequest.params:type_name -> traffic.v1.DescribeRequest.ParamsEntry
@@ -661,8 +660,8 @@ var file_traffic_v1_source_proto_depIdxs = []int32{
 	8,  // 10: traffic.v1.CaptureSourceService.Status:input_type -> traffic.v1.StatusRequest
 	4,  // 11: traffic.v1.CaptureSourceService.Describe:output_type -> traffic.v1.SourceDescriptor
 	13, // 12: traffic.v1.CaptureSourceService.StartCapture:output_type -> traffic.v1.StartCaptureResponse
-	14, // 13: traffic.v1.CaptureSourceService.StopCapture:output_type -> traffic.v1.StopCaptureResponse
-	15, // 14: traffic.v1.CaptureSourceService.ReleaseSource:output_type -> traffic.v1.Empty
+	14, // 13: traffic.v1.CaptureSourceService.StopCapture:output_type -> traffic.v1.Empty
+	14, // 14: traffic.v1.CaptureSourceService.ReleaseSource:output_type -> traffic.v1.Empty
 	9,  // 15: traffic.v1.CaptureSourceService.Status:output_type -> traffic.v1.SourceStatus
 	11, // [11:16] is the sub-list for method output_type
 	6,  // [6:11] is the sub-list for method input_type

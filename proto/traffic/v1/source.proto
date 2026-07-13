@@ -24,8 +24,9 @@ service CaptureSourceService {
   rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
 
   // End the given session; a source that keeps a warm resource stays up (see keep_warm in
-  // ADR-0010) and returns to READY.
-  rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
+  // ADR-0010) and returns to READY. Returns Empty — the source closes the session
+  // (CloseSession) but doesn't hold the Session; the gateway owns session state.
+  rpc StopCapture(StopCaptureRequest) returns (Empty);
 
   // Drop any warm resource (e.g. shut an emulator this source booted). A source with
   // nothing to hold treats it as a no-op. Teardown follows provisioning ownership: a
