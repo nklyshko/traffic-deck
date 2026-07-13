@@ -1,12 +1,15 @@
 package decode
 
-// Live custom-protocol decoding, fully in-process in Go. Instead of
+// Live decoding, fully in-process in Go and authoritative by default. Instead of
 // re-running `tshark -z follow,tls,raw` over the growing capture, we tap the same live
-// pcap byte stream, reassemble TCP with gopacket, decrypt TLS 1.3 from the key-log
-// (internal/tlsdecrypt), and feed each matched connection's decrypted application bytes
-// to the decoder's stateful Session — emitting frames through the same onFlow/onMsg
-// callbacks the WebSocket live path uses. Streams that aren't TLS 1.3 (or use an
-// unsupported link type) are left to the batch tshark pass on close.
+// pcap byte stream, reassemble TCP with gopacket, decrypt TLS from the key-log
+// (internal/tlsdecrypt: SSL 3.0 – TLS 1.3), and feed each connection's decrypted
+// application bytes to its HTTP/WebSocket parser or to a decoder's stateful Session —
+// emitting flows and frames through the onFlow/onMsg callbacks.
+//
+// A connection this decoder can't handle (an unsupported version/suite or link type, or
+// one whose key-log secret never arrived) is only recoverable by the batch tshark pass,
+// which runs on close just when the live decode isn't authoritative — see skippedFate.
 
 import (
 	"bytes"
@@ -34,10 +37,15 @@ import (
 // inner IP packet ourselves (nflogIPPayload).
 const linkTypeNFLOG = gplayers.LinkType(239)
 
-// LiveTCPDecode reads a live pcap byte stream from r, reassembles TCP, decrypts TLS 1.3
-// using the (growing) key-log at keylogPath, and emits decoded custom-protocol frames
-// via onFlow/onMsg. Returns when r reaches EOF (the capture's pipe is closed).
-func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage)) error {
+// LiveTCPDecode reads a live pcap byte stream from r, reassembles TCP, decrypts TLS
+// using the (growing) key-log at keylogPath, and emits decoded flows and frames via
+// onFlow/onMsg. Returns when r reaches EOF (the capture's pipe is closed).
+//
+// recordLive tells the decoder whether it is the authoritative decode (the caller's
+// GATEWAY_RECORD_LIVE): it changes no decoding, only what the diagnostics say becomes of
+// a connection this decoder skips — nothing else will decode it when authoritative.
+func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage),
+	recordLive bool) error {
 	reader, err := pcapgo.NewReader(r)
 	if err != nil {
 		return err // includes EOF if the session sent no pcap
@@ -46,10 +54,11 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 		onMsg = func(*WsMessage) {} // the WebSocket/custom paths call it unconditionally
 	}
 	lt := &liveTCP{
-		keylog: tlsdecrypt.NewKeylog(keylogPath),
-		onFlow: onFlow,
-		onMsg:  onMsg,
-		quic:   map[string]*quicConnState{},
+		keylog:     tlsdecrypt.NewKeylog(keylogPath),
+		onFlow:     onFlow,
+		onMsg:      onMsg,
+		quic:       map[string]*quicConnState{},
+		recordLive: recordLive,
 	}
 	asm := reassembly.NewAssembler(reassembly.NewStreamPool(lt))
 	linkType := reader.LinkType()
@@ -81,7 +90,10 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 			lt.handleUDP(netLayer.NetworkFlow(), udpLayer.(*gplayers.UDP))
 		}
 	}
-	asm.FlushAll()
+	asm.FlushAll() // TCP only: closes each tcpStream via ReassemblyComplete
+	for _, st := range lt.quic {
+		st.sess.close() // QUIC has no assembler to flush it, so end each connection here
+	}
 	return nil
 }
 
@@ -92,10 +104,37 @@ type liveTCP struct {
 	onMsg  func(*WsMessage)
 	quic   map[string]*quicConnState // QUIC connections keyed by canonical UDP 4-tuple
 
+	// recordLive: this decode is authoritative and no batch pass will run on close, so a
+	// connection skipped here is simply absent from the session. Diagnostics only.
+	recordLive bool
+
 	// Connection counter handed out by connID, in first-seen order. Needs no lock: New
 	// and handleUDP both run on the single packet loop in LiveTCPDecode (as the unlocked
 	// quic map above already assumes).
 	nextConn int
+}
+
+// skippedFate describes what actually becomes of a connection the live decoder can't
+// handle, so the diagnostic doesn't promise a recovery that won't happen. Only a
+// non-record-live close runs the authoritative batch tshark pass; the extra decode
+// GATEWAY_VERIFY_LIVE does under record-live is diagnostic and never persisted.
+func (f *liveTCP) skippedFate() string {
+	if f.recordLive {
+		return "dropped from the session (live decode is authoritative; " +
+			"set GATEWAY_RECORD_LIVE=off to batch-decode on close instead)"
+	}
+	return "left to the authoritative batch tshark pass on close"
+}
+
+// partialFate is skippedFate for a loss *inside* a connection that is otherwise decoding
+// — an HTTP/3 QPACK failure costs individual requests, not the whole connection, so
+// skippedFate's wording would overstate it.
+func (f *liveTCP) partialFate() string {
+	if f.recordLive {
+		return "the affected requests are missing from the session (live decode is " +
+			"authoritative; set GATEWAY_RECORD_LIVE=off to batch-decode on close instead)"
+	}
+	return "the affected requests come from the authoritative batch tshark pass on close"
 }
 
 // connID assigns the next connection identifier, numbering connections in first-seen
@@ -136,7 +175,7 @@ func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP) {
 		st = &quicConnState{
 			// "quic:" prefix as the PDML decode path uses, so a QUIC connection id can't be
 			// mistaken for (or collide with) a TCP one.
-			sess: newQUICSession(f.keylog, f.onFlow, "quic:"+f.connID(),
+			sess: newQUICSession(f, "quic:"+f.connID(),
 				netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)), src),
 			client: src,
 		}
@@ -225,9 +264,10 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 	s.conn.Feed(fromClient, data)
 	if s.conn.Unsupported() {
 		// A TLS connection we recognized but can't decrypt live (e.g. 3DES/RC4). Surface it
-		// — the batch tshark pass on close is still authoritative.
-		log.Printf("live decode: not decoding %s (%s) live: %s — deferred to batch pass on close",
-			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, s.conn.UnsupportedReason())
+		// with what becomes of it, which depends on whether a batch pass will run.
+		log.Printf("live decode: not decoding %s (%s) live: %s — %s",
+			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, s.conn.UnsupportedReason(),
+			s.lt.skippedFate())
 		s.dropped = true
 	}
 }
@@ -247,10 +287,10 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 	}
 	// A TLS connection we never managed to decrypt (no key-log secret arrived, or the
 	// handshake never completed in the capture) yields no live flow — flag it so the gap
-	// isn't silent. Batch decode on close may still recover it if keys are present.
+	// isn't silent, and say what becomes of it.
 	if s.sniffed && !s.dropped && !s.decided && !s.conn.Unsupported() {
-		log.Printf("live decode: %s (%s) not decoded live: no TLS key-log secret (or incomplete handshake) — trying batch pass on close",
-			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost)
+		log.Printf("live decode: %s (%s) not decoded live: no TLS key-log secret (or incomplete handshake) — %s",
+			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, s.lt.skippedFate())
 	}
 	return true
 }

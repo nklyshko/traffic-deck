@@ -91,7 +91,7 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		// Close the read end when decode exits so write() can't block forever if the
 		// decoder returns early (writes get ErrClosedPipe instead).
 		defer pr.Close()
-		_ = decode.LiveTCPDecode(pr, keylogPath, ls.onFlow, ls.onMessage)
+		_ = decode.LiveTCPDecode(pr, keylogPath, ls.onFlow, ls.onMessage, h.recordLive)
 	}()
 }
 

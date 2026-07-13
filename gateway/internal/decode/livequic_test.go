@@ -3,6 +3,8 @@ package decode
 import (
 	"bytes"
 	"encoding/hex"
+	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,11 +37,89 @@ func h3Frame(t uint64, payload []byte) []byte {
 	return append(out, payload...)
 }
 
+// captureLog redirects the standard logger for one test and returns what was written.
+func captureLog(t *testing.T) func() string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return buf.String
+}
+
+// quicTestSession builds a QUIC session with no key-log, as an unkeyed capture would.
+func quicTestSession(recordLive bool) *quicSession {
+	lt := &liveTCP{
+		keylog:     tlsdecrypt.NewKeylog(""),
+		onFlow:     func(*Flow, bool) {},
+		recordLive: recordLive,
+	}
+	return newQUICSession(lt, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
+}
+
+// TestQUICCloseReportsBlockedHeaders covers the silent gap QUIC had with no close hook:
+// HEADERS buffered waiting on QPACK inserts that never arrive are requests that never
+// become flows, so ending the capture has to say so instead of dropping them quietly.
+func TestQUICCloseReportsBlockedHeaders(t *testing.T) {
+	logged := captureLog(t)
+	s := quicTestSession(true)
+	s.decrypted = true // decoding fine; only these sections are stuck
+	s.blocked = []blockedSection{
+		{fromClient: true, payload: []byte{0x01}},
+		{fromClient: true, payload: []byte{0x02}},
+	}
+
+	s.close()
+
+	out := logged()
+	if !strings.Contains(out, "2 HEADERS section(s) still blocked") {
+		t.Errorf("close() log = %q, want the count of blocked sections", out)
+	}
+	if !strings.Contains(out, "missing from the session") {
+		t.Errorf("close() log = %q, want the record-live fate of the lost requests", out)
+	}
+	if s.blocked != nil {
+		t.Errorf("blocked = %v, want cleared once reported", s.blocked)
+	}
+}
+
+// TestQUICCloseReportsNeverDecrypted is the QUIC counterpart of the TCP "no key-log
+// secret" diagnostic, which QUIC had no close hook to emit.
+func TestQUICCloseReportsNeverDecrypted(t *testing.T) {
+	logged := captureLog(t)
+	s := quicTestSession(true) // nothing fed: no stream bytes ever came out
+
+	s.close()
+
+	out := logged()
+	if !strings.Contains(out, "no QUIC key-log secret") {
+		t.Errorf("close() log = %q, want the never-decrypted diagnostic", out)
+	}
+	if !strings.Contains(out, "dropped from the session") {
+		t.Errorf("close() log = %q, want the record-live fate of the connection", out)
+	}
+}
+
+// A connection that decoded and has nothing pending must close silently — the
+// diagnostics above are only worth anything if they don't cry wolf.
+func TestQUICCloseSilentWhenHealthy(t *testing.T) {
+	logged := captureLog(t)
+	s := quicTestSession(true)
+	s.decrypted = true
+
+	s.close()
+
+	if out := logged(); out != "" {
+		t.Errorf("close() logged %q for a healthy connection, want silence", out)
+	}
+}
+
 func TestLiveHTTP3RequestResponse(t *testing.T) {
 	var mu sync.Mutex
 	var flow *Flow
 	onFlow := func(f *Flow, _ bool) { mu.Lock(); flow = f; mu.Unlock() }
-	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
+	s := newQUICSession(&liveTCP{keylog: tlsdecrypt.NewKeylog(""), onFlow: onFlow},
+		"quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 
 	// Request stream 0 (client bidirectional): HEADERS then DATA.
 	reqHdr := h3Frame(h3FrameHeaders, qpackSection(
@@ -94,7 +174,8 @@ func TestLiveHTTP3DynamicTable(t *testing.T) {
 	var mu sync.Mutex
 	var flow *Flow
 	onFlow := func(f *Flow, _ bool) { mu.Lock(); flow = f; mu.Unlock() }
-	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
+	s := newQUICSession(&liveTCP{keylog: tlsdecrypt.NewKeylog(""), onFlow: onFlow},
+		"quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 
 	// Request field section: prefix (Required Insert Count=2, Base=0), :method GET (static
 	// 17), :scheme https (static 23), then post-base dynamic :authority (0) and :path (1).

@@ -5,8 +5,11 @@ package decode
 // version-derived keys and 1-RTT with the key-log secrets); here we parse the HTTP/3
 // frame layer on each client-initiated bidirectional (request) stream, QPACK-decode the
 // HEADERS (with dynamic-table support via internal/qpackdec, fed by the peer's QPACK
-// encoder stream), and emit a Flow per request/response — like the H1/H2 live paths. The
-// batch tshark pass on close stays authoritative.
+// encoder stream), and emit a Flow per request/response — like the H1/H2 live paths.
+//
+// Unlike TCP there is no assembler calling us back at end-of-capture, so close() is
+// driven from LiveTCPDecode's teardown; see it for the ways an HTTP/3 connection can end
+// up incomplete.
 
 import (
 	"log"
@@ -19,7 +22,6 @@ import (
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/qpackdec"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // HTTP/3 frame types (RFC 9114 §7.2) we handle; others are skipped by length.
@@ -30,7 +32,7 @@ const (
 
 // quicSession decodes one QUIC connection's HTTP/3 into Flows.
 type quicSession struct {
-	onFlow                             func(*Flow, bool)
+	lt                                 *liveTCP
 	conn                               *quicdecrypt.Conn
 	connID                             string // this connection's id; goes on every flow it carries
 	serverHost, serverPort, clientAddr string
@@ -40,8 +42,10 @@ type quicSession struct {
 	uni         map[uint64]*uniStream // unidirectional streams (control, QPACK enc/dec, push)
 	qpack       [2]*qpackdec.Decoder  // QPACK dynamic tables: [0]=client (requests), [1]=server
 	blocked     []blockedSection      // HEADERS awaiting more encoder-stream inserts
+	decrypted   bool                  // any stream bytes ever came out — i.e. we had the keys
 	loggedUnsup bool                  // logged the unsupported-suite diagnostic once
-	loggedQPACK bool                  // logged a QPACK decode failure once
+	loggedQPACK bool                  // logged a QPACK HEADERS decode failure once
+	loggedEnc   bool                  // logged a QPACK encoder-stream failure once
 }
 
 // uniStream tracks one unidirectional QUIC stream until its type is known, then whether it
@@ -67,15 +71,15 @@ type h3Stream struct {
 	flow *Flow
 }
 
-func newQUICSession(keylog *tlsdecrypt.Keylog, onFlow func(*Flow, bool), connID, serverHost, serverPort, clientAddr string) *quicSession {
+func newQUICSession(lt *liveTCP, connID, serverHost, serverPort, clientAddr string) *quicSession {
 	s := &quicSession{
-		onFlow: onFlow, connID: connID,
+		lt: lt, connID: connID,
 		serverHost: serverHost, serverPort: serverPort, clientAddr: clientAddr,
 		streams: map[uint64]*h3Stream{},
 		uni:     map[uint64]*uniStream{},
 		qpack:   [2]*qpackdec.Decoder{qpackdec.New(), qpackdec.New()},
 	}
-	s.conn = quicdecrypt.NewConn(keylog, s.onStream)
+	s.conn = quicdecrypt.NewConn(lt.keylog, s.onStream)
 	return s
 }
 
@@ -87,11 +91,36 @@ func qdir(fromClient bool) int {
 	return 1
 }
 
+// close ends the connection at capture EOF. QUIC has no equivalent of the TCP
+// assembler's ReassemblyComplete, so without this the two ways a connection can end up
+// silently incomplete would never be reported: HEADERS still blocked on QPACK inserts
+// that never arrived (those requests never become flows), and a connection whose
+// key-log secrets never showed up (nothing decoded at all).
+func (s *quicSession) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := len(s.blocked); n > 0 {
+		log.Printf("live decode: HTTP/3 %s (%s): %d HEADERS section(s) still blocked on QPACK "+
+			"inserts that never arrived — %s",
+			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, n, s.lt.partialFate())
+		s.blocked = nil
+	}
+	// Never decrypted: the ClientHello (and so the SNI we log) rides the Initial packets,
+	// which decrypt from the connection id alone — so we can name the host even here.
+	if !s.decrypted && !s.conn.Unsupported() {
+		log.Printf("live decode: HTTP/3 %s (%s) not decoded live: no QUIC key-log secret "+
+			"(or incomplete handshake) — %s",
+			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, s.lt.skippedFate())
+	}
+}
+
 func (s *quicSession) feed(fromClient bool, datagram []byte) {
 	s.conn.Feed(fromClient, datagram)
 	if !s.loggedUnsup && s.conn.Unsupported() {
-		log.Printf("live decode: not decoding HTTP/3 %s (%s) live: %s — deferred to batch pass on close",
-			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, s.conn.UnsupportedReason())
+		// Nothing on this connection decodes — whole-connection wording applies.
+		log.Printf("live decode: not decoding HTTP/3 %s (%s) live: %s — %s",
+			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, s.conn.UnsupportedReason(),
+			s.lt.skippedFate())
 		s.loggedUnsup = true
 	}
 }
@@ -103,6 +132,7 @@ func (s *quicSession) feed(fromClient bool, datagram []byte) {
 func (s *quicSession) onStream(streamID uint64, fromClient bool, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.decrypted = true // stream bytes at all means the key-log secrets were there
 	if streamID&0x02 != 0 {
 		s.onUni(streamID, fromClient, data)
 		return
@@ -144,7 +174,16 @@ func (s *quicSession) onUni(streamID uint64, fromClient bool, data []byte) {
 		return
 	}
 	if err := s.qpack[qdir(fromClient)].ReadEncoderStream(data); err != nil {
-		return // malformed encoder stream — leave the connection to the batch pass
+		// The dynamic table is cumulative, so a bad insert doesn't cost one section: every
+		// later HEADERS on this direction that references a dynamic entry fails too. Say so
+		// once rather than letting the connection quietly half-decode.
+		if !s.loggedEnc {
+			log.Printf("live decode: HTTP/3 %s (%s): QPACK encoder stream failed (%v) — "+
+				"dynamic-table header decoding is broken for this direction from here on; %s",
+				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err, s.lt.partialFate())
+			s.loggedEnc = true
+		}
+		return
 	}
 	s.retryBlocked() // new inserts may unblock buffered HEADERS
 }
@@ -187,9 +226,11 @@ func (s *quicSession) onHeaders(st *h3Stream, fromClient bool, payload []byte) {
 		return
 	}
 	if err != nil {
+		// One HEADERS section, not the connection: other streams here keep decoding, so this
+		// costs individual requests.
 		if !s.loggedQPACK {
-			log.Printf("live decode: HTTP/3 %s (%s): QPACK HEADERS decode failed (%v) — deferred to batch pass on close",
-				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err)
+			log.Printf("live decode: HTTP/3 %s (%s): QPACK HEADERS decode failed (%v) — %s",
+				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err, s.lt.partialFate())
 			s.loggedQPACK = true
 		}
 		return
@@ -273,7 +314,7 @@ func (s *quicSession) onData(st *h3Stream, fromClient bool, payload []byte) {
 func (s *quicSession) emit(st *h3Stream) {
 	first := !st.flow.emitted
 	st.flow.emitted = true
-	s.onFlow(st.flow, first)
+	s.lt.onFlow(st.flow, first)
 }
 
 func (s *quicSession) newFlow(streamID uint64) *Flow {
