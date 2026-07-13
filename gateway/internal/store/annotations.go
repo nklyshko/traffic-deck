@@ -370,6 +370,28 @@ func msgRecords(msgs map[string]*trafficv1.WsMessage) map[string]annotatable {
 	return out
 }
 
+// AttachFlowAnnotations folds the session bundle's annotations onto an in-memory flow that
+// isn't persisted yet — one that exists only in the live hub during capture. Its
+// annotations still live in the bundle DB (keyed by the flow id), so the live GetFlow path
+// can surface them (comments, marks, tags, …) while the session is still open.
+func (s *Store) AttachFlowAnnotations(ctx context.Context, sessionID string, f *trafficv1.Flow) error {
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	return s.attachAnnotations(ctx, db, flowRecords(map[string]*trafficv1.Flow{f.Id: f}))
+}
+
+// AttachMessageAnnotations is the message-side counterpart of AttachFlowAnnotations, for a
+// live WebSocket/parsed message not yet persisted.
+func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, m *trafficv1.WsMessage) error {
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	return s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.WsMessage{m.Id: m}))
+}
+
 // attachAnnotations folds tags, favorites, marks, groups and comments onto the given
 // records (flows or messages), keyed by record id.
 func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, records map[string]annotatable) error {

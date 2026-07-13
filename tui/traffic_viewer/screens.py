@@ -1017,6 +1017,30 @@ class WorkspaceScreen(Screen):
             await self.open_session(choice, labels.get(choice, ""), source_columns=cols.get(choice, []))
 
 
+def annotation_lines(rec, tagnames: dict, groupnames: dict) -> list[Content]:
+    """Render a record's annotations (mark, favorite, tags, groups, comments) as display
+    lines — shared by the flow detail view and the WebSocket message payload view. Tag and
+    group ids resolve to names via the supplied maps; unknown ids fall back to the raw id."""
+    lines: list[Content] = []
+    bits: list[Content] = []
+    if rec.favorite:
+        bits.append(Content.from_markup("[yellow]★ favorite[/yellow]"))
+    if rec.mark_color:
+        color = rec.mark_color if rec.mark_color in MARK_COLORS else "white"
+        bits.append(Content.from_markup(f"[{color}]● $c[/{color}]", c=rec.mark_color))
+    if rec.tag_ids:
+        names = ", ".join(tagnames.get(t, t) for t in rec.tag_ids)
+        bits.append(Content.from_markup("[cyan]tags:[/cyan] $names", names=names))
+    if rec.group_ids:
+        names = ", ".join(groupnames.get(g, g) for g in rec.group_ids)
+        bits.append(Content.from_markup("[blue]groups:[/blue] $names", names=names))
+    if bits:
+        lines.append(Content.from_markup("[dim]│[/dim] ").append(Content("   ").join(bits)))
+    for c in rec.comments:
+        lines.append(Content.from_markup("  [dim]💬[/dim] $body", body=c.body))
+    return lines
+
+
 class FlowDetailScreen(Screen):
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=False),
@@ -1277,22 +1301,7 @@ class FlowDetailScreen(Screen):
     def _append_annotations(self, lines: list[Content], f) -> None:
         """Render the record's annotations: mark, favorite, tags, groups,
         comments. Names resolve via the maps passed from the flow list."""
-        bits: list[Content] = []
-        if f.favorite:
-            bits.append(Content.from_markup("[yellow]★ favorite[/yellow]"))
-        if f.mark_color:
-            color = f.mark_color if f.mark_color in MARK_COLORS else "white"
-            bits.append(Content.from_markup(f"[{color}]● $c[/{color}]", c=f.mark_color))
-        if f.tag_ids:
-            names = ", ".join(self._tagnames.get(t, t) for t in f.tag_ids)
-            bits.append(Content.from_markup("[cyan]tags:[/cyan] $names", names=names))
-        if f.group_ids:
-            names = ", ".join(self._groupnames.get(g, g) for g in f.group_ids)
-            bits.append(Content.from_markup("[blue]groups:[/blue] $names", names=names))
-        if bits:
-            lines.append(Content.from_markup("[dim]│[/dim] ").append(Content("   ").join(bits)))
-        for c in f.comments:
-            lines.append(Content.from_markup("  [dim]💬[/dim] $body", body=c.body))
+        lines.extend(annotation_lines(f, self._tagnames, self._groupnames))
 
     @classmethod
     def _append_body(cls, lines: list[Content], title: str, body, save_key: str,
@@ -1329,6 +1338,10 @@ class _PayloadView(Screen):
     payloads left for `s` to save. Subclasses supply the bytes (`_fetch`), the
     content-type, and naming (`_what` / `_subtitle` / `_file_stem`)."""
 
+    CSS = """
+    _PayloadView #pmeta { margin-bottom: 1; }
+    """
+
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=False),
         Binding("o", "open_editor", "Open in editor"),
@@ -1361,16 +1374,28 @@ class _PayloadView(Screen):
     def _file_stem(self) -> str:  # base name for temp + saved files
         return "payload"
 
+    def _meta_content(self) -> "Content | None":
+        """Optional content shown above the payload (e.g. a message's annotations).
+        None hides the block."""
+        return None
+
     # --- shared behaviour -----------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
         with VerticalScroll(id="payload"):
+            yield Static(id="pmeta")
             yield Static("loading…", id="pbody")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "TrafficDeck"
         self.sub_title = self._subtitle
+        meta = self.query_one("#pmeta", Static)
+        content = self._meta_content()
+        if content is None:
+            meta.display = False
+        else:
+            meta.update(content)
         self.load()
 
     @work(exclusive=True)
@@ -1565,7 +1590,8 @@ class WsMessagesScreen(AnnotatableTable, Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         mid = str(event.row_key.value)
-        self.app.push_screen(WsPayloadScreen(self.session_id, self._msgs[mid]))
+        self.app.push_screen(WsPayloadScreen(
+            self.session_id, self._msgs[mid], self._tagnames, self._groupnames))
 
     # --- annotation hooks (see AnnotatableTable) -------------------
     def _focused_record_id(self) -> "str | None":
@@ -1589,10 +1615,19 @@ class WsPayloadScreen(_PayloadView):
     like an HTTP body (text), or hex-dumped (binary), with the same editor handoff
     for payloads too large to view in the TUI."""
 
-    def __init__(self, session_id: str, msg) -> None:
+    def __init__(self, session_id: str, msg, tagnames: dict | None = None,
+                 groupnames: dict | None = None) -> None:
         super().__init__()
         self.session_id = session_id
         self.msg = msg
+        self._tagnames = tagnames or {}
+        self._groupnames = groupnames or {}
+
+    def _meta_content(self) -> "Content | None":
+        # Surface the frame's annotations (notably any comment) above the payload — the
+        # message-side counterpart of the flow detail view's annotation block.
+        lines = annotation_lines(self.msg, self._tagnames, self._groupnames)
+        return Content("\n").join(lines) if lines else None
 
     async def _fetch(self) -> bytes:
         try:

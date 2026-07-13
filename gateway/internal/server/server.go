@@ -59,12 +59,35 @@ func (v *Viewer) ListSessions(ctx context.Context, req *trafficv1.ListSessionsRe
 func (v *Viewer) GetFlow(ctx context.Context, req *trafficv1.GetFlowRequest) (*trafficv1.Flow, error) {
 	f, err := v.st.GetFlow(ctx, req.GetSessionId(), req.GetFlowId())
 	if errors.Is(err, store.ErrNotFound) {
+		// A live native-decode flow isn't persisted to the store until the session closes,
+		// so serve it from the hub with the bundle's annotations attached — otherwise an
+		// annotation set during capture (a comment, mark, tag) wouldn't be visible until
+		// the session is closed and reopened.
+		if lf := v.liveFlow(ctx, req.GetSessionId(), req.GetFlowId()); lf != nil {
+			return lf, nil
+		}
 		return nil, status.Error(codes.NotFound, "flow not found")
 	}
 	if err != nil {
 		return nil, storeStatus(err, "get flow")
 	}
 	return f, nil
+}
+
+// liveFlow returns the in-progress (unpersisted) flow from the live hub with the session
+// bundle's annotations folded in, or nil if it isn't live. Annotation attach is best-effort:
+// the flow itself is still worth returning if that read fails.
+func (v *Viewer) liveFlow(ctx context.Context, sessionID, flowID string) *trafficv1.Flow {
+	ls := v.hub.get(sessionID)
+	if ls == nil {
+		return nil
+	}
+	f := ls.flow(flowID)
+	if f == nil {
+		return nil
+	}
+	_ = v.st.AttachFlowAnnotations(ctx, sessionID, f)
+	return f
 }
 
 // StreamFlows replays stored flows (backfill), then — if follow is set and the
@@ -161,12 +184,33 @@ func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRe
 func (v *Viewer) GetMessage(ctx context.Context, req *trafficv1.GetMessageRequest) (*trafficv1.WsMessage, error) {
 	m, err := v.st.GetMessage(ctx, req.GetSessionId(), req.GetMessageId())
 	if errors.Is(err, store.ErrNotFound) {
+		// Like GetFlow: a live WebSocket/parsed message isn't persisted until close, so
+		// serve it from the hub with its annotations attached — so an annotation set on a
+		// message during capture reflects immediately in the message timeline.
+		if lm := v.liveMessage(ctx, req.GetSessionId(), req.GetMessageId()); lm != nil {
+			return lm, nil
+		}
 		return nil, status.Error(codes.NotFound, "message not found")
 	}
 	if err != nil {
 		return nil, storeStatus(err, "get message")
 	}
 	return m, nil
+}
+
+// liveMessage is the message-side counterpart of liveFlow: the in-progress message from the
+// live hub with the bundle's annotations folded in, or nil if it isn't live.
+func (v *Viewer) liveMessage(ctx context.Context, sessionID, messageID string) *trafficv1.WsMessage {
+	ls := v.hub.get(sessionID)
+	if ls == nil {
+		return nil
+	}
+	m := ls.message(messageID)
+	if m == nil {
+		return nil
+	}
+	_ = v.st.AttachMessageAnnotations(ctx, sessionID, m)
+	return m
 }
 
 // StreamMessages replays an Upgrade flow's stored frames, then — if follow is set and

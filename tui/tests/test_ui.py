@@ -500,6 +500,21 @@ async def test_ws_payload_formats_json_inline():
         assert isinstance(app.screen, WsPayloadScreen)
         rendered = app.screen.query_one("#pbody", Static).render()
         assert '"a"' in rendered.plain and "\n" in rendered.plain  # reindented JSON
+        # No annotations on this frame → the meta block stays hidden.
+        assert app.screen.query_one("#pmeta", Static).display is False
+
+
+async def test_ws_payload_shows_comment():
+    app = make_app()
+    msg = _ws_messages()[0]
+    msg.comments.append(cp.Comment(id="c1", record_id=msg.id, body="look here"))
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(WsPayloadScreen(SESSION_ID, msg))
+        await settle(pilot)
+        meta = app.screen.query_one("#pmeta", Static)
+        assert meta.display is True
+        assert "look here" in meta.render().plain  # comment shown above the payload
 
 
 async def test_ws_payload_opens_editor_for_large_body(monkeypatch):

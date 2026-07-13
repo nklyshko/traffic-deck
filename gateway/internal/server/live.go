@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 
+	"google.golang.org/protobuf/proto"
+
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
@@ -180,6 +182,31 @@ func (ls *liveSession) flowCount() int {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	return len(ls.order)
+}
+
+// flow returns a clone of the live flow with the given id, or nil if it isn't present.
+// A clone (not the shared pointer) so callers — e.g. the live GetFlow path attaching
+// annotations — don't mutate the proto fanned out to every subscriber.
+func (ls *liveSession) flow(id string) *trafficv1.Flow {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if f := ls.flows[id]; f != nil {
+		return proto.Clone(f).(*trafficv1.Flow)
+	}
+	return nil
+}
+
+// message returns a clone of the live WebSocket/parsed message with the given id, or nil.
+// Cloned for the same reason as flow: the live proto is shared with subscribers.
+func (ls *liveSession) message(id string) *trafficv1.WsMessage {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	for _, m := range ls.messages {
+		if m.Id == id {
+			return proto.Clone(m).(*trafficv1.WsMessage)
+		}
+	}
+	return nil
 }
 
 // protoFlows returns the live-decoded flows (final state, arrival order) as protos — used
