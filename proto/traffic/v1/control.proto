@@ -6,6 +6,11 @@ import "traffic/v1/common.proto";
 
 // viewer -> gateway -> tools. Capture control, re-decode, annotations.
 service ControlService {
+  // Capture control. The viewer lists the sources the gateway can drive, describes a
+  // chosen source's options (re-called as fields fill, for cascading), then starts a
+  // capture; the gateway dispatches each to the source's CaptureSourceService. See ADR-0010.
+  rpc ListCaptureSources(Empty) returns (CaptureSourceList);
+  rpc DescribeCaptureSource(DescribeCaptureSourceRequest) returns (SourceDescriptor);
   rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
   rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
   rpc ReDecode(ReDecodeRequest) returns (stream DecodeProgress);
@@ -55,6 +60,90 @@ service ControlService {
 }
 
 message Empty {}
+
+// --- Capture sources (see ADR-0010). These message/enum types are the control-plane
+// vocabulary shared by ControlService (viewer-facing) and CaptureSourceService
+// (source-facing, in source.proto, which imports this file). ---
+
+message CaptureSourceList {
+  repeated CaptureSourceInfo sources = 1;
+}
+
+message CaptureSourceInfo {
+  string name = 1;       // dispatch key ("chrome", "android", a module name)
+  string label = 2;      // human label
+  bool keep_warm = 3;    // holds a warm resource across captures (Android's emulator)
+}
+
+// Viewer-facing describe: which source, plus the partial selection so far. Re-sent as
+// fields fill in, for cascading. (The source-facing DescribeRequest omits `source` — the
+// source is known by the connection.)
+message DescribeCaptureSourceRequest {
+  string source = 1;
+  map<string, string> params = 2;
+}
+
+// Partial selection so far; empty on the first call.
+message DescribeRequest {
+  map<string, string> params = 1;
+}
+
+// The form a viewer renders for a source: ordered parameters plus readiness. A source that
+// must provision an expensive resource before it can enumerate options returns
+// readiness = PROVISION_REQUIRED with a `message`, rather than provisioning silently.
+message SourceDescriptor {
+  repeated Param params = 1;
+  Readiness readiness = 2;
+  string message = 3; // human-readable note (e.g. what provisioning will do)
+}
+
+enum Readiness {
+  READINESS_UNSPECIFIED = 0;
+  READINESS_READY = 1;              // params below are complete
+  READINESS_PROVISION_REQUIRED = 2; // must provision first; see `message`
+}
+
+// One capture parameter the viewer prompts for. `key` is the params-map key passed back
+// to StartCapture; the source decodes its own value strings.
+message Param {
+  string key = 1;
+  string label = 2;
+  ParamType type = 3;
+  repeated Choice choices = 4; // populated for CHOICE
+  string default = 5;          // preselected value ("" = none)
+  bool required = 6;
+}
+
+enum ParamType {
+  PARAM_TYPE_UNSPECIFIED = 0;
+  PARAM_TYPE_STRING = 1;
+  PARAM_TYPE_PATH = 2;
+  PARAM_TYPE_BOOL = 3;
+  PARAM_TYPE_INT = 4;
+  PARAM_TYPE_CHOICE = 5;
+}
+
+message Choice {
+  string value = 1; // stored in params
+  string label = 2; // shown to the user
+}
+
+message ReleaseSourceRequest {}
+
+message StatusRequest {}
+
+message SourceStatus {
+  SourceState state = 1;
+  repeated string active_sessions = 2; // session ids currently capturing
+  string detail = 3;
+}
+
+enum SourceState {
+  SOURCE_STATE_UNSPECIFIED = 0;
+  SOURCE_STATE_PROVISIONING = 1;
+  SOURCE_STATE_READY = 2; // up, idle
+  SOURCE_STATE_CAPTURING = 3;
+}
 
 message StartCaptureRequest {
   SourceKind source_kind = 1;

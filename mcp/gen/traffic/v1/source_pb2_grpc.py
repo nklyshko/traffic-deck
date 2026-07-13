@@ -4,7 +4,6 @@ import grpc
 import warnings
 
 from traffic.v1 import control_pb2 as traffic_dot_v1_dot_control__pb2
-from traffic.v1 import source_pb2 as traffic_dot_v1_dot_source__pb2
 
 GRPC_GENERATED_VERSION = '1.76.0'
 GRPC_VERSION = grpc.__version__
@@ -45,8 +44,8 @@ class CaptureSourceServiceStub(object):
         """
         self.Describe = channel.unary_unary(
                 '/traffic.v1.CaptureSourceService/Describe',
-                request_serializer=traffic_dot_v1_dot_source__pb2.DescribeRequest.SerializeToString,
-                response_deserializer=traffic_dot_v1_dot_source__pb2.SourceDescriptor.FromString,
+                request_serializer=traffic_dot_v1_dot_control__pb2.DescribeRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.SourceDescriptor.FromString,
                 _registered_method=True)
         self.StartCapture = channel.unary_unary(
                 '/traffic.v1.CaptureSourceService/StartCapture',
@@ -60,13 +59,13 @@ class CaptureSourceServiceStub(object):
                 _registered_method=True)
         self.ReleaseSource = channel.unary_unary(
                 '/traffic.v1.CaptureSourceService/ReleaseSource',
-                request_serializer=traffic_dot_v1_dot_source__pb2.ReleaseSourceRequest.SerializeToString,
+                request_serializer=traffic_dot_v1_dot_control__pb2.ReleaseSourceRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
                 _registered_method=True)
         self.Status = channel.unary_unary(
                 '/traffic.v1.CaptureSourceService/Status',
-                request_serializer=traffic_dot_v1_dot_source__pb2.StatusRequest.SerializeToString,
-                response_deserializer=traffic_dot_v1_dot_source__pb2.SourceStatus.FromString,
+                request_serializer=traffic_dot_v1_dot_control__pb2.StatusRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.SourceStatus.FromString,
                 _registered_method=True)
 
 
@@ -129,8 +128,8 @@ def add_CaptureSourceServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Describe': grpc.unary_unary_rpc_method_handler(
                     servicer.Describe,
-                    request_deserializer=traffic_dot_v1_dot_source__pb2.DescribeRequest.FromString,
-                    response_serializer=traffic_dot_v1_dot_source__pb2.SourceDescriptor.SerializeToString,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.DescribeRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.SourceDescriptor.SerializeToString,
             ),
             'StartCapture': grpc.unary_unary_rpc_method_handler(
                     servicer.StartCapture,
@@ -144,13 +143,13 @@ def add_CaptureSourceServiceServicer_to_server(servicer, server):
             ),
             'ReleaseSource': grpc.unary_unary_rpc_method_handler(
                     servicer.ReleaseSource,
-                    request_deserializer=traffic_dot_v1_dot_source__pb2.ReleaseSourceRequest.FromString,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.ReleaseSourceRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
             ),
             'Status': grpc.unary_unary_rpc_method_handler(
                     servicer.Status,
-                    request_deserializer=traffic_dot_v1_dot_source__pb2.StatusRequest.FromString,
-                    response_serializer=traffic_dot_v1_dot_source__pb2.SourceStatus.SerializeToString,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.StatusRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.SourceStatus.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -186,8 +185,8 @@ class CaptureSourceService(object):
             request,
             target,
             '/traffic.v1.CaptureSourceService/Describe',
-            traffic_dot_v1_dot_source__pb2.DescribeRequest.SerializeToString,
-            traffic_dot_v1_dot_source__pb2.SourceDescriptor.FromString,
+            traffic_dot_v1_dot_control__pb2.DescribeRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.SourceDescriptor.FromString,
             options,
             channel_credentials,
             insecure,
@@ -267,7 +266,7 @@ class CaptureSourceService(object):
             request,
             target,
             '/traffic.v1.CaptureSourceService/ReleaseSource',
-            traffic_dot_v1_dot_source__pb2.ReleaseSourceRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.ReleaseSourceRequest.SerializeToString,
             traffic_dot_v1_dot_control__pb2.Empty.FromString,
             options,
             channel_credentials,
@@ -294,8 +293,8 @@ class CaptureSourceService(object):
             request,
             target,
             '/traffic.v1.CaptureSourceService/Status',
-            traffic_dot_v1_dot_source__pb2.StatusRequest.SerializeToString,
-            traffic_dot_v1_dot_source__pb2.SourceStatus.FromString,
+            traffic_dot_v1_dot_control__pb2.StatusRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.SourceStatus.FromString,
             options,
             channel_credentials,
             insecure,

@@ -32,13 +32,14 @@ const readyPrefix = "traffic-deck source ready "
 // --gateway and --control and injects GATEWAY_ADDR.
 type Spec struct {
 	Argv     []string
+	Label    string
 	KeepWarm bool
 }
 
-// SourceInfo names a registered source for enumeration (the viewer-facing list RPC comes
-// with the TUI in a later step; this is the internal shape).
+// SourceInfo names a registered source for the viewer-facing list.
 type SourceInfo struct {
 	Name     string
+	Label    string
 	KeepWarm bool
 }
 
@@ -66,9 +67,10 @@ type Manager struct {
 // emulator) and mitmproxy join as those land.
 var builtinSources = []struct {
 	name     string
+	label    string
 	keepWarm bool
 }{
-	{name: "chrome", keepWarm: false},
+	{name: "chrome", label: "Chrome", keepWarm: false},
 }
 
 // DefaultSpecs builds the built-in source registry by locating each tool itself — no env
@@ -85,7 +87,7 @@ func DefaultSpecs() map[string]Spec {
 				b.name, strings.ToUpper(b.name))
 			continue
 		}
-		specs[b.name] = Spec{Argv: append(argv, "serve"), KeepWarm: b.keepWarm}
+		specs[b.name] = Spec{Argv: append(argv, "serve"), Label: b.label, KeepWarm: b.keepWarm}
 		log.Printf("capture source %q: %s", b.name, strings.Join(argv, " "))
 	}
 	return specs
@@ -162,7 +164,7 @@ func (m *Manager) Sources() []SourceInfo {
 	defer m.mu.Unlock()
 	out := make([]SourceInfo, 0, len(m.specs))
 	for name, spec := range m.specs {
-		out = append(out, SourceInfo{Name: name, KeepWarm: spec.KeepWarm})
+		out = append(out, SourceInfo{Name: name, Label: spec.Label, KeepWarm: spec.KeepWarm})
 	}
 	return out
 }

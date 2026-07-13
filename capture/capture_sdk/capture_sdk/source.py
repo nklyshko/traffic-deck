@@ -24,37 +24,36 @@ from typing import Mapping
 import grpc
 
 from capture_sdk.proto import control_pb2 as ctl
-from capture_sdk.proto import source_pb2 as sp
 from capture_sdk.proto import source_pb2_grpc as sp_grpc
 
 # Re-exported for ergonomic descriptors: `source.STRING`, `source.CHOICE`, …
-STRING = sp.PARAM_TYPE_STRING
-PATH = sp.PARAM_TYPE_PATH
-BOOL = sp.PARAM_TYPE_BOOL
-INT = sp.PARAM_TYPE_INT
-CHOICE = sp.PARAM_TYPE_CHOICE
+STRING = ctl.PARAM_TYPE_STRING
+PATH = ctl.PARAM_TYPE_PATH
+BOOL = ctl.PARAM_TYPE_BOOL
+INT = ctl.PARAM_TYPE_INT
+CHOICE = ctl.PARAM_TYPE_CHOICE
 
 
-def choice(value: str, label: str = "") -> sp.Choice:
-    return sp.Choice(value=value, label=label or value)
+def choice(value: str, label: str = "") -> ctl.Choice:
+    return ctl.Choice(value=value, label=label or value)
 
 
 def param(key: str, label: str, type: int, *, choices=(), default: str = "",
-          required: bool = False) -> sp.Param:
-    return sp.Param(key=key, label=label, type=type, choices=list(choices),
+          required: bool = False) -> ctl.Param:
+    return ctl.Param(key=key, label=label, type=type, choices=list(choices),
                     default=default, required=required)
 
 
-def descriptor(params, *, message: str = "") -> sp.SourceDescriptor:
+def descriptor(params, *, message: str = "") -> ctl.SourceDescriptor:
     """A ready-to-fill form: these params, all options resolved."""
-    return sp.SourceDescriptor(params=list(params), readiness=sp.READINESS_READY,
+    return ctl.SourceDescriptor(params=list(params), readiness=ctl.READINESS_READY,
                                message=message)
 
 
-def provision_required(message: str) -> sp.SourceDescriptor:
+def provision_required(message: str) -> ctl.SourceDescriptor:
     """No options yet — the source must provision an expensive resource first (e.g. boot an
     emulator). The viewer shows `message` and asks the user to consent before proceeding."""
-    return sp.SourceDescriptor(readiness=sp.READINESS_PROVISION_REQUIRED, message=message)
+    return ctl.SourceDescriptor(readiness=ctl.READINESS_PROVISION_REQUIRED, message=message)
 
 
 class CaptureSource(abc.ABC):
@@ -75,7 +74,7 @@ class CaptureSource(abc.ABC):
     # --- implement these ---------------------------------------------------
 
     @abc.abstractmethod
-    def describe(self, params: Mapping[str, str]) -> sp.SourceDescriptor:
+    def describe(self, params: Mapping[str, str]) -> ctl.SourceDescriptor:
         """The options this source offers given the partial selection so far. Re-called as
         fields fill in (cascading); build the result with `descriptor`/`param`/`choice`, or
         `provision_required` when a resource must come up first."""
@@ -108,16 +107,16 @@ class CaptureSource(abc.ABC):
         with self._lock:
             self._active.add(session_id)
 
-    def _status(self) -> sp.SourceStatus:
+    def _status(self) -> ctl.SourceStatus:
         with self._lock:
             active = sorted(self._active)
         if active:
-            state = sp.SOURCE_STATE_CAPTURING
+            state = ctl.SOURCE_STATE_CAPTURING
         elif self.provisioning:
-            state = sp.SOURCE_STATE_PROVISIONING
+            state = ctl.SOURCE_STATE_PROVISIONING
         else:
-            state = sp.SOURCE_STATE_READY
-        return sp.SourceStatus(state=state, active_sessions=active)
+            state = ctl.SOURCE_STATE_READY
+        return ctl.SourceStatus(state=state, active_sessions=active)
 
     def _shutdown(self) -> None:
         """Graceful teardown on signal: stop every live capture, then release."""

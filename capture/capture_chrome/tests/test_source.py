@@ -11,7 +11,6 @@ from capture_chrome import source as chrome_source
 from capture_chrome.source import ChromeSource
 from capture_sdk import source as harness
 from capture_sdk.proto import control_pb2 as ctl
-from capture_sdk.proto import source_pb2 as sp
 from capture_sdk.proto import source_pb2_grpc as sp_grpc
 
 
@@ -92,7 +91,7 @@ def test_describe_path_param_when_no_binaries(monkeypatch):
     src = make_source(monkeypatch, binaries=[])
     d = src.describe({})
     assert d.params[0].key == "chrome"
-    assert d.params[0].type == sp.PARAM_TYPE_PATH
+    assert d.params[0].type == ctl.PARAM_TYPE_PATH
 
 
 class FakeCapture:
@@ -142,13 +141,13 @@ def test_start_stop_through_the_served_harness(monkeypatch):
         assert cap.kw["label"] == "run1" and cap.kw["profile"] == "/tmp/prof"
         assert src._store.saved == {"chrome": "/usr/bin/google-chrome", "profile_kind": "temp"}
 
-        st = stub.Status(sp.StatusRequest())
-        assert st.state == sp.SOURCE_STATE_CAPTURING
+        st = stub.Status(ctl.StatusRequest())
+        assert st.state == ctl.SOURCE_STATE_CAPTURING
         assert list(st.active_sessions) == ["sess-1"]
 
         stub.StopCapture(ctl.StopCaptureRequest(session_id="sess-1"))
         assert cap.stopped
-        assert stub.Status(sp.StatusRequest()).state == sp.SOURCE_STATE_READY
+        assert stub.Status(ctl.StatusRequest()).state == ctl.SOURCE_STATE_READY
     finally:
         chan.close()
         server.stop(None)

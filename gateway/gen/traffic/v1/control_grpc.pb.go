@@ -19,29 +19,31 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ControlService_StartCapture_FullMethodName    = "/traffic.v1.ControlService/StartCapture"
-	ControlService_StopCapture_FullMethodName     = "/traffic.v1.ControlService/StopCapture"
-	ControlService_ReDecode_FullMethodName        = "/traffic.v1.ControlService/ReDecode"
-	ControlService_ExportSession_FullMethodName   = "/traffic.v1.ControlService/ExportSession"
-	ControlService_SetSessionGroup_FullMethodName = "/traffic.v1.ControlService/SetSessionGroup"
-	ControlService_SetSessionLabel_FullMethodName = "/traffic.v1.ControlService/SetSessionLabel"
-	ControlService_DeleteSession_FullMethodName   = "/traffic.v1.ControlService/DeleteSession"
-	ControlService_ImportSession_FullMethodName   = "/traffic.v1.ControlService/ImportSession"
-	ControlService_CreateTag_FullMethodName       = "/traffic.v1.ControlService/CreateTag"
-	ControlService_DeleteTag_FullMethodName       = "/traffic.v1.ControlService/DeleteTag"
-	ControlService_ListTags_FullMethodName        = "/traffic.v1.ControlService/ListTags"
-	ControlService_SetTags_FullMethodName         = "/traffic.v1.ControlService/SetTags"
-	ControlService_ToggleFavorite_FullMethodName  = "/traffic.v1.ControlService/ToggleFavorite"
-	ControlService_AddComment_FullMethodName      = "/traffic.v1.ControlService/AddComment"
-	ControlService_EditComment_FullMethodName     = "/traffic.v1.ControlService/EditComment"
-	ControlService_DeleteComment_FullMethodName   = "/traffic.v1.ControlService/DeleteComment"
-	ControlService_SetMark_FullMethodName         = "/traffic.v1.ControlService/SetMark"
-	ControlService_ClearMark_FullMethodName       = "/traffic.v1.ControlService/ClearMark"
-	ControlService_CreateGroup_FullMethodName     = "/traffic.v1.ControlService/CreateGroup"
-	ControlService_UpdateGroup_FullMethodName     = "/traffic.v1.ControlService/UpdateGroup"
-	ControlService_DeleteGroup_FullMethodName     = "/traffic.v1.ControlService/DeleteGroup"
-	ControlService_ListGroups_FullMethodName      = "/traffic.v1.ControlService/ListGroups"
-	ControlService_SetGroups_FullMethodName       = "/traffic.v1.ControlService/SetGroups"
+	ControlService_ListCaptureSources_FullMethodName    = "/traffic.v1.ControlService/ListCaptureSources"
+	ControlService_DescribeCaptureSource_FullMethodName = "/traffic.v1.ControlService/DescribeCaptureSource"
+	ControlService_StartCapture_FullMethodName          = "/traffic.v1.ControlService/StartCapture"
+	ControlService_StopCapture_FullMethodName           = "/traffic.v1.ControlService/StopCapture"
+	ControlService_ReDecode_FullMethodName              = "/traffic.v1.ControlService/ReDecode"
+	ControlService_ExportSession_FullMethodName         = "/traffic.v1.ControlService/ExportSession"
+	ControlService_SetSessionGroup_FullMethodName       = "/traffic.v1.ControlService/SetSessionGroup"
+	ControlService_SetSessionLabel_FullMethodName       = "/traffic.v1.ControlService/SetSessionLabel"
+	ControlService_DeleteSession_FullMethodName         = "/traffic.v1.ControlService/DeleteSession"
+	ControlService_ImportSession_FullMethodName         = "/traffic.v1.ControlService/ImportSession"
+	ControlService_CreateTag_FullMethodName             = "/traffic.v1.ControlService/CreateTag"
+	ControlService_DeleteTag_FullMethodName             = "/traffic.v1.ControlService/DeleteTag"
+	ControlService_ListTags_FullMethodName              = "/traffic.v1.ControlService/ListTags"
+	ControlService_SetTags_FullMethodName               = "/traffic.v1.ControlService/SetTags"
+	ControlService_ToggleFavorite_FullMethodName        = "/traffic.v1.ControlService/ToggleFavorite"
+	ControlService_AddComment_FullMethodName            = "/traffic.v1.ControlService/AddComment"
+	ControlService_EditComment_FullMethodName           = "/traffic.v1.ControlService/EditComment"
+	ControlService_DeleteComment_FullMethodName         = "/traffic.v1.ControlService/DeleteComment"
+	ControlService_SetMark_FullMethodName               = "/traffic.v1.ControlService/SetMark"
+	ControlService_ClearMark_FullMethodName             = "/traffic.v1.ControlService/ClearMark"
+	ControlService_CreateGroup_FullMethodName           = "/traffic.v1.ControlService/CreateGroup"
+	ControlService_UpdateGroup_FullMethodName           = "/traffic.v1.ControlService/UpdateGroup"
+	ControlService_DeleteGroup_FullMethodName           = "/traffic.v1.ControlService/DeleteGroup"
+	ControlService_ListGroups_FullMethodName            = "/traffic.v1.ControlService/ListGroups"
+	ControlService_SetGroups_FullMethodName             = "/traffic.v1.ControlService/SetGroups"
 )
 
 // ControlServiceClient is the client API for ControlService service.
@@ -50,6 +52,11 @@ const (
 //
 // viewer -> gateway -> tools. Capture control, re-decode, annotations.
 type ControlServiceClient interface {
+	// Capture control. The viewer lists the sources the gateway can drive, describes a
+	// chosen source's options (re-called as fields fill, for cascading), then starts a
+	// capture; the gateway dispatches each to the source's CaptureSourceService. See ADR-0010.
+	ListCaptureSources(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CaptureSourceList, error)
+	DescribeCaptureSource(ctx context.Context, in *DescribeCaptureSourceRequest, opts ...grpc.CallOption) (*SourceDescriptor, error)
 	StartCapture(ctx context.Context, in *StartCaptureRequest, opts ...grpc.CallOption) (*StartCaptureResponse, error)
 	StopCapture(ctx context.Context, in *StopCaptureRequest, opts ...grpc.CallOption) (*StopCaptureResponse, error)
 	ReDecode(ctx context.Context, in *ReDecodeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DecodeProgress], error)
@@ -93,6 +100,26 @@ type controlServiceClient struct {
 
 func NewControlServiceClient(cc grpc.ClientConnInterface) ControlServiceClient {
 	return &controlServiceClient{cc}
+}
+
+func (c *controlServiceClient) ListCaptureSources(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CaptureSourceList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CaptureSourceList)
+	err := c.cc.Invoke(ctx, ControlService_ListCaptureSources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) DescribeCaptureSource(ctx context.Context, in *DescribeCaptureSourceRequest, opts ...grpc.CallOption) (*SourceDescriptor, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SourceDescriptor)
+	err := c.cc.Invoke(ctx, ControlService_DescribeCaptureSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *controlServiceClient) StartCapture(ctx context.Context, in *StartCaptureRequest, opts ...grpc.CallOption) (*StartCaptureResponse, error) {
@@ -352,6 +379,11 @@ func (c *controlServiceClient) SetGroups(ctx context.Context, in *SetGroupsReque
 //
 // viewer -> gateway -> tools. Capture control, re-decode, annotations.
 type ControlServiceServer interface {
+	// Capture control. The viewer lists the sources the gateway can drive, describes a
+	// chosen source's options (re-called as fields fill, for cascading), then starts a
+	// capture; the gateway dispatches each to the source's CaptureSourceService. See ADR-0010.
+	ListCaptureSources(context.Context, *Empty) (*CaptureSourceList, error)
+	DescribeCaptureSource(context.Context, *DescribeCaptureSourceRequest) (*SourceDescriptor, error)
 	StartCapture(context.Context, *StartCaptureRequest) (*StartCaptureResponse, error)
 	StopCapture(context.Context, *StopCaptureRequest) (*StopCaptureResponse, error)
 	ReDecode(*ReDecodeRequest, grpc.ServerStreamingServer[DecodeProgress]) error
@@ -397,6 +429,12 @@ type ControlServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedControlServiceServer struct{}
 
+func (UnimplementedControlServiceServer) ListCaptureSources(context.Context, *Empty) (*CaptureSourceList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListCaptureSources not implemented")
+}
+func (UnimplementedControlServiceServer) DescribeCaptureSource(context.Context, *DescribeCaptureSourceRequest) (*SourceDescriptor, error) {
+	return nil, status.Error(codes.Unimplemented, "method DescribeCaptureSource not implemented")
+}
 func (UnimplementedControlServiceServer) StartCapture(context.Context, *StartCaptureRequest) (*StartCaptureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartCapture not implemented")
 }
@@ -485,6 +523,42 @@ func RegisterControlServiceServer(s grpc.ServiceRegistrar, srv ControlServiceSer
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ControlService_ServiceDesc, srv)
+}
+
+func _ControlService_ListCaptureSources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).ListCaptureSources(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_ListCaptureSources_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).ListCaptureSources(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_DescribeCaptureSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DescribeCaptureSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).DescribeCaptureSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_DescribeCaptureSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).DescribeCaptureSource(ctx, req.(*DescribeCaptureSourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ControlService_StartCapture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -883,6 +957,14 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "traffic.v1.ControlService",
 	HandlerType: (*ControlServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListCaptureSources",
+			Handler:    _ControlService_ListCaptureSources_Handler,
+		},
+		{
+			MethodName: "DescribeCaptureSource",
+			Handler:    _ControlService_DescribeCaptureSource_Handler,
+		},
 		{
 			MethodName: "StartCapture",
 			Handler:    _ControlService_StartCapture_Handler,

@@ -30,6 +30,35 @@ func NewControl(st *store.Store, dataRoot string, mgr *sourcemgr.Manager) *Contr
 	return &Control{st: st, dataRoot: dataRoot, mgr: mgr}
 }
 
+// ListCaptureSources enumerates the sources the gateway can drive, for the viewer's picker.
+func (c *Control) ListCaptureSources(ctx context.Context, _ *trafficv1.Empty) (*trafficv1.CaptureSourceList, error) {
+	if c.mgr == nil {
+		return &trafficv1.CaptureSourceList{}, nil
+	}
+	out := &trafficv1.CaptureSourceList{}
+	for _, s := range c.mgr.Sources() {
+		out.Sources = append(out.Sources, &trafficv1.CaptureSourceInfo{
+			Name: s.Name, Label: s.Label, KeepWarm: s.KeepWarm})
+	}
+	return out, nil
+}
+
+// DescribeCaptureSource returns a source's option form for the partial selection so far,
+// re-called by the viewer as fields fill in (cascading).
+func (c *Control) DescribeCaptureSource(ctx context.Context, req *trafficv1.DescribeCaptureSourceRequest) (*trafficv1.SourceDescriptor, error) {
+	if c.mgr == nil {
+		return nil, status.Error(codes.Unimplemented, "capture control is disabled")
+	}
+	if req.GetSource() == "" {
+		return nil, status.Error(codes.InvalidArgument, "describe: source is required")
+	}
+	d, err := c.mgr.Describe(ctx, req.GetSource(), req.GetParams())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "describe %s: %v", req.GetSource(), err)
+	}
+	return d, nil
+}
+
 // StartCapture launches (or reuses) the named source and starts a capture, returning the
 // opened session id. The source name comes from StartCaptureRequest.source.
 func (c *Control) StartCapture(ctx context.Context, req *trafficv1.StartCaptureRequest) (*trafficv1.StartCaptureResponse, error) {

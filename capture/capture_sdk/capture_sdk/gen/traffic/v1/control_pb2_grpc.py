@@ -36,6 +36,16 @@ class ControlServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.ListCaptureSources = channel.unary_unary(
+                '/traffic.v1.ControlService/ListCaptureSources',
+                request_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.CaptureSourceList.FromString,
+                _registered_method=True)
+        self.DescribeCaptureSource = channel.unary_unary(
+                '/traffic.v1.ControlService/DescribeCaptureSource',
+                request_serializer=traffic_dot_v1_dot_control__pb2.DescribeCaptureSourceRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.SourceDescriptor.FromString,
+                _registered_method=True)
         self.StartCapture = channel.unary_unary(
                 '/traffic.v1.ControlService/StartCapture',
                 request_serializer=traffic_dot_v1_dot_control__pb2.StartCaptureRequest.SerializeToString,
@@ -156,6 +166,21 @@ class ControlServiceStub(object):
 class ControlServiceServicer(object):
     """viewer -> gateway -> tools. Capture control, re-decode, annotations.
     """
+
+    def ListCaptureSources(self, request, context):
+        """Capture control. The viewer lists the sources the gateway can drive, describes a
+        chosen source's options (re-called as fields fill, for cascading), then starts a
+        capture; the gateway dispatches each to the source's CaptureSourceService. See ADR-0010.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DescribeCaptureSource(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
 
     def StartCapture(self, request, context):
         """Missing associated documentation comment in .proto file."""
@@ -312,6 +337,16 @@ class ControlServiceServicer(object):
 
 def add_ControlServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'ListCaptureSources': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListCaptureSources,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.CaptureSourceList.SerializeToString,
+            ),
+            'DescribeCaptureSource': grpc.unary_unary_rpc_method_handler(
+                    servicer.DescribeCaptureSource,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.DescribeCaptureSourceRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.SourceDescriptor.SerializeToString,
+            ),
             'StartCapture': grpc.unary_unary_rpc_method_handler(
                     servicer.StartCapture,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.StartCaptureRequest.FromString,
@@ -438,6 +473,60 @@ def add_ControlServiceServicer_to_server(servicer, server):
 class ControlService(object):
     """viewer -> gateway -> tools. Capture control, re-decode, annotations.
     """
+
+    @staticmethod
+    def ListCaptureSources(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/ListCaptureSources',
+            traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.CaptureSourceList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DescribeCaptureSource(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/DescribeCaptureSource',
+            traffic_dot_v1_dot_control__pb2.DescribeCaptureSourceRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.SourceDescriptor.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
 
     @staticmethod
     def StartCapture(request,

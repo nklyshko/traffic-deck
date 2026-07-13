@@ -37,64 +37,6 @@ service CaptureSourceService {
   rpc Status(StatusRequest) returns (SourceStatus);
 }
 
-// Partial selection so far; empty on the first call.
-message DescribeRequest {
-  map<string, string> params = 1;
-}
-
-// The form a viewer renders for this source: ordered parameters plus readiness. A source
-// that must provision an expensive resource before it can enumerate options returns
-// readiness = PROVISION_REQUIRED with a `message`, rather than provisioning silently.
-message SourceDescriptor {
-  repeated Param params = 1;
-  Readiness readiness = 2;
-  string message = 3; // human-readable note (e.g. what provisioning will do)
-}
-
-enum Readiness {
-  READINESS_UNSPECIFIED = 0;
-  READINESS_READY = 1;              // params below are complete
-  READINESS_PROVISION_REQUIRED = 2; // must provision first; see `message`
-}
-
-// One capture parameter the viewer prompts for. `key` is the params-map key passed back
-// to StartCapture; the source decodes its own value strings.
-message Param {
-  string key = 1;
-  string label = 2;
-  ParamType type = 3;
-  repeated Choice choices = 4; // populated for CHOICE
-  string default = 5;          // preselected value ("" = none)
-  bool required = 6;
-}
-
-enum ParamType {
-  PARAM_TYPE_UNSPECIFIED = 0;
-  PARAM_TYPE_STRING = 1;
-  PARAM_TYPE_PATH = 2;
-  PARAM_TYPE_BOOL = 3;
-  PARAM_TYPE_INT = 4;
-  PARAM_TYPE_CHOICE = 5;
-}
-
-message Choice {
-  string value = 1; // stored in params
-  string label = 2; // shown to the user
-}
-
-message ReleaseSourceRequest {}
-
-message StatusRequest {}
-
-message SourceStatus {
-  SourceState state = 1;
-  repeated string active_sessions = 2; // session ids currently capturing
-  string detail = 3;
-}
-
-enum SourceState {
-  SOURCE_STATE_UNSPECIFIED = 0;
-  SOURCE_STATE_PROVISIONING = 1;
-  SOURCE_STATE_READY = 2; // up, idle
-  SOURCE_STATE_CAPTURING = 3;
-}
+// The message/enum types this service uses (DescribeRequest, SourceDescriptor, Param,
+// StartCaptureRequest, …) live in control.proto — the shared control-plane vocabulary,
+// also used by the viewer-facing ControlService — which this file imports above.

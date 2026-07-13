@@ -15,7 +15,7 @@ from typing import Mapping
 from capture_chrome import platform, profiles
 from capture_chrome.capture import ChromeCapture
 from capture_sdk import source
-from capture_sdk.proto import source_pb2 as sp
+from capture_sdk.proto import control_pb2 as ctl
 from capture_sdk.state import Store
 
 
@@ -29,7 +29,7 @@ class ChromeSource(source.CaptureSource):
         self._caps: dict[str, ChromeCapture] = {}
         self._caps_lock = threading.Lock()
 
-    def describe(self, params: Mapping[str, str]) -> sp.SourceDescriptor:
+    def describe(self, params: Mapping[str, str]) -> ctl.SourceDescriptor:
         bins = platform.chrome_binaries()
         chrome = params.get("chrome") or self._store.get_valid("chrome", bins) or (bins[0] if bins else "")
 
