@@ -129,9 +129,7 @@ def _serve(argv) -> None:
     ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
                     help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
     args = ap.parse_args(argv)
-    harness.serve_forever(
-        ChromeSource(args.gateway), args.control,
-        on_ready=lambda port: print(f"chrome source serving on 127.0.0.1:{port}", flush=True))
+    harness.serve_forever(ChromeSource(args.gateway), args.control)
 
 
 def _capture(argv) -> None:

@@ -12,20 +12,54 @@ import (
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
-// Control implements trafficv1.ControlServiceServer — annotations and
-// session export. Capture control / re-decode (StartCapture/StopCapture/
-// ReDecode) are not wired yet and fall through to the Unimplemented base.
+// Control implements trafficv1.ControlServiceServer — annotations, session export, and
+// capture control (StartCapture/StopCapture), which it dispatches to the source manager.
+// ReDecode is still unwired and falls through to the Unimplemented base.
 type Control struct {
 	trafficv1.UnimplementedControlServiceServer
 	st       *store.Store
 	dataRoot string
+	mgr      *sourcemgr.Manager // nil disables capture control
 }
 
-func NewControl(st *store.Store, dataRoot string) *Control {
-	return &Control{st: st, dataRoot: dataRoot}
+func NewControl(st *store.Store, dataRoot string, mgr *sourcemgr.Manager) *Control {
+	return &Control{st: st, dataRoot: dataRoot, mgr: mgr}
+}
+
+// StartCapture launches (or reuses) the named source and starts a capture, returning the
+// opened session id. The source name comes from StartCaptureRequest.source.
+func (c *Control) StartCapture(ctx context.Context, req *trafficv1.StartCaptureRequest) (*trafficv1.StartCaptureResponse, error) {
+	if c.mgr == nil {
+		return nil, status.Error(codes.Unimplemented, "capture control is disabled")
+	}
+	if req.GetSource() == "" {
+		return nil, status.Error(codes.InvalidArgument, "start capture: source is required")
+	}
+	sid, err := c.mgr.StartCapture(ctx, req.GetSource(), req.GetLabel(), req.GetParams())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "start capture: %v", err)
+	}
+	return &trafficv1.StartCaptureResponse{SessionId: sid}, nil
+}
+
+// StopCapture ends a running capture by session id, routing to the source that started it,
+// and returns the finalized session.
+func (c *Control) StopCapture(ctx context.Context, req *trafficv1.StopCaptureRequest) (*trafficv1.StopCaptureResponse, error) {
+	if c.mgr == nil {
+		return nil, status.Error(codes.Unimplemented, "capture control is disabled")
+	}
+	if err := c.mgr.StopCapture(ctx, req.GetSessionId()); err != nil {
+		return nil, status.Errorf(codes.Internal, "stop capture: %v", err)
+	}
+	sess, err := c.st.GetSession(ctx, req.GetSessionId())
+	if err != nil {
+		return &trafficv1.StopCaptureResponse{}, nil // stopped, but the row isn't readable yet
+	}
+	return &trafficv1.StopCaptureResponse{Session: sess}, nil
 }
 
 // ExportSession streams a session's bundle as a .tar.gz. The archive is

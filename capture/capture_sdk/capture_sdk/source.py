@@ -187,12 +187,18 @@ def serve(source: CaptureSource, addr: str) -> tuple[grpc.Server, int]:
     return server, port
 
 
+# Canonical line printed on stdout once the server is bound, so the supervisor knows the
+# source is up and on which port — a stable contract independent of any tool's own logging.
+READY_PREFIX = "traffic-deck source ready "
+
+
 def serve_forever(source: CaptureSource, addr: str, *, on_ready=None) -> None:
     """Serve `source` and block until SIGTERM/SIGINT, then shut down gracefully — stop
     every live capture and release the resource — so a supervised tool never strands a
-    session. `on_ready(port)` is called once the server is up (e.g. to print the address
-    the supervisor waits for)."""
+    session. Prints the canonical READY_PREFIX line the supervisor waits for; `on_ready(port)`
+    is an extra hook."""
     server, port = serve(source, addr)
+    print(f"{READY_PREFIX}127.0.0.1:{port}", flush=True)
     if on_ready is not None:
         on_ready(port)
     stop = threading.Event()

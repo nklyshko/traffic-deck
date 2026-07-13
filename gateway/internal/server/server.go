@@ -14,6 +14,7 @@ import (
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
@@ -293,16 +294,19 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 	return nil
 }
 
-// Register attaches all implemented services to s, sharing one live hub between
-// the ingest (producer) and viewer (subscriber) sides.
-func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark string, liveDecode, recordLive, verifyLive bool) {
+// Register attaches all implemented services to s, sharing one live hub between the ingest
+// (producer) and viewer (subscriber) sides. gatewayAddr is where spawned capture sources
+// connect back for ingest. Returns the source manager so the caller can reap it on shutdown.
+func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, recordLive, verifyLive bool) *sourcemgr.Manager {
 	if recordLive {
 		// The persisted record is the live decode, so keep full bodies (not previews).
 		decode.SetUnlimitedLiveBodies()
 	}
 	hub := newLiveHub(recordLive)
 	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
+	mgr := sourcemgr.New(gatewayAddr, sourcemgr.DefaultSpecs())
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, verifyLive))
-	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot))
+	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot, mgr))
+	return mgr
 }

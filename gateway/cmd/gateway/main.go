@@ -13,7 +13,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -82,7 +84,17 @@ func serve() {
 	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
 	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
 	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-	server.Register(s, st, obj, cfg.TsharkPath, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+	mgr := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+	// Reap spawned capture-source processes (and their groups) on shutdown, so a browser
+	// or emulator a source started doesn't linger after the gateway stops.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sig
+		log.Println("shutting down: reaping capture sources")
+		mgr.Close()
+		s.GracefulStop()
+	}()
 	log.Printf("gateway listening on %s (live decode: %v, record live: %v, verify live: %v)",
 		cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
 	if err := s.Serve(lis); err != nil {
