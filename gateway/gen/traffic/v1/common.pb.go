@@ -201,7 +201,10 @@ type Session struct {
 	Group string `protobuf:"bytes,10,opt,name=group,proto3" json:"group,omitempty"`
 	// Opaque metadata the capture source supplied at OpenSession — verbatim key/value
 	// pairs the gateway stores and surfaces. A source can declare `viewer.columns`
-	// (comma-separated flow-metadata keys) to seed the viewer's default table columns.
+	// (comma-separated) to seed the viewer's default table columns; each name is a
+	// built-in flow field the viewer offers as an optional column ("conn", "stream" —
+	// declared by the pcap-based sources, which decode both off the wire) or, failing
+	// that, a flow-metadata key.
 	Metadata      map[string]string `protobuf:"bytes,11,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

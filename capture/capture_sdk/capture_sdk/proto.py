@@ -24,6 +24,8 @@ from traffic.v1 import ingest_pb2  # noqa: E402,F401
 from traffic.v1 import ingest_pb2_grpc  # noqa: E402,F401
 from traffic.v1 import viewer_pb2  # noqa: E402,F401
 from traffic.v1 import viewer_pb2_grpc  # noqa: E402,F401
+from traffic.v1 import source_pb2  # noqa: E402,F401
+from traffic.v1 import source_pb2_grpc  # noqa: E402,F401
 
 __all__ = [
     "common_pb2",
@@ -33,4 +35,6 @@ __all__ = [
     "ingest_pb2_grpc",
     "viewer_pb2",
     "viewer_pb2_grpc",
+    "source_pb2",
+    "source_pb2_grpc",
 ]

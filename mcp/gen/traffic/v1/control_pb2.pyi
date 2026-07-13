@@ -12,7 +12,7 @@ class Empty(_message.Message):
     def __init__(self) -> None: ...
 
 class StartCaptureRequest(_message.Message):
-    __slots__ = ("source_kind", "label", "params")
+    __slots__ = ("source_kind", "label", "params", "source")
     class ParamsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -23,10 +23,12 @@ class StartCaptureRequest(_message.Message):
     SOURCE_KIND_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
     PARAMS_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
     source_kind: _common_pb2.SourceKind
     label: str
     params: _containers.ScalarMap[str, str]
-    def __init__(self, source_kind: _Optional[_Union[_common_pb2.SourceKind, str]] = ..., label: _Optional[str] = ..., params: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    source: str
+    def __init__(self, source_kind: _Optional[_Union[_common_pb2.SourceKind, str]] = ..., label: _Optional[str] = ..., params: _Optional[_Mapping[str, str]] = ..., source: _Optional[str] = ...) -> None: ...
 
 class StartCaptureResponse(_message.Message):
     __slots__ = ("session_id",)

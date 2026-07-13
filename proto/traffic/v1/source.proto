@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package traffic.v1;
+
+import "traffic/v1/control.proto";
+
+// Implemented by a capture *source* process; the gateway is the client. This is the
+// inverse direction of ControlService (viewer -> gateway): here the gateway spawns a
+// built-in's `serve` mode (or reaches a module's manifest process) and dials in to
+// enumerate options and drive capture. Chrome, Android and a third-party module all look
+// identical to the gateway — an address speaking this service. See ADR-0010.
+//
+// A source is also a *client* of IngestService: StartCapture below opens a session
+// (OpenSession) and streams into it (UploadCapture / PushFlows), then returns its id.
+service CaptureSourceService {
+  // The capture options this source currently offers, given whatever the user has filled
+  // so far. Re-called as fields fill in (cascading): choosing the Chrome binary and
+  // calling Describe again returns that binary's profiles. Idempotent.
+  rpc Describe(DescribeRequest) returns (SourceDescriptor);
+
+  // Start a capture with resolved params; the source opens a session and returns its id
+  // while capture continues in the background. Reuses ControlService's StartCaptureRequest
+  // (its `source` field is ignored here — the source is known by the connection).
+  rpc StartCapture(StartCaptureRequest) returns (StartCaptureResponse);
+
+  // End the given session; a source that keeps a warm resource stays up (see keep_warm in
+  // ADR-0010) and returns to READY.
+  rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
+
+  // Drop any warm resource (e.g. shut an emulator this source booted). A source with
+  // nothing to hold treats it as a no-op. Teardown follows provisioning ownership: a
+  // resource the source only attached to must be left running.
+  rpc ReleaseSource(ReleaseSourceRequest) returns (Empty);
+
+  // Live state, for the viewer.
+  rpc Status(StatusRequest) returns (SourceStatus);
+}
+
+// Partial selection so far; empty on the first call.
+message DescribeRequest {
+  map<string, string> params = 1;
+}
+
+// The form a viewer renders for this source: ordered parameters plus readiness. A source
+// that must provision an expensive resource before it can enumerate options returns
+// readiness = PROVISION_REQUIRED with a `message`, rather than provisioning silently.
+message SourceDescriptor {
+  repeated Param params = 1;
+  Readiness readiness = 2;
+  string message = 3; // human-readable note (e.g. what provisioning will do)
+}
+
+enum Readiness {
+  READINESS_UNSPECIFIED = 0;
+  READINESS_READY = 1;              // params below are complete
+  READINESS_PROVISION_REQUIRED = 2; // must provision first; see `message`
+}
+
+// One capture parameter the viewer prompts for. `key` is the params-map key passed back
+// to StartCapture; the source decodes its own value strings.
+message Param {
+  string key = 1;
+  string label = 2;
+  ParamType type = 3;
+  repeated Choice choices = 4; // populated for CHOICE
+  string default = 5;          // preselected value ("" = none)
+  bool required = 6;
+}
+
+enum ParamType {
+  PARAM_TYPE_UNSPECIFIED = 0;
+  PARAM_TYPE_STRING = 1;
+  PARAM_TYPE_PATH = 2;
+  PARAM_TYPE_BOOL = 3;
+  PARAM_TYPE_INT = 4;
+  PARAM_TYPE_CHOICE = 5;
+}
+
+message Choice {
+  string value = 1; // stored in params
+  string label = 2; // shown to the user
+}
+
+message ReleaseSourceRequest {}
+
+message StatusRequest {}
+
+message SourceStatus {
+  SourceState state = 1;
+  repeated string active_sessions = 2; // session ids currently capturing
+  string detail = 3;
+}
+
+enum SourceState {
+  SOURCE_STATE_UNSPECIFIED = 0;
+  SOURCE_STATE_PROVISIONING = 1;
+  SOURCE_STATE_READY = 2; // up, idle
+  SOURCE_STATE_CAPTURING = 3;
+}

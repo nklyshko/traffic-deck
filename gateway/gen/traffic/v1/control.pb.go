@@ -58,10 +58,16 @@ func (*Empty) Descriptor() ([]byte, []int) {
 }
 
 type StartCaptureRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SourceKind    SourceKind             `protobuf:"varint,1,opt,name=source_kind,json=sourceKind,proto3,enum=traffic.v1.SourceKind" json:"source_kind,omitempty"`
-	Label         string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
-	Params        map[string]string      `protobuf:"bytes,3,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SourceKind SourceKind             `protobuf:"varint,1,opt,name=source_kind,json=sourceKind,proto3,enum=traffic.v1.SourceKind" json:"source_kind,omitempty"`
+	Label      string                 `protobuf:"bytes,2,opt,name=label,proto3" json:"label,omitempty"`
+	Params     map[string]string      `protobuf:"bytes,3,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Source name — a built-in ("chrome", "android", …) or a module's declared name.
+	// Supersedes source_kind, which is a closed enum and cannot name a third-party module
+	// (see ADR-0010). The viewer-facing ControlService.StartCapture uses this to dispatch;
+	// the source-facing CaptureSourceService.StartCapture ignores it (the source is known
+	// by the connection).
+	Source        string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -115,6 +121,13 @@ func (x *StartCaptureRequest) GetParams() map[string]string {
 		return x.Params
 	}
 	return nil
+}
+
+func (x *StartCaptureRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
 }
 
 type StartCaptureResponse struct {
@@ -1525,12 +1538,13 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"\x18traffic/v1/control.proto\x12\n" +
 	"traffic.v1\x1a\x17traffic/v1/common.proto\"\a\n" +
-	"\x05Empty\"\xe4\x01\n" +
+	"\x05Empty\"\xfc\x01\n" +
 	"\x13StartCaptureRequest\x127\n" +
 	"\vsource_kind\x18\x01 \x01(\x0e2\x16.traffic.v1.SourceKindR\n" +
 	"sourceKind\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12C\n" +
-	"\x06params\x18\x03 \x03(\v2+.traffic.v1.StartCaptureRequest.ParamsEntryR\x06params\x1a9\n" +
+	"\x06params\x18\x03 \x03(\v2+.traffic.v1.StartCaptureRequest.ParamsEntryR\x06params\x12\x16\n" +
+	"\x06source\x18\x04 \x01(\tR\x06source\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"5\n" +
