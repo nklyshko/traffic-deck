@@ -13,6 +13,12 @@ _FILTER_FIELDS = {
     "~u": url,
     "~c": lambda f: str(f.status) if f.status else "",
     "~t": lambda f: f.content_type,
+    # Connection identity: ~conn is the transport connection (a tcp.stream index, or
+    # "quic:<conn-id>"), ~stream the HTTP/2/3 stream within it. Together they show how
+    # multiplexed requests share one connection. Both are regex-matched like every other
+    # term, so anchor to pin an exact id: `~conn '^12$'`.
+    "~conn": lambda f: f.tcp_stream,
+    "~stream": lambda f: f.h2_stream_id,
 }
 
 
@@ -23,6 +29,7 @@ FILTER_HELP = (
     "  ~m <re> method     ~d <re> domain      ~u <re> url        ~c <re> status\n"
     "  ~t <re> type       ~mark <re> color    ~tag <re> name     ~group <re> name\n"
     "  ~comment <re>      ~s has response     ~q no response     ~fav favorited\n"
+    "  ~conn <re> conn    ~stream <re> h2 stream id\n"
     "  ~meta <key>=<re>   (source metadata; ~meta <key> alone matches presence)\n"
     "  <re>  a bare regex matches the URL           Enter apply · Esc cancel"
 )
@@ -37,9 +44,10 @@ def compile_filter(expr: str, tagnames: dict | None = None, groupnames: dict | N
 
     Terms (space-separated, ANDed): `~m/~d/~u/~c/~t <regex>`, `~s`/`~q` (has/no
     response), `~fav` (favorited), annotation fields `~mark/~tag/~group/~comment
-    <regex>`, `~meta <key>=<regex>` (a source metadata value; `~meta <key>` alone
-    matches presence), a naked regex (matches the URL), and a leading `!` negates a
-    term. Raises ValueError on a bad regex. (Full `& | ()` grammar is future.)
+    <regex>`, connection identity `~conn/~stream <regex>`, `~meta <key>=<regex>` (a
+    source metadata value; `~meta <key>` alone matches presence), a naked regex
+    (matches the URL), and a leading `!` negates a term. Raises ValueError on a bad
+    regex. (Full `& | ()` grammar is future.)
     """
     tagnames = tagnames or {}
     groupnames = groupnames or {}

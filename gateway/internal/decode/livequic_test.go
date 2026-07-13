@@ -39,7 +39,7 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	var mu sync.Mutex
 	var flow *Flow
 	onFlow := func(f *Flow, _ bool) { mu.Lock(); flow = f; mu.Unlock() }
-	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "203.0.113.5", "443", "198.51.100.2:50000")
+	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 
 	// Request stream 0 (client bidirectional): HEADERS then DATA.
 	reqHdr := h3Frame(h3FrameHeaders, qpackSection(
@@ -94,7 +94,7 @@ func TestLiveHTTP3DynamicTable(t *testing.T) {
 	var mu sync.Mutex
 	var flow *Flow
 	onFlow := func(f *Flow, _ bool) { mu.Lock(); flow = f; mu.Unlock() }
-	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "203.0.113.5", "443", "198.51.100.2:50000")
+	s := newQUICSession(tlsdecrypt.NewKeylog(""), onFlow, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 
 	// Request field section: prefix (Required Insert Count=2, Base=0), :method GET (static
 	// 17), :scheme https (static 23), then post-base dynamic :authority (0) and :path (1).

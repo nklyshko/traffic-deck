@@ -370,33 +370,64 @@ class SessionsScreen(Screen):
         self.app.push_screen(TextPrompt("Import bundle (.tar.gz path):"), _do)
 
 
-def _env_meta_columns() -> list[str]:
-    """Metadata keys to show as flow-table columns by default, from
-    TRAFFICDECK_META_COLUMNS (comma-separated). A source may also declare defaults
-    per session (viewer.columns); the pane unions both."""
+def _env_columns() -> list[str]:
+    """Column names to show in the flow table by default, from TRAFFICDECK_META_COLUMNS
+    (comma-separated). A source may also declare defaults per session (viewer.columns);
+    the pane unions both. See _resolve_columns for the name vocabulary."""
     raw = os.environ.get("TRAFFICDECK_META_COLUMNS", "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 def _session_view_columns(session) -> list[str]:
-    """Metadata keys the capture source declared as default table columns for a session,
-    via the `viewer.columns` session metadata (comma-separated)."""
+    """Column names the capture source declared as default table columns for a session,
+    via the `viewer.columns` session metadata (comma-separated). A pcap-based source
+    declares "conn,stream", having decoded both off the wire."""
     raw = session.metadata.get("viewer.columns", "") if session.metadata else ""
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
-def _resolve_meta_columns(source_columns) -> list[str]:
-    """The pane's initial metadata columns: env-configured keys unioned with the source-
-    declared ones (order-preserving, de-duplicated)."""
+def _resolve_columns(source_columns) -> list[str]:
+    """The pane's initial column names: env-configured unioned with the source-declared
+    ones (order-preserving, de-duplicated). A name is either a built-in field column
+    (_FIELD_COLUMNS) or, failing that, a source-metadata key."""
     out: list[str] = []
-    for k in [*_env_meta_columns(), *(source_columns or [])]:
+    for k in [*_env_columns(), *(source_columns or [])]:
         if k not in out:
             out.append(k)
     return out
 
 
-# How wide a metadata value cell may get before it's truncated in the table.
-_META_CELL_MAX = 24
+# How wide an extra-column value cell may get before it's truncated in the table.
+_EXTRA_CELL_MAX = 24
+
+# Optional flow-field columns: off by default, toggled from the column picker (C).
+# tcp_stream identifies the transport connection (a tcp.stream index, or "quic:<conn-id>")
+# and h2_stream_id the stream multiplexed onto it, so showing both makes HTTP/2 connection
+# reuse legible in the table: one Conn value across many rows, each with its own Stream.
+# Values are read straight off the Flow, unlike metadata columns (keyed into f.metadata).
+_FIELD_COLUMNS = {
+    "conn": ("Conn", lambda f: f.tcp_stream or ""),
+    "stream": ("Stream", lambda f: f.h2_stream_id or ""),
+}
+
+
+def _meta_col_id(key: str) -> str:
+    """Column id for a source-metadata key. Namespaced so a metadata key that happens to
+    be called "conn" can't collide with the built-in field column of that name."""
+    return f"meta:{key}"
+
+
+def _col_id(name: str) -> str:
+    """Column id for a declared column name (env / viewer.columns): a built-in field
+    column when the name is one, else a source-metadata key. So a field name shadows a
+    metadata key of the same name — the column picker can still reach both."""
+    return name if name in _FIELD_COLUMNS else _meta_col_id(name)
+
+
+def _extra_col_label(cid: str) -> str:
+    """Header label for an extra-column id: the bare key for metadata, the declared
+    label for a field column."""
+    return cid[len("meta:"):] if cid.startswith("meta:") else _FIELD_COLUMNS[cid][0]
 
 
 class AnnotatableTable:
@@ -633,9 +664,12 @@ class SessionPane(AnnotatableTable, Vertical):
         self.flows: dict[str, object] = {}  # flow id -> cached Flow (for live detail)
         self._rows: set[str] = set()
         self._cols: list = []                   # base (fixed) column keys
-        # Metadata columns: env default unioned with the source-declared ones (viewer.columns).
-        self._meta_cols: list[str] = _resolve_meta_columns(source_columns)
-        self._meta_col_keys: dict[str, object] = {}       # metadata key -> DataTable ColumnKey
+        # Extra (optional) columns, in display order, as column ids: "meta:<key>" for a
+        # source-metadata key, or a _FIELD_COLUMNS name. Seeded from what the env default
+        # and the source declaration (viewer.columns) ask for — a pcap source declares
+        # conn/stream; anything undeclared starts hidden and is toggled on with C.
+        self._extra_cols: list[str] = [_col_id(n) for n in _resolve_columns(source_columns)]
+        self._extra_col_keys: dict[str, object] = {}      # column id -> DataTable ColumnKey
         self._predicate = None  # active filter
         self._selected: set[str] = set()       # multi-selection for bulk annotation
         self._tags: list = []                  # tag defs (catalog)
@@ -651,36 +685,42 @@ class SessionPane(AnnotatableTable, Vertical):
         table = NavDataTable(id="flows", cursor_type="row", zebra_stripes=True)
         self._cols = table.add_columns("", "Time", "Method", "Status", "Dur", "Proto", "Authority", "Path")
         self._dur_col = self._cols[4]
-        for key in self._meta_cols:  # source metadata shown as extra columns
-            self._meta_col_keys[key] = table.add_column(key, key=f"meta:{key}")
+        for cid in self._extra_cols:
+            self._extra_col_keys[cid] = table.add_column(_extra_col_label(cid), key=cid)
         yield table
         # Filter cheat sheet, docked at the bottom; only shown while the filter is focused.
         yield Static(FILTER_HELP, id="filter-help")
 
     def _ordered_cols(self) -> list:
-        """All column keys in display order: the fixed base columns then metadata columns."""
-        return [*self._cols, *(self._meta_col_keys[k] for k in self._meta_cols)]
+        """All column keys in display order: the fixed base columns then the extra ones."""
+        return [*self._cols, *(self._extra_col_keys[c] for c in self._extra_cols)]
 
-    def _meta_value(self, f, key: str) -> str:
-        return (f.metadata.get(key, "") or "")[:_META_CELL_MAX]
+    def _extra_value(self, f, cid: str) -> str:
+        """This flow's value for an extra column: a source-metadata lookup, or a field
+        column read off the Flow itself."""
+        if cid.startswith("meta:"):
+            val = f.metadata.get(cid[len("meta:"):], "") or ""
+        else:
+            val = _FIELD_COLUMNS[cid][1](f)
+        return val[:_EXTRA_CELL_MAX]
 
-    def _add_meta_column(self, key: str) -> None:
-        if key in self._meta_cols:
+    def _add_extra_column(self, cid: str) -> None:
+        if cid in self._extra_cols:
             return
         table = self.query_one("#flows", DataTable)
-        self._meta_cols.append(key)
-        self._meta_col_keys[key] = table.add_column(key, default="", key=f"meta:{key}")
+        self._extra_cols.append(cid)
+        self._extra_col_keys[cid] = table.add_column(_extra_col_label(cid), default="", key=cid)
         for fid in self._rows:  # backfill the new cell for rows already on screen
             f = self.flows.get(fid)
             if f is not None:
-                table.update_cell(fid, self._meta_col_keys[key], self._meta_value(f, key))
+                table.update_cell(fid, self._extra_col_keys[cid], self._extra_value(f, cid))
 
-    def _remove_meta_column(self, key: str) -> None:
-        if key not in self._meta_cols:
+    def _remove_extra_column(self, cid: str) -> None:
+        if cid not in self._extra_cols:
             return
         table = self.query_one("#flows", DataTable)
-        table.remove_column(self._meta_col_keys.pop(key))
-        self._meta_cols.remove(key)
+        table.remove_column(self._extra_col_keys.pop(cid))
+        self._extra_cols.remove(cid)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         # Reveal the filter help only while the filter input is being edited.
@@ -793,7 +833,7 @@ class SessionPane(AnnotatableTable, Vertical):
             f.protocol or "",
             f.authority or "",
             (f.path or "")[:80],
-            *(self._meta_value(f, k) for k in self._meta_cols),
+            *(self._extra_value(f, c) for c in self._extra_cols),
         )
 
     def _upsert(self, f) -> None:
@@ -850,23 +890,23 @@ class SessionPane(AnnotatableTable, Vertical):
 
     @work(exclusive=True)
     async def action_columns(self) -> None:
-        """Toggle a source-metadata key as a table column. Keys are discovered from the
-        loaded flows (plus any already shown); ✓ marks columns currently displayed."""
+        """Toggle an optional table column: the built-in flow-field columns (Conn, Stream)
+        first, then the source-metadata keys discovered from the loaded flows (plus any
+        already shown). ✓ marks columns currently displayed."""
         keys = sorted({k for f in self.flows.values() for k in f.metadata.keys()})
-        for k in self._meta_cols:  # keep a shown column listed even if no loaded flow has it
-            if k not in keys:
+        for cid in self._extra_cols:  # keep a shown column listed even if no loaded flow has it
+            if cid.startswith("meta:") and (k := cid[len("meta:"):]) not in keys:
                 keys.append(k)
-        if not keys:
-            self.notify("no source metadata on these flows", severity="warning")
-            return
-        opts = [(k, Text(("✓ " if k in self._meta_cols else "  ") + k)) for k in keys]
+        cids = [*_FIELD_COLUMNS, *(_meta_col_id(k) for k in keys)]
+        opts = [(c, Text(("✓ " if c in self._extra_cols else "  ") + _extra_col_label(c)))
+                for c in cids]
         choice = await self.app.push_screen_wait(SelectPrompt("Toggle column", opts))
         if choice is None:
             return
-        if choice in self._meta_cols:
-            self._remove_meta_column(choice)
+        if choice in self._extra_cols:
+            self._remove_extra_column(choice)
         else:
-            self._add_meta_column(choice)
+            self._add_extra_column(choice)
 
     def action_compare(self) -> None:
         fid = self._focused_flow_id()
@@ -1228,10 +1268,18 @@ class FlowDetailScreen(Screen):
         if f.query:
             url += f"?{f.query}"
         lines.append(Content.from_markup("[b]$v[/b]", v=f.method + " " + url))
+        # Connection identity, appended to the transport line: which connection carried this
+        # request and — for HTTP/2/3 — which multiplexed stream on it. Omitted per-part when
+        # unknown (a pushed proxy flow has no tcp_stream; HTTP/1.1 has no stream id).
+        conn, conn_kw = "", {}
+        if f.tcp_stream:
+            conn, conn_kw["conn"] = conn + "  conn=$conn", f.tcp_stream
+        if f.h2_stream_id:
+            conn, conn_kw["stream"] = conn + "  stream=$stream", f.h2_stream_id
         lines.append(Content.from_markup(
-            "[dim]$proto  status=$status  tls=$tls  $src → $dst[/dim]",
+            "[dim]$proto  status=$status  tls=$tls  $src → $dst" + conn + "[/dim]",
             proto=f.protocol, status=str(f.status),
-            tls="yes" if f.tls_decrypted else "no", src=f.src_addr, dst=f.dst_addr))
+            tls="yes" if f.tls_decrypted else "no", src=f.src_addr, dst=f.dst_addr, **conn_kw))
         if f.proxy.addr:
             creds = f"  {f.proxy.username}:{f.proxy.password}" if f.proxy.username else ""
             lines.append(Content.from_markup(

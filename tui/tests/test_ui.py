@@ -35,9 +35,10 @@ def _session():
                       pcap_bytes=1024, created_at_unix_ms=1_700_000_000_000)
 
 
-def _flow(fid, method, status, websocket=False):
+def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id=""):
     f = cp.Flow(id=fid, method=method, scheme="https", authority="api.example.com",
-                path="/" + fid, protocol="HTTP/2", status=status, ts_unix_micros=1)
+                path="/" + fid, protocol="HTTP/2", status=status, ts_unix_micros=1,
+                tcp_stream=tcp_stream, h2_stream_id=h2_stream_id)
     if method:
         f.request_headers.append(cp.Header(name="content-type", value="application/json"))
         f.request_body.CopyFrom(cp.Body(size=7, content_type="application/json", inline=b'{"k":1}'))
@@ -56,7 +57,13 @@ def _flow(fid, method, status, websocket=False):
     return f
 
 
-_FLOWS = [_flow("f1", "GET", 200), _flow("f2", "POST", 201), _flow("f3", "", 0, websocket=True)]
+# f1 and f2 are multiplexed onto one HTTP/2 connection (tcp stream 12, h2 streams 1 and 3);
+# f3 sits on a second connection — enough to exercise the Conn/Stream columns and ~conn/~stream.
+_FLOWS = [
+    _flow("f1", "GET", 200, tcp_stream="12", h2_stream_id="1"),
+    _flow("f2", "POST", 201, tcp_stream="12", h2_stream_id="3"),
+    _flow("f3", "", 0, websocket=True, tcp_stream="13", h2_stream_id="1"),
+]
 
 SESSION_ID2 = "sess-2"
 _FLOWS2 = [_flow("g1", "GET", 200), _flow("g2", "DELETE", 204)]
@@ -316,6 +323,17 @@ async def _open_flows(pilot):
     await settle(pilot)
 
 
+async def _toggle_column(pilot, cid):
+    """Open the column picker (C) and toggle the option carrying the given column id."""
+    await pilot.press("C")
+    await settle(pilot)
+    opts = pilot.app.screen.query_one(OptionList)
+    opts.highlighted = next(i for i in range(opts.option_count)
+                            if opts.get_option_at_index(i).id == cid)
+    await pilot.press("enter")
+    await settle(pilot)
+
+
 async def test_metadata_column_picker_toggles_column():
     app = make_app()
     async with app.run_test() as pilot:
@@ -323,29 +341,50 @@ async def test_metadata_column_picker_toggles_column():
         pane = app.screen.query_one(SessionPane)
         table = pane.query_one("#flows", DataTable)
         base_cols = len(table.ordered_columns)
-        assert pane._meta_cols == []            # nothing shown by default
+        assert pane._extra_cols == []           # nothing shown by default
 
         await focus(pilot, "#flows")
-        await pilot.press("C")                  # open the column picker
-        await settle(pilot)
-        # Options are the discovered metadata keys, sorted: proxy_provider, scrape_group.
-        app.screen.query_one(OptionList).highlighted = 0
-        await pilot.press("enter")              # toggle proxy_provider on
-        await settle(pilot)
+        await _toggle_column(pilot, "meta:proxy_provider")
 
-        assert pane._meta_cols == ["proxy_provider"]
+        assert pane._extra_cols == ["meta:proxy_provider"]
         assert len(table.ordered_columns) == base_cols + 1
         # f2 carries proxy_provider=brightdata; its row shows it in the new column.
-        assert str(table.get_cell("f2", pane._meta_col_keys["proxy_provider"])) == "brightdata"
+        assert str(table.get_cell("f2", pane._extra_col_keys["meta:proxy_provider"])) == "brightdata"
 
         # Toggling the same key again removes the column.
-        await pilot.press("C")
-        await settle(pilot)
-        app.screen.query_one(OptionList).highlighted = 0
-        await pilot.press("enter")
-        await settle(pilot)
-        assert pane._meta_cols == []
+        await _toggle_column(pilot, "meta:proxy_provider")
+        assert pane._extra_cols == []
         assert len(table.ordered_columns) == base_cols
+
+
+async def test_conn_stream_columns_are_optional_and_toggleable():
+    # The HTTP/2 connection/stream columns are off by default and toggle on from the same
+    # picker; f1 and f2 share connection 12 on distinct streams.
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_flows(pilot)
+        pane = app.screen.query_one(SessionPane)
+        table = pane.query_one("#flows", DataTable)
+        base_cols = len(table.ordered_columns)
+        assert pane._extra_cols == []
+
+        await focus(pilot, "#flows")
+        await _toggle_column(pilot, "conn")
+        await _toggle_column(pilot, "stream")
+
+        assert pane._extra_cols == ["conn", "stream"]
+        assert len(table.ordered_columns) == base_cols + 2
+        assert [c.label.plain for c in table.ordered_columns[-2:]] == ["Conn", "Stream"]
+        # Same connection, different streams — the multiplexing the columns exist to show.
+        assert str(table.get_cell("f1", pane._extra_col_keys["conn"])) == "12"
+        assert str(table.get_cell("f2", pane._extra_col_keys["conn"])) == "12"
+        assert str(table.get_cell("f1", pane._extra_col_keys["stream"])) == "1"
+        assert str(table.get_cell("f2", pane._extra_col_keys["stream"])) == "3"
+        assert str(table.get_cell("f3", pane._extra_col_keys["conn"])) == "13"
+
+        await _toggle_column(pilot, "conn")
+        assert pane._extra_cols == ["stream"]
+        assert len(table.ordered_columns) == base_cols + 1
 
 
 async def test_source_declared_columns_seed_table():
@@ -356,17 +395,17 @@ async def test_source_declared_columns_seed_table():
         app.push_screen(WorkspaceScreen(SESSION_ID, "demo", source_columns=["proxy_provider"]))
         await settle(pilot)
         pane = app.screen.query_one(SessionPane)
-        assert pane._meta_cols == ["proxy_provider"]
+        assert pane._extra_cols == ["meta:proxy_provider"]
         table = pane.query_one("#flows", DataTable)
-        assert str(table.get_cell("f2", pane._meta_col_keys["proxy_provider"])) == "brightdata"
+        assert str(table.get_cell("f2", pane._extra_col_keys["meta:proxy_provider"])) == "brightdata"
 
 
-def test_resolve_meta_columns_unions_env_and_source(monkeypatch):
-    from traffic_viewer.screens import _resolve_meta_columns, _session_view_columns
+def test_resolve_columns_unions_env_and_source(monkeypatch):
+    from traffic_viewer.screens import _resolve_columns, _session_view_columns
 
     monkeypatch.setenv("TRAFFICDECK_META_COLUMNS", "region, proxy_provider")
     # env first, then source-declared, de-duplicated and order-preserving.
-    assert _resolve_meta_columns(["proxy_provider", "scrape_group"]) == \
+    assert _resolve_columns(["proxy_provider", "scrape_group"]) == \
         ["region", "proxy_provider", "scrape_group"]
 
     s = cp.Session(id="s1")
@@ -375,15 +414,40 @@ def test_resolve_meta_columns_unions_env_and_source(monkeypatch):
     assert _session_view_columns(cp.Session(id="s2")) == []
 
 
+def test_col_id_maps_field_names_and_metadata_keys():
+    from traffic_viewer.screens import _col_id
+
+    # A built-in field name resolves to the field column; anything else is a metadata key.
+    assert _col_id("conn") == "conn"
+    assert _col_id("stream") == "stream"
+    assert _col_id("proxy_provider") == "meta:proxy_provider"
+
+
+async def test_pcap_source_declared_conn_stream_columns_shown_by_default():
+    # A pcap-based source declares viewer.columns="conn,stream" (capture_sdk's
+    # PCAP_VIEWER_COLUMNS); the pane shows both without the user toggling anything.
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(WorkspaceScreen(SESSION_ID, "demo", source_columns=["conn", "stream"]))
+        await settle(pilot)
+        pane = app.screen.query_one(SessionPane)
+        assert pane._extra_cols == ["conn", "stream"]
+        table = pane.query_one("#flows", DataTable)
+        assert [c.label.plain for c in table.ordered_columns[-2:]] == ["Conn", "Stream"]
+        assert str(table.get_cell("f1", pane._extra_col_keys["conn"])) == "12"
+        assert str(table.get_cell("f2", pane._extra_col_keys["stream"])) == "3"
+
+
 async def test_metadata_column_from_env(monkeypatch):
     monkeypatch.setenv("TRAFFICDECK_META_COLUMNS", "proxy_provider")
     app = make_app()
     async with app.run_test() as pilot:
         await _open_flows(pilot)
         pane = app.screen.query_one(SessionPane)
-        assert pane._meta_cols == ["proxy_provider"]
+        assert pane._extra_cols == ["meta:proxy_provider"]
         table = pane.query_one("#flows", DataTable)
-        assert str(table.get_cell("f2", pane._meta_col_keys["proxy_provider"])) == "brightdata"
+        assert str(table.get_cell("f2", pane._extra_col_keys["meta:proxy_provider"])) == "brightdata"
 
 
 async def test_drill_flow_to_detail():
@@ -410,6 +474,30 @@ async def _open_first_flow_detail(pilot):
     await focus(pilot, "#flows")
     await pilot.press("enter")
     await settle(pilot)
+
+
+async def test_detail_view_shows_connection_and_stream():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_first_flow_detail(pilot)          # f1: conn 12, h2 stream 1
+        rendered = app.screen.query_one("#body", Static).render().plain
+        assert "conn=12" in rendered
+        assert "stream=1" in rendered
+
+
+async def test_detail_view_omits_stream_for_non_multiplexed_flow():
+    # An HTTP/1.1 flow has a connection but no stream id — the stream part is dropped
+    # rather than rendered empty.
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        f = _flow("h1", "GET", 200, tcp_stream="7")
+        f.protocol = "HTTP/1.1"
+        app.push_screen(FlowDetailScreen(SESSION_ID, "h1", f, {}, {}))
+        await settle(pilot)
+        rendered = app.screen.query_one("#body", Static).render().plain
+        assert "conn=7" in rendered
+        assert "stream=" not in rendered
 
 
 async def test_detail_view_request_body_opens_body_screen():

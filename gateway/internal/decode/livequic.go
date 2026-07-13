@@ -32,6 +32,7 @@ const (
 type quicSession struct {
 	onFlow                             func(*Flow, bool)
 	conn                               *quicdecrypt.Conn
+	connID                             string // this connection's id; goes on every flow it carries
 	serverHost, serverPort, clientAddr string
 
 	mu          sync.Mutex
@@ -66,9 +67,10 @@ type h3Stream struct {
 	flow *Flow
 }
 
-func newQUICSession(keylog *tlsdecrypt.Keylog, onFlow func(*Flow, bool), serverHost, serverPort, clientAddr string) *quicSession {
+func newQUICSession(keylog *tlsdecrypt.Keylog, onFlow func(*Flow, bool), connID, serverHost, serverPort, clientAddr string) *quicSession {
 	s := &quicSession{
-		onFlow: onFlow, serverHost: serverHost, serverPort: serverPort, clientAddr: clientAddr,
+		onFlow: onFlow, connID: connID,
+		serverHost: serverHost, serverPort: serverPort, clientAddr: clientAddr,
 		streams: map[uint64]*h3Stream{},
 		uni:     map[uint64]*uniStream{},
 		qpack:   [2]*qpackdec.Decoder{qpackdec.New(), qpackdec.New()},
@@ -288,6 +290,7 @@ func (s *quicSession) newFlow(streamID uint64) *Flow {
 		SrcAddr:      s.clientAddr,
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
 		TLSDecrypted: true,
+		TCPStream:    s.connID,
 		H2StreamID:   strconv.FormatUint(streamID, 10),
 	}
 	if ch := s.conn.ClientHello; ch != nil {

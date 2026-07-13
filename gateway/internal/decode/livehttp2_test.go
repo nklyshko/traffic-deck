@@ -48,6 +48,7 @@ func feedH2Until(t *testing.T, client, server []byte, ready func([]*Flow) bool) 
 	}}
 	s := &tcpStream{
 		lt:         lt,
+		connID:     "7",
 		serverHost: "203.0.113.5",
 		serverPort: "443",
 		clientAddr: "198.51.100.2:51000",
@@ -137,6 +138,76 @@ func TestLiveHTTP2RequestResponse(t *testing.T) {
 	}
 	if string(f.ResponseBody) != `{"ok":true}` {
 		t.Errorf("body=%q", f.ResponseBody)
+	}
+}
+
+// TestLiveHTTP2MultiplexedStreamsShareConnID covers the whole point of HTTP/2
+// multiplexing being visible: two requests sent over one connection get one shared
+// connection id and their own stream ids, so a viewer can group them.
+func TestLiveHTTP2MultiplexedStreamsShareConnID(t *testing.T) {
+	var cbuf bytes.Buffer
+	cbuf.WriteString(http2.ClientPreface)
+	cf := http2.NewFramer(&cbuf, nil)
+	if err := cf.WriteSettings(); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []uint32{1, 3} { // client-initiated streams are odd
+		if err := cf.WriteHeaders(http2.HeadersFrameParam{
+			StreamID: sid,
+			BlockFragment: h2encode(
+				hpack.HeaderField{Name: ":method", Value: "GET"},
+				hpack.HeaderField{Name: ":scheme", Value: "https"},
+				hpack.HeaderField{Name: ":authority", Value: "example.com"},
+				hpack.HeaderField{Name: ":path", Value: "/s"},
+			),
+			EndStream:  true,
+			EndHeaders: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var sbuf bytes.Buffer
+	sf := http2.NewFramer(&sbuf, nil)
+	if err := sf.WriteSettings(); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []uint32{1, 3} {
+		if err := sf.WriteHeaders(http2.HeadersFrameParam{
+			StreamID: sid,
+			BlockFragment: h2encode(
+				hpack.HeaderField{Name: ":status", Value: "200"},
+			),
+			EndStream:  true,
+			EndHeaders: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	flows := feedH2Until(t, cbuf.Bytes(), sbuf.Bytes(), func(fs []*Flow) bool {
+		if len(fs) < 2 {
+			return false
+		}
+		for _, f := range fs {
+			if f.Status == 0 {
+				return false
+			}
+		}
+		return true
+	})
+	if len(flows) != 2 {
+		t.Fatalf("got %d flows, want 2", len(flows))
+	}
+	// One connection (the id feedH2Until gives its tcpStream), two distinct streams.
+	for _, f := range flows {
+		if f.TCPStream != "7" {
+			t.Errorf("stream %q: conn=%q, want %q — multiplexed flows share a connection",
+				f.H2StreamID, f.TCPStream, "7")
+		}
+	}
+	if a, b := flows[0].H2StreamID, flows[1].H2StreamID; a != "1" || b != "3" {
+		t.Errorf("h2 stream ids = %q,%q; want 1,3", a, b)
 	}
 }
 

@@ -259,6 +259,26 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 	if f.Status != 404 || string(f.ResponseBody) != "not found" {
 		t.Errorf("resp: status=%d body=%q", f.Status, f.ResponseBody)
 	}
+	// The connection this rode on, numbered in first-seen order; this pcap has just the one.
+	if f.TCPStream != "0" {
+		t.Errorf("tcp stream=%q, want %q (the first connection)", f.TCPStream, "0")
+	}
+}
+
+// TestLiveConnIDNumbersConnectionsInOrder covers the identity that makes HTTP/2
+// multiplexing legible: connections are numbered in first-seen order (as tshark's
+// tcp.stream index does), and a QUIC connection is namespaced so it can't be taken for
+// a TCP one of the same number.
+func TestLiveConnIDNumbersConnectionsInOrder(t *testing.T) {
+	lt := &liveTCP{}
+	for i, want := range []string{"0", "1", "2"} {
+		if got := lt.connID(); got != want {
+			t.Errorf("connID #%d = %q, want %q", i, got, want)
+		}
+	}
+	if got := "quic:" + lt.connID(); got != "quic:3" {
+		t.Errorf("quic conn id = %q, want %q", got, "quic:3")
+	}
 }
 
 // TestLiveTCPDecodePlaintextHTTPReset covers the TCP-reset failure signal: a request with

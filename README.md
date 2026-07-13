@@ -54,14 +54,31 @@ tui/run.sh                                 # runs the TUI (GATEWAY_ADDR overrida
 
 TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
 refresh sessions, `e` export the focused session as a `.tar.gz` bundle. In a flow
-list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`, plus annotations `~fav ~mark
-~tag ~group ~comment`, naked = URL, `!` negate), `c` mark/compare two requests across
+list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`, connection identity `~conn
+~stream`, plus annotations `~fav ~mark ~tag ~group ~comment`, naked = URL, `!`
+negate), `C` toggle optional columns (`Conn`/`Stream` — see below — and any source
+metadata key), `c` mark/compare two requests across
 sessions. Annotate: `space` toggle select (for bulk), `t` tag, `F`
 favorite, `m` color-mark, `n` comment, `g` group — each acts on the selection if any,
 else the focused row. `M` opens the WebSocket message timeline for a `⇅` flow. In a
 flow detail: bodies are pretty-printed (JSON reindented + syntax-colored, form fields
 as key/value); `s`/`r` save response/request body, `x` export curl, `w` export raw
 request+response, `M` ws messages. `q` quit.
+
+#### HTTP/2 connections and streams
+
+HTTP/2 multiplexes many requests over one connection, so a flow carries both the
+transport connection it rode on (a `tcp.stream` index, or `quic:<conn-id>` for HTTP/3)
+and its stream id within that connection. The flow detail always shows them
+(`conn=12  stream=5`), and the flow table has optional `Conn`/`Stream` columns — one
+`Conn` value repeated across rows with different `Stream` values *is* connection reuse.
+Filter with `~conn`/`~stream` to isolate one connection's streams (both are regexes
+like every other term, so anchor to pin an exact id: `~conn '^12$'`).
+
+The pcap-based sources (`capture_chrome`, `capture_android`) show both columns by
+default — they decode the frames off the wire, so the ids are the client's real ones.
+`capture_mitmproxy` doesn't: mitmproxy terminates the connection, and its addon API
+never exposes the HTTP/2 stream id, so both fields stay empty for proxy-captured flows.
 
 ### MCP server (for LLM/agent clients)
 

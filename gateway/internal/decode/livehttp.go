@@ -280,6 +280,7 @@ func (s *tcpStream) newHTTPFlow() *Flow {
 		SrcAddr:      s.clientAddr,
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
 		TLSDecrypted: !s.plaintext,
+		TCPStream:    s.connID,
 	}
 	s.applyTLSFingerprint(f)
 	return f

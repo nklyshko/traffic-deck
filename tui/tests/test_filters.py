@@ -18,7 +18,7 @@ def flow(**kw):
         method="GET", authority="api.example.com", path="/v1", query="", scheme="https",
         status=200, content_type="application/json",
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
-        metadata={},
+        metadata={}, tcp_stream="", h2_stream_id="",
     )
     d.update(kw)
     return types.SimpleNamespace(**d)
@@ -74,6 +74,32 @@ def test_negation_both_forms():
     assert compile_filter("!~m POST")(f) is True
     assert compile_filter("! ~m POST")(f) is True
     assert compile_filter("!~m GET")(f) is False
+
+
+def test_conn_and_stream_fields():
+    # Two requests multiplexed on one HTTP/2 connection, plus one on another connection.
+    a = flow(tcp_stream="12", h2_stream_id="1")
+    b = flow(tcp_stream="12", h2_stream_id="3")
+    c = flow(tcp_stream="13", h2_stream_id="1")
+    # ~conn isolates one connection's streams — the point of the term.
+    assert compile_filter("~conn 12")(a) is True
+    assert compile_filter("~conn 12")(b) is True
+    assert compile_filter("~conn 12")(c) is False
+    assert compile_filter("~stream 3")(b) is True
+    assert compile_filter("~stream 3")(a) is False
+    # Combined: one specific stream on one specific connection.
+    assert compile_filter("~conn 12 ~stream 3")(b) is True
+    assert compile_filter("~conn 12 ~stream 3")(c) is False
+    # Regex semantics, as for every other term: unanchored, so anchor to pin an exact id.
+    assert compile_filter("~conn 1")(a) is True
+    assert compile_filter("~conn ^1$")(a) is False
+    # QUIC reuses tcp_stream for the connection id.
+    assert compile_filter("~conn quic")(flow(tcp_stream="quic:ab12", h2_stream_id="0")) is True
+    # An HTTP/1.1 flow has a connection but no stream id.
+    h1 = flow(tcp_stream="7", h2_stream_id="")
+    assert compile_filter("~conn 7")(h1) is True
+    assert compile_filter("~stream 1")(h1) is False
+    assert compile_filter("!~stream 1")(h1) is True
 
 
 def test_meta_field():

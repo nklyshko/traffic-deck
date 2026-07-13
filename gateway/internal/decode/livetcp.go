@@ -91,6 +91,21 @@ type liveTCP struct {
 	onFlow func(*Flow, bool)
 	onMsg  func(*WsMessage)
 	quic   map[string]*quicConnState // QUIC connections keyed by canonical UDP 4-tuple
+
+	// Connection counter handed out by connID, in first-seen order. Needs no lock: New
+	// and handleUDP both run on the single packet loop in LiveTCPDecode (as the unlocked
+	// quic map above already assumes).
+	nextConn int
+}
+
+// connID assigns the next connection identifier, numbering connections in first-seen
+// order the way tshark's tcp.stream index does — the same identity the PDML decode path
+// puts on Flow.TCPStream. Requests sharing one id shared one connection, which is what
+// makes HTTP/2 multiplexing legible in the viewer.
+func (f *liveTCP) connID() string {
+	id := strconv.Itoa(f.nextConn)
+	f.nextConn++
+	return id
 }
 
 // quicConnState is one tracked QUIC connection: its HTTP/3 decoder + the address that
@@ -119,7 +134,10 @@ func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP) {
 			return // not (the start of) an HTTP/3 connection
 		}
 		st = &quicConnState{
-			sess:   newQUICSession(f.keylog, f.onFlow, netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)), src),
+			// "quic:" prefix as the PDML decode path uses, so a QUIC connection id can't be
+			// mistaken for (or collide with) a TCP one.
+			sess: newQUICSession(f.keylog, f.onFlow, "quic:"+f.connID(),
+				netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)), src),
 			client: src,
 		}
 		f.quic[key] = st
@@ -132,6 +150,7 @@ func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassem
 	// starting at connection setup that's the real TLS client, so its peer is the server.
 	s := &tcpStream{
 		lt:         f,
+		connID:     f.connID(),
 		serverHost: netFlow.Dst().String(),
 		serverPort: tcpFlow.Dst().String(),
 		clientAddr: net.JoinHostPort(netFlow.Src().String(), tcpFlow.Src().String()),
@@ -144,6 +163,7 @@ func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassem
 // from its first decrypted bytes — either a custom-decoder session or an HTTP/1.1 parser.
 type tcpStream struct {
 	lt                                 *liveTCP
+	connID                             string // this connection's id; goes on every flow it carries
 	serverHost, serverPort, clientAddr string
 	conn                               *tlsdecrypt.Conn
 

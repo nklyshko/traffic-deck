@@ -27,6 +27,7 @@ from capture_sdk.proto import ingest_pb2_grpc as ig
 from capture_sdk import terminal
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.upload import SENTINEL, capture_chunks
+from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
 
 _KEYLOG_SCRIPT = Path(__file__).resolve().parent / "frida_sslkeylog.js"
 # Plain-IIFE bundle of frida-java-bridge that installs globalThis.Java; see
@@ -101,7 +102,8 @@ def run_capture(
     chan = grpc.insecure_channel(gateway)
     ing = ig.IngestServiceStub(chan)
     handle = ing.OpenSession(ip.OpenSessionRequest(
-        label=label, source_kind=cp.SOURCE_KIND_ANDROID_EMULATOR))
+        label=label, source_kind=cp.SOURCE_KIND_ANDROID_EMULATOR,
+        metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)
     log(f"session {sid}")

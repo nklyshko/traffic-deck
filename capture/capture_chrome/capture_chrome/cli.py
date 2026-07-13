@@ -39,6 +39,7 @@ import grpc
 
 from capture_chrome import platform
 from capture_sdk import paths, prompt, terminal
+from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
@@ -301,7 +302,8 @@ def main(argv=None) -> None:
     chan = grpc.insecure_channel(args.gateway)
     ing = ig.IngestServiceStub(chan)
     handle = ing.OpenSession(ip.OpenSessionRequest(
-        label=args.label, source_kind=cp.SOURCE_KIND_CHROME))
+        label=args.label, source_kind=cp.SOURCE_KIND_CHROME,
+        metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)
     prof_desc = (
