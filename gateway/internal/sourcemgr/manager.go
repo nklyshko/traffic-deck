@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -60,21 +61,86 @@ type Manager struct {
 	session map[string]string // session id -> source name
 }
 
-// DefaultSpecs builds the built-in source registry from the environment. Where the capture
-// tools live is a deployment detail (the packaged one-command build wires this; see
-// ADR-0010), so for now each source is enabled by pointing an env var at its launcher — the
-// command that runs the tool, to which the manager appends `serve` and the control flags:
-//
-//	TRAFFICDECK_SOURCE_CHROME="uv run --project /abs/capture/capture_chrome trafficdeck-capture-chrome"
-//
-// An unset var simply omits that source. A launcher with no such var registers nothing, so
-// capture control reports no sources rather than failing.
+// builtinSources are the sources the gateway registers by default, no configuration
+// needed. A source appears here once it has a `serve` mode; android (keep_warm, for its
+// emulator) and mitmproxy join as those land.
+var builtinSources = []struct {
+	name     string
+	keepWarm bool
+}{
+	{name: "chrome", keepWarm: false},
+}
+
+// DefaultSpecs builds the built-in source registry by locating each tool itself — no env
+// vars required. For each built-in it resolves a launcher (see resolveLauncher) and, if the
+// tool is found, registers it. A tool that can't be located is logged and simply omitted,
+// so capture control lists what actually works.
 func DefaultSpecs() map[string]Spec {
+	capDir := findCaptureDir()
 	specs := map[string]Spec{}
-	if cmd := os.Getenv("TRAFFICDECK_SOURCE_CHROME"); cmd != "" {
-		specs["chrome"] = Spec{Argv: append(strings.Fields(cmd), "serve"), KeepWarm: false}
+	for _, b := range builtinSources {
+		argv := resolveLauncher(b.name, capDir)
+		if argv == nil {
+			log.Printf("capture source %q: tool not found — set TRAFFICDECK_SOURCE_%s to enable",
+				b.name, strings.ToUpper(b.name))
+			continue
+		}
+		specs[b.name] = Spec{Argv: append(argv, "serve"), KeepWarm: b.keepWarm}
+		log.Printf("capture source %q: %s", b.name, strings.Join(argv, " "))
 	}
 	return specs
+}
+
+// resolveLauncher finds how to launch a built-in tool, most-specific first: an explicit
+// TRAFFICDECK_SOURCE_<NAME> override; else the dev repo (uv run against capture/capture_<name>);
+// else an installed console script on PATH. Returns nil when none is found.
+func resolveLauncher(name, capDir string) []string {
+	if env := os.Getenv("TRAFFICDECK_SOURCE_" + strings.ToUpper(name)); env != "" {
+		return strings.Fields(env)
+	}
+	if capDir != "" {
+		proj := filepath.Join(capDir, "capture_"+name)
+		if fi, err := os.Stat(proj); err == nil && fi.IsDir() {
+			if uv, err := exec.LookPath("uv"); err == nil {
+				return []string{uv, "run", "--project", proj, "trafficdeck-capture-" + name}
+			}
+		}
+	}
+	if p, err := exec.LookPath("trafficdeck-capture-" + name); err == nil {
+		return []string{p}
+	}
+	return nil
+}
+
+// findCaptureDir locates the repo's capture/ directory (holding capture_chrome, …) by
+// walking up from the working directory, then from the executable's directory. Returns ""
+// if not found — the installed-console-script path then applies.
+func findCaptureDir() string {
+	var starts []string
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	return findCaptureDirFrom(starts)
+}
+
+func findCaptureDirFrom(starts []string) string {
+	for _, start := range starts {
+		for dir := start; ; {
+			cand := filepath.Join(dir, "capture", "capture_chrome")
+			if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
+				return filepath.Join(dir, "capture")
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break // reached the filesystem root
+			}
+			dir = parent
+		}
+	}
+	return ""
 }
 
 // New returns a manager over the given registry. gatewayAddr is where spawned sources

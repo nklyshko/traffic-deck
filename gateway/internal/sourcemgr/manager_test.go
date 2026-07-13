@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -14,14 +15,16 @@ import (
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 )
 
-// TestRealSpawnChromeDescribe exercises realSpawn end-to-end against the actual chrome
-// tool: spawn its `serve`, read the ready line, dial, Describe. Describe needs no browser,
-// so it's safe headless. Skipped unless TRAFFICDECK_SOURCE_CHROME points at the launcher.
+// TestRealSpawnChromeDescribe exercises the whole env-free path against the actual chrome
+// tool: DefaultSpecs discovers it, realSpawn spawns its `serve`, reads the ready line,
+// dials, Describes. Describe needs no browser, so it's safe headless. Skipped only where
+// the tool can't be discovered (no repo layout + no console script).
 func TestRealSpawnChromeDescribe(t *testing.T) {
-	if os.Getenv("TRAFFICDECK_SOURCE_CHROME") == "" {
-		t.Skip("set TRAFFICDECK_SOURCE_CHROME to run the real chrome-serve spawn test")
+	specs := DefaultSpecs()
+	if _, ok := specs["chrome"]; !ok {
+		t.Skip("chrome tool not discoverable in this environment")
 	}
-	m := New("127.0.0.1:8080", DefaultSpecs())
+	m := New("127.0.0.1:8080", specs)
 	t.Cleanup(m.Close)
 	d, err := m.Describe(context.Background(), "chrome", nil)
 	if err != nil {
@@ -30,6 +33,56 @@ func TestRealSpawnChromeDescribe(t *testing.T) {
 	if len(d.GetParams()) == 0 || d.GetParams()[0].GetKey() != "chrome" {
 		t.Fatalf("descriptor lacks a chrome param: %+v", d.GetParams())
 	}
+}
+
+func TestFindCaptureDirWalksUp(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "capture", "capture_chrome"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deep := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := findCaptureDirFrom([]string{deep}); got != filepath.Join(root, "capture") {
+		t.Errorf("findCaptureDirFrom = %q, want %q", got, filepath.Join(root, "capture"))
+	}
+	if got := findCaptureDirFrom([]string{t.TempDir()}); got != "" {
+		t.Errorf("no capture dir should yield \"\", got %q", got)
+	}
+}
+
+func TestResolveLauncherPrefersEnvThenRepo(t *testing.T) {
+	// Explicit override wins.
+	t.Setenv("TRAFFICDECK_SOURCE_CHROME", "my launcher here")
+	if got := resolveLauncher("chrome", "/whatever"); !equal(got, []string{"my", "launcher", "here"}) {
+		t.Errorf("env override = %v", got)
+	}
+	// Repo layout: a capture_<name> dir under capDir → a uv run launcher (uv is on PATH here).
+	capDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(capDir, "capture_demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveLauncher("demo", capDir)
+	if len(got) < 4 || got[1] != "run" || got[len(got)-1] != "trafficdeck-capture-demo" {
+		t.Errorf("repo launcher = %v, want a uv run … trafficdeck-capture-demo", got)
+	}
+	// Nothing found → nil.
+	if got := resolveLauncher("nonesuch-xyz", ""); got != nil {
+		t.Errorf("unknown tool should be nil, got %v", got)
+	}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // fakeSource is an in-process CaptureSourceService: canned Describe/StartCapture, records
