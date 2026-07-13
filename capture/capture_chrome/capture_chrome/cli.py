@@ -37,8 +37,9 @@ import time
 
 import grpc
 
-from capture_chrome import platform
-from capture_sdk import paths, prompt, terminal
+from capture_chrome import platform, profiles
+from capture_chrome.profiles import BUILTIN_PROFILE
+from capture_sdk import prompt, terminal
 from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
@@ -47,55 +48,6 @@ from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.state import Store
 
 _SENTINEL = object()
-
-# Returned by the profile picker to mean "launch with no --user-data-dir", so the
-# chosen browser uses its own built-in default profile (each binary has its own path).
-_BUILTIN_PROFILE = object()
-
-# Named persistent custom profiles live here so a capture's logins/state survive
-# across runs; the user picks an existing one or creates a new named one.
-_PROFILES_DIR = str(paths.home() / "chrome-profiles")
-# Pre-relocation location, migrated into _PROFILES_DIR on first use.
-_LEGACY_PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
-
-
-def _snap_writable_base(chrome: str) -> str | None:
-    """The snap-writable dir that tool-managed files (the keylog and any throwaway or
-    persistent profile) must live in when `chrome` is a snap-confined browser — snap's
-    private /tmp and hidden-file restrictions otherwise swallow them so nothing decodes.
-    None for an unconfined browser (the usual /tmp and ~/.traffic-deck apply). Created on
-    demand."""
-    snap = platform.snap_name(chrome)
-    if not snap:
-        return None
-    base = platform.snap_user_common(snap)
-    os.makedirs(base, exist_ok=True)
-    return base
-
-
-def _temp_profile(chrome: str) -> str:
-    """A fresh throwaway --user-data-dir: under the snap's writable area for a snap
-    browser (confinement blocks /tmp), an ordinary tempdir otherwise."""
-    return tempfile.mkdtemp(prefix="chrome-capture-", dir=_snap_writable_base(chrome))
-
-
-def _profiles_dir(chrome: str) -> str:
-    """The persistent-profiles dir, creating it and migrating any legacy profiles
-    (from ~/.capture-chrome/profiles) into it on first use. For a snap browser this lives
-    under the snap's own writable area instead of the hidden ~/.traffic-deck (which
-    confinement blocks), so persistent profiles are separate per snap and not migrated."""
-    if base := _snap_writable_base(chrome):
-        path = os.path.join(base, "td-chrome-profiles")
-        os.makedirs(path, exist_ok=True)
-        return path
-    os.makedirs(_PROFILES_DIR, exist_ok=True)
-    if os.path.isdir(_LEGACY_PROFILES_DIR):
-        for name in os.listdir(_LEGACY_PROFILES_DIR):
-            src = os.path.join(_LEGACY_PROFILES_DIR, name)
-            dst = os.path.join(_PROFILES_DIR, name)
-            if not os.path.exists(dst):
-                os.rename(src, dst)
-    return _PROFILES_DIR
 
 
 # --- interactive prompts -------------------------------------------------
@@ -117,7 +69,7 @@ def _pick_profile(chrome: str, store: Store):
     """Step 2: pick the profile. Returns one of: a (user_data_dir, profile_directory)
     tuple for an existing profile of this browser; a path string used as --user-data-dir
     (fresh temp or a named persistent profile under ~/.traffic-deck/chrome-profiles); or
-    _BUILTIN_PROFILE to launch with no --user-data-dir (the browser's own default)."""
+    BUILTIN_PROFILE to launch with no --user-data-dir (the browser's own default)."""
     discovered = platform.chrome_profiles(chrome)
     options = []
     if discovered:
@@ -135,9 +87,9 @@ def _pick_profile(chrome: str, store: Store):
     if choice == "default":
         print(f"note: uses {os.path.basename(chrome)}'s own default profile — quit any "
               "running instance of it first, or no TLS keys are logged")
-        return _BUILTIN_PROFILE
+        return BUILTIN_PROFILE
     if choice == "temp":
-        return _temp_profile(chrome)
+        return profiles.temp_profile(chrome)
     return _pick_persistent_profile(chrome, store)
 
 
@@ -155,7 +107,7 @@ def _pick_existing_profile(chrome: str, discovered: list[tuple[str, str, str]], 
 
 def _pick_persistent_profile(chrome: str, store: Store) -> str:
     """Choose one of the saved persistent profiles, or create a new named one."""
-    profiles_dir = _profiles_dir(chrome)
+    profiles_dir = profiles.profiles_dir(chrome)
     existing = sorted(d for d in os.listdir(profiles_dir)
                       if os.path.isdir(os.path.join(profiles_dir, d)))
     choice = prompt.select("Custom persistent profile:", existing + [("＋ create new…", "__new__")],
@@ -273,16 +225,16 @@ def main(argv=None) -> None:
     if not chrome:
         chrome = _pick_chrome(store) if interactive else platform.chrome_binary()
     # profile is a path (→ --user-data-dir), a (user_data_dir, profile_directory) tuple
-    # for a specific profile, or _BUILTIN_PROFILE (no flag → the browser's own default).
+    # for a specific profile, or BUILTIN_PROFILE (no flag → the browser's own default).
     if args.default_profile:
-        profile = _BUILTIN_PROFILE
+        profile = BUILTIN_PROFILE
     elif args.profile_dir:
         profile = (args.profile_dir, args.profile_directory) if args.profile_directory \
             else args.profile_dir
     elif interactive:
         profile = _pick_profile(chrome, store)
     else:
-        profile = _temp_profile(chrome)
+        profile = profiles.temp_profile(chrome)
 
     iface = args.iface or platform.default_interface()
     dumpcap = platform.dumpcap_binary()
@@ -296,7 +248,7 @@ def main(argv=None) -> None:
               flush=True)
     # Keep the keylog out of the profile dir so an existing user profile isn't
     # polluted (and stays valid even when --profile-dir points at a real one).
-    keylog = os.path.join(tempfile.mkdtemp(prefix="chrome-keylog-", dir=_snap_writable_base(chrome)),
+    keylog = os.path.join(tempfile.mkdtemp(prefix="chrome-keylog-", dir=profiles.snap_writable_base(chrome)),
                           "key.log")
 
     chan = grpc.insecure_channel(args.gateway)
@@ -307,7 +259,7 @@ def main(argv=None) -> None:
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)
     prof_desc = (
-        "browser default" if profile is _BUILTIN_PROFILE
+        "browser default" if profile is BUILTIN_PROFILE
         else f"{profile[0]} [{profile[1]}]" if isinstance(profile, tuple)
         else profile)
     print(f"session {sid}  iface={iface}  profile={prof_desc}  keylog={keylog}", flush=True)
@@ -344,7 +296,7 @@ def main(argv=None) -> None:
         user_data_dir, profile_directory = profile
         chrome_cmd[2:2] = [f"--user-data-dir={user_data_dir}",
                            f"--profile-directory={profile_directory}"]
-    elif profile is not _BUILTIN_PROFILE:
+    elif profile is not BUILTIN_PROFILE:
         chrome_cmd.insert(2, f"--user-data-dir={profile}")
     if args.url:
         chrome_cmd.append(args.url)
