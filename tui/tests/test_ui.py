@@ -9,10 +9,12 @@ from textual.widgets import DataTable, Input, OptionList, Static, TabPane
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
 from traffic.v1 import common_pb2 as cp
+from traffic.v1 import control_pb2 as cp2
 from traffic.v1 import viewer_pb2 as vp
 from traffic_viewer.app import TrafficViewerApp
 from traffic_viewer.screens import (
     BodyScreen,
+    CaptureFormScreen,
     ConfirmScreen,
     QuitConfirmScreen,
     FlowDetailScreen,
@@ -92,6 +94,33 @@ class FakeClient:
         self.force_closed = []
         self.marks = []     # recorded (record_ids, color|None) from set_mark/clear_mark
         self.comments = []  # recorded (record_id, body) from add_comment
+        # Capture control.
+        self.capture_sources = [cp2.CaptureSourceInfo(name="chrome", label="Chrome")]
+        self.describe_calls = []  # (source, params) each DescribeCaptureSource
+        self.started = []         # (source, label, params) each StartCapture
+        self.stopped = []         # session ids stopped
+
+    async def list_capture_sources(self):
+        return list(self.capture_sources)
+
+    async def describe_capture_source(self, source, params=None):
+        params = dict(params or {})
+        self.describe_calls.append((source, params))
+        # A tiny cascade: "profile" only appears once a "mode" is chosen.
+        out = [cp2.Param(key="mode", label="Mode", type=cp2.PARAM_TYPE_CHOICE,
+                         choices=[cp2.Choice(value="fast"), cp2.Choice(value="slow")],
+                         default=params.get("mode", ""))]
+        if params.get("mode"):
+            out.append(cp2.Param(key="profile", label="Profile", type=cp2.PARAM_TYPE_STRING,
+                                 default="p1"))
+        return cp2.SourceDescriptor(params=out, readiness=cp2.READINESS_READY)
+
+    async def start_capture(self, source, label, params):
+        self.started.append((source, label, dict(params)))
+        return "cap-sess-1"
+
+    async def stop_capture(self, session_id):
+        self.stopped.append(session_id)
 
     async def list_sessions(self, limit=200):
         return list(self._sessions)
@@ -861,3 +890,62 @@ async def test_compare_requests_across_tabs():
         await settle(pilot)
         assert isinstance(app.screen, CompareScreen)
         assert app.compare_a is None      # consumed by the compare
+
+
+async def test_new_capture_describes_cascades_and_starts():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("a")            # new capture; single source → straight to the form
+        await settle(pilot)
+        assert isinstance(app.screen, CaptureFormScreen)
+        assert app.client.describe_calls[0] == ("chrome", {})   # initial describe, empty params
+        form = app.screen
+        assert "mode" in form._widgets and "profile" not in form._widgets  # profile hidden until mode
+
+        # Choose a mode → re-describe → the dependent "profile" field appears (the cascade).
+        form._widgets["mode"].value = "fast"
+        await settle(pilot)
+        assert ("chrome", {"mode": "fast"}) in app.client.describe_calls
+        assert "profile" in form._widgets
+
+        await pilot.click("#capture-start")
+        await settle(pilot)
+        # Started with the source, the (defaulted) label, and the collected params.
+        assert app.client.started == [("chrome", "chrome", {"mode": "fast", "profile": "p1"})]
+
+
+async def test_new_capture_multiple_sources_prompts_first():
+    app = make_app()
+    app.client.capture_sources = [
+        cp2.CaptureSourceInfo(name="chrome", label="Chrome"),
+        cp2.CaptureSourceInfo(name="android", label="Android"),
+    ]
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("a")
+        await settle(pilot)
+        # Two sources → a picker first (not straight to the form).
+        assert app.screen.query_one(OptionList) is not None
+
+
+async def test_capture_form_cancel_starts_nothing():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("a")
+        await settle(pilot)
+        await pilot.press("escape")       # cancel the form
+        await settle(pilot)
+        assert app.client.started == []
+        assert isinstance(app.screen, SessionsScreen)
+
+
+async def test_stop_capture_calls_client():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("s")            # stop the focused (first) session
+        await settle(pilot)
+        assert app.client.stopped == [SESSION_ID]

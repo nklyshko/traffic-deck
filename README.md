@@ -58,7 +58,7 @@ Several sessions can be open at once as tabs in the workspace. Keys by screen:
 
 | Screen | Keys |
 |---|---|
-| Sessions | `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `c` force-close a session left open · `d` delete |
+| Sessions | `a` new capture (pick a source, fill its form, start) · `s` stop the focused capture · `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `c` force-close a session left open · `d` delete |
 | Workspace (tabs) | `o` open another session in a tab · `[` / `]` prev/next tab · `w` close tab |
 | Flow list | `f` filter (see below) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow |
 | Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages |

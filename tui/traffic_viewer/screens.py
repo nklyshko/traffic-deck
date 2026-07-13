@@ -16,9 +16,13 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
-    Button, DataTable, Footer, Header, Input, Label, OptionList, Static,
-    TabbedContent, TabPane,
+    Button, Checkbox, DataTable, Footer, Header, Input, Label, OptionList,
+    Select, Static, TabbedContent, TabPane,
 )
+
+# Importing the client puts the generated stubs' gen/ tree on sys.path, so this resolves
+# regardless of import order.
+from traffic_viewer.client import control_pb2 as cpb
 from textual.widgets.option_list import Option
 from rich.text import Text
 
@@ -128,6 +132,111 @@ class SelectPrompt(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class CaptureFormScreen(ModalScreen[str | None]):
+    """Start a capture on a source. The form is built from the source's Describe response
+    and re-described whenever a choice changes, so dependent fields appear as they're
+    picked (the same cascade the CLI picker walks). Dismisses with the started session id,
+    or None on cancel. See ADR-0010."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, source: str, label: str) -> None:
+        super().__init__()
+        self._source = source
+        self._source_label = label or source
+        self._widgets: dict[str, object] = {}   # param key -> input widget
+        self._building = False                  # ignore Select.Changed while rebuilding
+        self._ready = False                     # descriptor readiness (can we start?)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="capture-form"):
+            yield Label(f"New capture — {self._source_label}", id="capture-title")
+            yield Label("Session label")
+            yield Input(value=self._source_label.lower(), id="capture-label")
+            yield VerticalScroll(id="capture-params")
+            yield Static("", id="capture-msg")
+            with Horizontal(id="capture-buttons"):
+                yield Button("Start", id="capture-start", variant="primary")
+                yield Button("Cancel", id="capture-cancel")
+
+    def on_mount(self) -> None:
+        self._rebuild({})
+
+    def _current_params(self) -> dict:
+        """The values entered so far, as the params map (empty values dropped)."""
+        out = {}
+        for key, w in self._widgets.items():
+            if isinstance(w, Select):
+                v = "" if w.is_blank() else str(w.value)
+            elif isinstance(w, Checkbox):
+                v = "true" if w.value else ""
+            else:
+                v = w.value
+            if v != "":
+                out[key] = v
+        return out
+
+    @work(exclusive=True)
+    async def _rebuild(self, params: dict) -> None:
+        """Describe the source for the params so far and (re)render the fields."""
+        try:
+            desc = await self.app.client.describe_capture_source(self._source, params)
+        except Exception as exc:  # noqa: BLE001
+            self.query_one("#capture-msg", Static).update(f"[red]describe failed: {exc}[/red]")
+            return
+        self._building = True
+        cont = self.query_one("#capture-params", VerticalScroll)
+        await cont.remove_children()
+        self._widgets = {}
+        for p in desc.params:
+            await cont.mount(Label(p.label))
+            w = self._widget_for(p)
+            self._widgets[p.key] = w
+            await cont.mount(w)
+        self._ready = desc.readiness != cpb.READINESS_PROVISION_REQUIRED
+        self.query_one("#capture-msg", Static).update(desc.message or "")
+        # Let mount-triggered Select.Changed events flush before we listen again.
+        self.call_after_refresh(lambda: setattr(self, "_building", False))
+
+    def _widget_for(self, p) -> object:
+        if p.type == cpb.PARAM_TYPE_CHOICE and p.choices:
+            opts = [(c.label or c.value, c.value) for c in p.choices]
+            if any(p.default == c.value for c in p.choices):
+                return Select(opts, value=p.default, allow_blank=not p.required)
+            return Select(opts, allow_blank=True)  # no selection yet (Select.NULL)
+        if p.type == cpb.PARAM_TYPE_BOOL:
+            return Checkbox(value=p.default == "true")
+        return Input(value=p.default)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        # A choice changed: re-describe so dependent fields update. Ignore the events our
+        # own rebuild triggers when it sets values.
+        if not self._building:
+            self._rebuild(self._current_params())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "capture-cancel":
+            self.dismiss(None)
+        elif event.button.id == "capture-start":
+            self._start()
+
+    @work(exclusive=True)
+    async def _start(self) -> None:
+        if not self._ready:
+            self.query_one("#capture-msg", Static).update("[yellow]source not ready to capture[/yellow]")
+            return
+        label = self.query_one("#capture-label", Input).value or self._source
+        try:
+            sid = await self.app.client.start_capture(self._source, label, self._current_params())
+        except Exception as exc:  # noqa: BLE001
+            self.query_one("#capture-msg", Static).update(f"[red]start failed: {exc}[/red]")
+            return
+        self.dismiss(sid)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ConfirmScreen(ModalScreen[bool]):
     """Modal yes/no confirmation; dismisses True when confirmed, False otherwise."""
 
@@ -170,6 +279,8 @@ class QuitConfirmScreen(ConfirmScreen):
 
 class SessionsScreen(Screen):
     BINDINGS = [
+        Binding("a", "new_capture", "Capture"),
+        Binding("s", "stop_capture", "Stop"),
         Binding("r", "refresh", "Refresh"),
         Binding("n", "rename", "Rename"),
         Binding("g", "set_group", "Group"),
@@ -194,6 +305,44 @@ class SessionsScreen(Screen):
         self.load_sessions()
 
     def action_refresh(self) -> None:
+        self.load_sessions()
+
+    @work(exclusive=True)
+    async def action_new_capture(self) -> None:
+        """Start a capture: pick a source the gateway offers, fill its form, and start it.
+        The new session appears in the list (refreshed on return)."""
+        try:
+            sources = await self.app.client.list_capture_sources()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"list sources failed: {exc}", severity="error")
+            return
+        if not sources:
+            self.notify("no capture sources available", severity="warning")
+            return
+        if len(sources) == 1:
+            src = sources[0]
+        else:
+            opts = [(s.name, Text(s.label or s.name)) for s in sources]
+            choice = await self.app.push_screen_wait(SelectPrompt("Capture source", opts))
+            if choice is None:
+                return
+            src = next(s for s in sources if s.name == choice)
+        sid = await self.app.push_screen_wait(CaptureFormScreen(src.name, src.label))
+        if sid:
+            self.notify(f"capturing → session {sid[:8]}")
+            self.load_sessions()
+
+    async def action_stop_capture(self) -> None:
+        """Stop the focused running capture (cleanly, via the source that started it)."""
+        sid = self._selected_session()
+        if sid is None:
+            return
+        try:
+            await self.app.client.stop_capture(sid)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"stop failed: {exc}", severity="error")
+            return
+        self.notify(f"stopped capture {sid[:8]}")
         self.load_sessions()
 
     @work(exclusive=True)

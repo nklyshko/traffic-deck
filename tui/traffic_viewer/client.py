@@ -217,3 +217,26 @@ class GatewayClient:
         await call.done_writing()
         resp = await call
         return resp.session
+
+    # --- capture control (ADR-0010) -------------------------------------
+
+    async def list_capture_sources(self):
+        """The sources the gateway can drive (name, label, keep_warm)."""
+        resp = await self._ctrl().ListCaptureSources(control_pb2.Empty())
+        return list(resp.sources)
+
+    async def describe_capture_source(self, source: str, params: dict | None = None):
+        """A source's option form for the partial selection so far; re-called as fields
+        fill in (cascading)."""
+        return await self._ctrl().DescribeCaptureSource(
+            control_pb2.DescribeCaptureSourceRequest(source=source, params=params or {}))
+
+    async def start_capture(self, source: str, label: str, params: dict) -> str:
+        """Start a capture on `source`; returns the opened session id."""
+        resp = await self._ctrl().StartCapture(
+            control_pb2.StartCaptureRequest(source=source, label=label, params=params))
+        return resp.session_id
+
+    async def stop_capture(self, session_id: str) -> None:
+        """Stop a running capture by session id."""
+        await self._ctrl().StopCapture(control_pb2.StopCaptureRequest(session_id=session_id))
