@@ -28,26 +28,14 @@ from __future__ import annotations
 
 import argparse
 import os
-import queue
-import subprocess
 import sys
-import tempfile
-import threading
-import time
-
-import grpc
 
 from capture_chrome import platform, profiles
+from capture_chrome.capture import ChromeCapture, profile_desc
 from capture_chrome.profiles import BUILTIN_PROFILE
 from capture_sdk import prompt, terminal
-from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
-from capture_sdk.proto import common_pb2 as cp
-from capture_sdk.proto import ingest_pb2 as ip
-from capture_sdk.proto import ingest_pb2_grpc as ig
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.state import Store
-
-_SENTINEL = object()
 
 
 # --- interactive prompts -------------------------------------------------
@@ -122,71 +110,31 @@ def _pick_persistent_profile(chrome: str, store: Store) -> str:
     return path
 
 
-def _wait_for_stop(proc: subprocess.Popen, duration: float | None,
-                   stop: threading.Event) -> None:
-    """Block until Chrome exits, `duration` elapses, or a graceful stop is requested
-    (first Ctrl-C sets `stop`). Polls so the request is seen promptly without the
-    handler having to raise — keeping in-flight teardown intact."""
-    deadline = (time.monotonic() + duration) if duration else None
-    while proc.poll() is None:
-        if stop.is_set() or (deadline and time.monotonic() >= deadline):
-            break
-        time.sleep(0.2)
-
-
-def _reader_thread(stdout, q: queue.Queue, stop: threading.Event) -> None:
-    """Stream dumpcap's pcap bytes (stdout) into the queue."""
-    try:
-        while not stop.is_set():
-            b = stdout.read(65536)
-            if not b:
-                break
-            q.put(("pcap", b))
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _keylog_thread(path: str, q: queue.Queue, stop: threading.Event) -> None:
-    """Tail the SSLKEYLOGFILE and stream new bytes into the queue."""
-    import time
-
-    while not os.path.exists(path) and not stop.is_set():
-        time.sleep(0.1)
-    if not os.path.exists(path):
-        return
-    with open(path, "rb") as f:
-        while True:
-            b = f.read()
-            if b:
-                q.put(("keylog", b))
-            elif stop.is_set():
-                break
-            else:
-                time.sleep(0.1)
-        if b := f.read():
-            q.put(("keylog", b))
-
-
-def _chunks(session_id: str, q: queue.Queue, max_chunk: int):
-    """Generator of CaptureChunk messages for UploadCapture."""
-    yield ip.CaptureChunk(begin=ip.UploadBegin(
-        session_id=session_id, upload_id="chrome", mode=ip.CAPTURE_MODE_STREAMING_LIVE))
-    offsets = {"pcap": 0, "keylog": 0}
-    kinds = {"pcap": cp.FILE_KIND_PCAP, "keylog": cp.FILE_KIND_KEYLOG}
-    while True:
-        item = q.get()
-        if item is _SENTINEL:
-            break
-        kind, payload = item
-        for i in range(0, len(payload), max_chunk):
-            part = payload[i : i + max_chunk]
-            yield ip.CaptureChunk(data=ip.DataChunk(
-                kind=kinds[kind], offset=offsets[kind], payload=part))
-            offsets[kind] += len(part)
-    yield ip.CaptureChunk(end=ip.UploadEnd(upload_id="chrome"))
-
-
 def main(argv=None) -> None:
+    # serve mode: run as a CaptureSourceService the gateway dials (ADR-0010). Split off
+    # before argparse so the capture flags don't apply.
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "serve":
+        return _serve(argv[1:])
+    return _capture(argv)
+
+
+def _serve(argv) -> None:
+    from capture_chrome.source import ChromeSource
+    from capture_sdk import source as harness
+
+    ap = argparse.ArgumentParser(prog="capture-chrome serve",
+                                 description="Serve Chrome as a CaptureSourceService")
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
+                    help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
+    args = ap.parse_args(argv)
+    harness.serve_forever(
+        ChromeSource(args.gateway), args.control,
+        on_ready=lambda port: print(f"chrome source serving on 127.0.0.1:{port}", flush=True))
+
+
+def _capture(argv) -> None:
     ap = argparse.ArgumentParser(description="Stream a live Chrome capture to the gateway")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
     ap.add_argument("--label", default="chrome")
@@ -237,7 +185,6 @@ def main(argv=None) -> None:
         profile = profiles.temp_profile(chrome)
 
     iface = args.iface or platform.default_interface()
-    dumpcap = platform.dumpcap_binary()
     # A snap-confined browser has a private /tmp and can't write outside its own writable
     # area, so the keylog (and any tool-managed profile) must go under ~/snap/<name>/common
     # or the TLS keys never reach us and nothing decodes.
@@ -246,60 +193,14 @@ def main(argv=None) -> None:
         print(f"note: {os.path.basename(chrome)} is the '{snap}' snap — keeping keylog/profile "
               f"under ~/snap/{snap}/common so confinement doesn't swallow the TLS keys",
               flush=True)
-    # Keep the keylog out of the profile dir so an existing user profile isn't
-    # polluted (and stays valid even when --profile-dir points at a real one).
-    keylog = os.path.join(tempfile.mkdtemp(prefix="chrome-keylog-", dir=profiles.snap_writable_base(chrome)),
-                          "key.log")
 
-    chan = grpc.insecure_channel(args.gateway)
-    ing = ig.IngestServiceStub(chan)
-    handle = ing.OpenSession(ip.OpenSessionRequest(
-        label=args.label, source_kind=cp.SOURCE_KIND_CHROME,
-        metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
-    sid = handle.session_id
-    max_chunk = handle.max_chunk_bytes or (1 << 20)
-    prof_desc = (
-        "browser default" if profile is BUILTIN_PROFILE
-        else f"{profile[0]} [{profile[1]}]" if isinstance(profile, tuple)
-        else profile)
-    print(f"session {sid}  iface={iface}  profile={prof_desc}  keylog={keylog}", flush=True)
-
-    q: queue.Queue = queue.Queue()
-    stop = threading.Event()
-
-    dump_cmd = [dumpcap, "-i", iface, "-P", "-w", "-", "-q"]
-    if args.filter:
-        dump_cmd += ["-f", args.filter]  # no filter = capture everything
-    dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    rt = threading.Thread(target=_reader_thread, args=(dump.stdout, q, stop), daemon=True)
-    kt = threading.Thread(target=_keylog_thread, args=(keylog, q, stop), daemon=True)
-    rt.start()
-    kt.start()
-
-    ack = {}
-    def upload():
-        ack["ack"] = ing.UploadCapture(_chunks(sid, q, max_chunk))
-    ut = threading.Thread(target=upload, daemon=True)
-    ut.start()
-
-    chrome_cmd = [
-        chrome,
-        f"--ssl-key-log-file={keylog}",
-        "--no-first-run",
-        "--no-default-browser-check",
-        *[a for a in args.chrome_args if a != "--"],
-    ]
-    # Only pin a user-data-dir for temp/explicit/persistent profiles; for the browser
-    # default we pass nothing so each binary uses its own default profile path. A tuple
-    # additionally selects a specific profile within that dir via --profile-directory.
-    if isinstance(profile, tuple):
-        user_data_dir, profile_directory = profile
-        chrome_cmd[2:2] = [f"--user-data-dir={user_data_dir}",
-                           f"--profile-directory={profile_directory}"]
-    elif profile is not BUILTIN_PROFILE:
-        chrome_cmd.insert(2, f"--user-data-dir={profile}")
-    if args.url:
-        chrome_cmd.append(args.url)
+    cap = ChromeCapture(
+        gateway=args.gateway, label=args.label, chrome=chrome, profile=profile,
+        iface=iface, capture_filter=args.filter, url=args.url, duration=args.duration,
+        extra_args=args.chrome_args)
+    sid = cap.start()
+    print(f"session {sid}  iface={iface}  profile={profile_desc(profile)}  keylog={cap.keylog}",
+          flush=True)
 
     # A preceding questionary picker may have left the tty raw on a CPR-less terminal,
     # where ^C is a literal byte not SIGINT — restore it so Ctrl-C reaches the capture.
@@ -309,39 +210,20 @@ def main(argv=None) -> None:
               flush=True)
     else:
         print("launching Chrome (close it or press Ctrl-C to finish capture) …", flush=True)
-    chrome_proc = subprocess.Popen(chrome_cmd)
-    # First Ctrl-C stops the capture and closes the session below; a second aborts.
+    # First Ctrl-C stops the capture and closes the session; a second aborts the upload
+    # drain (Chrome + dumpcap are already stopped by then, so nothing keeps recording).
     try:
         with GracefulInterrupt() as interrupt:
             try:
-                _wait_for_stop(chrome_proc, args.duration, interrupt.event)
+                cap.wait(interrupt.event)
             finally:
-                # Fast teardown first: stop Chrome + dumpcap so nothing keeps recording,
-                # even if a second Ctrl-C aborts the (slower) upload drain that follows.
-                if chrome_proc.poll() is None:
-                    chrome_proc.terminate()
-                    try:
-                        chrome_proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        chrome_proc.kill()
-                stop.set()
-                dump.terminate()
                 try:
-                    dump.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    dump.kill()
-                rt.join(timeout=5)
-                kt.join(timeout=5)
-                q.put(_SENTINEL)
-                # Drain the upload and close the session. A second Ctrl-C raises through
-                # here (Chrome/dumpcap already stopped) so the process exits at once.
-                try:
-                    ut.join(timeout=30)
-                    if a := ack.get("ack"):
-                        print(f"uploaded pcap={a.pcap_received}B keylog={a.keylog_received}B",
+                    ack, summary = cap.stop()
+                    if ack:
+                        print(f"uploaded pcap={ack.pcap_received}B keylog={ack.keylog_received}B",
                               flush=True)
-                    summary = ing.CloseSession(ip.CloseSessionRequest(session_id=sid))
-                    print(f"closed session {sid}: {summary.session.flow_count} flows", flush=True)
+                    if summary:
+                        print(f"closed session {sid}: {summary.session.flow_count} flows", flush=True)
                 except KeyboardInterrupt:
                     print("aborted — session left open (gateway closes it on timeout)", flush=True)
                     raise
