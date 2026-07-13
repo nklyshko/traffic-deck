@@ -64,29 +64,27 @@ def test_temp_profile_unconfined_uses_tmp(monkeypatch):
     assert prof.startswith(profiles.tempfile.gettempdir())
 
 
-def test_profile_choices_flattens_the_picker_tree(monkeypatch):
-    # The cascade's leaves as one flat list: fixed kinds + each discovered profile + each
-    # saved one + "new" — what a viewer form renders instead of the CLI's tree.
-    monkeypatch.setattr(profiles.platform, "chrome_profiles",
-                        lambda _b: [("/u/.config/chrome", "Default", "Personal")])
-    monkeypatch.setattr(profiles, "_saved_profiles", lambda _b: ["research"])
-
-    values = [v for v, _ in profiles.profile_choices("chrome")]
-    assert values == ["default", "temp",
-                      "existing:/u/.config/chrome\x1fDefault", "saved:research", "new"]
-
-
-def test_resolve_profile_round_trips_each_value(monkeypatch, tmp_path):
-    monkeypatch.setattr(profiles, "temp_profile", lambda _b: "/tmp/x")
+def test_saved_profiles_lists_subdirs(monkeypatch, tmp_path):
+    (tmp_path / "work").mkdir()
+    (tmp_path / "research").mkdir()
+    (tmp_path / "notes.txt").write_text("x")  # files are ignored
     monkeypatch.setattr(profiles, "profiles_dir", lambda _b: str(tmp_path))
+    assert profiles.saved_profiles("chrome") == ["research", "work"]
 
-    assert profiles.resolve_profile("chrome", "default") is profiles.BUILTIN_PROFILE
-    assert profiles.resolve_profile("chrome", "temp") == "/tmp/x"
-    assert profiles.resolve_profile("chrome", "") == "/tmp/x"  # empty => temp
-    assert profiles.resolve_profile("chrome", "existing:/u/dd\x1fProfile 2") == ("/u/dd", "Profile 2")
-    # saved/new create the directory under profiles_dir.
-    assert profiles.resolve_profile("chrome", "saved:work") == str(tmp_path / "work")
-    assert (tmp_path / "work").is_dir()
-    assert profiles.resolve_profile("chrome", "new", new_name="fresh") == str(tmp_path / "fresh")
-    # A bare path passes through (the CLI's --profile-dir).
-    assert profiles.resolve_profile("chrome", "/explicit/dir") == "/explicit/dir"
+
+def test_persistent_path_creates_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(profiles, "profiles_dir", lambda _b: str(tmp_path))
+    p = profiles.persistent_path("chrome", "work")
+    assert p == str(tmp_path / "work") and (tmp_path / "work").is_dir()
+    # No name falls back to "default".
+    assert profiles.persistent_path("chrome", "") == str(tmp_path / "default")
+
+
+def test_resolve_existing_maps_dir_to_udd(monkeypatch):
+    monkeypatch.setattr(profiles.platform, "chrome_profiles",
+                        lambda _b: [("/u/.config/chrome", "Default", "Personal"),
+                                    ("/u/.config/chrome", "Profile 2", "Work")])
+    assert profiles.resolve_existing("chrome", "Profile 2") == ("/u/.config/chrome", "Profile 2")
+    # Unknown dir falls back to the binary's user-data-dir.
+    monkeypatch.setattr(profiles.platform, "chrome_user_data_dir", lambda _b: "/u/.config/chrome")
+    assert profiles.resolve_existing("chrome", "Ghost") == ("/u/.config/chrome", "Ghost")

@@ -1,12 +1,12 @@
-"""Chrome profile handling, shared between the interactive picker and the serve-mode
-`Describe`.
+"""Chrome profile discovery + resolution, shared between the interactive picker and the
+serve-mode `Describe`.
 
-The CLI picker is a tree (pick a kind, then which one within it); a viewer form can't
-cascade like that, so `profile_choices` flattens the tree's leaves into one list of
-(value, label) pairs and `resolve_profile` decodes a chosen value back into the launch
-form. Both sides read the same discovery (`platform.chrome_profiles`) and the same
-persistent-profiles directory, so they can't disagree about what exists — the precondition
-ADR-0010 calls out.
+Both surfaces present the same tree — pick a kind (an existing browser profile, the
+browser default, a fresh temp, or a saved persistent one), then which one within it — the
+picker by prompting, `Describe` by re-describing as fields fill. This module holds the
+discovery (which profiles exist, which are saved) and the resolution (a chosen kind +
+selection → the launch form), so the two can't disagree about what exists — the
+precondition ADR-0010 calls out.
 """
 
 from __future__ import annotations
@@ -26,10 +26,6 @@ BUILTIN_PROFILE = object()
 _PROFILES_DIR = str(paths.home() / "chrome-profiles")
 # Pre-relocation location, migrated into _PROFILES_DIR on first use.
 _LEGACY_PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
-
-# Separator packed into an "existing:<udd>\x1f<dir>" choice value (a control char can't
-# occur in a path), so a discovered profile round-trips through the flat value string.
-_SEP = "\x1f"
 
 
 def snap_writable_base(chrome: str) -> str | None:
@@ -70,45 +66,23 @@ def profiles_dir(chrome: str) -> str:
     return _PROFILES_DIR
 
 
-def _saved_profiles(chrome: str) -> list[str]:
+def saved_profiles(chrome: str) -> list[str]:
+    """Names of the saved persistent profiles for a binary (subdirs of profiles_dir)."""
     d = profiles_dir(chrome)
     return sorted(n for n in os.listdir(d) if os.path.isdir(os.path.join(d, n)))
 
 
-def profile_choices(chrome: str) -> list[tuple[str, str]]:
-    """The flattened profile options for a binary as (value, label). The value encodes the
-    outcome so `resolve_profile` can decode it: "default", "temp", "existing:<udd>|<dir>",
-    "saved:<name>", or "new" (which then reads the new_profile_name param)."""
-    out = [
-        ("default", "Browser's own default profile"),
-        ("temp", "Fresh temporary profile"),
-    ]
-    for udd, dirn, label in platform.chrome_profiles(chrome):
-        out.append((f"existing:{udd}{_SEP}{dirn}", f"{label} [{dirn}]"))
-    for name in _saved_profiles(chrome):
-        out.append((f"saved:{name}", f"Saved profile: {name}"))
-    out.append(("new", "New saved profile…"))
-    return out
-
-
-def resolve_profile(chrome: str, value: str, new_name: str = ""):
-    """Decode a `profile_choices` value into the launch form the runner takes: BUILTIN_PROFILE
-    (no --user-data-dir), a (user_data_dir, profile_directory) tuple for a specific profile,
-    or a path string used as --user-data-dir. A bare path is passed through (the CLI's
-    --profile-dir). Creates the directory for saved/new profiles."""
-    if not value or value == "temp":
-        return temp_profile(chrome)
-    if value == "default":
-        return BUILTIN_PROFILE
-    if value.startswith("existing:"):
-        udd, _, dirn = value[len("existing:"):].partition(_SEP)
-        return (udd, dirn)
-    if value.startswith("saved:"):
-        name = value[len("saved:"):]
-    elif value == "new":
-        name = new_name or "default"
-    else:
-        return value  # a raw --user-data-dir path
-    path = os.path.join(profiles_dir(chrome), name)
+def persistent_path(chrome: str, name: str) -> str:
+    """The --user-data-dir for a saved persistent profile `name`, created on demand."""
+    path = os.path.join(profiles_dir(chrome), name or "default")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def resolve_existing(chrome: str, dir_name: str) -> tuple[str, str]:
+    """Map a discovered profile's directory name back to its (user_data_dir, dir_name) for
+    launch, looking it up in the same discovery the choice came from."""
+    for udd, dirn, _label in platform.chrome_profiles(chrome):
+        if dirn == dir_name:
+            return (udd, dirn)
+    return (platform.chrome_user_data_dir(chrome) or "", dir_name)

@@ -42,27 +42,55 @@ class ChromeSource(source.CaptureSource):
             out.append(source.param("chrome", "Chrome binary path", source.PATH,
                                     default=chrome, required=True))
 
-        # Cascade: the profile (and the rest) only appear once a binary is known, so the
-        # profile choices are for the chosen binary — the chrome->profiles dependency.
+        # The profile tree, by re-description: profile_kind first (its choices are for the
+        # chosen binary), then the which-one param appears only once its kind is picked —
+        # the same drill-down the CLI picker prompts, no field shown before it applies.
         if chrome:
-            choices = profiles.profile_choices(chrome)
-            default = self._store.get_valid("profile_value", [v for v, _ in choices]) or "temp"
-            out.append(source.param(
-                "profile", "Profile", source.CHOICE,
-                choices=[source.choice(v, label) for v, label in choices], default=default))
-            out.append(source.param("new_profile_name", "New profile name", source.STRING))
+            out.extend(self._profile_params(chrome, params))
             out.append(source.param("url", "Open URL", source.STRING))
             out.append(source.param("duration", "Auto-stop after (seconds)", source.INT))
         return source.descriptor(out)
 
+    def _profile_params(self, chrome: str, params: Mapping[str, str]) -> list:
+        kinds = []
+        if platform.chrome_profiles(chrome):  # only offer "existing" when some exist
+            kinds.append(source.choice("existing", "An existing profile of this browser"))
+        kinds += [source.choice("default", "The browser's own default profile"),
+                  source.choice("temp", "A fresh temporary profile"),
+                  source.choice("custom", "A saved persistent profile")]
+        kind = (params.get("profile_kind")
+                or self._store.get_valid("profile_kind", [c.value for c in kinds]) or "temp")
+        out = [source.param("profile_kind", "Profile", source.CHOICE, choices=kinds, default=kind)]
+
+        if kind == "existing":
+            profs = platform.chrome_profiles(chrome)
+            default = (self._store.get_valid("existing_profile", [d for _, d, _ in profs])
+                       or (profs[0][1] if profs else ""))
+            out.append(source.param(
+                "existing_profile", "Which profile", source.CHOICE,
+                choices=[source.choice(dirn, f"{label} [{dirn}]") for _, dirn, label in profs],
+                default=default))
+        elif kind == "custom":
+            saved = profiles.saved_profiles(chrome)
+            choices = [source.choice(n, n) for n in saved] + [source.choice("__new__", "＋ New profile…")]
+            # Default to the first saved profile when any exist, so the name field only
+            # appears when the user actually picks "new".
+            sel = (params.get("saved_profile")
+                   or self._store.get_valid("saved_profile", [c.value for c in choices])
+                   or (saved[0] if saved else "__new__"))
+            out.append(source.param("saved_profile", "Saved profile", source.CHOICE,
+                                    choices=choices, default=sel))
+            if sel == "__new__":
+                out.append(source.param("new_profile_name", "New profile name", source.STRING,
+                                        default=self._store.get("profile_name") or "default"))
+        return out
+
     def start_capture(self, label: str, params: Mapping[str, str]) -> str:
         chrome = params.get("chrome") or platform.chrome_binary()
-        profile_value = params.get("profile") or "temp"
-        # Remember the choices so the next Describe defaults to them, exactly as the CLI
-        # picker's Store does — keeping the "defaults to your last run" behaviour in serve mode.
+        # Remember choices so the next Describe defaults to them, exactly as the CLI picker's
+        # Store does — keeping "defaults to your last run" in serve mode.
         self._store.remember("chrome", chrome)
-        self._store.remember("profile_value", profile_value)
-        profile = profiles.resolve_profile(chrome, profile_value, params.get("new_profile_name", ""))
+        profile = self._resolve_profile(chrome, params)
         duration = float(params["duration"]) if params.get("duration") else None
 
         cap = ChromeCapture(
@@ -73,6 +101,28 @@ class ChromeSource(source.CaptureSource):
             self._caps[sid] = cap
         threading.Thread(target=self._watch, args=(sid, cap), daemon=True).start()
         return sid
+
+    def _resolve_profile(self, chrome: str, params: Mapping[str, str]):
+        """Turn the chosen profile params into the launch form, mirroring the kinds Describe
+        offered, and remember each selection for next time."""
+        kind = params.get("profile_kind") or "temp"
+        self._store.remember("profile_kind", kind)
+        if kind == "default":
+            return profiles.BUILTIN_PROFILE
+        if kind == "existing":
+            dir_name = params.get("existing_profile") or ""
+            self._store.remember("existing_profile", dir_name)
+            return profiles.resolve_existing(chrome, dir_name)
+        if kind == "custom":
+            sel = params.get("saved_profile") or "__new__"
+            self._store.remember("saved_profile", sel)
+            if sel == "__new__":
+                name = params.get("new_profile_name") or "default"
+                self._store.remember("profile_name", name)
+            else:
+                name = sel
+            return profiles.persistent_path(chrome, name)
+        return profiles.temp_profile(chrome)  # temp (the default)
 
     def _watch(self, sid: str, cap: ChromeCapture) -> None:
         """Wait for the browser to close (or the duration to elapse), then finalize the

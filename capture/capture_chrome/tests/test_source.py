@@ -20,6 +20,9 @@ class FakeStore:
         self._r = dict(remembered or {})
         self.saved = {}
 
+    def get(self, key, default=None):
+        return self._r.get(key, default)
+
     def get_valid(self, key, valid, default=None):
         v = self._r.get(key)
         return v if v in (valid or []) else default
@@ -36,29 +39,52 @@ def make_source(monkeypatch, *, binaries, remembered=None):
     return src
 
 
-def test_describe_profile_choices_follow_the_chosen_binary(monkeypatch):
-    src = make_source(monkeypatch, binaries=["/usr/bin/google-chrome", "/snap/bin/chromium"])
-    # The chrome->profile dependency: profile choices differ per binary.
-    monkeypatch.setattr(chrome_source.profiles, "profile_choices",
-                        lambda c: [("temp", "Fresh")] if "chromium" in c
-                        else [("default", "Default"), ("temp", "Fresh")])
+def _keys(descriptor):
+    return [p.key for p in descriptor.params]
 
-    # With a binary determinable (defaults to the first), the full form appears — the
-    # profile options being those of that default binary.
+
+def test_describe_offers_kind_then_drills_in_by_redescribe(monkeypatch):
+    src = make_source(monkeypatch, binaries=["/usr/bin/google-chrome"])
+    monkeypatch.setattr(chrome_source.platform, "chrome_profiles",
+                        lambda _c: [("/u/dd", "Default", "Personal"), ("/u/dd", "Profile 2", "Work")])
+    monkeypatch.setattr(chrome_source.profiles, "saved_profiles", lambda _c: ["research"])
+
+    # Top level: binary + profile_kind (+ the capture opts). No which-one field yet — that's
+    # the single-mechanism point: nothing shown before its kind is picked.
     d0 = src.describe({})
-    assert [p.key for p in d0.params] == ["chrome", "profile", "new_profile_name", "url", "duration"]
-    assert d0.params[0].default == "/usr/bin/google-chrome"
-    assert [c.value for c in d0.params[1].choices] == ["default", "temp"]
+    assert _keys(d0) == ["chrome", "profile_kind", "url", "duration"]
+    kind_values = [c.value for c in d0.params[1].choices]
+    assert kind_values == ["existing", "default", "temp", "custom"]  # existing offered: profiles exist
 
-    # Re-describe with a different binary → its profiles, not the first's.
-    d1 = src.describe({"chrome": "/snap/bin/chromium"})
-    assert [c.value for c in d1.params[1].choices] == ["temp"]
+    # Pick "existing" → re-describe grows the which-existing param.
+    d1 = src.describe({"profile_kind": "existing"})
+    assert _keys(d1) == ["chrome", "profile_kind", "existing_profile", "url", "duration"]
+    assert [c.value for c in d1.params[2].choices] == ["Default", "Profile 2"]
+
+    # Pick "custom" → the saved-profile param, ending in a "new" option.
+    d2 = src.describe({"profile_kind": "custom"})
+    assert _keys(d2) == ["chrome", "profile_kind", "saved_profile", "url", "duration"]
+    assert [c.value for c in d2.params[2].choices] == ["research", "__new__"]
+
+    # Pick "custom" + new → the name field appears (and only then).
+    d3 = src.describe({"profile_kind": "custom", "saved_profile": "__new__"})
+    assert _keys(d3) == ["chrome", "profile_kind", "saved_profile", "new_profile_name", "url", "duration"]
+
+    # default/temp are terminal — no extra field.
+    assert _keys(src.describe({"profile_kind": "temp"})) == ["chrome", "profile_kind", "url", "duration"]
+
+
+def test_describe_hides_existing_kind_when_no_profiles(monkeypatch):
+    src = make_source(monkeypatch, binaries=["/usr/bin/google-chrome"])
+    monkeypatch.setattr(chrome_source.platform, "chrome_profiles", lambda _c: [])
+    kinds = [c.value for c in src.describe({}).params[1].choices]
+    assert kinds == ["default", "temp", "custom"]  # no "existing"
 
 
 def test_describe_remembers_default_binary(monkeypatch):
     src = make_source(monkeypatch, binaries=["/a/chrome", "/b/chromium"],
                       remembered={"chrome": "/b/chromium"})
-    monkeypatch.setattr(chrome_source.profiles, "profile_choices", lambda _c: [("temp", "Fresh")])
+    monkeypatch.setattr(chrome_source.platform, "chrome_profiles", lambda _c: [])
     assert src.describe({}).params[0].default == "/b/chromium"
 
 
@@ -103,19 +129,18 @@ def test_start_stop_through_the_served_harness(monkeypatch):
     src = make_source(monkeypatch, binaries=["/usr/bin/google-chrome"])
     monkeypatch.setattr(chrome_source.platform, "chrome_binary", lambda: "/usr/bin/google-chrome")
     monkeypatch.setattr(chrome_source, "ChromeCapture", FakeCapture)
-    monkeypatch.setattr(chrome_source.profiles, "resolve_profile",
-                        lambda chrome, val, new="": f"resolved:{val}")
+    monkeypatch.setattr(chrome_source.profiles, "temp_profile", lambda _c: "/tmp/prof")
 
     server, port = harness.serve(src, "127.0.0.1:0")
     chan = grpc.insecure_channel(f"127.0.0.1:{port}")
     stub = sp_grpc.CaptureSourceServiceStub(chan)
     try:
         resp = stub.StartCapture(ctl.StartCaptureRequest(
-            label="run1", params={"chrome": "/usr/bin/google-chrome", "profile": "temp"}))
+            label="run1", params={"chrome": "/usr/bin/google-chrome", "profile_kind": "temp"}))
         assert resp.session_id == "sess-1"
         cap = FakeCapture.instances[0]
-        assert cap.kw["label"] == "run1" and cap.kw["profile"] == "resolved:temp"
-        assert src._store.saved == {"chrome": "/usr/bin/google-chrome", "profile_value": "temp"}
+        assert cap.kw["label"] == "run1" and cap.kw["profile"] == "/tmp/prof"
+        assert src._store.saved == {"chrome": "/usr/bin/google-chrome", "profile_kind": "temp"}
 
         st = stub.Status(sp.StatusRequest())
         assert st.state == sp.SOURCE_STATE_CAPTURING
