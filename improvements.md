@@ -1,14 +1,27 @@
-# NOT COVERED — traffic-deck cannot inform these parameters
+# Fingerprinting coverage — what traffic-deck can and can't tell you
 
-| connection/request parameter | What's missing in traffic-deck | Impact | Comment |
+Gap analysis for parser/anti-bot fingerprinting: which connection and request
+parameters a capture can inform, and which it still can't. Most of the original gaps
+below have since been closed; the remaining ones are listed first.
+
+## Still not covered
+
+| connection/request parameter | What's missing | Impact |
 |---|---|---|
-| **TLS fingerprint ** | TLS version, cipher suite, and SNI are parsed internally during decryption but **NOT persisted in the Flow proto**. No JA3/JA4 fingerprint stored. | **Critical gap.** You can't see which TLS ClientHello profile the target app uses. Must guess from UA or use external tools. traffic-deck knows the connection was decrypted but doesn't expose what the ClientHello looked like. | It should be possible to export TLS ClientHello from TUI |
-| **ALPN negotiation result** | ALPN is detected in `gateway/internal/decode/livetcp.go` to decide HTTP/2 vs HTTP/1.1, but **not stored as a field** | Can infer from `protocol` field (h2 → ALPN negotiated h2), but can't see the full ALPN list offered | |
-| **Certificate details** | Not captured at all | Can't inspect server cert chain, pinning behavior, or custom client certs | |
-| **HTTP/2 SETTINGS frames** | Not captured. The `h2_stream_id` is stored but HTTP/2 settings (header_table_size, max_concurrent_streams, initial_window_size, etc.) are not persisted | **Major gap for anti-bot.** vendetta-http transport has granular HTTP/2 settings that must match the browser. traffic-deck doesn't expose what the real browser's HTTP/2 settings are. | Should be possible to view these parameters in TUI |
-| **HTTP/2 header priority** | Not captured | Can't see stream dependency/weight the target uses | |
-| **HTTP/2 stream ID start** | Not captured | Can't determine `start_stream_id_settings` | |
-| **HTTP/2 window size / flow control** | Not captured | Can't tune `initial_window_size`, `window_size_increment` | |
-| **HTTP/3 / QUIC details** | QUIC is decoded but no QUIC-specific fields (connection IDs, QUIC transport parameters) stored | Can't see QUIC-level fingerprint details | |
-| **Cookie attributes** (domain, path, expires, secure, httpOnly, sameSite) | `Cookie` proto stores only `name` + `value` | Can't fully reconstruct cookie jar behavior (e.g., which cookies are secure/httpOnly, domain scoping) | |
-| **Redirect chain** | Each flow is a single request/response; redirects are separate flows without explicit linking | Must manually trace redirect chains via timing/headers | |
+| **Certificate details** | Not captured at all. The server `Certificate` message is on the wire and decryptable, but nothing parses or stores it. | Can't inspect the server cert chain, pinning behaviour, or custom client certs. |
+| **QUIC transport parameters** | HTTP/3 is decoded, but no QUIC-level fields are stored: no transport parameters, and no real connection id (`tcp_stream` carries a synthetic `quic:<n>` index assigned by the decoder, not the wire's connection id). | Can't see QUIC-level fingerprint details, or match a capture against a QUIC client's transport-parameter profile. |
+| **ALPN as a typed field** | The *offered* ALPN list is in `tls_client_hello` (text), and the *negotiated* protocol is inferable from `protocol` (h2 → ALPN negotiated h2). Neither is a dedicated field. | Enough to read, awkward to query — no `~`-filter or column for ALPN. |
+
+## Now covered
+
+Kept for history: these were the original gaps, with where each is surfaced today.
+
+| parameter | How it's covered | Where |
+|---|---|---|
+| **TLS fingerprint** | `Flow.ja3`, `ja4`, `tls_client_hello` (JA3 string + offered ALPN), `client_hellos` (raw handshake bytes, more than one entry after a HelloRetryRequest), `tls_hrr`. | Flow detail → *TLS ClientHello*; export the raw ClientHellos from the TUI; MCP `export_client_hellos`. |
+| **HTTP/2 SETTINGS** | `Flow.http2_fingerprint` (Akamai format) carries the connection's client SETTINGS. | Flow detail → *HTTP/2 fingerprint*, decoded to named settings. |
+| **HTTP/2 header priority** | Same fingerprint: the PRIORITY component. | As above. |
+| **HTTP/2 window size / flow control** | Same fingerprint: `initial_window_size` among the SETTINGS, plus the connection-level WINDOW_UPDATE increment. | As above. |
+| **HTTP/2 stream ID start** | `h2_stream_id` per flow, plus `tcp_stream` identifying the connection — so the first stream id on each connection is directly observable. | Flow table `Conn`/`Stream` columns; `~conn`/`~stream` filters. |
+| **Cookie attributes** | `Cookie` carries `domain`, `path`, `expires`, `max_age`, `secure`, `http_only`, `same_site`; `response_cookies` parses Set-Cookie separately from the bare request `Cookie` pairs. | Flow detail cookie sections. |
+| **Redirect chain** | `redirect_location` (absolute, resolved) and `redirected_from_id` link a 3xx to the flow it redirected to, computed across the session. | Flow detail → `↪ redirects to` / `↩ redirected from`. |

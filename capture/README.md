@@ -5,7 +5,7 @@ with its own dependencies, over a shared SDK:
 
 | Project | Command | Extra deps | What |
 |---|---|---|---|
-| [`capture_sdk/`](capture_sdk/) | — (library) | grpcio, protobuf, questionary | gRPC stubs (`capture_sdk.proto`), `UploadCapture` streaming, interactive prompts |
+| [`capture_sdk/`](capture_sdk/) | — (library) | grpcio, protobuf, questionary | gRPC stubs (`capture_sdk.proto`), `UploadCapture` streaming, interactive prompts, viewer hints declared at `OpenSession` (`capture_sdk.viewer`) |
 | [`capture_chrome/`](capture_chrome/) | `trafficdeck-capture-chrome` | — | live Chrome capture (dumpcap + `SSLKEYLOGFILE`) |
 | [`capture_mitmproxy/`](capture_mitmproxy/) | `trafficdeck-capture-mitmproxy` | mitmproxy | mitmproxy addon → `PushFlows` (any device, incl. WireGuard) |
 | [`capture_android/`](capture_android/) | `trafficdeck-capture-android` | frida | per-app capture from a rooted emulator/device (interactive) |

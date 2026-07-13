@@ -22,8 +22,9 @@ database server or Docker required.
 
 - **[mise](https://mise.jdx.dev)** — provisions the toolchain (go, python, uv, buf,
   protoc plugins).
-- **Wireshark CLI** — the gateway shells out to **`tshark`** for decode, and the
-  Chrome tool captures with **`dumpcap`** (both ship with Wireshark). Not provisioned
+- **Wireshark CLI** — the Chrome tool captures with **`dumpcap`**, and the gateway
+  shells out to **`tshark`** for pcap import and the optional batch decode (the default
+  live decode is pure Go and needs neither). Both ship with Wireshark; not provisioned
   by mise.
 - **Capture permission for dumpcap** (only for live capture):
   - Linux: be in the `wireshark` group (`sudo usermod -aG wireshark $USER`, then
@@ -52,18 +53,27 @@ tui/run.sh                                 # runs the TUI (GATEWAY_ADDR overrida
 # or: uv run --directory tui python -m traffic_viewer.app
 ```
 
-TUI keys: `↑/↓`+`Enter` drill in (sessions → flows → detail), `Esc` back, `r`
-refresh sessions, `e` export the focused session as a `.tar.gz` bundle. In a flow
-list: `f` filter (mitmproxy-style: `~m ~d ~u ~c ~t`, connection identity `~conn
-~stream`, plus annotations `~fav ~mark ~tag ~group ~comment`, naked = URL, `!`
-negate), `C` toggle optional columns (`Conn`/`Stream` — see below — and any source
-metadata key), `c` mark/compare two requests across
-sessions. Annotate: `space` toggle select (for bulk), `t` tag, `F`
-favorite, `m` color-mark, `n` comment, `g` group — each acts on the selection if any,
-else the focused row. `M` opens the WebSocket message timeline for a `⇅` flow. In a
-flow detail: bodies are pretty-printed (JSON reindented + syntax-colored, form fields
-as key/value); `s`/`r` save response/request body, `x` export curl, `w` export raw
-request+response, `M` ws messages. `q` quit.
+`↑/↓`+`Enter` drills in (sessions → flows → detail), `Esc` goes back, `q` quits.
+Several sessions can be open at once as tabs in the workspace. Keys by screen:
+
+| Screen | Keys |
+|---|---|
+| Sessions | `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `c` force-close a session left open · `d` delete |
+| Workspace (tabs) | `o` open another session in a tab · `[` / `]` prev/next tab · `w` close tab |
+| Flow list | `f` filter (see below) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow |
+| Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages |
+| WS messages | `space` select / `D` deselect · `t` `F` `m` `n` `g` annotate · `l` follow new |
+| Compare A/B | `s` switch A/B · `h` copy header order · `p` copy pseudo-header order · `k` copy cookie order |
+
+Annotation keys act on the selection if there is one, else on the focused row. Bodies
+in the detail view are pretty-printed (JSON reindented + syntax-colored, form fields as
+key/value).
+
+The filter (`f`) is mitmproxy-style: `~m ~d ~u ~c ~t` (method, domain, url, status,
+content-type), connection identity `~conn ~stream`, annotations `~fav ~mark ~tag
+~group ~comment`, source metadata `~meta <key>=<re>`, `~s`/`~q` (has/no response). A
+naked regex matches the URL and `!` negates a term; terms are ANDed. The cheat sheet
+shows while the filter input is focused.
 
 #### HTTP/2 connections and streams
 
@@ -84,12 +94,14 @@ never exposes the HTTP/2 stream id, so both fields stay empty for proxy-captured
 
 `trafficdeck-mcp` exposes recorded sessions over the Model Context Protocol, backed by the
 gateway's `ViewerService` (it never touches SQLite directly, so it works against a
-local or remote gateway). Tools: `list_sessions`, `network_timeline` (the request
-sequence, like the DevTools Network tab), `search` (structured, combined
-domain/method/content-type/status/… in one query), `search_flows` (the TUI's filter
-DSL), `get_flow`, `get_body` (text/base64/`as_hex`), `export_request` (request+response
-headers, no bodies), `list_ws_messages` (paginated) + `get_ws_message_body` (WebSocket
-frames; `as_hex` for byte inspection). Session args accept an id prefix.
+local or remote gateway). Tools: `list_sessions` + `list_session_groups`,
+`network_timeline` (the request sequence, like the DevTools Network tab), `search`
+(structured, combined domain/method/content-type/status/… in one query), `search_flows`
+(the TUI's filter DSL), `get_flow`, `get_body` (text/base64/`as_hex`), `compare_flows`
+(diff two requests, across sessions), `export_request` (request+response headers, no
+bodies), `export_client_hellos` (a flow's raw TLS ClientHello bytes), `list_ws_messages`
+(paginated) + `get_ws_message_body` (WebSocket frames; `as_hex` for byte inspection).
+Session args accept an id prefix.
 
 It runs **read-only by default**: only the inspection tools above are exposed. Set
 `MCP_READONLY=0` to additionally expose the mutating tools `rename_session` and
@@ -257,14 +269,17 @@ directional byte stream into message frames, surfaced as a synthetic flow with t
 WebSocket-style `M` message timeline. HTTP and custom-protocol flows coexist in one
 session. Two paths produce the decrypted bytes:
 
-- **Batch** (session close): `tshark -z follow,tls,raw` over each matched stream.
-- **Live** (during capture): fully in-process in Go — the gateway taps the live pcap,
-  reassembles TCP (`gopacket`, including the Android `NFLOG` link type), and decrypts
-  TLS 1.3 from the key-log ([`internal/tlsdecrypt`](gateway/internal/tlsdecrypt/)),
-  feeding the decoder as bytes arrive — no `tshark` re-run. So MAX frames stream into
-  the `M` timeline in real time. Streams that aren't TLS 1.3 fall back to the batch
-  pass on close. **Verified end-to-end** on the Android `ru.oneme` (MAX) app: live
-  TLS-1.3 decryption + decoding of MAX frames during capture.
+- **Live** (during capture, the default): fully in-process in Go — the gateway taps the
+  live pcap, reassembles TCP (`gopacket`, including the Android `NFLOG` link type), and
+  decrypts TLS (SSL 3.0 – TLS 1.3) from the key-log
+  ([`internal/tlsdecrypt`](gateway/internal/tlsdecrypt/)), feeding the decoder as bytes
+  arrive — no `tshark` re-run. So MAX frames stream into the `M` timeline in real time.
+  **Verified end-to-end** on the Android `ru.oneme` (MAX) app: live TLS decryption +
+  decoding of MAX frames during capture.
+- **Batch** (session close): `tshark -z follow,tls,raw` over each matched stream. Runs
+  only with `GATEWAY_RECORD_LIVE=off` (or on import/verify), and is what can still
+  recover a connection the live decryptor had to skip — one negotiating a version or
+  cipher suite it doesn't implement, or whose key-log secret never arrived.
 
 A decoder implements `decoders.Decoder` (`Name`, `Matches(StreamMeta)`, `NewSession`);
 the returned `Session` is a stateful framer — `Feed(fromClient, data) []Message` —
@@ -302,13 +317,25 @@ mise exec -- go -C gateway run ./cmd/gateway import-session session.tar.gz [--ne
 |-----|---------|---------|
 | `DATA_ROOT` | `./data` | SQLite bundles + catalog |
 | `GATEWAY_ADDR` | `127.0.0.1:8080` | gRPC listen / viewer + tools connect addr |
-| `TSHARK_PATH` | `tshark` | decode binary |
-| `GATEWAY_LIVE_DECODE` | `true` | live decode during capture (tshark HTTP/WS/HTTP3 + in-process Go TLS decryption for custom raw-TCP). Set `0`/`false` to archive only and decode on close. |
+| `TSHARK_PATH` | `tshark` | batch-decode / import binary (not used by the default live path) |
+| `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
+| `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass. Set `off` to run an authoritative batch tshark re-decode on close instead (full bodies; useful to verify the live decoder). |
+| `GATEWAY_VERIFY_LIVE` | `false` | on close, compare the live-decoded flows against a batch decode and log the differences. |
+| `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. Size/retention: `GATEWAY_LOG_MAX_SIZE_MB` (50), `GATEWAY_LOG_MAX_BACKUPS` (10), `GATEWAY_LOG_MAX_AGE_DAYS` (30), `GATEWAY_LOG_COMPRESS` (true). |
 
 ## Features
 
 - **Protocols** — HTTP/1.1, HTTP/2, HTTP/3 + QUIC, WebSocket, and custom binary
   protocols over TLS (compiled-in Go decoders; first decoder: **MAX** / `ru.oneme`).
+- **Fingerprinting** — what a client's stack looks like on the wire, from the raw
+  frames the native decoder sees: **JA3/JA4** and the verbatim TLS ClientHello bytes
+  (exportable, incl. the second one after a HelloRetryRequest), and the Akamai
+  **HTTP/2 fingerprint** (client SETTINGS, connection WINDOW_UPDATE, PRIORITY,
+  pseudo-header order) — decoded to named settings in the detail view. Compare A/B
+  diffs two requests' header/pseudo-header/cookie order across sessions.
+- **HTTP/2 connections** — a flow records the connection it rode on and its stream
+  within it, so multiplexed requests can be grouped back onto one connection
+  (`Conn`/`Stream` columns, `~conn`/`~stream` filters).
 - **Proxy detection** — connections through an HTTP `CONNECT` or SOCKS proxy are
   flagged per flow (proxy address, type, and any credentials seen on the wire),
   detected from the captured handshake.

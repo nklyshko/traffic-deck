@@ -63,14 +63,24 @@ See [ADR-0001](adr/0001-embedded-per-session-sqlite.md).
 
 ## Decode pipeline
 
-The gateway shells out to `tshark` for the heavy lifting (TCP reassembly, TLS
-decryption, HPACK/QPACK) — see [ADR-0002](adr/0002-tshark-for-dissection.md) — parses
-its per-frame PDML, and stitches frames into flows. Custom non-HTTP protocols are
-decoded by compiled-in Go modules.
+There are two decoders, and the **native one is the default**: a streaming capture is
+decoded live, fully in-process in Go, with no `tshark`. `tshark` drives the *batch*
+decoder, which now runs only for pcap import and when the live decode is turned off or
+being verified. See [ADR-0009](adr/0009-native-live-decode-default.md), which supersedes
+much of [ADR-0002](adr/0002-tshark-for-dissection.md).
 
 ```mermaid
 flowchart TD
-  pcap[capture.pcap + key.log] --> tshark["tshark -T pdml"]
+  pcap["capture.pcap + key.log"] --> which{decoder}
+
+  which -- "live (default)" --> gopacket["gopacket: TCP + QUIC reassembly"]
+  gopacket --> tlsdec["in-process TLS/QUIC decryption\n(SSL 3.0 – TLS 1.3, from the key-log)"]
+  tlsdec --> classify{"classify the\ndecrypted stream"}
+  classify --> nhttp["HTTP/1.1 · HTTP/2 · HTTP/3 flows"]
+  classify --> nws["WebSocket frames\n(message records)"]
+  classify --> ndec["decoder session\n→ custom-protocol frames"]
+
+  which -- "batch (import, RECORD_LIVE=off, verify)" --> tshark["tshark -T pdml"]
   tshark --> stitch[stitcher]
   stitch --> http["HTTP/1.1 · HTTP/2 · HTTP/3 flows"]
   stitch --> ws["WebSocket frames\n(message records)"]
@@ -81,15 +91,21 @@ flowchart TD
   dec --> custom["custom-protocol frames\n(message records)"]
 ```
 
-- One PDML `<proto>` element becomes one stitcher record, so multiplexed HTTP/2 frames
-  in a single packet keep their own stream id. See
-  [ADR-0003](adr/0003-per-frame-pdml-decode.md).
+Both decoders produce the same model:
+
 - HTTP request/response pairs become `Flow`s; WebSocket and custom-protocol frames
   become **message records** bound to their flow, rendered as one directional timeline.
   See [ADR-0005](adr/0005-message-shaped-records.md).
 - Custom decoders are compiled-in Go modules that self-register; each is a stateful
   framer fed the connection's decrypted byte stream. See
   [ADR-0004](adr/0004-compiled-in-go-decoders.md).
+- A flow records the connection it rode on (`tcp_stream`, or `quic:<n>` for HTTP/3) and,
+  for HTTP/2 and HTTP/3, its stream within that connection (`h2_stream_id`) — so
+  multiplexed requests can be grouped back onto their connection.
+
+In the batch decoder specifically, one PDML `<proto>` element becomes one stitcher
+record, so multiplexed HTTP/2 frames in a single packet keep their own stream id. See
+[ADR-0003](adr/0003-per-frame-pdml-decode.md).
 
 ## Live vs. batch decode
 
@@ -115,12 +131,16 @@ flowchart TD
 
 - The live decode is **fully in-process in Go — no tshark**. A single pipeline
   reassembles TCP and QUIC (`gopacket`, incl. the Android NFLOG link type), decrypts TLS
-  (1.0–1.3 + SSL 3.0) and QUIC from the key-log, and frames HTTP/1.1, HTTP/2, HTTP/3,
+  (SSL 3.0 – TLS 1.3) and QUIC from the key-log, and frames HTTP/1.1, HTTP/2, HTTP/3,
   WebSocket and custom raw-TCP protocols — plaintext or TLS. See
+  [ADR-0009](adr/0009-native-live-decode-default.md), which grew out of
   [ADR-0006](adr/0006-in-process-tls-decryption.md).
 - `tshark` is used only for the **optional batch decode** on close (`GATEWAY_RECORD_LIVE=off`,
-  or `verify-live`) and for pcap import — never for the default live capture path.
+  or `GATEWAY_VERIFY_LIVE`) and for pcap import — never for the default live capture path.
 - In record-live mode (default) the live decode is authoritative and persisted on close.
+- Only the native decoder produces the TLS/HTTP2 fingerprints (`ja3`, `ja4`,
+  `client_hellos`, `http2_fingerprint`), so a batch re-decode trades those for tshark's
+  dissectors and full-fidelity bodies.
 
 ## Capture sources
 

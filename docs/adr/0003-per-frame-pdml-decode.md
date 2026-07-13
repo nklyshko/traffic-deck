@@ -1,6 +1,7 @@
 # 0003 — Parse per-frame PDML, not flat fields
 
-Status: accepted
+Status: accepted; scope narrowed by [0009](0009-native-live-decode-default.md) — this
+governs the batch (tshark) decoder, which is no longer the default path.
 
 ## Context
 

@@ -1,6 +1,8 @@
 # 0002 — Use `tshark` for protocol dissection and TLS decryption
 
-Status: accepted
+Status: superseded in part by [0009](0009-native-live-decode-default.md) — decoding is
+now native Go by default, and tshark drives only pcap import and the optional
+batch/verify passes. The reasoning below is what held when the decision was made.
 
 ## Context
 

@@ -1,6 +1,10 @@
 # 0006 — In-process Go TLS decryption for live custom-protocol decode
 
-Status: accepted
+Status: accepted; generalized by [0009](0009-native-live-decode-default.md). What was
+the custom-protocol exception here became the default path for every protocol, so two
+statements below no longer hold: TLS support has grown past 1.3 (SSL 3.0 – TLS 1.3),
+and the batch pass is no longer authoritative by default. The reasoning below is what
+held when the decision was made.
 
 ## Context
 
