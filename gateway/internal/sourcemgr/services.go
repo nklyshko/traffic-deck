@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,10 +18,13 @@ import (
 
 // ServiceSpec is how to launch an auxiliary service, plus what to tell the viewer about it.
 type ServiceSpec struct {
-	Argv   []string
-	Label  string
-	URL    string // where it's reachable when up
-	Detail string // note for the viewer (e.g. exposure warning)
+	Argv      []string
+	Cwd       string            // working dir (a module process runs in its own dir)
+	Env       map[string]string // extra env (a module declares e.g. VITE_ADAPTER_URL)
+	Label     string
+	URL       string // where it's reachable when up
+	Detail    string // note for the viewer (e.g. exposure warning)
+	AutoStart bool   // start at gateway launch (a module's processes) vs toggled (MCP)
 }
 
 // ServiceInfo is a service's state for the viewer-facing list.
@@ -178,7 +182,11 @@ func (s *Services) Close() {
 
 func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
+	cmd.Dir = spec.Cwd
 	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+s.gatewayAddr)
+	for k, v := range spec.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own group for group-kill
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -186,6 +194,25 @@ func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 	}
 	log.Printf("service %q started: %s", name, spec.URL)
 	return cmd, nil
+}
+
+// StartAuto launches every service marked AutoStart (a module's processes), in registry
+// order — called once at gateway launch.
+func (s *Services) StartAuto() {
+	s.mu.Lock()
+	names := make([]string, 0, len(s.specs))
+	for name, spec := range s.specs {
+		if spec.AutoStart {
+			names = append(names, name)
+		}
+	}
+	s.mu.Unlock()
+	sort.Strings(names) // module:<name>:<NN>-<proc> keys sort into declared order
+	for _, name := range names {
+		if _, err := s.Start(name); err != nil {
+			log.Printf("auto-start service %q: %v", name, err)
+		}
+	}
 }
 
 func killGroup(cmd *exec.Cmd) {

@@ -304,8 +304,14 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	}
 	hub := newLiveHub(recordLive)
 	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
-	mgr := sourcemgr.New(gatewayAddr, sourcemgr.DefaultSpecs())
-	svcs := sourcemgr.NewServices(gatewayAddr, sourcemgr.DefaultServices())
+	// Built-in registries, then merge in any third-party modules from plugins/ (their
+	// processes become auto-start services; a [control] block a dial-only capture source).
+	srcSpecs := sourcemgr.DefaultSpecs()
+	svcSpecs := sourcemgr.DefaultServices()
+	sourcemgr.ApplyManifests(sourcemgr.PluginsDir(), srcSpecs, svcSpecs)
+	mgr := sourcemgr.New(gatewayAddr, srcSpecs)
+	svcs := sourcemgr.NewServices(gatewayAddr, svcSpecs)
+	svcs.StartAuto() // bring module processes up now (the adapter must run while the app does)
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, verifyLive))
 	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot, mgr, svcs))

@@ -319,6 +319,36 @@ mise exec -- go -C gateway run ./cmd/gateway export <session-id> -o session.tar.
 mise exec -- go -C gateway run ./cmd/gateway import-session session.tar.gz [--new-id] [--label name]
 ```
 
+## Third-party capture/viewer modules
+
+A module (e.g. a private adapter that pushes flows plus its own web UI) enrolls by dropping
+a manifest in `~/.traffic-deck/plugins/*.toml` after its own setup — TrafficDeck installs
+nothing. The gateway launches the declared processes at startup (in order, with
+`GATEWAY_ADDR` injected) and group-kills them on shutdown; a `[control]` block whose `addr`
+speaks `CaptureSourceService` registers the module as a capture source the gateway *dials*
+(it appears in the TUI's source picker like a built-in). A manifest is executable trust —
+whatever lands in `plugins/` runs inside TrafficDeck, like a shell rc file.
+
+```toml
+name = "acme"
+
+[[process]]
+name    = "adapter"
+cwd     = "/home/you/src/acme/adapter"
+command = ["uv", "run", "acme-adapter", "--listen", "127.0.0.1:7070"]
+
+[[process]]
+name    = "web"
+cwd     = "/home/you/src/acme/web"
+command = ["npm", "run", "dev"]
+env     = { VITE_ADAPTER_URL = "http://127.0.0.1:7070" }
+
+[control]                       # optional: this module is also a capture source
+addr   = "127.0.0.1:7070"       # speaks traffic.v1.CaptureSourceService
+source = "acme"
+label  = "Acme"
+```
+
 ## Configuration (gateway)
 
 | Env | Default | Meaning |

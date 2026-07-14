@@ -28,10 +28,13 @@ import (
 // once its server is bound, carrying the address to dial.
 const readyPrefix = "traffic-deck source ready "
 
-// Spec is how to launch a source: the argv of its `serve` command. The manager appends
-// --gateway and --control and injects GATEWAY_ADDR.
+// Spec is how the manager reaches a source. A built-in is spawned: Argv is its `serve`
+// command, to which the manager appends --gateway/--control and injects GATEWAY_ADDR. A
+// third-party module is already running (its manifest launched it), so Addr is set and the
+// manager dials it directly instead of spawning.
 type Spec struct {
 	Argv     []string
+	Addr     string // dial-only: a module's already-running CaptureSourceService
 	Label    string
 	KeepWarm bool
 }
@@ -265,9 +268,17 @@ func (c *conn) close() {
 	}
 }
 
-// realSpawn launches a source's `serve` command, reads the ready line for its address, and
-// dials it. The process gets its own group (Setpgid) so Close can group-kill it.
+// realSpawn reaches a source. A module (Addr set) is already running — just dial it. A
+// built-in is launched: run its `serve` command, read the ready line for its address, and
+// dial that. The process gets its own group (Setpgid) so Close can group-kill it.
 func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn, error) {
+	if spec.Addr != "" {
+		cc, err := grpc.NewClient(spec.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return nil, err
+		}
+		return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc}, nil
+	}
 	if len(spec.Argv) == 0 {
 		return nil, fmt.Errorf("source %q has no command", name)
 	}
