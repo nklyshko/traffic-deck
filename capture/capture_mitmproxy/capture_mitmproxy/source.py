@@ -82,8 +82,21 @@ class MitmproxySource(source.CaptureSource):
     def stop_capture(self, session_id: str) -> None:
         with self._lock:
             proc = self._caps.pop(session_id, None)
-        if proc is not None and proc.poll() is None:
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGINT)  # graceful: addon closes the session
+        except ProcessLookupError:
+            return
+        # Wait for mitmdump to actually exit before returning, so its proxy port is free for
+        # the next capture — otherwise a start-right-after-stop races the port and fails to
+        # bind. Escalate to SIGKILL if the graceful shutdown hangs.
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGINT)  # graceful: addon closes the session
-            except ProcessLookupError:
+                os.killpg(pgid, signal.SIGKILL)
+                proc.wait(timeout=5)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
                 pass
