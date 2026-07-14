@@ -240,3 +240,17 @@ class GatewayClient:
     async def stop_capture(self, session_id: str) -> None:
         """Stop a running capture by session id."""
         await self._ctrl().StopCapture(control_pb2.StopCaptureRequest(session_id=session_id))
+
+    # --- auxiliary services (MCP, module UIs) ---------------------------
+
+    async def list_services(self):
+        """The gateway-owned auxiliary services and whether each is running."""
+        resp = await self._ctrl().ListServices(control_pb2.Empty())
+        return list(resp.services)
+
+    async def start_service(self, name: str):
+        """Start an auxiliary service; returns its ServiceInfo (running, url, detail)."""
+        return await self._ctrl().StartService(control_pb2.ServiceRequest(name=name))
+
+    async def stop_service(self, name: str) -> None:
+        await self._ctrl().StopService(control_pb2.ServiceRequest(name=name))

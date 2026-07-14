@@ -47,6 +47,32 @@ class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
+class ServiceRequest(_message.Message):
+    __slots__ = ("name",)
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    def __init__(self, name: _Optional[str] = ...) -> None: ...
+
+class ServiceList(_message.Message):
+    __slots__ = ("services",)
+    SERVICES_FIELD_NUMBER: _ClassVar[int]
+    services: _containers.RepeatedCompositeFieldContainer[ServiceInfo]
+    def __init__(self, services: _Optional[_Iterable[_Union[ServiceInfo, _Mapping]]] = ...) -> None: ...
+
+class ServiceInfo(_message.Message):
+    __slots__ = ("name", "label", "running", "url", "detail")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    RUNNING_FIELD_NUMBER: _ClassVar[int]
+    URL_FIELD_NUMBER: _ClassVar[int]
+    DETAIL_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    label: str
+    running: bool
+    url: str
+    detail: str
+    def __init__(self, name: _Optional[str] = ..., label: _Optional[str] = ..., running: bool = ..., url: _Optional[str] = ..., detail: _Optional[str] = ...) -> None: ...
+
 class CaptureSourceList(_message.Message):
     __slots__ = ("sources",)
     SOURCES_FIELD_NUMBER: _ClassVar[int]

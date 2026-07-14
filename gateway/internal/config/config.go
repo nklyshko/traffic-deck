@@ -33,6 +33,9 @@ type Config struct {
 	// RecordLive on it runs an extra diagnostic batch decode (not persisted) just for
 	// the comparison. Default false.
 	VerifyLive bool
+	// StartMCP auto-starts the MCP server on launch (GATEWAY_MCP), for headless agent
+	// access without a viewer. Default false; the TUI can also toggle it.
+	StartMCP bool
 
 	// Logging. File logging is on by default (no env needed): logs are teed to stderr and
 	// to a size-rolling file. Set GATEWAY_LOG_FILE=off to log to stderr only.
@@ -82,6 +85,7 @@ func Load() Config {
 		LiveDecode:    getbool("GATEWAY_LIVE_DECODE", true),
 		RecordLive:    getbool("GATEWAY_RECORD_LIVE", true),
 		VerifyLive:    getbool("GATEWAY_VERIFY_LIVE", false),
+		StartMCP:      getbool("GATEWAY_MCP", false),
 		LogFile:       getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
 		LogMaxSizeMB:  getint("GATEWAY_LOG_MAX_SIZE_MB", 50),
 		LogMaxBackups: getint("GATEWAY_LOG_MAX_BACKUPS", 10),

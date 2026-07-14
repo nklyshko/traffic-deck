@@ -312,6 +312,7 @@ class SessionsScreen(Screen):
     BINDINGS = [
         Binding("a", "new_capture", "Capture"),
         Binding("s", "stop_capture", "Stop"),
+        Binding("X", "toggle_mcp", "MCP"),
         Binding("r", "refresh", "Refresh"),
         Binding("n", "rename", "Rename"),
         Binding("g", "set_group", "Group"),
@@ -375,6 +376,25 @@ class SessionsScreen(Screen):
             return
         self.notify(f"stopped capture {sid[:8]}")
         self.load_sessions()
+
+    async def action_toggle_mcp(self) -> None:
+        """Start or stop the gateway's MCP server (agent access to recorded sessions). It's
+        gateway-owned, so it keeps running after the viewer closes."""
+        try:
+            services = await self.app.client.list_services()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"services unavailable: {exc}", severity="error")
+            return
+        mcp = next((s for s in services if s.name == "mcp"), None)
+        if mcp is None:
+            self.notify("MCP server not available", severity="warning")
+            return
+        if mcp.running:
+            await self.app.client.stop_service("mcp")
+            self.notify("MCP server stopped")
+        else:
+            info = await self.app.client.start_service("mcp")
+            self.notify(f"MCP server listening at {info.url} — {info.detail}", timeout=10)
 
     @work(exclusive=True)
     async def load_sessions(self) -> None:

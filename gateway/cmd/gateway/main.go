@@ -91,15 +91,21 @@ func serve() {
 	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
 	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
 	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-	mgr := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
-	// Reap spawned capture-source processes (and their groups) on shutdown, so a browser
-	// or emulator a source started doesn't linger after the gateway stops.
+	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+	if cfg.StartMCP {
+		if _, err := svcs.Start("mcp"); err != nil {
+			log.Printf("auto-start mcp: %v", err)
+		}
+	}
+	// Reap spawned capture-source and service processes (and their groups) on shutdown, so a
+	// browser, emulator, or MCP server they started doesn't linger after the gateway stops.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
-		log.Println("shutting down: reaping capture sources")
+		log.Println("shutting down: reaping capture sources and services")
 		mgr.Close()
+		svcs.Close()
 		s.GracefulStop()
 	}()
 	log.Printf("gateway listening on %s (live decode: %v, record live: %v, verify live: %v)",
@@ -128,6 +134,7 @@ func runFused() {
 
 	var s *grpc.Server
 	var mgr *sourcemgr.Manager
+	var svcs *sourcemgr.Services
 	var stClose func()
 	if lis, err := net.Listen("tcp", cfg.GRPCAddr); err != nil {
 		log.Printf("gateway address %s already in use — attaching the viewer to the running gateway", cfg.GRPCAddr)
@@ -135,7 +142,12 @@ func runFused() {
 		obj, st := openDeps(ctx, cfg)
 		stClose = st.Close
 		s = grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-		mgr = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+		if cfg.StartMCP {
+			if _, err := svcs.Start("mcp"); err != nil {
+				log.Printf("auto-start mcp: %v", err)
+			}
+		}
 		go func() { _ = s.Serve(lis) }()
 		log.Printf("gateway listening on %s (live decode: %v, record live: %v)",
 			cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive)
@@ -147,9 +159,12 @@ func runFused() {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := cmd.Run()
 
-	// Viewer exited → tear the gateway down (reap capture sources, close the store).
+	// Viewer exited → tear the gateway down (reap capture sources + services, close store).
 	if mgr != nil {
 		mgr.Close()
+	}
+	if svcs != nil {
+		svcs.Close()
 	}
 	if s != nil {
 		s.GracefulStop()

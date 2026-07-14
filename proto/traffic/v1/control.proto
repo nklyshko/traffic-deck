@@ -15,6 +15,13 @@ service ControlService {
   rpc StopCapture(StopCaptureRequest) returns (StopCaptureResponse);
   rpc ReDecode(ReDecodeRequest) returns (stream DecodeProgress);
 
+  // Auxiliary services — gateway-owned processes that are *not* capture sources (the MCP
+  // server; a module's web UI). A viewer toggles them; the gateway owns them, so they
+  // outlive the viewer. See ADR-0010.
+  rpc ListServices(Empty) returns (ServiceList);
+  rpc StartService(ServiceRequest) returns (ServiceInfo);
+  rpc StopService(ServiceRequest) returns (Empty);
+
   // Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
   // spilled blobs) as a self-contained .tar.gz, streamed in chunks.
   rpc ExportSession(ExportSessionRequest) returns (stream ExportChunk);
@@ -60,6 +67,25 @@ service ControlService {
 }
 
 message Empty {}
+
+// --- Auxiliary services (see ADR-0010): opaque gateway-owned processes, toggled by the
+// viewer. Not capture sources — no options, no sessions. ---
+
+message ServiceRequest {
+  string name = 1;
+}
+
+message ServiceList {
+  repeated ServiceInfo services = 1;
+}
+
+message ServiceInfo {
+  string name = 1;    // toggle key ("mcp", a module ui name)
+  string label = 2;   // human label
+  bool running = 3;
+  string url = 4;      // where it's reachable when running (e.g. http://127.0.0.1:8765/mcp)
+  string detail = 5;   // note for the viewer (e.g. exposure warning)
+}
 
 // --- Capture sources (see ADR-0010). These message/enum types are the control-plane
 // vocabulary shared by ControlService (viewer-facing) and CaptureSourceService

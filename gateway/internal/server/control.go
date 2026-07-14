@@ -23,11 +23,52 @@ type Control struct {
 	trafficv1.UnimplementedControlServiceServer
 	st       *store.Store
 	dataRoot string
-	mgr      *sourcemgr.Manager // nil disables capture control
+	mgr      *sourcemgr.Manager  // nil disables capture control
+	svcs     *sourcemgr.Services // nil disables auxiliary services
 }
 
-func NewControl(st *store.Store, dataRoot string, mgr *sourcemgr.Manager) *Control {
-	return &Control{st: st, dataRoot: dataRoot, mgr: mgr}
+func NewControl(st *store.Store, dataRoot string, mgr *sourcemgr.Manager, svcs *sourcemgr.Services) *Control {
+	return &Control{st: st, dataRoot: dataRoot, mgr: mgr, svcs: svcs}
+}
+
+// ListServices reports the auxiliary services (MCP, module UIs) and whether each is running.
+func (c *Control) ListServices(ctx context.Context, _ *trafficv1.Empty) (*trafficv1.ServiceList, error) {
+	if c.svcs == nil {
+		return &trafficv1.ServiceList{}, nil
+	}
+	out := &trafficv1.ServiceList{}
+	for _, s := range c.svcs.List() {
+		out.Services = append(out.Services, serviceInfo(s))
+	}
+	return out, nil
+}
+
+// StartService launches an auxiliary service (gateway-owned, so it outlives the viewer).
+func (c *Control) StartService(ctx context.Context, req *trafficv1.ServiceRequest) (*trafficv1.ServiceInfo, error) {
+	if c.svcs == nil {
+		return nil, status.Error(codes.Unimplemented, "services are disabled")
+	}
+	info, err := c.svcs.Start(req.GetName())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "start service: %v", err)
+	}
+	return serviceInfo(info), nil
+}
+
+// StopService stops an auxiliary service.
+func (c *Control) StopService(ctx context.Context, req *trafficv1.ServiceRequest) (*trafficv1.Empty, error) {
+	if c.svcs == nil {
+		return nil, status.Error(codes.Unimplemented, "services are disabled")
+	}
+	if err := c.svcs.Stop(req.GetName()); err != nil {
+		return nil, status.Errorf(codes.Internal, "stop service: %v", err)
+	}
+	return &trafficv1.Empty{}, nil
+}
+
+func serviceInfo(s sourcemgr.ServiceInfo) *trafficv1.ServiceInfo {
+	return &trafficv1.ServiceInfo{
+		Name: s.Name, Label: s.Label, Running: s.Running, Url: s.URL, Detail: s.Detail}
 }
 
 // ListCaptureSources enumerates the sources the gateway can drive, for the viewer's picker.

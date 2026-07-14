@@ -1,0 +1,80 @@
+package sourcemgr
+
+import (
+	"os/exec"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// servicesWithSleeps wires a Services whose spawn launches a real `sleep`, so Stop can
+// group-kill it and status reflects a live process — without needing the real MCP server.
+func servicesWithSleeps(t *testing.T, seconds string) *Services {
+	svcs := NewServices("127.0.0.1:8080", map[string]ServiceSpec{
+		"mcp": {Label: "MCP server", URL: "http://127.0.0.1:8765/mcp"},
+	})
+	svcs.spawn = func(name string, spec ServiceSpec) (*exec.Cmd, error) {
+		cmd := exec.Command("sleep", seconds)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		return cmd, cmd.Start()
+	}
+	return svcs
+}
+
+func eventually(t *testing.T, cond func() bool) bool {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		if cond() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+func TestServiceStartStopStatus(t *testing.T) {
+	svcs := servicesWithSleeps(t, "30")
+	t.Cleanup(svcs.Close)
+
+	if got := svcs.List(); len(got) != 1 || got[0].Running {
+		t.Fatalf("initial: %+v, want one not-running service", got)
+	}
+	info, err := svcs.Start("mcp")
+	if err != nil || !info.Running || info.URL != "http://127.0.0.1:8765/mcp" {
+		t.Fatalf("start: info=%+v err=%v", info, err)
+	}
+	if !svcs.List()[0].Running {
+		t.Error("service should read running after Start")
+	}
+	if err := svcs.Stop("mcp"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if !eventually(t, func() bool { return !svcs.List()[0].Running }) {
+		t.Error("service should read not-running after Stop")
+	}
+}
+
+func TestServiceReapsWhenItExits(t *testing.T) {
+	svcs := servicesWithSleeps(t, "0.2") // exits on its own
+	t.Cleanup(svcs.Close)
+	if _, err := svcs.Start("mcp"); err != nil {
+		t.Fatal(err)
+	}
+	if !eventually(t, func() bool { return !svcs.List()[0].Running }) {
+		t.Error("a service that exits on its own should drop from running")
+	}
+}
+
+func TestStartUnknownService(t *testing.T) {
+	svcs := NewServices("addr", map[string]ServiceSpec{})
+	if _, err := svcs.Start("nope"); err == nil {
+		t.Fatal("starting an unknown service should error")
+	}
+}
+
+func TestResolveMCPEnvOverride(t *testing.T) {
+	t.Setenv("TRAFFICDECK_SERVICE_MCP", "my mcp launcher")
+	if got := resolveMCP(); !equal(got, []string{"my", "mcp", "launcher"}) {
+		t.Errorf("env override = %v", got)
+	}
+}

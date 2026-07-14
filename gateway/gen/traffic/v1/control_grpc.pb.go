@@ -24,6 +24,9 @@ const (
 	ControlService_StartCapture_FullMethodName          = "/traffic.v1.ControlService/StartCapture"
 	ControlService_StopCapture_FullMethodName           = "/traffic.v1.ControlService/StopCapture"
 	ControlService_ReDecode_FullMethodName              = "/traffic.v1.ControlService/ReDecode"
+	ControlService_ListServices_FullMethodName          = "/traffic.v1.ControlService/ListServices"
+	ControlService_StartService_FullMethodName          = "/traffic.v1.ControlService/StartService"
+	ControlService_StopService_FullMethodName           = "/traffic.v1.ControlService/StopService"
 	ControlService_ExportSession_FullMethodName         = "/traffic.v1.ControlService/ExportSession"
 	ControlService_SetSessionGroup_FullMethodName       = "/traffic.v1.ControlService/SetSessionGroup"
 	ControlService_SetSessionLabel_FullMethodName       = "/traffic.v1.ControlService/SetSessionLabel"
@@ -60,6 +63,12 @@ type ControlServiceClient interface {
 	StartCapture(ctx context.Context, in *StartCaptureRequest, opts ...grpc.CallOption) (*StartCaptureResponse, error)
 	StopCapture(ctx context.Context, in *StopCaptureRequest, opts ...grpc.CallOption) (*StopCaptureResponse, error)
 	ReDecode(ctx context.Context, in *ReDecodeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DecodeProgress], error)
+	// Auxiliary services — gateway-owned processes that are *not* capture sources (the MCP
+	// server; a module's web UI). A viewer toggles them; the gateway owns them, so they
+	// outlive the viewer. See ADR-0010.
+	ListServices(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServiceList, error)
+	StartService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*ServiceInfo, error)
+	StopService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*Empty, error)
 	// Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
 	// spilled blobs) as a self-contained .tar.gz, streamed in chunks.
 	ExportSession(ctx context.Context, in *ExportSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error)
@@ -160,6 +169,36 @@ func (c *controlServiceClient) ReDecode(ctx context.Context, in *ReDecodeRequest
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ReDecodeClient = grpc.ServerStreamingClient[DecodeProgress]
+
+func (c *controlServiceClient) ListServices(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServiceList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServiceList)
+	err := c.cc.Invoke(ctx, ControlService_ListServices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) StartService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*ServiceInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServiceInfo)
+	err := c.cc.Invoke(ctx, ControlService_StartService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) StopService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, ControlService_StopService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *controlServiceClient) ExportSession(ctx context.Context, in *ExportSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -387,6 +426,12 @@ type ControlServiceServer interface {
 	StartCapture(context.Context, *StartCaptureRequest) (*StartCaptureResponse, error)
 	StopCapture(context.Context, *StopCaptureRequest) (*StopCaptureResponse, error)
 	ReDecode(*ReDecodeRequest, grpc.ServerStreamingServer[DecodeProgress]) error
+	// Auxiliary services — gateway-owned processes that are *not* capture sources (the MCP
+	// server; a module's web UI). A viewer toggles them; the gateway owns them, so they
+	// outlive the viewer. See ADR-0010.
+	ListServices(context.Context, *Empty) (*ServiceList, error)
+	StartService(context.Context, *ServiceRequest) (*ServiceInfo, error)
+	StopService(context.Context, *ServiceRequest) (*Empty, error)
 	// Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
 	// spilled blobs) as a self-contained .tar.gz, streamed in chunks.
 	ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error
@@ -443,6 +488,15 @@ func (UnimplementedControlServiceServer) StopCapture(context.Context, *StopCaptu
 }
 func (UnimplementedControlServiceServer) ReDecode(*ReDecodeRequest, grpc.ServerStreamingServer[DecodeProgress]) error {
 	return status.Error(codes.Unimplemented, "method ReDecode not implemented")
+}
+func (UnimplementedControlServiceServer) ListServices(context.Context, *Empty) (*ServiceList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListServices not implemented")
+}
+func (UnimplementedControlServiceServer) StartService(context.Context, *ServiceRequest) (*ServiceInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartService not implemented")
+}
+func (UnimplementedControlServiceServer) StopService(context.Context, *ServiceRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method StopService not implemented")
 }
 func (UnimplementedControlServiceServer) ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error {
 	return status.Error(codes.Unimplemented, "method ExportSession not implemented")
@@ -607,6 +661,60 @@ func _ControlService_ReDecode_Handler(srv interface{}, stream grpc.ServerStream)
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ReDecodeServer = grpc.ServerStreamingServer[DecodeProgress]
+
+func _ControlService_ListServices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).ListServices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_ListServices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).ListServices(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_StartService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).StartService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_StartService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).StartService(ctx, req.(*ServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_StopService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).StopService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_StopService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).StopService(ctx, req.(*ServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _ControlService_ExportSession_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ExportSessionRequest)
@@ -972,6 +1080,18 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopCapture",
 			Handler:    _ControlService_StopCapture_Handler,
+		},
+		{
+			MethodName: "ListServices",
+			Handler:    _ControlService_ListServices_Handler,
+		},
+		{
+			MethodName: "StartService",
+			Handler:    _ControlService_StartService_Handler,
+		},
+		{
+			MethodName: "StopService",
+			Handler:    _ControlService_StopService_Handler,
 		},
 		{
 			MethodName: "SetSessionGroup",

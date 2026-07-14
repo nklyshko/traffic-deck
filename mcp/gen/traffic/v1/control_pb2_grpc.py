@@ -61,6 +61,21 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.ReDecodeRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_common__pb2.DecodeProgress.FromString,
                 _registered_method=True)
+        self.ListServices = channel.unary_unary(
+                '/traffic.v1.ControlService/ListServices',
+                request_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.ServiceList.FromString,
+                _registered_method=True)
+        self.StartService = channel.unary_unary(
+                '/traffic.v1.ControlService/StartService',
+                request_serializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.ServiceInfo.FromString,
+                _registered_method=True)
+        self.StopService = channel.unary_unary(
+                '/traffic.v1.ControlService/StopService',
+                request_serializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                _registered_method=True)
         self.ExportSession = channel.unary_stream(
                 '/traffic.v1.ControlService/ExportSession',
                 request_serializer=traffic_dot_v1_dot_control__pb2.ExportSessionRequest.SerializeToString,
@@ -195,6 +210,27 @@ class ControlServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def ReDecode(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListServices(self, request, context):
+        """Auxiliary services — gateway-owned processes that are *not* capture sources (the MCP
+        server; a module's web UI). A viewer toggles them; the gateway owns them, so they
+        outlive the viewer. See ADR-0010.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StartService(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def StopService(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -361,6 +397,21 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     servicer.ReDecode,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.ReDecodeRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_common__pb2.DecodeProgress.SerializeToString,
+            ),
+            'ListServices': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListServices,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.ServiceList.SerializeToString,
+            ),
+            'StartService': grpc.unary_unary_rpc_method_handler(
+                    servicer.StartService,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.ServiceInfo.SerializeToString,
+            ),
+            'StopService': grpc.unary_unary_rpc_method_handler(
+                    servicer.StopService,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
             ),
             'ExportSession': grpc.unary_stream_rpc_method_handler(
                     servicer.ExportSession,
@@ -599,6 +650,87 @@ class ControlService(object):
             '/traffic.v1.ControlService/ReDecode',
             traffic_dot_v1_dot_control__pb2.ReDecodeRequest.SerializeToString,
             traffic_dot_v1_dot_common__pb2.DecodeProgress.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListServices(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/ListServices',
+            traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.ServiceList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StartService(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/StartService',
+            traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.ServiceInfo.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StopService(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/StopService',
+            traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.Empty.FromString,
             options,
             channel_credentials,
             insecure,

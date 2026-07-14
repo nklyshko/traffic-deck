@@ -99,6 +99,7 @@ class FakeClient:
         self.describe_calls = []  # (source, params) each DescribeCaptureSource
         self.started = []         # (source, label, params) each StartCapture
         self.stopped = []         # session ids stopped
+        self.mcp_running = False
 
     async def list_capture_sources(self):
         return list(self.capture_sources)
@@ -132,6 +133,18 @@ class FakeClient:
 
     async def stop_capture(self, session_id):
         self.stopped.append(session_id)
+
+    async def list_services(self):
+        return [cp2.ServiceInfo(name="mcp", label="MCP server", running=self.mcp_running,
+                                url="http://127.0.0.1:8765/mcp", detail="loopback, read-only")]
+
+    async def start_service(self, name):
+        self.mcp_running = True
+        return cp2.ServiceInfo(name=name, running=True, url="http://127.0.0.1:8765/mcp",
+                               detail="loopback, read-only")
+
+    async def stop_service(self, name):
+        self.mcp_running = False
 
     async def list_sessions(self, limit=200):
         return list(self._sessions)
@@ -1005,3 +1018,17 @@ async def test_stop_capture_calls_client():
         await pilot.press("s")            # stop the focused (first) session
         await settle(pilot)
         assert app.client.stopped == [SESSION_ID]
+
+
+async def test_toggle_mcp_starts_then_stops():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        assert app.client.mcp_running is False
+        await pilot.press("X")            # start MCP
+        await settle(pilot)
+        assert app.client.mcp_running is True
+        await pilot.press("X")            # stop it
+        await settle(pilot)
+        assert app.client.mcp_running is False

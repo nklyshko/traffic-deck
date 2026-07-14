@@ -66,7 +66,7 @@ Several sessions can be open at once as tabs in the workspace. Keys by screen:
 
 | Screen | Keys |
 |---|---|
-| Sessions | `a` new capture (pick a source, then step through its options — binary, profile, … — and start) · `s` stop the focused capture · `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `c` force-close a session left open · `d` delete |
+| Sessions | `a` new capture (pick a source, then step through its options — binary, profile, … — and start) · `s` stop the focused capture · `X` start/stop the MCP server · `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `c` force-close a session left open · `d` delete |
 | Workspace (tabs) | `o` open another session in a tab · `[` / `]` prev/next tab · `w` close tab |
 | Flow list | `f` filter (see below) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow |
 | Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages |
@@ -329,6 +329,7 @@ mise exec -- go -C gateway run ./cmd/gateway import-session session.tar.gz [--ne
 | `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
 | `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass. Set `off` to run an authoritative batch tshark re-decode on close instead (full bodies; useful to verify the live decoder). |
 | `GATEWAY_VERIFY_LIVE` | `false` | on close, compare the live-decoded flows against a batch decode and log the differences. |
+| `GATEWAY_MCP` | `false` | auto-start the MCP server on launch (headless agent access without a viewer). The TUI can also toggle it with `X`; either way the gateway owns it, so it outlives the viewer. |
 | `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. Size/retention: `GATEWAY_LOG_MAX_SIZE_MB` (50), `GATEWAY_LOG_MAX_BACKUPS` (10), `GATEWAY_LOG_MAX_AGE_DAYS` (30), `GATEWAY_LOG_COMPRESS` (true). |
 
 ## Features

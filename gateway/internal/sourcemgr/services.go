@@ -1,0 +1,199 @@
+package sourcemgr
+
+import (
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+)
+
+// Auxiliary services are gateway-owned processes that are not capture sources — the MCP
+// server, a module's web UI. The gateway spawns/reaps them (group-kill, GATEWAY_ADDR
+// injected) but never dials them: they're opaque, with only start/stop/status. A viewer
+// toggles them; because the gateway owns them they outlive the viewer. See ADR-0010.
+
+// ServiceSpec is how to launch an auxiliary service, plus what to tell the viewer about it.
+type ServiceSpec struct {
+	Argv   []string
+	Label  string
+	URL    string // where it's reachable when up
+	Detail string // note for the viewer (e.g. exposure warning)
+}
+
+// ServiceInfo is a service's state for the viewer-facing list.
+type ServiceInfo struct {
+	Name    string
+	Label   string
+	Running bool
+	URL     string
+	Detail  string
+}
+
+// Services manages the auxiliary-service registry and the running processes.
+type Services struct {
+	gatewayAddr string
+	spawn       func(name string, spec ServiceSpec) (*exec.Cmd, error)
+
+	mu      sync.Mutex
+	specs   map[string]ServiceSpec
+	running map[string]*exec.Cmd
+}
+
+// NewServices returns a manager over the given registry. gatewayAddr is injected as
+// GATEWAY_ADDR so a service (MCP) connects back to the gateway.
+func NewServices(gatewayAddr string, specs map[string]ServiceSpec) *Services {
+	s := &Services{
+		gatewayAddr: gatewayAddr,
+		specs:       specs,
+		running:     map[string]*exec.Cmd{},
+	}
+	s.spawn = s.realSpawn
+	return s
+}
+
+// DefaultServices builds the built-in auxiliary registry — the MCP server — located the
+// same way the capture tools are (the repo's mcp/ dir), env-overridable, else the installed
+// console entry. An unlocatable service is omitted.
+func DefaultServices() map[string]ServiceSpec {
+	specs := map[string]ServiceSpec{}
+	if argv := resolveMCP(); argv != nil {
+		specs["mcp"] = ServiceSpec{
+			Argv:   argv,
+			Label:  "MCP server",
+			URL:    mcpURL(),
+			Detail: "serves recorded sessions to MCP/agent clients (loopback, read-only by default)",
+		}
+	}
+	return specs
+}
+
+func resolveMCP() []string {
+	if env := os.Getenv("TRAFFICDECK_SERVICE_MCP"); env != "" {
+		return strings.Fields(env)
+	}
+	if capDir := findCaptureDir(); capDir != "" {
+		mcpDir := filepath.Join(filepath.Dir(capDir), "mcp")
+		if fi, err := os.Stat(filepath.Join(mcpDir, "traffic_mcp")); err == nil && fi.IsDir() {
+			if uv, err := exec.LookPath("uv"); err == nil {
+				return []string{uv, "run", "--directory", mcpDir, "python", "-m", "traffic_mcp.server"}
+			}
+		}
+	}
+	if p, err := exec.LookPath("trafficdeck-mcp"); err == nil {
+		return []string{p}
+	}
+	return nil
+}
+
+func mcpURL() string {
+	host := os.Getenv("MCP_HOST")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := os.Getenv("MCP_PORT")
+	if port == "" {
+		port = "8765"
+	}
+	return "http://" + host + ":" + port + "/mcp"
+}
+
+// List reports every registered service and whether it's currently running.
+func (s *Services) List() []ServiceInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]ServiceInfo, 0, len(s.specs))
+	for name, spec := range s.specs {
+		out = append(out, s.infoLocked(name, spec))
+	}
+	return out
+}
+
+func (s *Services) infoLocked(name string, spec ServiceSpec) ServiceInfo {
+	return ServiceInfo{
+		Name: name, Label: spec.Label, URL: spec.URL, Detail: spec.Detail,
+		Running: s.running[name] != nil,
+	}
+}
+
+// Start launches a service if it isn't already running, returning its state.
+func (s *Services) Start(name string) (ServiceInfo, error) {
+	s.mu.Lock()
+	spec, ok := s.specs[name]
+	if !ok {
+		s.mu.Unlock()
+		return ServiceInfo{}, &notFoundError{name}
+	}
+	if s.running[name] != nil {
+		info := s.infoLocked(name, spec)
+		s.mu.Unlock()
+		return info, nil
+	}
+	s.mu.Unlock()
+
+	cmd, err := s.spawn(name, spec)
+	if err != nil {
+		return ServiceInfo{}, err
+	}
+	s.mu.Lock()
+	s.running[name] = cmd
+	info := s.infoLocked(name, spec)
+	s.mu.Unlock()
+
+	go func() { // drop it from the running set when it exits on its own
+		_ = cmd.Wait()
+		s.mu.Lock()
+		if s.running[name] == cmd {
+			delete(s.running, name)
+		}
+		s.mu.Unlock()
+	}()
+	return info, nil
+}
+
+// Stop group-kills a running service; a no-op if it isn't running.
+func (s *Services) Stop(name string) error {
+	s.mu.Lock()
+	cmd := s.running[name]
+	delete(s.running, name)
+	s.mu.Unlock()
+	if cmd != nil {
+		killGroup(cmd)
+	}
+	return nil
+}
+
+// Close reaps every running service (whole process group).
+func (s *Services) Close() {
+	s.mu.Lock()
+	running := s.running
+	s.running = map[string]*exec.Cmd{}
+	s.mu.Unlock()
+	for _, cmd := range running {
+		killGroup(cmd)
+	}
+}
+
+func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
+	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
+	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+s.gatewayAddr)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own group for group-kill
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	log.Printf("service %q started: %s", name, spec.URL)
+	return cmd, nil
+}
+
+func killGroup(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+}
+
+type notFoundError struct{ name string }
+
+func (e *notFoundError) Error() string { return "unknown service " + e.name }
