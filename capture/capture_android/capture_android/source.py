@@ -34,6 +34,10 @@ class AndroidBackend(Protocol):
         """Bring the emulator/device to a capture-ready state (root + frida-server + adb).
         Blocking; may take tens of seconds when it boots an emulator."""
 
+    def frida_versions(self) -> tuple[list[str], str]:
+        """(offered frida versions, recommended default) for the connected device — frida
+        must match the device's Android release, so the user picks per device."""
+
     def list_packages(self) -> list[str]:
         """Installed app package names on the provisioned device."""
 
@@ -83,12 +87,18 @@ class AndroidSource(source.CaptureSource):
             finally:
                 self.provisioning = False
 
+        versions, recommended = self._backend.frida_versions()
         packages = self._backend.list_packages()
         pkg = (source.param("package", "App to capture", source.CHOICE, required=True,
                             choices=[source.choice(p) for p in packages])
                if packages else
                source.param("package", "App package", source.STRING, required=True))
         return source.descriptor([
+            # Frida must match the device's Android release; the recommended one is default,
+            # picked interactively like the CLI.
+            source.param("frida", "Frida version", source.CHOICE, required=True,
+                         default=params.get("frida") or recommended,
+                         choices=[source.choice(v) for v in versions]),
             pkg,
             source.param("url", "Open URL (optional)", source.STRING),
             source.param("duration", "Auto-stop after (seconds)", source.INT),

@@ -37,10 +37,14 @@ def main(argv=None) -> None:
 
     adb = AdbClient(serial=args.serial)
     ensure_target_ready(adb)
+    # A supervisor (the serve-mode source) parses this line to learn the session id while
+    # the capture runs; harmless noise for a human.
+    on_session = lambda sid: print(f"SESSION {sid}", flush=True)
     try:
         run_capture(adb, args.package, gateway=args.gateway, label=args.label, url=args.url,
                     duration=args.duration, extra_scripts=args.script,
-                    nflog_group=args.nflog_group, mark=args.mark, attach=args.attach)
+                    nflog_group=args.nflog_group, mark=args.mark, attach=args.attach,
+                    on_session=on_session)
     except KeyboardInterrupt:  # second Ctrl-C — abort without a traceback
         sys.exit(130)
 

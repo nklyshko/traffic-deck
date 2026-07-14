@@ -25,6 +25,9 @@ class FakeBackend:
     def provision(self):
         self.provisioned += 1
 
+    def frida_versions(self):
+        return ["16.7.19", "17.15.1"], "16.7.19"
+
     def list_packages(self):
         return list(self.packages)
 
@@ -50,13 +53,16 @@ def test_describe_requires_provision_consent_first():
     assert [c.value for c in d.params[0].choices] == ["start"]
 
 
-def test_describe_after_consent_provisions_once_and_lists_packages():
+def test_describe_after_consent_offers_frida_and_packages():
     b = FakeBackend()
     src = AndroidSource("gw", b)
     d = src.describe({"provision": "start"})
     assert d.readiness == ctl.READINESS_READY
-    assert [p.key for p in d.params] == ["package", "url", "duration"]
-    assert [c.value for c in d.params[0].choices] == ["com.a", "com.b"]
+    assert [p.key for p in d.params] == ["frida", "package", "url", "duration"]
+    # Frida version is a choice, defaulting to the device recommendation.
+    assert [c.value for c in d.params[0].choices] == ["16.7.19", "17.15.1"]
+    assert d.params[0].default == "16.7.19"
+    assert [c.value for c in d.params[1].choices] == ["com.a", "com.b"]
     assert b.provisioned == 1
 
     src.describe({"provision": "start"})  # re-describe
@@ -67,7 +73,8 @@ def test_describe_package_is_free_text_when_no_apps_listed():
     b = FakeBackend()
     b.packages = []
     d = AndroidSource("gw", b).describe({"provision": "start"})
-    assert d.params[0].key == "package" and d.params[0].type == ctl.PARAM_TYPE_STRING
+    pkg = next(p for p in d.params if p.key == "package")
+    assert pkg.type == ctl.PARAM_TYPE_STRING
 
 
 def test_start_and_stop_through_the_served_harness():
