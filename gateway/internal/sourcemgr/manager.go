@@ -75,6 +75,7 @@ var builtinSources = []struct {
 }{
 	{name: "chrome", label: "Chrome", keepWarm: false},
 	{name: "android", label: "Android", keepWarm: true},
+	{name: "mitmproxy", label: "mitmproxy", keepWarm: false},
 }
 
 // DefaultSpecs builds the built-in source registry by locating each tool itself — no env

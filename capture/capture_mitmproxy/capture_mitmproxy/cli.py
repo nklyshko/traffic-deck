@@ -88,6 +88,27 @@ def _choose_host(store: Store, override: str | None) -> str | None:
 
 
 def main() -> None:
+    # serve mode: run as a CaptureSourceService the gateway dials (ADR-0010).
+    argv = sys.argv[1:]
+    if argv and argv[0] == "serve":
+        return _serve(argv[1:])
+    return _interactive()
+
+
+def _serve(argv) -> None:
+    from capture_mitmproxy.source import MitmproxySource
+    from capture_sdk import source as harness
+
+    ap = argparse.ArgumentParser(prog="capture-mitmproxy serve",
+                                 description="Serve mitmproxy as a CaptureSourceService")
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
+                    help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
+    args = ap.parse_args(argv)
+    harness.serve_forever(MitmproxySource(args.gateway), args.control)
+
+
+def _interactive() -> None:
     # Proxy settings default to the previous run's, remembered under
     # ~/.traffic-deck/state/mitmproxy.json; passing a flag updates the remembered value.
     store = Store("mitmproxy")

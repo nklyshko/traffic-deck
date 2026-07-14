@@ -181,6 +181,9 @@ class GatewayPusher:
         )
         self.session_id = handle.session_id
         ctx.log.info(f"gateway: session {self.session_id} @ {self.addr}")
+        # A supervisor (serve-mode source) parses this line to learn the session id;
+        # harmless noise otherwise.
+        print(f"SESSION {self.session_id}", flush=True)
 
     async def request(self, flow: http.HTTPFlow) -> None:
         # Push the flow as soon as the request is seen, so an in-flight request (no
