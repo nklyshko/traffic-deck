@@ -13,8 +13,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -25,6 +27,7 @@ import (
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/server"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 
 	// Custom protocol decoders self-register via init(). Add a blank import
@@ -34,9 +37,12 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		usage()
+		runFused() // no args: gateway in-process + the TUI in the foreground (ADR-0010)
+		return
 	}
 	switch os.Args[1] {
+	case "run":
+		runFused()
 	case "serve":
 		serve()
 	case "import":
@@ -53,7 +59,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: gateway <serve|import|redecode|export|import-session> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|import|redecode|export|import-session] [flags]")
+	fmt.Fprintln(os.Stderr, "  (no command)  run the gateway and the TUI together")
 	os.Exit(2)
 }
 
@@ -100,6 +107,88 @@ func serve() {
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+// runFused is the one-command mode: start the gateway in-process and run the TUI in the
+// foreground, so `trafficdeck` alone brings the whole thing up. When the viewer exits the
+// gateway is shut down cleanly (capture sources reaped). If the gateway address is already
+// in use we assume one is running and just attach the viewer to it. See ADR-0010.
+func runFused() {
+	ctx := context.Background()
+	cfg := config.Load()
+	logging.Setup(cfg)
+
+	tuiDir := findTUIDir()
+	if tuiDir == "" {
+		log.Fatal("cannot locate the tui/ directory; run `trafficdeck serve` and the TUI separately")
+	}
+	if _, err := exec.LookPath("uv"); err != nil {
+		log.Fatal("`uv` is required to run the TUI; install it or run the TUI yourself against `trafficdeck serve`")
+	}
+
+	var s *grpc.Server
+	var mgr *sourcemgr.Manager
+	var stClose func()
+	if lis, err := net.Listen("tcp", cfg.GRPCAddr); err != nil {
+		log.Printf("gateway address %s already in use — attaching the viewer to the running gateway", cfg.GRPCAddr)
+	} else {
+		obj, st := openDeps(ctx, cfg)
+		stClose = st.Close
+		s = grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
+		mgr = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+		go func() { _ = s.Serve(lis) }()
+		log.Printf("gateway listening on %s (live decode: %v, record live: %v)",
+			cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive)
+	}
+
+	// The viewer runs in the foreground, inheriting the terminal.
+	cmd := exec.Command("uv", "run", "--directory", tuiDir, "python", "-m", "traffic_viewer.app")
+	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+cfg.GRPCAddr)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	runErr := cmd.Run()
+
+	// Viewer exited → tear the gateway down (reap capture sources, close the store).
+	if mgr != nil {
+		mgr.Close()
+	}
+	if s != nil {
+		s.GracefulStop()
+	}
+	if stClose != nil {
+		stClose()
+	}
+	if runErr != nil {
+		if ee, ok := runErr.(*exec.ExitError); ok {
+			os.Exit(ee.ExitCode())
+		}
+		log.Fatalf("run viewer: %v", runErr)
+	}
+}
+
+// findTUIDir locates the repo's tui/ directory (holding traffic_viewer/app.py) by walking
+// up from the working directory, then the executable's directory. Returns "" if not found.
+func findTUIDir() string {
+	var starts []string
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		starts = append(starts, filepath.Dir(exe))
+	}
+	for _, start := range starts {
+		for dir := start; ; {
+			cand := filepath.Join(dir, "tui", "traffic_viewer", "app.py")
+			if _, err := os.Stat(cand); err == nil {
+				return filepath.Join(dir, "tui")
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return ""
 }
 
 func importCapture(args []string) {

@@ -39,17 +39,25 @@ mise run gen            # generate gRPC stubs (Go + Python) — REQUIRED before 
 
 ## Quick start
 
-Start the gateway (serves on `127.0.0.1:8080`, data under `./data`):
+One command runs the gateway and the TUI together — the gateway supervises capture, so
+it starts and stops the capture tools for you (no separate terminal for them):
 
 ```sh
-make run                                              # build ./trafficdeck and serve
-# or: mise exec -- go -C gateway run ./cmd/gateway serve
+make build && ./trafficdeck            # gateway in-process + the TUI in the foreground
 ```
 
-Browse in the TUI (separate terminal):
+Quitting the TUI shuts the gateway down cleanly. If a gateway is already listening on the
+address, `./trafficdeck` just attaches the viewer to it. In the sessions screen, press `a`
+to start a capture (pick a source, step through its options) and `s` to stop one.
+
+Prefer them apart (headless gateway, remote viewer, several viewers)? Run the daemon and
+the TUI separately:
 
 ```sh
-tui/run.sh                                 # runs the TUI (GATEWAY_ADDR overridable)
+make run                                   # build ./trafficdeck and serve (gateway only)
+# or: mise exec -- go -C gateway run ./cmd/gateway serve
+
+tui/run.sh                                 # the TUI (GATEWAY_ADDR overridable)
 # or: uv run --directory tui python -m traffic_viewer.app
 ```
 
