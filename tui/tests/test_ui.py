@@ -106,6 +106,17 @@ class FakeClient:
     async def describe_capture_source(self, source, params=None):
         params = dict(params or {})
         self.describe_calls.append((source, params))
+        if source == "android":
+            # A persistent source: PROVISION_REQUIRED until consent, then a package list.
+            if params.get("provision") != "start":
+                return cp2.SourceDescriptor(
+                    readiness=cp2.READINESS_PROVISION_REQUIRED, message="set up the device",
+                    params=[cp2.Param(key="provision", label="Set up", type=cp2.PARAM_TYPE_CHOICE,
+                                      required=True, choices=[cp2.Choice(value="start", label="Set up")])])
+            return cp2.SourceDescriptor(
+                readiness=cp2.READINESS_READY,
+                params=[cp2.Param(key="package", label="App", type=cp2.PARAM_TYPE_CHOICE,
+                                  choices=[cp2.Choice(value="com.a")])])
         # A tiny cascade: "profile" only appears once a "mode" is chosen.
         out = [cp2.Param(key="mode", label="Mode", type=cp2.PARAM_TYPE_CHOICE,
                          choices=[cp2.Choice(value="fast"), cp2.Choice(value="slow")],
@@ -952,6 +963,26 @@ async def test_new_capture_multiple_sources_prompts_first():
         # Two sources → a source picker first (not straight to the wizard).
         assert not isinstance(app.screen, CaptureWizardScreen)
         assert app.screen.query_one(OptionList) is not None
+
+
+async def test_capture_wizard_provision_step_then_continues():
+    # A persistent source (android): the wizard shows the provision step under
+    # PROVISION_REQUIRED, and consenting re-describes into the real options.
+    app = make_app()
+    app.client.capture_sources = [cp2.CaptureSourceInfo(name="android", label="Android")]
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("a")
+        await settle(pilot)
+        wiz = app.screen
+        assert isinstance(wiz, CaptureWizardScreen)
+        assert wiz._current.key == "provision"            # provision consent first
+        assert "set up the device" in app.screen.query_one("#wizard-msg", Static).render().plain
+
+        await pilot.press("enter")                        # consent → re-describe into packages
+        await settle(pilot)
+        assert ("android", {"provision": "start"}) in app.client.describe_calls
+        assert wiz._current.key == "package"
 
 
 async def test_capture_wizard_cancel_starts_nothing():

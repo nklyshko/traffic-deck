@@ -71,6 +71,7 @@ var builtinSources = []struct {
 	keepWarm bool
 }{
 	{name: "chrome", label: "Chrome", keepWarm: false},
+	{name: "android", label: "Android", keepWarm: true},
 }
 
 // DefaultSpecs builds the built-in source registry by locating each tool itself — no env

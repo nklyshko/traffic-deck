@@ -90,6 +90,7 @@ def run_capture(
     mark: int = 0x2A,
     attach: bool = False,
     stop_event: threading.Event | None = None,
+    on_session: Callable[[str], None] | None = None,
     log: Callable[[str], None] = print,
 ) -> CaptureResult:
     """Capture `package`'s traffic until `duration` elapses, `stop_event` is set, or
@@ -107,6 +108,8 @@ def run_capture(
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)
     log(f"session {sid}")
+    if on_session is not None:
+        on_session(sid)  # let a supervisor learn the session id while capture continues
 
     q: "queue.Queue" = queue.Queue()
     stop = threading.Event()

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from capture_android import frida_versions
@@ -256,6 +257,27 @@ def _menu_loop(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str, a
 
 
 def main(argv=None) -> None:
+    # serve mode: run as a CaptureSourceService the gateway dials (ADR-0010).
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "serve":
+        return _serve(argv[1:])
+    return _interactive(argv)
+
+
+def _serve(argv) -> None:
+    from capture_android.source import AndroidSource
+    from capture_sdk import source as harness
+
+    ap = argparse.ArgumentParser(prog="capture-android serve",
+                                 description="Serve Android as a CaptureSourceService")
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
+                    help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
+    args = ap.parse_args(argv)
+    harness.serve_forever(AndroidSource(args.gateway), args.control)
+
+
+def _interactive(argv) -> None:
     ap = argparse.ArgumentParser(description="Interactive Android capture")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
     ap.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")

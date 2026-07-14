@@ -181,16 +181,19 @@ class CaptureWizardScreen(ModalScreen[str | None]):
             return
         self._update_crumbs()
         self.query_one("#wizard-msg", Static).update(desc.message or "")
-        if desc.readiness == cpb.READINESS_PROVISION_REQUIRED:
-            # The source must bring a resource up before it can offer options (Android's
-            # emulator). Provision-consent UX is a later step; for now surface the note.
-            return
         nxt = next((p for p in desc.params if p.key not in self._answered), None)
-        if nxt is None:
-            await self._render_label_step()
+        if nxt is not None:
+            self._current = nxt
+            await self._render_param_step(nxt)
             return
-        self._current = nxt
-        await self._render_param_step(nxt)
+        # No more params. Only move to naming + start once the source is actually ready —
+        # a PROVISION_REQUIRED descriptor with nothing left to answer can't capture yet.
+        if desc.readiness == cpb.READINESS_PROVISION_REQUIRED:
+            self._current = None
+            step = self.query_one("#wizard-step", Vertical)
+            await step.remove_children()
+            return
+        await self._render_label_step()
 
     async def _render_param_step(self, p) -> None:
         step = self.query_one("#wizard-step", Vertical)
