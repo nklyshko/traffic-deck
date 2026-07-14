@@ -4,12 +4,27 @@ release. The real device path (RealAndroidBackend) is not exercised here."""
 
 from __future__ import annotations
 
+import threading
+import time
+
 import grpc
 
 from capture_android.source import AndroidSource
 from capture_sdk import source as harness
 from capture_sdk.proto import control_pb2 as ctl
 from capture_sdk.proto import source_pb2_grpc as sp_grpc
+
+
+def describe_provisioned(src, action="attach"):
+    """Consent, then poll Describe until the (background) provisioning is done and it goes
+    READY — mirroring how the viewer polls."""
+    src.describe({"provision": action})  # kicks off provisioning
+    for _ in range(400):
+        d = src.describe({"provision": action})
+        if d.readiness == ctl.READINESS_READY:
+            return d
+        time.sleep(0.005)
+    raise AssertionError("provisioning did not complete")
 
 
 class FakeBackend:
@@ -62,11 +77,10 @@ def test_describe_offers_provision_options_first():
     assert [c.value for c in d.params[0].choices] == ["attach", "pixel"]
 
 
-def test_describe_after_consent_offers_frida_and_packages():
+def test_describe_after_provisioning_offers_frida_and_packages():
     b = FakeBackend()
     src = AndroidSource("gw", b)
-    d = src.describe({"provision": "attach"})
-    assert d.readiness == ctl.READINESS_READY
+    d = describe_provisioned(src)
     assert [p.key for p in d.params] == ["frida", "package", "url", "duration"]
     # Frida version is a choice, defaulting to the device recommendation.
     assert [c.value for c in d.params[0].choices] == ["16.7.19", "17.15.1"]
@@ -78,10 +92,37 @@ def test_describe_after_consent_offers_frida_and_packages():
     assert b.provisioned == 1  # not re-provisioned — the resource is kept warm
 
 
+def test_describe_is_non_blocking_while_provisioning():
+    # Describe returns at once while the (slow) provision runs in the background: a
+    # PROVISION_REQUIRED descriptor with no params and a progress message, which the viewer
+    # renders as "working…" and polls.
+    class SlowBackend(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.gate = threading.Event()
+
+        def provision(self, action):
+            self.gate.wait(timeout=5)  # block until released
+            super().provision(action)
+
+    b = SlowBackend()
+    src = AndroidSource("gw", b)
+    d = src.describe({"provision": "attach"})
+    assert d.readiness == ctl.READINESS_PROVISION_REQUIRED
+    assert list(d.params) == []           # nothing to answer — just working
+    assert "Setting up" in d.message
+    assert src.provisioning is True       # Status reflects it
+
+    b.gate.set()                          # let provisioning finish
+    d2 = describe_provisioned(src)        # polls to READY
+    assert [p.key for p in d2.params][0] == "frida"
+    assert src.provisioning is False
+
+
 def test_describe_package_is_free_text_when_no_apps_listed():
     b = FakeBackend()
     b.packages = []
-    d = AndroidSource("gw", b).describe({"provision": "attach"})
+    d = describe_provisioned(AndroidSource("gw", b))
     pkg = next(p for p in d.params if p.key == "package")
     assert pkg.type == ctl.PARAM_TYPE_STRING
 
@@ -114,7 +155,7 @@ def test_start_and_stop_through_the_served_harness():
 def test_release_tears_down_and_resets_provisioning():
     b = FakeBackend()
     src = AndroidSource("gw", b)
-    src.describe({"provision": "attach"})
+    describe_provisioned(src)
     assert src._provisioned
     src.release()
     assert b.released == 1 and not src._provisioned

@@ -144,6 +144,8 @@ class CaptureWizardScreen(ModalScreen[str | None]):
         Binding("ctrl+b", "back", "Back"),
     ]
 
+    _POLL_SECONDS = 2.0  # how often to re-check a source that's still provisioning
+
     # Yes/No shown for a boolean step.
     _BOOL_CHOICES = [("Yes", "true"), ("No", "")]
 
@@ -186,12 +188,15 @@ class CaptureWizardScreen(ModalScreen[str | None]):
             self._current = nxt
             await self._render_param_step(nxt)
             return
-        # No more params. Only move to naming + start once the source is actually ready —
-        # a PROVISION_REQUIRED descriptor with nothing left to answer can't capture yet.
+        # No more params. A PROVISION_REQUIRED descriptor with nothing to answer means the
+        # source is still setting up (e.g. booting an emulator) — show progress and poll,
+        # without blocking input, rather than freezing on a step.
         if desc.readiness == cpb.READINESS_PROVISION_REQUIRED:
             self._current = None
             step = self.query_one("#wizard-step", Vertical)
             await step.remove_children()
+            await step.mount(Label("⏳ working…"))
+            self.set_timer(self._POLL_SECONDS, self._advance)
             return
         await self._render_label_step()
 

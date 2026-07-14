@@ -100,6 +100,7 @@ class FakeClient:
         self.started = []         # (source, label, params) each StartCapture
         self.stopped = []         # session ids stopped
         self.mcp_running = False
+        self.android_provision_calls = 0
 
     async def list_capture_sources(self):
         return list(self.capture_sources)
@@ -108,12 +109,17 @@ class FakeClient:
         params = dict(params or {})
         self.describe_calls.append((source, params))
         if source == "android":
-            # A persistent source: PROVISION_REQUIRED until consent, then a package list.
+            # A persistent source: PROVISION_REQUIRED until consent; then it "provisions" in
+            # the background (one in-progress describe with no params) before going READY.
             if params.get("provision") != "start":
                 return cp2.SourceDescriptor(
                     readiness=cp2.READINESS_PROVISION_REQUIRED, message="set up the device",
                     params=[cp2.Param(key="provision", label="Set up", type=cp2.PARAM_TYPE_CHOICE,
                                       required=True, choices=[cp2.Choice(value="start", label="Set up")])])
+            self.android_provision_calls += 1
+            if self.android_provision_calls < 2:  # still provisioning
+                return cp2.SourceDescriptor(
+                    readiness=cp2.READINESS_PROVISION_REQUIRED, message="Setting up the device…")
             return cp2.SourceDescriptor(
                 readiness=cp2.READINESS_READY,
                 params=[cp2.Param(key="package", label="App", type=cp2.PARAM_TYPE_CHOICE,
@@ -992,10 +998,17 @@ async def test_capture_wizard_provision_step_then_continues():
         assert wiz._current.key == "provision"            # provision consent first
         assert "set up the device" in app.screen.query_one("#wizard-msg", Static).render().plain
 
-        await pilot.press("enter")                        # consent → re-describe into packages
+        await pilot.press("enter")                        # consent → provisioning starts
         await settle(pilot)
         assert ("android", {"provision": "start"}) in app.client.describe_calls
-        assert wiz._current.key == "package"
+        # While provisioning the wizard is on no param step (showing progress), not frozen —
+        # the 2s poll hasn't fired yet.
+        assert wiz._current is None
+
+        # The poll re-checks and, once provisioning finishes, advances to the package step.
+        wiz._advance()                                    # simulate the poll firing
+        await settle(pilot, n=15)
+        assert wiz._current is not None and wiz._current.key == "package"
 
 
 async def test_capture_wizard_cancel_starts_nothing():

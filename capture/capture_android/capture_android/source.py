@@ -67,6 +67,11 @@ class AndroidSource(source.CaptureSource):
         self._provisioned = False
         self._captures: dict[str, threading.Event] = {}  # session id -> stop event
         self._caps_lock = threading.Lock()
+        # Provisioning runs in the background so Describe never blocks the viewer on a ~30s
+        # emulator boot; the viewer polls Describe and shows progress.
+        self._provision_lock = threading.Lock()
+        self._provision_started = False
+        self._provision_error: str | None = None
 
     def describe(self, params: Mapping[str, str]) -> ctl.SourceDescriptor:
         # Until the user picks a device/emulator, offer only the provision step (nothing can
@@ -81,15 +86,10 @@ class AndroidSource(source.CaptureSource):
                     "provision", "Device / emulator", source.CHOICE, required=True,
                     choices=[source.choice(v, label) for v, label in options])])
 
-        # Chosen: carry out the provision action once (blocking — may boot an emulator),
-        # then list apps.
+        # Chosen: provision in the background (may boot an emulator) and report progress —
+        # Describe returns at once so the viewer stays responsive.
         if not self._provisioned:
-            self.provisioning = True
-            try:
-                self._backend.provision(params["provision"])
-                self._provisioned = True
-            finally:
-                self.provisioning = False
+            return self._provisioning_descriptor(params["provision"])
 
         versions, recommended = self._backend.frida_versions()
         packages = self._backend.list_packages()
@@ -107,6 +107,32 @@ class AndroidSource(source.CaptureSource):
             source.param("url", "Open URL (optional)", source.STRING),
             source.param("duration", "Auto-stop after (seconds)", source.INT),
         ])
+
+    def _provisioning_descriptor(self, action: str) -> ctl.SourceDescriptor:
+        """Kick off provisioning in the background (once) and report progress. Returns a
+        PROVISION_REQUIRED descriptor with a message and no params, which the viewer renders
+        as "working…" and polls until it goes READY — so the viewer never blocks on the boot."""
+        with self._provision_lock:
+            if self._provision_error is not None:
+                err, self._provision_error = self._provision_error, None
+                self._provision_started = False  # allow a fresh attempt to retry
+                raise RuntimeError(err)          # surfaced once; the next Describe restarts it
+            if not self._provision_started:
+                self._provision_started = True
+                self.provisioning = True
+                threading.Thread(target=self._run_provision, args=(action,), daemon=True).start()
+        return ctl.SourceDescriptor(
+            readiness=ctl.READINESS_PROVISION_REQUIRED,
+            message="Setting up the device — this can take ~30s…")
+
+    def _run_provision(self, action: str) -> None:
+        try:
+            self._backend.provision(action)
+            self._provisioned = True
+        except Exception as exc:  # noqa: BLE001 — reported to the viewer via Describe
+            self._provision_error = str(exc)
+        finally:
+            self.provisioning = False
 
     def start_capture(self, label: str, params: Mapping[str, str]) -> str:
         package = params.get("package")
@@ -147,3 +173,5 @@ class AndroidSource(source.CaptureSource):
     def release(self) -> None:
         self._backend.release()  # tears down only if it owns the emulator
         self._provisioned = False
+        with self._provision_lock:
+            self._provision_started = False  # a later capture can provision afresh
