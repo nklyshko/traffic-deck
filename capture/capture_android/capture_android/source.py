@@ -19,9 +19,6 @@ from typing import Mapping, Protocol
 from capture_sdk import source
 from capture_sdk.proto import control_pb2 as ctl
 
-# Value the "provision" choice carries once the user consents to bring the resource up.
-_PROVISION_CONSENT = "start"
-
 
 class AndroidBackend(Protocol):
     """The device-side operations AndroidSource drives. owns_resource says whether *we*
@@ -30,9 +27,13 @@ class AndroidBackend(Protocol):
 
     owns_resource: bool
 
-    def provision(self) -> None:
-        """Bring the emulator/device to a capture-ready state (root + frida-server + adb).
-        Blocking; may take tens of seconds when it boots an emulator."""
+    def provision_options(self) -> list[tuple[str, str]]:
+        """(value, label) choices for the provision step, from what's connected: attach to a
+        running device, or boot/create an emulator. Cheap (no boot) — probes device state."""
+
+    def provision(self, action: str) -> None:
+        """Carry out the chosen provision action — attach to the running device, boot an AVD
+        by name, or create+boot one. Blocking; booting can take tens of seconds."""
 
     def frida_versions(self) -> tuple[list[str], str]:
         """(offered frida versions, recommended default) for the connected device — frida
@@ -68,21 +69,24 @@ class AndroidSource(source.CaptureSource):
         self._caps_lock = threading.Lock()
 
     def describe(self, params: Mapping[str, str]) -> ctl.SourceDescriptor:
-        # Until the user consents, offer only the provision step (nothing can be listed
-        # without the device up) — PROVISION_REQUIRED so the viewer frames it as consent.
-        if params.get("provision") != _PROVISION_CONSENT:
+        # Until the user picks a device/emulator, offer only the provision step (nothing can
+        # be listed without the device up) — PROVISION_REQUIRED so the viewer frames it as
+        # consent. The choices depend on what's connected (attach vs boot an AVD).
+        if not params.get("provision"):
+            options = self._backend.provision_options()
             return ctl.SourceDescriptor(
                 readiness=ctl.READINESS_PROVISION_REQUIRED,
-                message="No Android device is set up yet — this will bring it up (can take ~30s).",
+                message="Choose the device or emulator to capture on (booting one can take ~30s).",
                 params=[source.param(
-                    "provision", "Set up the device", source.CHOICE, required=True,
-                    choices=[source.choice(_PROVISION_CONSENT, "Set up the emulator/device")])])
+                    "provision", "Device / emulator", source.CHOICE, required=True,
+                    choices=[source.choice(v, label) for v, label in options])])
 
-        # Consented: bring the resource up once (blocking), then list apps.
+        # Chosen: carry out the provision action once (blocking — may boot an emulator),
+        # then list apps.
         if not self._provisioned:
             self.provisioning = True
             try:
-                self._backend.provision()
+                self._backend.provision(params["provision"])
                 self._provisioned = True
             finally:
                 self.provisioning = False

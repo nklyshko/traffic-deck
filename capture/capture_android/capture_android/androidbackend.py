@@ -1,13 +1,15 @@
 """RealAndroidBackend — AndroidSource's device-side operations.
 
-This process never imports frida: provision/list use adb only, and each capture runs as a
-subprocess under the frida version chosen for the device (`uv run --with frida==<ver>
-python -m capture_android.headless …`), exactly as the interactive CLI does — client and
-frida-server versions must match, and frida 17 can't spawn on Android ≤ 11, so the version
-has to be per-device. The device path needs real hardware and isn't exercised in CI.
+This process never imports frida: provision/list use adb (and the SDK's emulator tools)
+only, and each capture runs as a subprocess under the frida version chosen for the device
+(`uv run --with frida==<ver> python -m capture_android.headless …`), exactly as the
+interactive CLI does — client and frida-server versions must match, and frida 17 can't
+spawn on Android ≤ 11, so the version has to be per-device.
 
-v1 attaches to a device/emulator that is already running (owns_resource is False, so
-ReleaseSource leaves it alone); booting an AVD non-interactively is a follow-up.
+Provisioning attaches to a running device, or boots/creates an emulator (the same
+emulator.Sdk the CLI uses, which is tested there). When we boot an emulator we own it, so
+ReleaseSource stops it; a device we merely attached to is left alone. This whole path needs
+a real device or emulator and is not exercised in CI.
 """
 
 from __future__ import annotations
@@ -21,28 +23,65 @@ from typing import Mapping
 
 from capture_android import frida_versions
 from capture_android.adb import AdbClient
+from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices
 
 _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
+_CREATE = "__create__"  # provision-choice value: create + boot a new emulator
 
 
 class RealAndroidBackend:
-    owns_resource = False  # v1 attaches to a running device; we didn't boot it
-
     def __init__(self, gateway: str) -> None:
         self._gateway = gateway
         self._serial: str | None = None
         self._release = ""  # Android version, for the frida recommendation
+        self.owns_resource = False  # set True when we boot an emulator ourselves
+        self._sdk_inst: Sdk | None = None
 
-    def provision(self) -> None:
-        # adb only: attach to the running device and read its Android release (used to
-        # recommend a frida version). frida-server is set up per capture, under the chosen
-        # version. Raises if no device is connected — surfaced as the describe error.
-        adb = AdbClient()
-        self._serial = adb.serial
-        self._release = adb.shell("getprop", "ro.build.version.release").strip()
+    def _sdk(self) -> Sdk:
+        if self._sdk_inst is None:
+            self._sdk_inst = Sdk()  # locates the Android SDK ($ANDROID_HOME / ~/Android/Sdk)
+        return self._sdk_inst
+
+    def _running_serials(self) -> list[str]:
+        # adb only (no full SDK needed): serials in the "device" state.
+        adb = AdbClient().adb
+        out = subprocess.run([adb, "devices", "-l"], text=True, capture_output=True).stdout
+        return [d.serial for d in parse_devices(out) if d.state == "device"]
+
+    def provision_options(self) -> list[tuple[str, str]]:
+        running = self._running_serials()
+        if running:
+            return [("attach", f"Use the connected device ({running[0]})")]
+        # Nothing connected → offer the emulators to boot (needs the SDK).
+        avds = self._sdk().list_avds()
+        opts = [(a, f"Boot emulator: {a}") for a in avds]
+        opts.append((_CREATE, "Create + boot a new emulator (~1GB on first run)"))
+        return opts
+
+    def provision(self, action: str) -> None:
+        if action == "attach":
+            running = self._running_serials()
+            if not running:
+                raise RuntimeError("no connected device to attach to")
+            self._serial = running[0]
+            self.owns_resource = False
+        else:
+            sdk = self._sdk()
+            if action == _CREATE:
+                if not sdk.system_image_installed():
+                    sdk.install_system_image(log=lambda _m: None)
+                sdk.create_avd(log=lambda _m: None)
+                avd = DEFAULT_AVD
+            else:
+                avd = action
+            sdk.boot(avd, headless=True)
+            self._serial = sdk.wait_for_boot()
+            self.owns_resource = True  # we booted it → ReleaseSource stops it
+        self._release = AdbClient(serial=self._serial).shell(
+            "getprop", "ro.build.version.release").strip()
 
     def frida_versions(self) -> tuple[list[str], str]:
-        """(offered versions, recommended default) for the connected device."""
+        """(offered versions, recommended default) for the provisioned device."""
         rec = frida_versions.recommended(self._release)
         return frida_versions.choices(rec), rec
 
@@ -97,6 +136,12 @@ class RealAndroidBackend:
                 return
 
     def release(self) -> None:
-        # We only attached to a running device; teardown follows ownership, so there is
-        # nothing of ours to tear down.
+        # Teardown follows ownership: stop only an emulator we booted; a device the user had
+        # running is left alone.
+        if self.owns_resource and self._serial:
+            try:
+                self._sdk().stop_emulator(self._serial)
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                pass
         self._serial = None
+        self.owns_resource = False
