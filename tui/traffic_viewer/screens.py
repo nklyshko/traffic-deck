@@ -16,8 +16,8 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
-    Button, Checkbox, DataTable, Footer, Header, Input, Label, OptionList,
-    Select, Static, TabbedContent, TabPane,
+    Button, DataTable, Footer, Header, Input, Label, OptionList,
+    Static, TabbedContent, TabPane,
 )
 
 # Importing the client puts the generated stubs' gen/ tree on sys.path, so this resolves
@@ -132,104 +132,132 @@ class SelectPrompt(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class CaptureFormScreen(ModalScreen[str | None]):
-    """Start a capture on a source. The form is built from the source's Describe response
-    and re-described whenever a choice changes, so dependent fields appear as they're
-    picked (the same cascade the CLI picker walks). Dismisses with the started session id,
-    or None on cancel. See ADR-0010."""
+class CaptureWizardScreen(ModalScreen[str | None]):
+    """Step through a source's capture options one at a time, like the CLI picker: pick a
+    value, the source is re-described so the next step's options load fresh (Chrome binary →
+    its profile kinds → that kind's profiles → …), then name the session and start.
+    `backspace` goes back a step, `esc` cancels. Dismisses with the session id. See ADR-0010."""
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    # ctrl+b (not backspace) so Back works on text steps too — Input eats backspace.
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+b", "back", "Back"),
+    ]
+
+    # Yes/No shown for a boolean step.
+    _BOOL_CHOICES = [("Yes", "true"), ("No", "")]
 
     def __init__(self, source: str, label: str) -> None:
         super().__init__()
         self._source = source
         self._source_label = label or source
-        self._widgets: dict[str, object] = {}   # param key -> input widget
-        self._building = False                  # ignore Select.Changed while rebuilding
-        self._ready = False                     # descriptor readiness (can we start?)
+        self._params: dict[str, str] = {}   # answers accumulated so far
+        self._answered: list[str] = []      # param keys answered, in order (for Back)
+        self._current = None                # the Param being shown, or None on the label step
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="capture-form"):
-            yield Label(f"New capture — {self._source_label}", id="capture-title")
-            yield Label("Session label")
-            yield Input(value=self._source_label.lower(), id="capture-label")
-            yield VerticalScroll(id="capture-params")
-            yield Static("", id="capture-msg")
-            with Horizontal(id="capture-buttons"):
-                yield Button("Start", id="capture-start", variant="primary")
-                yield Button("Cancel", id="capture-cancel")
+        with Vertical(id="wizard"):
+            yield Label(f"New capture — {self._source_label}", id="wizard-title")
+            yield Static("", id="wizard-crumbs")  # choices made so far
+            yield Vertical(id="wizard-step")       # the current step's widgets
+            yield Static("", id="wizard-msg")
+            yield Label("↵ choose · ^b back · esc cancel", id="wizard-help")
 
     def on_mount(self) -> None:
-        self._rebuild({})
+        self._advance()
 
-    def _current_params(self) -> dict:
-        """The values entered so far, as the params map (empty values dropped)."""
-        out = {}
-        for key, w in self._widgets.items():
-            if isinstance(w, Select):
-                v = "" if w.is_blank() else str(w.value)
-            elif isinstance(w, Checkbox):
-                v = "true" if w.value else ""
-            else:
-                v = w.value
-            if v != "":
-                out[key] = v
-        return out
+    def _update_crumbs(self) -> None:
+        crumbs = "  ·  ".join(f"{k}={self._params[k]}" for k in self._answered if self._params.get(k))
+        self.query_one("#wizard-crumbs", Static).update(crumbs)
 
     @work(exclusive=True)
-    async def _rebuild(self, params: dict) -> None:
-        """Describe the source for the params so far and (re)render the fields."""
+    async def _advance(self) -> None:
+        """Re-describe for the answers so far, then show the next unanswered step — or, when
+        every param is answered, the final label + start step."""
         try:
-            desc = await self.app.client.describe_capture_source(self._source, params)
+            desc = await self.app.client.describe_capture_source(self._source, self._params)
         except Exception as exc:  # noqa: BLE001
-            self.query_one("#capture-msg", Static).update(f"[red]describe failed: {exc}[/red]")
+            self.query_one("#wizard-msg", Static).update(f"[red]describe failed: {exc}[/red]")
             return
-        self._building = True
-        cont = self.query_one("#capture-params", VerticalScroll)
-        await cont.remove_children()
-        self._widgets = {}
-        for p in desc.params:
-            await cont.mount(Label(p.label))
-            w = self._widget_for(p)
-            self._widgets[p.key] = w
-            await cont.mount(w)
-        self._ready = desc.readiness != cpb.READINESS_PROVISION_REQUIRED
-        self.query_one("#capture-msg", Static).update(desc.message or "")
-        # Let mount-triggered Select.Changed events flush before we listen again.
-        self.call_after_refresh(lambda: setattr(self, "_building", False))
+        self._update_crumbs()
+        self.query_one("#wizard-msg", Static).update(desc.message or "")
+        if desc.readiness == cpb.READINESS_PROVISION_REQUIRED:
+            # The source must bring a resource up before it can offer options (Android's
+            # emulator). Provision-consent UX is a later step; for now surface the note.
+            return
+        nxt = next((p for p in desc.params if p.key not in self._answered), None)
+        if nxt is None:
+            await self._render_label_step()
+            return
+        self._current = nxt
+        await self._render_param_step(nxt)
 
-    def _widget_for(self, p) -> object:
+    async def _render_param_step(self, p) -> None:
+        step = self.query_one("#wizard-step", Vertical)
+        await step.remove_children()
+        await step.mount(Label(p.label))
         if p.type == cpb.PARAM_TYPE_CHOICE and p.choices:
-            opts = [(c.label or c.value, c.value) for c in p.choices]
-            if any(p.default == c.value for c in p.choices):
-                return Select(opts, value=p.default, allow_blank=not p.required)
-            return Select(opts, allow_blank=True)  # no selection yet (Select.NULL)
-        if p.type == cpb.PARAM_TYPE_BOOL:
-            return Checkbox(value=p.default == "true")
-        return Input(value=p.default)
+            await self._mount_choice(step, [(c.label or c.value, c.value) for c in p.choices], p.default)
+        elif p.type == cpb.PARAM_TYPE_BOOL:
+            await self._mount_choice(step, self._BOOL_CHOICES, "true" if p.default == "true" else "")
+        else:
+            inp = Input(value=p.default, id="wizard-input")
+            await step.mount(inp)
+            inp.focus()
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        # A choice changed: re-describe so dependent fields update. Ignore the events our
-        # own rebuild triggers when it sets values.
-        if not self._building:
-            self._rebuild(self._current_params())
+    async def _mount_choice(self, step, choices, default: str) -> None:
+        options = [Option(label, id=value) for label, value in choices]
+        ol = OptionList(*options, id="wizard-choice")
+        await step.mount(ol)
+        for i, (_, value) in enumerate(choices):  # preselect the default row
+            if value == default:
+                ol.highlighted = i
+                break
+        ol.focus()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "capture-cancel":
-            self.dismiss(None)
-        elif event.button.id == "capture-start":
-            self._start()
+    async def _render_label_step(self) -> None:
+        self._current = None
+        step = self.query_one("#wizard-step", Vertical)
+        await step.remove_children()
+        await step.mount(Label("Session label (↵ to start capture):"))
+        inp = Input(value=self._source_label.lower(), id="wizard-label")
+        await step.mount(inp)
+        inp.focus()
+
+    def _commit(self, key: str, value: str) -> None:
+        if value != "":
+            self._params[key] = value
+        else:
+            self._params.pop(key, None)  # a cleared optional field
+        self._answered.append(key)
+        self._current = None
+        self._advance()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if self._current is not None:
+            self._commit(self._current.key, event.option.id or "")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "wizard-label":
+            self._start(event.value)
+        elif event.input.id == "wizard-input" and self._current is not None:
+            self._commit(self._current.key, event.value)
+
+    def action_back(self) -> None:
+        """Return to the previous step, dropping its answer so it's re-asked."""
+        if not self._answered:
+            return
+        key = self._answered.pop()
+        self._params.pop(key, None)
+        self._current = None
+        self._advance()
 
     @work(exclusive=True)
-    async def _start(self) -> None:
-        if not self._ready:
-            self.query_one("#capture-msg", Static).update("[yellow]source not ready to capture[/yellow]")
-            return
-        label = self.query_one("#capture-label", Input).value or self._source
+    async def _start(self, label: str) -> None:
         try:
-            sid = await self.app.client.start_capture(self._source, label, self._current_params())
+            sid = await self.app.client.start_capture(self._source, label or self._source, self._params)
         except Exception as exc:  # noqa: BLE001
-            self.query_one("#capture-msg", Static).update(f"[red]start failed: {exc}[/red]")
+            self.query_one("#wizard-msg", Static).update(f"[red]start failed: {exc}[/red]")
             return
         self.dismiss(sid)
 
@@ -327,7 +355,7 @@ class SessionsScreen(Screen):
             if choice is None:
                 return
             src = next(s for s in sources if s.name == choice)
-        sid = await self.app.push_screen_wait(CaptureFormScreen(src.name, src.label))
+        sid = await self.app.push_screen_wait(CaptureWizardScreen(src.name, src.label))
         if sid:
             self.notify(f"capturing → session {sid[:8]}")
             self.load_sessions()

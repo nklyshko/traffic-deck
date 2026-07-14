@@ -14,7 +14,7 @@ from traffic.v1 import viewer_pb2 as vp
 from traffic_viewer.app import TrafficViewerApp
 from traffic_viewer.screens import (
     BodyScreen,
-    CaptureFormScreen,
+    CaptureWizardScreen,
     ConfirmScreen,
     QuitConfirmScreen,
     FlowDetailScreen,
@@ -892,27 +892,51 @@ async def test_compare_requests_across_tabs():
         assert app.compare_a is None      # consumed by the compare
 
 
-async def test_new_capture_describes_cascades_and_starts():
+async def test_new_capture_wizard_walks_steps_and_starts():
     app = make_app()
     async with app.run_test() as pilot:
         await settle(pilot)
-        await pilot.press("a")            # new capture; single source → straight to the form
+        await pilot.press("a")            # new capture; single source → straight to the wizard
         await settle(pilot)
-        assert isinstance(app.screen, CaptureFormScreen)
-        assert app.client.describe_calls[0] == ("chrome", {})   # initial describe, empty params
-        form = app.screen
-        assert "mode" in form._widgets and "profile" not in form._widgets  # profile hidden until mode
+        assert isinstance(app.screen, CaptureWizardScreen)
+        wiz = app.screen
+        assert app.client.describe_calls[0] == ("chrome", {})   # step 1 describes empty params
+        # Step 1 is the "mode" choice (an OptionList of its options); "profile" isn't asked yet.
+        assert wiz._current.key == "mode"
+        assert app.screen.query_one("#wizard-choice", OptionList) is not None
 
-        # Choose a mode → re-describe → the dependent "profile" field appears (the cascade).
-        form._widgets["mode"].value = "fast"
+        await pilot.press("enter")        # pick the highlighted mode (fast) → re-describe
         await settle(pilot)
+        # The cascade: choosing mode makes the dependent "profile" step appear next.
         assert ("chrome", {"mode": "fast"}) in app.client.describe_calls
-        assert "profile" in form._widgets
+        assert wiz._current.key == "profile"
 
-        await pilot.click("#capture-start")
+        await pilot.press("enter")        # accept the profile input default ("p1")
         await settle(pilot)
-        # Started with the source, the (defaulted) label, and the collected params.
+        # No params left → the final label step (an Input, not a param).
+        assert wiz._current is None
+        assert app.screen.query_one("#wizard-label", Input) is not None
+
+        await pilot.press("enter")        # accept the label default and start
+        await settle(pilot)
         assert app.client.started == [("chrome", "chrome", {"mode": "fast", "profile": "p1"})]
+
+
+async def test_capture_wizard_back_re_asks_previous_step():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await pilot.press("a")
+        await settle(pilot)
+        wiz = app.screen
+        await pilot.press("enter")        # answer mode → advance to profile
+        await settle(pilot)
+        assert wiz._current.key == "profile"
+
+        await pilot.press("ctrl+b")       # back → mode is re-asked, its answer dropped
+        await settle(pilot)
+        assert wiz._current.key == "mode"
+        assert "mode" not in wiz._params
 
 
 async def test_new_capture_multiple_sources_prompts_first():
@@ -925,17 +949,18 @@ async def test_new_capture_multiple_sources_prompts_first():
         await settle(pilot)
         await pilot.press("a")
         await settle(pilot)
-        # Two sources → a picker first (not straight to the form).
+        # Two sources → a source picker first (not straight to the wizard).
+        assert not isinstance(app.screen, CaptureWizardScreen)
         assert app.screen.query_one(OptionList) is not None
 
 
-async def test_capture_form_cancel_starts_nothing():
+async def test_capture_wizard_cancel_starts_nothing():
     app = make_app()
     async with app.run_test() as pilot:
         await settle(pilot)
         await pilot.press("a")
         await settle(pilot)
-        await pilot.press("escape")       # cancel the form
+        await pilot.press("escape")       # cancel the wizard
         await settle(pilot)
         assert app.client.started == []
         assert isinstance(app.screen, SessionsScreen)
