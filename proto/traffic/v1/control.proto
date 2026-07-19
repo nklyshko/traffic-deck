@@ -22,6 +22,13 @@ service ControlService {
   rpc StartService(ServiceRequest) returns (ServiceInfo);
   rpc StopService(ServiceRequest) returns (Empty);
 
+  // Child logs. The gateway keeps one rolling file per spawned child (capture source,
+  // service, module process) plus its own; a viewer lists them and reads the tail of one,
+  // streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
+  // access. See ADR-0010 logging.
+  rpc ListLogs(Empty) returns (LogList);
+  rpc GetLog(GetLogRequest) returns (stream LogChunk);
+
   // Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
   // spilled blobs) as a self-contained .tar.gz, streamed in chunks.
   rpc ExportSession(ExportSessionRequest) returns (stream ExportChunk);
@@ -85,6 +92,29 @@ message ServiceInfo {
   bool running = 3;
   string url = 4;      // where it's reachable when running (e.g. http://127.0.0.1:8765/mcp)
   string detail = 5;   // note for the viewer (e.g. exposure warning)
+}
+
+// --- Child logs (see ADR-0010 logging): the gateway's own log and one rolling file per
+// spawned child, readable through the gateway so a remote viewer needs no disk access. ---
+
+message LogList {
+  repeated LogInfo logs = 1;
+}
+
+message LogInfo {
+  string name = 1;              // stable id to pass to GetLog ("gateway", "chrome", a service key)
+  string label = 2;             // human label ("gateway", "Chrome", "acme / adapter")
+  int64 size_bytes = 3;
+  int64 modified_unix_ms = 4;
+}
+
+message GetLogRequest {
+  string name = 1;       // a name from ListLogs
+  int64 max_bytes = 2;   // tail size to return; 0 = server default
+}
+
+message LogChunk {
+  bytes payload = 1;
 }
 
 // --- Capture sources (see ADR-0010). These message/enum types are the control-plane

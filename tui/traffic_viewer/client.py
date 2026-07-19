@@ -254,3 +254,17 @@ class GatewayClient:
 
     async def stop_service(self, name: str) -> None:
         await self._ctrl().StopService(control_pb2.ServiceRequest(name=name))
+
+    # --- child logs (gateway, capture sources, services) ----------------
+
+    async def list_logs(self):
+        """The logs the gateway can serve (name, label, size, mtime), those that exist."""
+        resp = await self._ctrl().ListLogs(control_pb2.Empty())
+        return list(resp.logs)
+
+    async def get_log(self, name: str, max_bytes: int = 0) -> bytes:
+        """The tail of a named log (0 = server default cap), streamed and joined."""
+        call = self._ctrl().GetLog(
+            control_pb2.GetLogRequest(name=name, max_bytes=max_bytes))
+        chunks = [c.payload async for c in call]
+        return b"".join(chunks)

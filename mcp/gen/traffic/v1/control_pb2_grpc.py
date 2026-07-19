@@ -76,6 +76,16 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
                 _registered_method=True)
+        self.ListLogs = channel.unary_unary(
+                '/traffic.v1.ControlService/ListLogs',
+                request_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.LogList.FromString,
+                _registered_method=True)
+        self.GetLog = channel.unary_stream(
+                '/traffic.v1.ControlService/GetLog',
+                request_serializer=traffic_dot_v1_dot_control__pb2.GetLogRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.LogChunk.FromString,
+                _registered_method=True)
         self.ExportSession = channel.unary_stream(
                 '/traffic.v1.ControlService/ExportSession',
                 request_serializer=traffic_dot_v1_dot_control__pb2.ExportSessionRequest.SerializeToString,
@@ -231,6 +241,22 @@ class ControlServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def StopService(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListLogs(self, request, context):
+        """Child logs. The gateway keeps one rolling file per spawned child (capture source,
+        service, module process) plus its own; a viewer lists them and reads the tail of one,
+        streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
+        access. See ADR-0010 logging.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetLog(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -412,6 +438,16 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     servicer.StopService,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            ),
+            'ListLogs': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListLogs,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.LogList.SerializeToString,
+            ),
+            'GetLog': grpc.unary_stream_rpc_method_handler(
+                    servicer.GetLog,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.GetLogRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.LogChunk.SerializeToString,
             ),
             'ExportSession': grpc.unary_stream_rpc_method_handler(
                     servicer.ExportSession,
@@ -731,6 +767,60 @@ class ControlService(object):
             '/traffic.v1.ControlService/StopService',
             traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
             traffic_dot_v1_dot_control__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListLogs(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/ListLogs',
+            traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.LogList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetLog(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/traffic.v1.ControlService/GetLog',
+            traffic_dot_v1_dot_control__pb2.GetLogRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.LogChunk.FromString,
             options,
             channel_credentials,
             insecure,

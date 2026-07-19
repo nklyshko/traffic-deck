@@ -12,6 +12,7 @@ import (
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
@@ -69,6 +70,106 @@ func (c *Control) StopService(ctx context.Context, req *trafficv1.ServiceRequest
 func serviceInfo(s sourcemgr.ServiceInfo) *trafficv1.ServiceInfo {
 	return &trafficv1.ServiceInfo{
 		Name: s.Name, Label: s.Label, Running: s.Running, Url: s.URL, Detail: s.Detail}
+}
+
+// How much of a log's tail GetLog returns by default, and the ceiling on a client request —
+// enough to see recent output without shipping a whole rolling file.
+const (
+	defaultLogTail = 256 << 10
+	maxLogTail     = 4 << 20
+)
+
+// logEntry pairs a log's stable name and human label with the file backing it.
+type logEntry struct{ name, label, path string }
+
+// logCatalog is every log the gateway can serve: its own, then one per capture source and
+// per auxiliary/module service. Paths come from the logging package (ChildLog writes each
+// child's file there), so GetLog can only ever read a catalogued path — never an arbitrary
+// one a client names.
+func (c *Control) logCatalog() []logEntry {
+	var out []logEntry
+	if p := logging.MainLogPath(); p != "" {
+		out = append(out, logEntry{name: "gateway", label: "gateway", path: p})
+	}
+	if c.mgr != nil {
+		for _, s := range c.mgr.Sources() {
+			out = append(out, logEntry{s.Name, orLabel(s.Label, s.Name), logging.ChildLogPath(s.Name)})
+		}
+	}
+	if c.svcs != nil {
+		for _, s := range c.svcs.List() {
+			out = append(out, logEntry{s.Name, orLabel(s.Label, s.Name), logging.ChildLogPath(s.Name)})
+		}
+	}
+	return out
+}
+
+func orLabel(label, name string) string {
+	if label == "" {
+		return name
+	}
+	return label
+}
+
+// ListLogs reports the logs that actually exist on disk (a source that never ran has no
+// file yet), with each one's current size and last-modified time.
+func (c *Control) ListLogs(ctx context.Context, _ *trafficv1.Empty) (*trafficv1.LogList, error) {
+	out := &trafficv1.LogList{}
+	for _, e := range c.logCatalog() {
+		if e.path == "" {
+			continue // file logging is off
+		}
+		fi, err := os.Stat(e.path)
+		if err != nil {
+			continue // not created yet, or unreadable — simply not listable
+		}
+		out.Logs = append(out.Logs, &trafficv1.LogInfo{
+			Name:           e.name,
+			Label:          e.label,
+			SizeBytes:      fi.Size(),
+			ModifiedUnixMs: fi.ModTime().UnixMilli(),
+		})
+	}
+	return out, nil
+}
+
+// GetLog streams the tail of a named log (from ListLogs) in chunks, capped at maxLogTail.
+func (c *Control) GetLog(req *trafficv1.GetLogRequest, srv grpc.ServerStreamingServer[trafficv1.LogChunk]) error {
+	var path string
+	for _, e := range c.logCatalog() {
+		if e.name == req.GetName() {
+			path = e.path
+			break
+		}
+	}
+	if path == "" {
+		return status.Errorf(codes.NotFound, "log %q not found", req.GetName())
+	}
+	max := req.GetMaxBytes()
+	if max <= 0 {
+		max = defaultLogTail
+	}
+	if max > maxLogTail {
+		max = maxLogTail
+	}
+	b, err := logging.ReadTail(path, max)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return status.Errorf(codes.NotFound, "log %q not found", req.GetName())
+		}
+		return status.Errorf(codes.Internal, "read log %q: %v", req.GetName(), err)
+	}
+	const chunk = 64 << 10
+	for off := 0; off < len(b); off += chunk {
+		end := off + chunk
+		if end > len(b) {
+			end = len(b)
+		}
+		if err := srv.Send(&trafficv1.LogChunk{Payload: b[off:end]}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListCaptureSources enumerates the sources the gateway can drive, for the viewer's picker.

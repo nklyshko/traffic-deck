@@ -63,6 +63,50 @@ func ChildLogPath(name string) string {
 	return filepath.Join(filepath.Dir(cfg.LogFile), safeName(name)+".log")
 }
 
+// MainLogPath is the gateway's own log file, for listing it alongside the child logs.
+// Empty when file logging is off.
+func MainLogPath() string {
+	mu.Lock()
+	cfg := current
+	mu.Unlock()
+	if cfg.LogFile == "" || disabled(cfg.LogFile) {
+		return ""
+	}
+	return cfg.LogFile
+}
+
+// ReadTail returns the last max bytes of the file at path, dropping a leading partial line
+// when the file was truncated at the front (so a viewer sees whole lines). max <= 0 reads
+// the whole file. Used to serve a log's tail without loading a rolling file in full.
+func ReadTail(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	truncated := false
+	if max > 0 && fi.Size() > max {
+		if _, err := f.Seek(fi.Size()-max, io.SeekStart); err != nil {
+			return nil, err
+		}
+		truncated = true
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	if truncated {
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
+			b = b[i+1:] // drop the partial first line the seek landed inside
+		}
+	}
+	return b, nil
+}
+
 var unsafeName = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 
 // safeName turns a child name into one path segment. Source names are free-form — a module

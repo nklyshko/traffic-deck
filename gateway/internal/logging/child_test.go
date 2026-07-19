@@ -160,3 +160,32 @@ func TestChildLogWithFileLoggingOff(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// ReadTail returns only the last max bytes and drops the partial line the seek lands in, so
+// a viewer sees whole lines; max <= 0 (or a file smaller than max) returns everything.
+func TestReadTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "some.log")
+	if err := os.WriteFile(path, []byte("line1\nline2\nline3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := ReadTail(path, 0)
+	if err != nil || string(all) != "line1\nline2\nline3\n" {
+		t.Fatalf("full read = %q err=%v", all, err)
+	}
+
+	// Cap below the file size: the tail starts mid-"line2", so that partial line is dropped
+	// and only whole lines survive.
+	tail, err := ReadTail(path, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(tail) != "line3\n" {
+		t.Errorf("tail = %q, want %q (partial first line dropped)", tail, "line3\n")
+	}
+
+	if _, err := ReadTail(filepath.Join(dir, "nope.log"), 0); err == nil {
+		t.Error("ReadTail of a missing file should error")
+	}
+}

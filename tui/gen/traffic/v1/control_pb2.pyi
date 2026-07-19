@@ -73,6 +73,38 @@ class ServiceInfo(_message.Message):
     detail: str
     def __init__(self, name: _Optional[str] = ..., label: _Optional[str] = ..., running: bool = ..., url: _Optional[str] = ..., detail: _Optional[str] = ...) -> None: ...
 
+class LogList(_message.Message):
+    __slots__ = ("logs",)
+    LOGS_FIELD_NUMBER: _ClassVar[int]
+    logs: _containers.RepeatedCompositeFieldContainer[LogInfo]
+    def __init__(self, logs: _Optional[_Iterable[_Union[LogInfo, _Mapping]]] = ...) -> None: ...
+
+class LogInfo(_message.Message):
+    __slots__ = ("name", "label", "size_bytes", "modified_unix_ms")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    MODIFIED_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    label: str
+    size_bytes: int
+    modified_unix_ms: int
+    def __init__(self, name: _Optional[str] = ..., label: _Optional[str] = ..., size_bytes: _Optional[int] = ..., modified_unix_ms: _Optional[int] = ...) -> None: ...
+
+class GetLogRequest(_message.Message):
+    __slots__ = ("name", "max_bytes")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    MAX_BYTES_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    max_bytes: int
+    def __init__(self, name: _Optional[str] = ..., max_bytes: _Optional[int] = ...) -> None: ...
+
+class LogChunk(_message.Message):
+    __slots__ = ("payload",)
+    PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    payload: bytes
+    def __init__(self, payload: _Optional[bytes] = ...) -> None: ...
+
 class CaptureSourceList(_message.Message):
     __slots__ = ("sources",)
     SOURCES_FIELD_NUMBER: _ClassVar[int]

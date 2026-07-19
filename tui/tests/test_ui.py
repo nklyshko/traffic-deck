@@ -23,6 +23,8 @@ from traffic_viewer.screens import (
     SessionPane,
     WorkspaceScreen,
     SessionsScreen,
+    LogsScreen,
+    LogViewScreen,
     CompareScreen,
     WsMessagesScreen,
     WsPayloadScreen,
@@ -154,6 +156,17 @@ class FakeClient:
 
     async def stop_service(self, name):
         self.mcp_running = False
+
+    async def list_logs(self):
+        return [
+            cp2.LogInfo(name="gateway", label="gateway", size_bytes=2048,
+                        modified_unix_ms=1_700_000_000_000),
+            cp2.LogInfo(name="chrome", label="Chrome", size_bytes=512,
+                        modified_unix_ms=1_700_000_050_000),
+        ]
+
+    async def get_log(self, name, max_bytes=0):
+        return f"=== {name} started ===\n[{name}] hello\n".encode()
 
     async def list_sessions(self, limit=200):
         return list(self._sessions)
@@ -398,6 +411,26 @@ async def _toggle_column(pilot, cid):
                             if opts.get_option_at_index(i).id == cid)
     await pilot.press("enter")
     await settle(pilot)
+
+
+async def test_logs_screen_lists_and_opens_a_log():
+    """L from the sessions list opens the log browser; Enter on a row shows that log's
+    tail, fetched from the gateway (get_log), rendered literally."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("L")
+        await settle(pilot)
+        assert isinstance(pilot.app.screen, LogsScreen)
+        table = pilot.app.screen.query_one("#logs", DataTable)
+        assert table.row_count == 2                       # gateway + chrome (from FakeClient)
+
+        await pilot.press("enter")                        # open the focused log (gateway)
+        await settle(pilot)
+        assert isinstance(pilot.app.screen, LogViewScreen)
+        rendered = pilot.app.screen.query_one("#logbody", Static).render().plain
+        assert "[gateway] hello" in rendered              # markup-looking line kept literal
 
 
 async def test_metadata_column_picker_toggles_column():

@@ -27,6 +27,8 @@ const (
 	ControlService_ListServices_FullMethodName          = "/traffic.v1.ControlService/ListServices"
 	ControlService_StartService_FullMethodName          = "/traffic.v1.ControlService/StartService"
 	ControlService_StopService_FullMethodName           = "/traffic.v1.ControlService/StopService"
+	ControlService_ListLogs_FullMethodName              = "/traffic.v1.ControlService/ListLogs"
+	ControlService_GetLog_FullMethodName                = "/traffic.v1.ControlService/GetLog"
 	ControlService_ExportSession_FullMethodName         = "/traffic.v1.ControlService/ExportSession"
 	ControlService_SetSessionGroup_FullMethodName       = "/traffic.v1.ControlService/SetSessionGroup"
 	ControlService_SetSessionLabel_FullMethodName       = "/traffic.v1.ControlService/SetSessionLabel"
@@ -69,6 +71,12 @@ type ControlServiceClient interface {
 	ListServices(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServiceList, error)
 	StartService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*ServiceInfo, error)
 	StopService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*Empty, error)
+	// Child logs. The gateway keeps one rolling file per spawned child (capture source,
+	// service, module process) plus its own; a viewer lists them and reads the tail of one,
+	// streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
+	// access. See ADR-0010 logging.
+	ListLogs(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*LogList, error)
+	GetLog(ctx context.Context, in *GetLogRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 	// Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
 	// spilled blobs) as a self-contained .tar.gz, streamed in chunks.
 	ExportSession(ctx context.Context, in *ExportSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error)
@@ -200,9 +208,38 @@ func (c *controlServiceClient) StopService(ctx context.Context, in *ServiceReque
 	return out, nil
 }
 
+func (c *controlServiceClient) ListLogs(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*LogList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LogList)
+	err := c.cc.Invoke(ctx, ControlService_ListLogs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) GetLog(ctx context.Context, in *GetLogRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[1], ControlService_GetLog_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetLogRequest, LogChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_GetLogClient = grpc.ServerStreamingClient[LogChunk]
+
 func (c *controlServiceClient) ExportSession(ctx context.Context, in *ExportSessionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[1], ControlService_ExportSession_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[2], ControlService_ExportSession_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +288,7 @@ func (c *controlServiceClient) DeleteSession(ctx context.Context, in *DeleteSess
 
 func (c *controlServiceClient) ImportSession(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[2], ControlService_ImportSession_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[3], ControlService_ImportSession_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -432,6 +469,12 @@ type ControlServiceServer interface {
 	ListServices(context.Context, *Empty) (*ServiceList, error)
 	StartService(context.Context, *ServiceRequest) (*ServiceInfo, error)
 	StopService(context.Context, *ServiceRequest) (*Empty, error)
+	// Child logs. The gateway keeps one rolling file per spawned child (capture source,
+	// service, module process) plus its own; a viewer lists them and reads the tail of one,
+	// streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
+	// access. See ADR-0010 logging.
+	ListLogs(context.Context, *Empty) (*LogList, error)
+	GetLog(*GetLogRequest, grpc.ServerStreamingServer[LogChunk]) error
 	// Export a whole session bundle (catalog row + flows.sqlite + pcap/key.log +
 	// spilled blobs) as a self-contained .tar.gz, streamed in chunks.
 	ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error
@@ -497,6 +540,12 @@ func (UnimplementedControlServiceServer) StartService(context.Context, *ServiceR
 }
 func (UnimplementedControlServiceServer) StopService(context.Context, *ServiceRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopService not implemented")
+}
+func (UnimplementedControlServiceServer) ListLogs(context.Context, *Empty) (*LogList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListLogs not implemented")
+}
+func (UnimplementedControlServiceServer) GetLog(*GetLogRequest, grpc.ServerStreamingServer[LogChunk]) error {
+	return status.Error(codes.Unimplemented, "method GetLog not implemented")
 }
 func (UnimplementedControlServiceServer) ExportSession(*ExportSessionRequest, grpc.ServerStreamingServer[ExportChunk]) error {
 	return status.Error(codes.Unimplemented, "method ExportSession not implemented")
@@ -715,6 +764,35 @@ func _ControlService_StopService_Handler(srv interface{}, ctx context.Context, d
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _ControlService_ListLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).ListLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_ListLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).ListLogs(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_GetLog_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetLogRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControlServiceServer).GetLog(m, &grpc.GenericServerStream[GetLogRequest, LogChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_GetLogServer = grpc.ServerStreamingServer[LogChunk]
 
 func _ControlService_ExportSession_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ExportSessionRequest)
@@ -1094,6 +1172,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ControlService_StopService_Handler,
 		},
 		{
+			MethodName: "ListLogs",
+			Handler:    _ControlService_ListLogs_Handler,
+		},
+		{
 			MethodName: "SetSessionGroup",
 			Handler:    _ControlService_SetSessionGroup_Handler,
 		},
@@ -1170,6 +1252,11 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "ReDecode",
 			Handler:       _ControlService_ReDecode_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "GetLog",
+			Handler:       _ControlService_GetLog_Handler,
 			ServerStreams: true,
 		},
 		{

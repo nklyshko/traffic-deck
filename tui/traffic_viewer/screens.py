@@ -318,6 +318,7 @@ class SessionsScreen(Screen):
         Binding("a", "new_capture", "Capture"),
         Binding("s", "stop_capture", "Stop"),
         Binding("X", "toggle_mcp", "MCP"),
+        Binding("L", "logs", "Logs"),
         Binding("r", "refresh", "Refresh"),
         Binding("n", "rename", "Rename"),
         Binding("g", "set_group", "Group"),
@@ -400,6 +401,10 @@ class SessionsScreen(Screen):
         else:
             info = await self.app.client.start_service("mcp")
             self.notify(f"MCP server listening at {info.url} — {info.detail}", timeout=10)
+
+    def action_logs(self) -> None:
+        """Open the log browser: the gateway's own log and each spawned child's."""
+        self.app.push_screen(LogsScreen())
 
     @work(exclusive=True)
     async def load_sessions(self) -> None:
@@ -2160,3 +2165,110 @@ class CompareScreen(Screen):
         (eq if ba == bb else chg)(f"{a.request_body.size}B", f"{b.request_body.size}B")
 
         return Content("\n").join(left), Content("\n").join(right)
+
+
+def _fmt_size(n: int) -> str:
+    """Human-readable byte count for the log list (1.2K, 3.4M)."""
+    size = float(n)
+    for unit in ("B", "K", "M", "G"):
+        if size < 1024 or unit == "G":
+            return f"{int(size)}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}G"
+
+
+class LogsScreen(Screen):
+    """The gateway's own log plus one per spawned child — capture source, service, module
+    process. Served by the gateway (not read off disk), so it works against a remote daemon
+    too. Enter opens a log's tail; r refreshes the list."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("r", "refresh", "Refresh"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        table = NavDataTable(id="logs", cursor_type="row", zebra_stripes=True)
+        table.add_columns("Log", "Name", "Size", "Modified")
+        yield table
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "TrafficDeck"
+        self.sub_title = "logs"
+        self.query_one("#logs", DataTable).focus()
+        self.load()
+
+    def action_refresh(self) -> None:
+        self.load()
+
+    @work(exclusive=True)
+    async def load(self) -> None:
+        table = self.query_one("#logs", DataTable)
+        table.clear()
+        self._labels: dict[str, str] = {}
+        try:
+            logs = await self.app.client.list_logs()
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"list logs failed: {exc}", severity="error")
+            return
+        for lg in logs:
+            label = lg.label or lg.name
+            self._labels[lg.name] = label
+            modified = datetime.fromtimestamp(
+                lg.modified_unix_ms / 1e3).strftime("%Y-%m-%d %H:%M") if lg.modified_unix_ms else ""
+            table.add_row(label, lg.name, _fmt_size(lg.size_bytes), modified, key=lg.name)
+        if not logs:
+            self.notify("no logs yet")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        name = str(event.row_key.value)
+        self.app.push_screen(LogViewScreen(name, self._labels.get(name, name)))
+
+
+class LogViewScreen(Screen):
+    """The tail of one log (the gateway caps how much it returns). r re-fetches so a live
+    child's log can be watched by hand; escape returns to the list."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("r", "refresh", "Refresh"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, name: str, label: str = "") -> None:
+        super().__init__()
+        self._name = name
+        self._label = label or name
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with VerticalScroll(id="logview"):
+            yield Static("loading…", id="logbody")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "TrafficDeck"
+        self.sub_title = f"log · {self._label}"
+        self.load()
+
+    def action_refresh(self) -> None:
+        self.load()
+
+    @work(exclusive=True)
+    async def load(self) -> None:
+        body = self.query_one("#logbody", Static)
+        try:
+            data = await self.app.client.get_log(self._name)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"get log failed: {exc}", severity="error")
+            return
+        text = data.decode("utf-8", "replace")
+        # Text(), not markup: a log line like "[chrome] …" must render literally, not be
+        # parsed as Rich markup.
+        body.update(Text(text) if text.strip() else Text("(empty)", style="dim"))
+        # Land on the most recent lines, as a log viewer should.
+        self.call_after_refresh(
+            lambda: self.query_one("#logview", VerticalScroll).scroll_end(animate=False))
