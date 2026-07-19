@@ -74,6 +74,51 @@ func TestListAndGetLog(t *testing.T) {
 	}
 }
 
+// TestModuleProcessLogIsListed confirms a third-party module's processes are covered: they
+// register as services keyed "module:<mod>:<NN>-<proc>" (ApplyManifests), so their per-child
+// files show up in ListLogs under that name and GetLog streams them like any other.
+func TestModuleProcessLogIsListed(t *testing.T) {
+	dir := t.TempDir()
+	logging.SetupFused(config.Config{LogFile: filepath.Join(dir, "gateway.log"), LogMaxSizeMB: 1})
+	t.Cleanup(func() { logging.Setup(config.Config{LogFile: "off"}) })
+
+	const key = "module:acme:00-adapter"
+	child := logging.ChildLog(key) // written under the same name the service is spawned with
+	_, _ = child.Write([]byte("[" + key + "] adapter listening\n"))
+	_ = child.Close()
+
+	// The service registry as ApplyManifests builds it for a module process.
+	svcs := sourcemgr.NewServices("127.0.0.1:0", map[string]sourcemgr.ServiceSpec{
+		key: {Module: "acme", Label: "acme / adapter"},
+	})
+	c := NewControl(nil, dir, sourcemgr.New("127.0.0.1:0", nil), svcs)
+
+	list, err := c.ListLogs(context.Background(), &trafficv1.Empty{})
+	if err != nil {
+		t.Fatalf("list logs: %v", err)
+	}
+	var info *trafficv1.LogInfo
+	for _, l := range list.GetLogs() {
+		if l.GetName() == key {
+			info = l
+		}
+	}
+	if info == nil {
+		t.Fatalf("module process log %q not listed: %+v", key, list.GetLogs())
+	}
+	if info.GetLabel() != "acme / adapter" {
+		t.Errorf("label = %q, want %q", info.GetLabel(), "acme / adapter")
+	}
+
+	stream := &fakeLogStream{ctx: context.Background()}
+	if err := c.GetLog(&trafficv1.GetLogRequest{Name: key}, stream); err != nil {
+		t.Fatalf("get log: %v", err)
+	}
+	if !contains(string(stream.data), "adapter listening") {
+		t.Errorf("module log tail = %q, want the written line", stream.data)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
