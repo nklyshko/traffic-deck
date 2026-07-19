@@ -132,6 +132,10 @@ func runFused() {
 		log.Fatal("`uv` is required to run the TUI; install it or run the TUI yourself against `trafficdeck serve`")
 	}
 
+	// Past the preflight the terminal is the viewer's: send our logs and every child's
+	// output to the log file alone, or they overwrite the top of the TUI.
+	logging.SetupFused(cfg)
+
 	var s *grpc.Server
 	var mgr *sourcemgr.Manager
 	var svcs *sourcemgr.Services
@@ -158,6 +162,7 @@ func runFused() {
 	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+cfg.GRPCAddr)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	runErr := cmd.Run()
+	logging.Setup(cfg) // viewer's gone, the terminal is ours again — teardown errors must show
 
 	// Viewer exited → tear the gateway down (reap capture sources + services, close store).
 	if mgr != nil {

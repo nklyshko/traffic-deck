@@ -360,7 +360,7 @@ label  = "Acme"
 | `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass. Set `off` to run an authoritative batch tshark re-decode on close instead (full bodies; useful to verify the live decoder). |
 | `GATEWAY_VERIFY_LIVE` | `false` | on close, compare the live-decoded flows against a batch decode and log the differences. |
 | `GATEWAY_MCP` | `false` | auto-start the MCP server on launch (headless agent access without a viewer). The TUI can also toggle it with `X`; either way the gateway owns it, so it outlives the viewer. |
-| `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. Size/retention: `GATEWAY_LOG_MAX_SIZE_MB` (50), `GATEWAY_LOG_MAX_BACKUPS` (10), `GATEWAY_LOG_MAX_AGE_DAYS` (30), `GATEWAY_LOG_COMPRESS` (true). |
+| `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. Size/retention: `GATEWAY_LOG_MAX_SIZE_MB` (50), `GATEWAY_LOG_MAX_BACKUPS` (10), `GATEWAY_LOG_MAX_AGE_DAYS` (30), `GATEWAY_LOG_COMPRESS` (true). Under `trafficdeck` (one-command mode) the terminal belongs to the TUI, so the gateway and its children log to the file only — `tail -f` it to watch, or use `trafficdeck serve`. Each spawned child (capture source, MCP, a module's processes) also gets its own rolling file in the same directory — `logs/chrome.log`, `logs/mcp.log` — so one tool can be read on its own; under `serve` its output is additionally teed to the terminal tagged `[chrome]`. |
 
 ## Features
 

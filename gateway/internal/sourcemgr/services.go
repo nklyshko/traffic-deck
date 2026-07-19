@@ -1,6 +1,7 @@
 package sourcemgr
 
 import (
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 )
 
 // Auxiliary services are gateway-owned processes that are not capture sources — the MCP
@@ -44,6 +47,7 @@ type Services struct {
 	mu      sync.Mutex
 	specs   map[string]ServiceSpec
 	running map[string]*exec.Cmd
+	logs    map[string]io.WriteCloser // per-service log sink, closed when it exits
 }
 
 // NewServices returns a manager over the given registry. gatewayAddr is injected as
@@ -53,6 +57,7 @@ func NewServices(gatewayAddr string, specs map[string]ServiceSpec) *Services {
 		gatewayAddr: gatewayAddr,
 		specs:       specs,
 		running:     map[string]*exec.Cmd{},
+		logs:        map[string]io.WriteCloser{},
 	}
 	s.spawn = s.realSpawn
 	return s
@@ -152,7 +157,12 @@ func (s *Services) Start(name string) (ServiceInfo, error) {
 		if s.running[name] == cmd {
 			delete(s.running, name)
 		}
+		out := s.logs[name]
+		delete(s.logs, name)
 		s.mu.Unlock()
+		if out != nil { // flush its last partial line and release the file
+			_ = out.Close()
+		}
 	}()
 	return info, nil
 }
@@ -188,11 +198,20 @@ func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own group for group-kill
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	out := logging.ChildLog(name)
+	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
+		_ = out.Close()
 		return nil, err
 	}
-	log.Printf("service %q started: %s", name, spec.URL)
+	s.mu.Lock()
+	s.logs[name] = out
+	s.mu.Unlock()
+	if p := logging.ChildLogPath(name); p != "" {
+		log.Printf("service %q started: %s (log: %s)", name, spec.URL, p)
+	} else {
+		log.Printf("service %q started: %s", name, spec.URL)
+	}
 	return cmd, nil
 }
 

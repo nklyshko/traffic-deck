@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 )
 
 // TestRealSpawnChromeDescribe exercises the whole env-free path against the actual chrome
@@ -32,6 +34,36 @@ func TestRealSpawnChromeDescribe(t *testing.T) {
 	}
 	if len(d.GetParams()) == 0 || d.GetParams()[0].GetKey() != "chrome" {
 		t.Fatalf("descriptor lacks a chrome param: %+v", d.GetParams())
+	}
+}
+
+// A spawned source's output goes to its own file, so one tool can be read on its own
+// rather than picked out of an interleaved stream. Real spawn, as the file only appears
+// once a child actually writes.
+func TestRealSpawnWritesPerSourceLog(t *testing.T) {
+	specs := DefaultSpecs()
+	if _, ok := specs["chrome"]; !ok {
+		t.Skip("chrome tool not discoverable in this environment")
+	}
+	dir := t.TempDir()
+	logging.SetupFused(config.Config{LogFile: filepath.Join(dir, "gateway.log"), LogMaxSizeMB: 1})
+	t.Cleanup(func() { logging.Setup(config.Config{LogFile: "off"}) })
+
+	m := New("127.0.0.1:8080", specs)
+	if _, err := m.Describe(context.Background(), "chrome", nil); err != nil {
+		t.Fatalf("describe via real spawn: %v", err)
+	}
+	m.Close() // flushes and closes the source's log
+
+	if want := filepath.Join(dir, "chrome.log"); want != logging.ChildLogPath("chrome") {
+		t.Errorf("ChildLogPath = %q, want %q", logging.ChildLogPath("chrome"), want)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "chrome.log"))
+	if err != nil {
+		t.Fatalf("no per-source log for chrome: %v", err)
+	}
+	if len(b) == 0 {
+		t.Error("chrome.log is empty")
 	}
 }
 

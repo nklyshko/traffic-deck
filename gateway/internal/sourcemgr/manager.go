@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 )
 
 // readyPrefix mirrors capture_sdk.source.READY_PREFIX: the line a source prints on stdout
@@ -50,7 +51,8 @@ type SourceInfo struct {
 type conn struct {
 	client trafficv1.CaptureSourceServiceClient
 	cc     *grpc.ClientConn
-	proc   *exec.Cmd // nil for an injected/pre-dialed conn (tests)
+	proc   *exec.Cmd      // nil for an injected/pre-dialed conn (tests)
+	log    io.WriteCloser // this source's own log sink; nil when not spawned by us
 }
 
 // Manager holds the source registry, the running sources, and which source owns each live
@@ -267,6 +269,9 @@ func (c *conn) close() {
 		// emulator) go too — a plain kill of the parent would strand them.
 		_ = syscall.Kill(-c.proc.Process.Pid, syscall.SIGTERM)
 	}
+	if c.log != nil { // flush its last partial line and release the file
+		_ = c.log.Close()
+	}
 }
 
 // realSpawn reaches a source. A module (Addr set) is already running — just dial it. A
@@ -288,25 +293,30 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+m.gatewayAddr)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stderr = os.Stderr
+	srcLog := logging.ChildLog(name)
+	cmd.Stderr = srcLog
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = srcLog.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		_ = srcLog.Close()
 		return nil, err
 	}
 
 	addr, err := readReady(stdout, 20*time.Second)
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		_ = srcLog.Close()
 		return nil, err
 	}
-	// Keep draining stdout so the child never blocks on a full pipe; tee to the log.
+	// Keep draining stdout so the child never blocks on a full pipe; into its own log
+	// alongside its stderr, so one source reads as one stream.
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
-			log.Printf("source %s: %s", name, sc.Text())
+			_, _ = srcLog.Write(append([]byte(sc.Text()), '\n'))
 		}
 	}()
 
@@ -315,7 +325,10 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		return nil, err
 	}
-	return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc, proc: cmd}, nil
+	if p := logging.ChildLogPath(name); p != "" {
+		log.Printf("source %s: logging to %s", name, p)
+	}
+	return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc, proc: cmd, log: srcLog}, nil
 }
 
 // readReady scans lines until the source prints its ready line, returning the address to
