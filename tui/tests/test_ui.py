@@ -839,6 +839,54 @@ async def test_flow_list_follow_mode():
         assert not table.follow and table.cursor_coordinate.row == 0
 
 
+async def test_flags_column_widens_when_a_row_is_annotated():
+    """Annotating an already-listed flow must widen the flags column. Column widths are
+    measured when rows are added, so in a session that opens with nothing annotated — as
+    every live session does — the column sits at width 0 under its empty header and an
+    in-place update that doesn't resize leaves the ★/●/#N invisible. (The _FLOWS fixture
+    has a WebSocket flow whose ⇅2 already gives the column width 3, so this asserts growth
+    from a baseline rather than from 0; the WS test below covers the true zero-width case.)"""
+    app = make_app()
+    async with app.run_test() as pilot:
+        table = await _open_flows(pilot)
+        pane = pilot.app.screen.query_one(SessionPane)
+        flags_col = table.columns[pane._cols[0]]
+
+        f = _flow("f4", "GET", 200)      # listed with an empty flags cell
+        pane._upsert(f)
+        await pilot.pause()
+        before = flags_col.content_width
+
+        f.favorite = True                # ...then annotated in place
+        f.mark_color = "red"
+        f.comments.append(cp.Comment(id="c1", body="hi"))
+        pane._upsert(f)
+        await pilot.pause()
+        assert flags_col.content_width > before
+
+
+async def test_ws_flags_column_widens_when_a_message_is_annotated():
+    """Same for the message timeline — it was only visible after leaving and re-entering
+    the screen, which rebuilds the rows and so re-measures the column."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_flows(pilot)
+        await pilot.press("end")   # f3 (last row) is the websocket flow
+        await pilot.pause()
+        await pilot.press("M")
+        await settle(pilot)
+        screen = pilot.app.screen
+        table = screen.query_one("#msgs", DataTable)
+        flags_col = table.columns[screen._cols[0]]
+        assert flags_col.content_width == 0
+
+        m = screen._msgs["m1"]
+        m.mark_color = "red"
+        screen._upsert_msg(m)
+        await pilot.pause()
+        assert flags_col.content_width > 0
+
+
 async def test_ws_messages_follow_mode():
     app = make_app()
     async with app.run_test() as pilot:

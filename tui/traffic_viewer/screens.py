@@ -918,7 +918,8 @@ class SessionPane(AnnotatableTable, Vertical):
         for fid in self._rows:  # backfill the new cell for rows already on screen
             f = self.flows.get(fid)
             if f is not None:
-                table.update_cell(fid, self._extra_col_keys[cid], self._extra_value(f, cid))
+                table.update_cell(fid, self._extra_col_keys[cid], self._extra_value(f, cid),
+                                  update_width=True)
 
     def _remove_extra_column(self, cid: str) -> None:
         if cid not in self._extra_cols:
@@ -1052,8 +1053,11 @@ class SessionPane(AnnotatableTable, Vertical):
             return
         cells = self._cells(f)
         if f.id in self._rows:
+            # update_width: a cell can outgrow the width the column was auto-sized to when
+            # its rows were added — the flags cell most visibly, since it starts empty under
+            # an empty header (width 0) and only gains content once something is annotated.
             for col, val in zip(self._ordered_cols(), cells):
-                table.update_cell(f.id, col, val)
+                table.update_cell(f.id, col, val, update_width=True)
         else:
             table.add_row(*cells, key=f.id)
             self._rows.add(f.id)
@@ -1817,8 +1821,10 @@ class WsMessagesScreen(AnnotatableTable, Screen):
         table = self.query_one("#msgs", DataTable)
         cells = self._msg_cells(m)
         if m.id in self._rows:
+            # update_width so the flags column (empty header, empty cells until the first
+            # annotation) actually widens to show the mark — see SessionPane._upsert.
             for col, val in zip(self._cols, cells):
-                table.update_cell(m.id, col, val)
+                table.update_cell(m.id, col, val, update_width=True)
         else:
             table.add_row(*cells, key=m.id)
             self._rows.add(m.id)
