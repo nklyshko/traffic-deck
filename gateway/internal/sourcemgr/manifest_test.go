@@ -75,18 +75,56 @@ label = "Acme"
 	svc := map[string]ServiceSpec{}
 	ApplyManifests(dir, src, svc)
 
-	if s, ok := src["acme"]; !ok || s.Addr != "127.0.0.1:7070" || s.Label != "Acme" {
+	if s, ok := src["acme"]; !ok || s.Addr != "127.0.0.1:7070" || s.Label != "Acme" || s.Module != "acme" {
 		t.Errorf("module source = %+v (ok=%v)", src["acme"], ok)
 	}
-	// The adapter process became an auto-start service.
+	// The adapter process is registered against its module, started on first use of the
+	// acme source rather than auto-started at launch (the module has a [control] source).
 	var found bool
 	for _, spec := range svc {
-		if len(spec.Argv) == 1 && spec.Argv[0] == "acme-adapter" && spec.AutoStart {
+		if len(spec.Argv) == 1 && spec.Argv[0] == "acme-adapter" {
 			found = true
+			if spec.AutoStart {
+				t.Errorf("adapter should not auto-start when the module has a capture source: %+v", spec)
+			}
+			if spec.Module != "acme" {
+				t.Errorf("adapter service Module = %q, want acme", spec.Module)
+			}
 		}
 	}
 	if !found {
-		t.Errorf("adapter process not registered as an auto-start service: %+v", svc)
+		t.Errorf("adapter process not registered as a service: %+v", svc)
+	}
+}
+
+// A module with processes but no [control] source has no capture type to gate on, so its
+// processes still auto-start at launch.
+func TestApplyManifestsAutoStartsProcessesWithoutControl(t *testing.T) {
+	dir := t.TempDir()
+	writeManifest(t, dir, `
+name = "acme"
+[[process]]
+name = "web"
+command = ["npm", "run", "dev"]
+`)
+	src := map[string]Spec{}
+	svc := map[string]ServiceSpec{}
+	ApplyManifests(dir, src, svc)
+
+	if len(src) != 0 {
+		t.Errorf("no [control] block should register no source, got %+v", src)
+	}
+	var found bool
+	for _, spec := range svc {
+		if len(spec.Argv) == 3 && spec.Argv[0] == "npm" {
+			found = true
+			if !spec.AutoStart || spec.Module != "" {
+				t.Errorf("web service = %+v, want AutoStart and no Module", spec)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("web process not registered: %+v", svc)
 	}
 }
 

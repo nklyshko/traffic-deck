@@ -1,6 +1,7 @@
 package sourcemgr
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -27,7 +28,8 @@ type ServiceSpec struct {
 	Label     string
 	URL       string // where it's reachable when up
 	Detail    string // note for the viewer (e.g. exposure warning)
-	AutoStart bool   // start at gateway launch (a module's processes) vs toggled (MCP)
+	AutoStart bool   // start at gateway launch vs toggled (MCP) or module-gated
+	Module    string // owning module: started with its capture source, not at launch ("" = neither)
 }
 
 // ServiceInfo is a service's state for the viewer-facing list.
@@ -215,8 +217,9 @@ func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-// StartAuto launches every service marked AutoStart (a module's processes), in registry
-// order — called once at gateway launch.
+// StartAuto launches every service marked AutoStart, in registry order — called once at
+// gateway launch. A module's processes are no longer auto-started unless the module has no
+// capture source (module-gated processes come up on first use; see StartModule).
 func (s *Services) StartAuto() {
 	s.mu.Lock()
 	names := make([]string, 0, len(s.specs))
@@ -232,6 +235,32 @@ func (s *Services) StartAuto() {
 			log.Printf("auto-start service %q: %v", name, err)
 		}
 	}
+}
+
+// StartModule launches every process belonging to a module (its adapter, its web UI), in
+// registry order — called by the source manager the first time the module's capture source
+// is requested, so a module's processes come up only when its capture type is used. Already
+// running processes are left as-is (Start is idempotent), and it's a no-op for a module with
+// no processes. The first process that fails to start aborts and is returned.
+func (s *Services) StartModule(module string) error {
+	if module == "" {
+		return nil
+	}
+	s.mu.Lock()
+	var names []string
+	for name, spec := range s.specs {
+		if spec.Module == module {
+			names = append(names, name)
+		}
+	}
+	s.mu.Unlock()
+	sort.Strings(names) // module:<name>:<NN>-<proc> keys sort into declared order
+	for _, name := range names {
+		if _, err := s.Start(name); err != nil {
+			return fmt.Errorf("start %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func killGroup(cmd *exec.Cmd) {

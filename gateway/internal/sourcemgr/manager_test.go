@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -213,6 +215,52 @@ func TestStartRoutesStopToTheOwningSource(t *testing.T) {
 	}
 	if len(fakes["android"].stopped) != 0 {
 		t.Errorf("android should not have been stopped, got %v", fakes["android"].stopped)
+	}
+}
+
+// TestModuleSourceStartsProcessesOnFirstUse is the lazy path: a module's processes aren't
+// running at registration, come up the first time its capture source is used (here via
+// Describe), and are reused (not re-spawned) on subsequent use.
+func TestModuleSourceStartsProcessesOnFirstUse(t *testing.T) {
+	fake := &fakeSource{name: "acme"}
+	addr := serveFake(t, fake)
+
+	const proc = "module:acme:00-adapter"
+	var mu sync.Mutex
+	starts := 0
+	svcs := NewServices("127.0.0.1:8080", map[string]ServiceSpec{
+		proc: {Module: "acme", Label: "acme / adapter"},
+	})
+	svcs.spawn = func(_ string, _ ServiceSpec) (*exec.Cmd, error) {
+		mu.Lock()
+		starts++
+		mu.Unlock()
+		cmd := exec.Command("sleep", "30")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		return cmd, cmd.Start()
+	}
+	t.Cleanup(svcs.Close)
+
+	m := New("127.0.0.1:8080", map[string]Spec{"acme": {Addr: addr, Module: "acme"}})
+	t.Cleanup(m.Close)
+	m.SetModuleStarter(svcs.StartModule)
+
+	if svcs.List()[0].Running {
+		t.Fatal("module process should not run before its source is used")
+	}
+	if _, err := m.Describe(context.Background(), "acme", nil); err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	if !svcs.List()[0].Running {
+		t.Error("module process should be running after first use of its source")
+	}
+	if _, err := m.Describe(context.Background(), "acme", nil); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 1 {
+		t.Errorf("adapter started %d times across two uses, want 1 (reused)", starts)
 	}
 }
 

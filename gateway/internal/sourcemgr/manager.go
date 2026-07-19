@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
@@ -36,6 +37,7 @@ const readyPrefix = "traffic-deck source ready "
 type Spec struct {
 	Argv     []string
 	Addr     string // dial-only: a module's already-running CaptureSourceService
+	Module   string // owning module, whose processes are started before this source is dialed
 	Label    string
 	KeepWarm bool
 }
@@ -60,6 +62,7 @@ type conn struct {
 type Manager struct {
 	gatewayAddr string
 	spawn       func(ctx context.Context, name string, spec Spec) (*conn, error)
+	startModule func(module string) error // start a module's processes before its source is dialed
 
 	mu      sync.Mutex
 	specs   map[string]Spec
@@ -165,6 +168,11 @@ func New(gatewayAddr string, specs map[string]Spec) *Manager {
 	return m
 }
 
+// SetModuleStarter wires the callback the manager uses to bring a module's processes up
+// before its capture source is dialed (see ApplyManifests / Services.StartModule). Left
+// unset for built-in sources, which have no module processes.
+func (m *Manager) SetModuleStarter(fn func(module string) error) { m.startModule = fn }
+
 // Sources lists the registered source names and whether each keeps a warm resource.
 func (m *Manager) Sources() []SourceInfo {
 	m.mu.Lock()
@@ -186,6 +194,13 @@ func (m *Manager) ensure(ctx context.Context, name string) (*conn, error) {
 	m.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown capture source %q", name)
+	}
+	// Bring the module's processes up first: the adapter that serves spec.Addr is one of
+	// them, so it must be running before we dial. Idempotent, so racing callers are fine.
+	if spec.Module != "" && m.startModule != nil {
+		if err := m.startModule(spec.Module); err != nil {
+			return nil, fmt.Errorf("start module %q for source %q: %w", spec.Module, name, err)
+		}
 	}
 	c, err := m.spawn(ctx, name, spec)
 	if err != nil {
@@ -283,6 +298,13 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 		if err != nil {
 			return nil, err
 		}
+		// The module's adapter serves this address and may have just been launched (its
+		// processes now start lazily), so wait for it to accept connections before handing
+		// back a client — otherwise the first Describe would race the adapter's bind.
+		if err := waitReady(ctx, cc, moduleReadyTimeout); err != nil {
+			_ = cc.Close()
+			return nil, fmt.Errorf("source %q at %s: %w", name, spec.Addr, err)
+		}
 		return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc}, nil
 	}
 	if len(spec.Argv) == 0 {
@@ -329,6 +351,29 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 		log.Printf("source %s: logging to %s", name, p)
 	}
 	return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc, proc: cmd, log: srcLog}, nil
+}
+
+// moduleReadyTimeout bounds how long a module's dial waits for its just-launched adapter to
+// start accepting connections — the dial-only analog of readReady's wait for a spawned
+// source's ready line. Generous, since a module process (an npm/node adapter) can be slow.
+const moduleReadyTimeout = 30 * time.Second
+
+// waitReady blocks until the channel reaches Ready, or the timeout / ctx expires. Used on a
+// module's dial-only connection, whose adapter may still be binding after a lazy start.
+func waitReady(ctx context.Context, cc *grpc.ClientConn, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cc.Connect()
+	for {
+		switch s := cc.GetState(); s {
+		case connectivity.Ready:
+			return nil
+		default:
+			if !cc.WaitForStateChange(ctx, s) { // deadline or ctx cancelled
+				return fmt.Errorf("not ready: %w", context.Cause(ctx))
+			}
+		}
+	}
 }
 
 // readReady scans lines until the source prints its ready line, returning the address to

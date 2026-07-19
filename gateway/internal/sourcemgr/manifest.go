@@ -26,8 +26,9 @@ type Manifest struct {
 	Control *ControlSpec  `toml:"control"`
 }
 
-// ProcessSpec is one long-lived process a module runs (launched at gateway startup, in
-// declared order, reaped by group-kill on shutdown).
+// ProcessSpec is one long-lived process a module runs (started in declared order — lazily
+// on first use of the module's capture source, or at launch if it has none — and reaped by
+// group-kill on shutdown).
 type ProcessSpec struct {
 	Name    string            `toml:"name"`
 	Cwd     string            `toml:"cwd"`
@@ -83,22 +84,32 @@ func LoadManifests(dir string) []Manifest {
 	return out
 }
 
-// ApplyManifests merges the modules found in dir into the source and service registries:
-// each module's processes become auto-start services, and a [control] block registers a
-// dial-only capture source.
+// ApplyManifests merges the modules found in dir into the source and service registries.
+// A module's processes (its adapter, its web UI) are tied to its capture type: a module
+// with a [control] block has its processes tagged with the module name and started lazily,
+// the first time that capture source is requested (see Manager.ensure) — so a module's
+// adapter and UI come up only when its capture is used, not at gateway launch. A module
+// with no [control] source has no capture type to gate on, so its processes auto-start.
 func ApplyManifests(dir string, srcSpecs map[string]Spec, svcSpecs map[string]ServiceSpec) {
 	for _, m := range LoadManifests(dir) {
+		lazy := m.Control != nil && m.Control.Addr != ""
 		for i, p := range m.Process {
 			if len(p.Command) == 0 {
 				continue
 			}
 			key := fmt.Sprintf("module:%s:%02d-%s", m.Name, i, p.Name)
-			svcSpecs[key] = ServiceSpec{
-				Argv: p.Command, Cwd: p.Cwd, Env: p.Env, AutoStart: true,
+			spec := ServiceSpec{
+				Argv: p.Command, Cwd: p.Cwd, Env: p.Env,
 				Label: m.Name + " / " + p.Name,
 			}
+			if lazy {
+				spec.Module = m.Name // started on first use of the module's source
+			} else {
+				spec.AutoStart = true // no capture type to gate on; start at launch
+			}
+			svcSpecs[key] = spec
 		}
-		if m.Control != nil && m.Control.Addr != "" {
+		if lazy {
 			name := m.Control.Source
 			if name == "" {
 				name = m.Name
@@ -107,8 +118,11 @@ func ApplyManifests(dir string, srcSpecs map[string]Spec, svcSpecs map[string]Se
 			if label == "" {
 				label = m.Name
 			}
-			srcSpecs[name] = Spec{Addr: m.Control.Addr, Label: label, KeepWarm: m.Control.KeepWarm}
-			log.Printf("plugin %q: capture source at %s", m.Name, m.Control.Addr)
+			srcSpecs[name] = Spec{
+				Addr: m.Control.Addr, Module: m.Name, Label: label, KeepWarm: m.Control.KeepWarm,
+			}
+			log.Printf("plugin %q: capture source at %s (processes start on first use)",
+				m.Name, m.Control.Addr)
 		}
 	}
 }

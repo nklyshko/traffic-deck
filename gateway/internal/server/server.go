@@ -311,7 +311,10 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	sourcemgr.ApplyManifests(sourcemgr.PluginsDir(), srcSpecs, svcSpecs)
 	mgr := sourcemgr.New(gatewayAddr, srcSpecs)
 	svcs := sourcemgr.NewServices(gatewayAddr, svcSpecs)
-	svcs.StartAuto() // bring module processes up now (the adapter must run while the app does)
+	// A module's processes (adapter, web UI) start on first use of its capture source, not
+	// now; only services with no owning capture type auto-start at launch.
+	mgr.SetModuleStarter(svcs.StartModule)
+	svcs.StartAuto()
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, verifyLive))
 	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot, mgr, svcs))
