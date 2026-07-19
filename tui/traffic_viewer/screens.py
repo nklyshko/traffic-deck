@@ -413,6 +413,8 @@ class SessionsScreen(Screen):
         self._labels = {s.id: s.label for s in sessions}  # for the workspace tab title
         # Source-declared default table columns (viewer.columns), by session.
         self._source_columns = {s.id: _session_view_columns(s) for s in sessions}
+        # Sessions still capturing — only these get live duration stopwatches in the pane.
+        self._open_sessions = {s.id for s in sessions if s.status == _STATUS_OPEN}
         # Cluster by group (grouped first, alphabetical; ungrouped last). Stable sort keeps
         # the server's created-DESC order within each group and when nothing is grouped.
         sessions = sorted(sessions, key=lambda s: (s.group == "", s.group.lower()))
@@ -529,7 +531,8 @@ class SessionsScreen(Screen):
         sid = str(event.row_key.value)
         label = getattr(self, "_labels", {}).get(sid, "")
         cols = getattr(self, "_source_columns", {}).get(sid, [])
-        self.app.push_screen(WorkspaceScreen(sid, label, source_columns=cols))
+        live = sid in getattr(self, "_open_sessions", set())
+        self.app.push_screen(WorkspaceScreen(sid, label, source_columns=cols, live=live))
 
     def _focused_session_id(self) -> str | None:
         table = self.query_one("#sessions", DataTable)
@@ -604,6 +607,10 @@ def _resolve_columns(source_columns) -> list[str]:
 
 # How wide an extra-column value cell may get before it's truncated in the table.
 _EXTRA_CELL_MAX = 24
+
+# SessionStatus.SESSION_STATUS_OPEN — the session is still capturing (see SESSION_STATUS).
+# Deliberately not "not closed": a decoding/error session has no in-flight requests either.
+_STATUS_OPEN = 1
 
 # Optional flow-field columns: off by default, toggled from the column picker (C).
 # tcp_stream identifies the transport connection (a tcp.stream index, or "quic:<conn-id>")
@@ -862,7 +869,8 @@ class SessionPane(AnnotatableTable, Vertical):
         Binding("l", "follow", "Follow new"),
     ]
 
-    def __init__(self, session_id: str, label: str = "", source_columns=None) -> None:
+    def __init__(self, session_id: str, label: str = "", source_columns=None,
+                 live: bool = False) -> None:
         super().__init__()
         self.session_id = session_id
         self.label = label
@@ -881,7 +889,12 @@ class SessionPane(AnnotatableTable, Vertical):
         self._groups: list = []                # group defs (catalog)
         self._tagnames: dict[str, str] = {}
         self._groupnames: dict[str, str] = {}
-        self._live = True                       # session open → tick in-flight stopwatches
+        # Whether the session is still capturing, from the catalog status the opener read.
+        # Defaults to False: assuming live would paint a stopwatch on every response-less
+        # flow of a *closed* session during backfill, only to wipe it when the stream ends
+        # — a phantom counter that ticks for a moment on open. A session that closes while
+        # we watch is caught by _finalize_live.
+        self._live = live
         self._dur_timer = None
 
     def compose(self) -> ComposeResult:
@@ -942,8 +955,10 @@ class SessionPane(AnnotatableTable, Vertical):
         self.query_one("#flows", DataTable).focus()
         self.load_defs()
         self.load_flows()
-        # Tick in-flight requests' duration cells so they read as a live stopwatch.
-        self._dur_timer = self.set_interval(0.5, self._tick_durations)
+        # Tick in-flight requests' duration cells so they read as a live stopwatch. Only
+        # a still-capturing session has any; a closed one needs no timer at all.
+        if self._live:
+            self._dur_timer = self.set_interval(0.5, self._tick_durations)
 
     def _tick_durations(self) -> None:
         """Refresh the Dur cell of each still-pending request (no response, no error) so
@@ -1172,9 +1187,10 @@ class WorkspaceScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, session_id: str, label: str = "", source_columns=None) -> None:
+    def __init__(self, session_id: str, label: str = "", source_columns=None,
+                 live: bool = False) -> None:
         super().__init__()
-        self._first = (session_id, label, source_columns or [])
+        self._first = (session_id, label, source_columns or [], live)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1189,7 +1205,8 @@ class WorkspaceScreen(Screen):
     def _tab_id(session_id: str) -> str:
         return "t" + session_id.replace("-", "")[:16]
 
-    async def open_session(self, session_id: str, label: str = "", source_columns=None) -> None:
+    async def open_session(self, session_id: str, label: str = "", source_columns=None,
+                           live: bool = False) -> None:
         """Open the session in a tab, or focus its existing tab."""
         tabs = self.query_one(TabbedContent)
         tid = self._tab_id(session_id)
@@ -1198,7 +1215,8 @@ class WorkspaceScreen(Screen):
         else:
             await tabs.add_pane(TabPane(
                 label or session_id[:8],
-                SessionPane(session_id, label, source_columns=source_columns), id=tid))
+                SessionPane(session_id, label, source_columns=source_columns, live=live),
+                id=tid))
             tabs.active = tid
         self._sync_subtitle()
         self.call_after_refresh(self._focus_active)
@@ -1260,10 +1278,13 @@ class WorkspaceScreen(Screen):
             return
         labels = {s.id: s.label for s in sessions}
         cols = {s.id: _session_view_columns(s) for s in sessions}
+        open_ids = {s.id for s in sessions if s.status == _STATUS_OPEN}
         opts = [(s.id, f"{s.label or '—'}  ({s.id[:8]}, {s.flow_count} flows)") for s in sessions]
         choice = await self.app.push_screen_wait(SelectPrompt("Open session", opts))
         if choice:
-            await self.open_session(choice, labels.get(choice, ""), source_columns=cols.get(choice, []))
+            await self.open_session(choice, labels.get(choice, ""),
+                                    source_columns=cols.get(choice, []),
+                                    live=choice in open_ids)
 
 
 def annotation_lines(rec, tagnames: dict, groupnames: dict) -> list[Content]:

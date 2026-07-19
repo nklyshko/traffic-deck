@@ -5,6 +5,8 @@ covered by test_render.py / test_filters.py."""
 
 from __future__ import annotations
 
+import asyncio
+
 from textual.widgets import DataTable, Input, OptionList, Static, TabPane
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
@@ -101,6 +103,7 @@ class FakeClient:
         self.stopped = []         # session ids stopped
         self.mcp_running = False
         self.android_provision_calls = 0
+        self.hold_flows = False   # keep stream_flows open, as a live session's would be
 
     async def list_capture_sources(self):
         return list(self.capture_sources)
@@ -174,6 +177,10 @@ class FakeClient:
     async def stream_flows(self, session_id, follow=False):
         for f in _BY_SESSION.get(session_id, _FLOWS):
             yield vp.FlowEvent(flow_added=f)
+        if self.hold_flows:
+            # Stand in for a session still capturing: the real stream stays open until the
+            # session closes, so the pane keeps its live state instead of finalizing.
+            await asyncio.Event().wait()
 
     async def get_flow(self, session_id, flow_id):
         for f in _BY_SESSION.get(session_id, _FLOWS):
@@ -837,6 +844,30 @@ async def test_flow_list_follow_mode():
         pane._upsert(_flow("f6", "GET", 200))
         await pilot.pause()
         assert not table.follow and table.cursor_coordinate.row == 0
+
+
+async def test_closed_session_shows_no_phantom_stopwatch():
+    """Opening a *closed* session must not paint a duration stopwatch on its response-less
+    flows. The pane used to assume live until the flow stream ended, so backfill rendered a
+    ⏱ counter that ticked for ~0.5s and then vanished. f3 is the response-less flow."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        table = await _open_flows(pilot)
+        pane = pilot.app.screen.query_one(SessionPane)
+        assert not pane._live and pane._dur_timer is None
+        assert table.get_cell("f3", pane._dur_col).plain == ""
+
+
+async def test_open_session_still_ticks_in_flight_requests():
+    """The converse: a session the catalog reports as open does get the live stopwatch."""
+    app = make_app()
+    app.client._sessions[0].status = 1  # SESSION_STATUS_OPEN
+    app.client.hold_flows = True        # ...and its flow stream stays open
+    async with app.run_test() as pilot:
+        table = await _open_flows(pilot)
+        pane = pilot.app.screen.query_one(SessionPane)
+        assert pane._live and pane._dur_timer is not None
+        assert table.get_cell("f3", pane._dur_col).plain.startswith("⏱")
 
 
 async def test_flags_column_widens_when_a_row_is_annotated():
