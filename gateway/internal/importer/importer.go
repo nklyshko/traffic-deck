@@ -24,6 +24,9 @@ type Options struct {
 	KeylogPath string // optional
 	Label      string
 	TsharkPath string
+	// Engine selects the batch decoder: decode.EngineTshark (default) orchestrates tshark;
+	// decode.EngineNative runs the in-process Go pipeline. "" means tshark.
+	Engine string
 }
 
 type Result struct {
@@ -67,14 +70,15 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 	if hasKeylog {
 		keylogLocal = localOr(obj, keylogKey, opts.KeylogPath)
 	}
-	return Finalize(ctx, st, opts.TsharkPath, sessionID, pcapLocal, keylogLocal)
+	return Finalize(ctx, st, opts.Engine, opts.TsharkPath, sessionID, pcapLocal, keylogLocal)
 }
 
-// Finalize batch-decodes a session's already-stored pcap (+ optional key.log),
-// persists the analysis + flows, and marks the session closed. Shared by the
-// `import` CLI and IngestService.CloseSession.
-func Finalize(ctx context.Context, st *store.Store, tsharkPath, sessionID, pcapPath, keylogPath string) (*Result, error) {
-	ds, err := decode.Decode(ctx, tsharkPath, pcapPath, keylogPath)
+// Finalize batch-decodes a session's already-stored pcap (+ optional key.log) with the
+// named engine (decode.EngineTshark or decode.EngineNative; "" = tshark), persists the
+// analysis + flows, and marks the session closed. Shared by the `import` CLI and
+// IngestService.CloseSession.
+func Finalize(ctx context.Context, st *store.Store, engine, tsharkPath, sessionID, pcapPath, keylogPath string) (*Result, error) {
+	ds, err := decodeBatch(ctx, engine, tsharkPath, pcapPath, keylogPath)
 	if err != nil {
 		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
 		return nil, fmt.Errorf("decode: %w", err)
@@ -149,6 +153,19 @@ func RedecodeCustom(ctx context.Context, st *store.Store, tsharkPath, sessionID,
 		return 0, fmt.Errorf("insert ws messages: %w", err)
 	}
 	return len(flows), nil
+}
+
+// decodeBatch runs a whole-pcap decode with the selected engine. tsharkPath is used only
+// by the tshark engine; native reads the file entirely in-process.
+func decodeBatch(ctx context.Context, engine, tsharkPath, pcapPath, keylogPath string) (*decode.Dataset, error) {
+	switch engine {
+	case decode.EngineNative:
+		return decode.DecodeNative(ctx, pcapPath, keylogPath)
+	case decode.EngineTshark, "":
+		return decode.Decode(ctx, tsharkPath, pcapPath, keylogPath)
+	default:
+		return nil, fmt.Errorf("unknown decode engine %q (want %q or %q)", engine, decode.EngineTshark, decode.EngineNative)
+	}
 }
 
 func copyIn(obj objstore.Store, key, srcPath string) (int64, error) {

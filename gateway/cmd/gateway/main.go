@@ -1,7 +1,7 @@
 // Command gateway is the TrafficDeck gateway entry point.
 //
 //	gateway serve                                      run the gRPC server
-//	gateway import --pcap f [--keylog f] [--label s]   import a capture
+//	gateway import --pcap f [--keylog f] [--label s] [--decoder tshark|native]  import a capture
 //	gateway export <session-id> [-o file.tar.gz]       export a session bundle
 //	gateway import-session <file> [--new-id] [--label s] import a session bundle
 package main
@@ -23,6 +23,7 @@ import (
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/importer"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
@@ -91,7 +92,7 @@ func serve() {
 	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
 	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
 	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify)
 	if cfg.StartMCP {
 		if _, err := svcs.Start("mcp"); err != nil {
 			log.Printf("auto-start mcp: %v", err)
@@ -108,8 +109,8 @@ func serve() {
 		svcs.Close()
 		s.GracefulStop()
 	}()
-	log.Printf("gateway listening on %s (live decode: %v, record live: %v, verify live: %v)",
-		cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+	log.Printf("gateway listening on %s (live decode: %v, record live: %v, tshark verify: %v)",
+		cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
@@ -146,7 +147,7 @@ func runFused() {
 		obj, st := openDeps(ctx, cfg)
 		stClose = st.Close
 		s = grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.VerifyLive)
+		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify)
 		if cfg.StartMCP {
 			if _, err := svcs.Start("mcp"); err != nil {
 				log.Printf("auto-start mcp: %v", err)
@@ -216,9 +217,13 @@ func importCapture(args []string) {
 	pcap := fs.String("pcap", "", "path to capture .pcap")
 	keylog := fs.String("keylog", "", "path to NSS key.log (optional)")
 	label := fs.String("label", "", "session label")
+	decoder := fs.String("decoder", decode.EngineTshark, "batch decoder: tshark | native (in-process Go, no tshark)")
 	_ = fs.Parse(args)
 	if *pcap == "" {
 		log.Fatal("import: --pcap is required")
+	}
+	if *decoder != decode.EngineTshark && *decoder != decode.EngineNative {
+		log.Fatalf("import: --decoder must be %q or %q", decode.EngineTshark, decode.EngineNative)
 	}
 
 	ctx := context.Background()
@@ -231,6 +236,7 @@ func importCapture(args []string) {
 		KeylogPath: *keylog,
 		Label:      *label,
 		TsharkPath: cfg.TsharkPath,
+		Engine:     *decoder,
 	})
 	if err != nil {
 		log.Fatalf("import: %v", err)

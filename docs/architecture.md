@@ -136,7 +136,8 @@ flowchart TD
   [ADR-0009](adr/0009-native-live-decode-default.md), which grew out of
   [ADR-0006](adr/0006-in-process-tls-decryption.md).
 - `tshark` is used only for the **optional batch decode** on close (`GATEWAY_RECORD_LIVE=off`,
-  or `GATEWAY_VERIFY_LIVE`) and for pcap import — never for the default live capture path.
+  or `GATEWAY_TSHARK_VERIFY`) and for pcap import with `--decoder tshark` — never for the
+  default live capture path. Import can also run the native Go decoder (`--decoder native`).
 - In record-live mode (default) the live decode is authoritative and persisted on close.
 - Only the native decoder produces the TLS/HTTP2 fingerprints (`ja3`, `ja4`,
   `client_hellos`, `http2_fingerprint`), so a batch re-decode trades those for tshark's

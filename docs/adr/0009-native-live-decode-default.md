@@ -35,7 +35,7 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
 - It is **authoritative by default**: `GATEWAY_LIVE_DECODE` and `GATEWAY_RECORD_LIVE`
   both default on, so live-decoded flows are persisted on close and no batch pass runs.
 - `tshark` remains for pcap import, for `GATEWAY_RECORD_LIVE=off` (an authoritative
-  batch re-decode on close), and for `GATEWAY_VERIFY_LIVE` (decode both ways on close
+  batch re-decode on close), and for `GATEWAY_TSHARK_VERIFY` (decode both ways on close
   and log the differences).
 
 ## Consequences
@@ -52,7 +52,7 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   well past [0006](0006-in-process-tls-decryption.md)'s TLS 1.3 — SSL 3.0 through TLS
   1.3, with QPACK/HPACK.
 - Keeping tshark on the import and verify paths is what makes that affordable:
-  `GATEWAY_VERIFY_LIVE` cross-checks the native decoder against Wireshark's dissectors
+  `GATEWAY_TSHARK_VERIFY` cross-checks the native decoder against Wireshark's dissectors
   on a real capture, so the two can't silently diverge.
 - Wireshark is no longer required to decode a live capture — only to import a pcap or
   run the batch/verify passes (`dumpcap` is still what the Chrome tool captures with).

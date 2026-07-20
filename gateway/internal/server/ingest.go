@@ -34,7 +34,7 @@ type Ingest struct {
 	hub        *liveHub
 	liveDecode bool // when false, streaming uploads are archived and decoded only on close
 	recordLive bool // when true, persist the live-decoded flows on close instead of batch decode
-	verifyLive bool // when true, compare live vs batch flows on close and log differences
+	tsharkVerify bool // when true, compare live flows vs a tshark decode on close and log differences
 
 	// pushAnalyses gives each pushed (mitmproxy) session a single analysis, shared across
 	// its many PushFlows streams — the addon opens one stream per flow/message.
@@ -55,10 +55,10 @@ type wsPushState struct {
 	sess    decoders.Session
 }
 
-func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive, verifyLive bool) *Ingest {
+func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive, tsharkVerify bool) *Ingest {
 	return &Ingest{
 		st: st, obj: obj, tshark: tshark, hub: hub,
-		liveDecode: liveDecode, recordLive: recordLive, verifyLive: verifyLive,
+		liveDecode: liveDecode, recordLive: recordLive, tsharkVerify: tsharkVerify,
 		pushAnalyses: map[string]string{},
 	}
 }
@@ -392,22 +392,22 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 		if err := i.persistLive(ctx, sid, ls); err != nil {
 			return nil, status.Errorf(codes.Internal, "persist live: %v", err)
 		}
-		if i.verifyLive {
-			// Diagnostic batch decode (not persisted) to check the recorded live flows.
+		if i.tsharkVerify {
+			// Diagnostic tshark decode (not persisted) to check the recorded live flows.
 			i.verifyRecordedLive(ctx, sid, ls, keylogLocal)
 		}
 	case pcapBytes > 0:
 		// PACKET source: authoritative batch decode over the finalized pcap.
 		pcapLocal, _ := i.obj.LocalPath(pcapKey(sid))
-		if _, err := importer.Finalize(ctx, i.st, i.tshark, sid, pcapLocal, keylogLocal); err != nil {
+		if _, err := importer.Finalize(ctx, i.st, decode.EngineTshark, i.tshark, sid, pcapLocal, keylogLocal); err != nil {
 			return nil, status.Errorf(codes.Internal, "finalize: %v", err)
 		}
-		if i.verifyLive && ls != nil {
-			// Compare the live decode against the just-persisted batch flows and log diffs.
+		if i.tsharkVerify && ls != nil {
+			// Compare the live decode against the just-persisted tshark flows and log diffs.
 			if batch, err := i.st.ListFlows(ctx, sid); err == nil {
-				verifyLiveVsBatch(sid, ls.protoFlows(), batch)
+				verifyLiveVsTshark(sid, ls.protoFlows(), batch)
 			} else {
-				log.Printf("verify %s: cannot list batch flows: %v", sid, err)
+				log.Printf("verify %s: cannot list tshark flows: %v", sid, err)
 			}
 		}
 	default:

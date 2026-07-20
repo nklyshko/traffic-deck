@@ -15,16 +15,16 @@ func f(proto, method, authority, path string) *trafficv1.Flow {
 	return &trafficv1.Flow{Protocol: proto, Method: method, Authority: authority, Path: path}
 }
 
-func TestVerifyLiveVsBatch(t *testing.T) {
-	batch := []*trafficv1.Flow{
+func TestVerifyLiveVsTshark(t *testing.T) {
+	tshark := []*trafficv1.Flow{
 		f("HTTP/2", "GET", "example.com", "/a"),
 		f("HTTP/2", "GET", "httpbin.org", "/get"),
 		f("HTTP/2", "GET", "httpbin.org", "/get"), // two identical requests
 		f("HTTP/2", "POST", "httpbin.org", "/post"),
 	}
 
-	// Live matches batch exactly → no diffs.
-	if diffs := verifyLiveVsBatch("s", batch, batch); len(diffs) != 0 {
+	// Live matches tshark exactly → no diffs.
+	if diffs := verifyLiveVsTshark("s", tshark, tshark); len(diffs) != 0 {
 		t.Fatalf("expected no diffs, got %v", diffs)
 	}
 
@@ -35,12 +35,12 @@ func TestVerifyLiveVsBatch(t *testing.T) {
 		f("HTTP/2", "GET", "httpbin.org", "/get"),
 		f("HTTP/2", "POST", "httpbin.org", "/post"),
 	}
-	diffs := verifyLiveVsBatch("s", live, batch)
+	diffs := verifyLiveVsTshark("s", live, tshark)
 	joined := strings.Join(diffs, "\n")
-	if !strings.Contains(joined, "httpbin.org/get: live=1 batch=2") {
+	if !strings.Contains(joined, "httpbin.org/get: live=1 tshark=2") {
 		t.Errorf("expected missing httpbin GET diff, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "example.com/a: live=2 batch=1") {
+	if !strings.Contains(joined, "example.com/a: live=2 tshark=1") {
 		t.Errorf("expected extra example.com diff, got:\n%s", joined)
 	}
 }
@@ -67,7 +67,7 @@ func TestVerifyRecordedLiveLogsDecodeFailure(t *testing.T) {
 	ls := &liveSession{flows: map[string]*trafficv1.Flow{}}
 	ing.verifyRecordedLive(context.Background(), sid, ls, "")
 
-	if !strings.Contains(buf.String(), "batch decode failed") {
+	if !strings.Contains(buf.String(), "tshark decode failed") {
 		t.Errorf("expected decode failure to be logged, got:\n%s", buf.String())
 	}
 }

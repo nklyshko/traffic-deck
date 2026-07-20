@@ -18,6 +18,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -104,6 +105,11 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 	for _, st := range lt.quic {
 		st.sess.close() // QUIC has no assembler to flush it, so end each connection here
 	}
+	// The per-connection parser goroutines drain and emit their final flows after close()
+	// EOFs their byte streams; wait for them so every flow is emitted before we return.
+	// A finite-capture caller (record-live persistence on close, DecodeNative batch import)
+	// relies on this — without it the last exchange can still be in flight at return.
+	lt.wg.Wait()
 	return nil
 }
 
@@ -122,12 +128,28 @@ type liveTCP struct {
 	// and handleUDP both run on the single packet loop in LiveTCPDecode (as the unlocked
 	// quic map above already assumes).
 	nextConn int
+
+	// wg tracks the per-connection parser goroutines (HTTP/1.1, HTTP/2, WebSocket), spawned
+	// via goParse, so LiveTCPDecode can join them after FlushAll — guaranteeing every flow
+	// is emitted before it returns.
+	wg sync.WaitGroup
+}
+
+// goParse runs a per-connection parser goroutine tracked by wg. LiveTCPDecode waits on wg
+// before returning, so a finite-capture decode never returns while a parser is still
+// draining a closed byte stream and about to emit its last flow.
+func (f *liveTCP) goParse(fn func()) {
+	f.wg.Add(1)
+	go func() {
+		defer f.wg.Done()
+		fn()
+	}()
 }
 
 // skippedFate describes what actually becomes of a connection the live decoder can't
 // handle, so the diagnostic doesn't promise a recovery that won't happen. Only a
 // non-record-live close runs the authoritative batch tshark pass; the extra decode
-// GATEWAY_VERIFY_LIVE does under record-live is diagnostic and never persisted.
+// GATEWAY_TSHARK_VERIFY does under record-live is diagnostic and never persisted.
 func (f *liveTCP) skippedFate() string {
 	if f.recordLive {
 		return "dropped from the session (live decode is authoritative; " +

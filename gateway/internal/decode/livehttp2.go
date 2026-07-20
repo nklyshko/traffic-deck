@@ -71,8 +71,8 @@ func newH2Stream(owner *tcpStream) *h2Stream {
 		flows:      map[uint32]*h2flow{},
 		pendingRST: map[uint32]string{},
 	}
-	go h.read(h.client, true)
-	go h.read(h.server, false)
+	owner.lt.goParse(func() { h.read(h.client, true) })
+	owner.lt.goParse(func() { h.read(h.server, false) })
 	return h
 }
 

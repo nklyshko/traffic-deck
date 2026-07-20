@@ -297,7 +297,7 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 // Register attaches all implemented services to s, sharing one live hub between the ingest
 // (producer) and viewer (subscriber) sides. gatewayAddr is where spawned capture sources
 // connect back for ingest. Returns the source manager so the caller can reap it on shutdown.
-func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, recordLive, verifyLive bool) (*sourcemgr.Manager, *sourcemgr.Services) {
+func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, recordLive, tsharkVerify bool) (*sourcemgr.Manager, *sourcemgr.Services) {
 	if recordLive {
 		// The persisted record is the live decode, so keep full bodies (not previews).
 		decode.SetUnlimitedLiveBodies()
@@ -316,7 +316,7 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	mgr.SetModuleStarter(svcs.StartModule)
 	svcs.StartAuto()
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
-	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, verifyLive))
+	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, tsharkVerify))
 	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot, mgr, svcs))
 	return mgr, svcs
 }

@@ -12,8 +12,8 @@ type Config struct {
 	GRPCAddr string // listen address for the gRPC server
 	DataRoot string // root for session bundles + catalog.sqlite
 	// TsharkPath is the tshark binary, used only for the optional batch decode: pcap
-	// import, and (record-live off) the authoritative batch pass / verify-live on close.
-	// The live decode needs no tshark.
+	// import (--decoder tshark), and (record-live off) the authoritative batch pass /
+	// tshark-verify on close. The live decode needs no tshark.
 	TsharkPath string
 	// LiveDecode toggles the live pipeline. When true (default) a streaming session
 	// decodes flows live, fully in-process in Go (no tshark): TCP/QUIC reassembly, TLS
@@ -27,12 +27,12 @@ type Config struct {
 	// tshark pass runs on close. Set GATEWAY_RECORD_LIVE=off to instead run the batch pass
 	// on close (authoritative, full bodies) — useful for verifying the live decoder.
 	RecordLive bool
-	// VerifyLive, on session close, compares the live-decoded flows against a batch
-	// (tshark) decode and logs any differences. Requires LiveDecode on. With RecordLive
-	// off it compares against the authoritative batch pass that runs anyway; with
-	// RecordLive on it runs an extra diagnostic batch decode (not persisted) just for
-	// the comparison. Default false.
-	VerifyLive bool
+	// TsharkVerify, on session close, compares the live-decoded flows against a tshark
+	// batch decode and logs any differences. Requires LiveDecode on. With RecordLive
+	// off it compares against the authoritative tshark pass that runs anyway; with
+	// RecordLive on it runs an extra diagnostic tshark decode (not persisted) just for
+	// the comparison. Default false. (Env: GATEWAY_TSHARK_VERIFY.)
+	TsharkVerify bool
 	// StartMCP auto-starts the MCP server on launch (GATEWAY_MCP), for headless agent
 	// access without a viewer. Default false; the TUI can also toggle it.
 	StartMCP bool
@@ -84,7 +84,7 @@ func Load() Config {
 		TsharkPath:    getenv("TSHARK_PATH", "tshark"),
 		LiveDecode:    getbool("GATEWAY_LIVE_DECODE", true),
 		RecordLive:    getbool("GATEWAY_RECORD_LIVE", true),
-		VerifyLive:    getbool("GATEWAY_VERIFY_LIVE", false),
+		TsharkVerify:  getbool("GATEWAY_TSHARK_VERIFY", false),
 		StartMCP:      getbool("GATEWAY_MCP", false),
 		LogFile:       getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
 		LogMaxSizeMB:  getint("GATEWAY_LOG_MAX_SIZE_MB", 50),

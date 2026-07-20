@@ -10,8 +10,18 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
+)
+
+// Engine names for a batch decode of a stored pcap. EngineTshark orchestrates tshark
+// (Decode); EngineNative runs the in-process Go pipeline (DecodeNative). Persisted as the
+// analysis engine label.
+const (
+	EngineTshark = "tshark"
+	EngineNative = "native"
 )
 
 // Header is one HTTP header (order preserved, duplicates allowed).
@@ -278,12 +288,48 @@ func attrVal(se xml.StartElement, name string) string {
 // flows + per-stream TLS metadata; custom raw-TCP decoders then run over the decrypted
 // bytes of matched streams.
 func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Dataset, error) {
-	ds := &Dataset{Engine: "tshark", TLSKeyLogUsed: keylogPath != ""}
+	ds := &Dataset{Engine: EngineTshark, TLSKeyLogUsed: keylogPath != ""}
 	st := newStitcher(ds, nil)
 	if err := runTshark(ctx, tsharkPath, tsharkArgs([]string{"-r", pcapPath}, keylogPath, false), nil, st); err != nil {
 		return nil, err
 	}
 	decodeCustomStreams(ctx, tsharkPath, pcapPath, keylogPath, st)
+	return ds, nil
+}
+
+// DecodeNative decodes pcapPath entirely in-process in Go — the same pipeline the live
+// capture path uses (LiveTCPDecode): gopacket TCP/QUIC reassembly, in-process TLS
+// decryption from keylogPath (when non-empty), and HTTP/1.1, HTTP/2, HTTP/3, WebSocket and
+// custom raw-TCP framing, with no tshark. It is the tshark-free alternative to Decode for
+// importing a stored pcap. Flows are returned in first-seen order; because the whole file
+// is read before returning, each flow reflects its final decoded state (later in-place
+// updates to a flow already emitted with isNew=true are seen when the caller reads it).
+func DecodeNative(ctx context.Context, pcapPath, keylogPath string) (*Dataset, error) {
+	f, err := os.Open(pcapPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	ds := &Dataset{Engine: EngineNative, TLSKeyLogUsed: keylogPath != ""}
+	var mu sync.Mutex // callbacks may fire from the decoder's internal goroutines
+	onFlow := func(fl *Flow, isNew bool) {
+		if !isNew {
+			return // the pointer is retained; its final state is read after EOF
+		}
+		mu.Lock()
+		ds.Flows = append(ds.Flows, fl)
+		mu.Unlock()
+	}
+	onMsg := func(m *WsMessage) {
+		mu.Lock()
+		ds.Messages = append(ds.Messages, m)
+		mu.Unlock()
+	}
+	// recordLive=true: this is the authoritative decode (it only tunes skip diagnostics).
+	if err := LiveTCPDecode(f, keylogPath, onFlow, onMsg, true); err != nil {
+		return nil, err
+	}
 	return ds, nil
 }
 

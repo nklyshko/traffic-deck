@@ -149,7 +149,7 @@ func newHTTPStream(owner *tcpStream) *httpStream {
 		req:    newByteStream(),
 		resp:   newByteStream(),
 	}
-	go h.run()
+	owner.lt.goParse(h.run)
 	return h
 }
 
@@ -286,8 +286,8 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 		}
 		h.onFlow(f, false) // refresh the row's ⇅ count
 	}
-	go readWSFrames(reqBr, true, emit)
-	go readWSFrames(respBr, false, emit)
+	h.owner.lt.goParse(func() { readWSFrames(reqBr, true, emit) })
+	h.owner.lt.goParse(func() { readWSFrames(respBr, false, emit) })
 }
 
 // drainBody reads up to maxLiveBody bytes, then drains the rest so the next message on a
