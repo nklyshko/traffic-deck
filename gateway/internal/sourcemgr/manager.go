@@ -330,7 +330,7 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 		return nil, err
 	}
 
-	addr, err := readReady(stdout, 20*time.Second)
+	addr, err := readReady(stdout, readyTimeout)
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		_ = srcLog.Close()
@@ -356,10 +356,17 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 	return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc, proc: cmd, log: srcLog}, nil
 }
 
-// moduleReadyTimeout bounds how long a module's dial waits for its just-launched adapter to
-// start accepting connections — the dial-only analog of readReady's wait for a spawned
-// source's ready line. Generous, since a module process (an npm/node adapter) can be slow.
-const moduleReadyTimeout = 30 * time.Second
+// readyTimeout bounds how long we wait for a freshly spawned source (or a module's dialed
+// adapter) to come up. It has to cover a cold start: the built-in sources launch via
+// `uv run`, which on a cold cache resolves and builds the project environment (grpcio, and
+// frida for android) before the tool even executes — tens of seconds, well past the old 20s.
+// The child dying still fails fast (readReady sees the closed stream; the dial sees the
+// connection refused), so this only bounds a genuinely hung-but-alive start.
+const readyTimeout = 120 * time.Second
+
+// moduleReadyTimeout is readyTimeout for a module's dial-only adapter, whose process the
+// gateway just launched (npm/uv, also cold-slow) and now waits to bind.
+const moduleReadyTimeout = readyTimeout
 
 // waitReady blocks until the channel reaches Ready, or the timeout / ctx expires. Used on a
 // module's dial-only connection, whose adapter may still be binding after a lazy start.

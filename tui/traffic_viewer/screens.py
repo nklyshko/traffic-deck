@@ -166,6 +166,12 @@ class CaptureWizardScreen(ModalScreen[str | None]):
             yield Label("↵ choose · ^b back · esc cancel", id="wizard-help")
 
     def on_mount(self) -> None:
+        # The first describe of a source spawns it, which on a cold environment (uv building
+        # the tool's deps) can take up to a minute — show that we're working, not frozen.
+        # _advance replaces this with the first step's message once the source answers.
+        self.query_one("#wizard-msg", Static).update(
+            f"⏳ starting {self._source_label}… "
+            "[dim](first run builds the source's environment; this can take a minute)[/dim]")
         self._advance()
 
     def _update_crumbs(self) -> None:
