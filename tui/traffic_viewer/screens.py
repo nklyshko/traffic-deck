@@ -427,10 +427,15 @@ class SessionsScreen(Screen):
         """Open the log browser: the gateway's own log and each spawned child's."""
         self.app.push_screen(LogsScreen())
 
-    @work(exclusive=True)
+    @work(exclusive=True, group="load-sessions")
     async def load_sessions(self, quiet: bool = False) -> None:
         """(Re)load the session list. quiet suppresses the empty/error notifications, for the
-        periodic and on-reopen auto-refreshes, which must not pop a toast every few seconds."""
+        periodic and on-reopen auto-refreshes, which must not pop a toast every few seconds.
+
+        The explicit group matters: @work(exclusive=True) cancels other workers in the same
+        group on this screen, and the default group is shared. Without a distinct group the
+        periodic/on-resume refresh would cancel an in-flight action_new_capture (which awaits
+        the source picker + wizard), so starting a capture did nothing — no form appeared."""
         table = self.query_one("#sessions", DataTable)
         # Keep the cursor on the same session across the rebuild (clear() resets it to the
         # top), so an auto-refresh doesn't yank the selection out from under the user.

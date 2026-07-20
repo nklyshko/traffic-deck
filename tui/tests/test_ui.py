@@ -17,6 +17,7 @@ from traffic_viewer.app import TrafficViewerApp
 from traffic_viewer.screens import (
     BodyScreen,
     CaptureWizardScreen,
+    SelectPrompt,
     ConfirmScreen,
     QuitConfirmScreen,
     FlowDetailScreen,
@@ -1075,6 +1076,29 @@ async def test_compare_requests_across_tabs():
         await settle(pilot)
         assert isinstance(app.screen, CompareScreen)
         assert app.compare_a is None      # consumed by the compare
+
+
+async def test_capture_reaches_wizard_through_source_picker():
+    """With more than one source, starting a capture shows the source picker, then the
+    wizard. Closing the picker briefly re-shows the sessions list, which auto-refreshes
+    (on_screen_resume); that refresh must not cancel the in-flight capture worker — if it
+    shares its worker group, the wizard never appears (the reported "nothing happens")."""
+    app = make_app()
+    app.client.capture_sources = [
+        cp2.CaptureSourceInfo(name="chrome", label="Chrome"),
+        cp2.CaptureSourceInfo(name="android", label="Android"),
+    ]
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("a")            # new capture → the source picker (2 sources)
+        await settle(pilot)
+        assert isinstance(app.screen, SelectPrompt)
+
+        await pilot.press("enter")        # pick the highlighted source (chrome)
+        await settle(pilot)
+        # The picker closed → sessions list resumed + refreshed; the capture must survive it.
+        assert isinstance(app.screen, CaptureWizardScreen)
 
 
 async def test_new_capture_wizard_walks_steps_and_starts():
