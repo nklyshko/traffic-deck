@@ -330,6 +330,7 @@ class SessionsScreen(Screen):
         Binding("g", "set_group", "Group"),
         Binding("e", "export", "Export"),
         Binding("i", "import_session", "Import"),
+        Binding("I", "import_capture", "Import pcap"),
         Binding("c", "force_close", "Close"),
         Binding("d", "delete", "Delete"),
         Binding("q", "quit", "Quit"),
@@ -482,7 +483,7 @@ class SessionsScreen(Screen):
             except Exception:  # noqa: BLE001 — that session is gone (deleted / no longer listed)
                 pass
         if not sessions and not quiet:
-            self.notify("no sessions — import one with `gateway import`")
+            self.notify("no sessions — press `a` to capture or `I` to import a pcap")
 
     def _selected_session(self) -> str | None:
         table = self.query_one("#sessions", DataTable)
@@ -623,6 +624,40 @@ class SessionsScreen(Screen):
             self.load_sessions()
 
         self.app.push_screen(TextPrompt("Import bundle (.tar.gz path):"), _do)
+
+    @work(exclusive=True)
+    async def action_import_capture(self) -> None:
+        """Import a pre-captured pcap (+ optional key.log), decoding it on the gateway with a
+        chosen batch decoder — tshark or the native Go pipeline (ADR-0009). The paths resolve
+        on the gateway host, which is the local host under one-command mode."""
+        pcap = await self.app.push_screen_wait(TextPrompt("Import pcap — path (.pcap):"))
+        if pcap is None or not pcap.strip():
+            return
+        keylog = await self.app.push_screen_wait(
+            TextPrompt("NSS key.log path (optional; ↵ to skip):"))
+        if keylog is None:
+            return
+        engine = await self.app.push_screen_wait(SelectPrompt("Decoder", [
+            ("tshark", Text("tshark — full-fidelity bodies + dissectors")),
+            ("native", Text("native — in-process Go pipeline, fingerprints, no tshark")),
+        ]))
+        if engine is None:
+            return
+        label = await self.app.push_screen_wait(TextPrompt("Session label (optional):"))
+        if label is None:
+            return
+
+        self.notify("importing …")
+        try:
+            sess = await self.app.client.import_capture(
+                os.path.abspath(os.path.expanduser(pcap.strip())),
+                os.path.abspath(os.path.expanduser(keylog.strip())) if keylog.strip() else "",
+                label.strip(), engine)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"import failed: {exc}", severity="error")
+            return
+        self.notify(f"imported {sess.label or sess.id[:8]}")
+        self.load_sessions()
 
 
 def _env_columns() -> list[str]:

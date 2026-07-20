@@ -12,7 +12,9 @@ import (
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/importer"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
 )
@@ -23,13 +25,15 @@ import (
 type Control struct {
 	trafficv1.UnimplementedControlServiceServer
 	st       *store.Store
+	obj      objstore.Store // for pcap import (ImportCapture)
 	dataRoot string
+	tshark   string // tshark binary, for a tshark-engine pcap import
 	mgr      *sourcemgr.Manager  // nil disables capture control
 	svcs     *sourcemgr.Services // nil disables auxiliary services
 }
 
-func NewControl(st *store.Store, dataRoot string, mgr *sourcemgr.Manager, svcs *sourcemgr.Services) *Control {
-	return &Control{st: st, dataRoot: dataRoot, mgr: mgr, svcs: svcs}
+func NewControl(st *store.Store, obj objstore.Store, dataRoot, tshark string, mgr *sourcemgr.Manager, svcs *sourcemgr.Services) *Control {
+	return &Control{st: st, obj: obj, dataRoot: dataRoot, tshark: tshark, mgr: mgr, svcs: svcs}
 }
 
 // ListServices reports the auxiliary services (MCP, module UIs) and whether each is running.
@@ -394,6 +398,31 @@ func (c *Control) ImportSession(stream grpc.ClientStreamingServer[trafficv1.Impo
 		return storeStatus(err, "import session")
 	}
 	return stream.SendAndClose(&trafficv1.ImportSessionResponse{Session: sess})
+}
+
+// ImportCapture decodes a pre-captured pcap (+ optional key.log) already on the gateway
+// host with the chosen engine and registers the session — the gRPC face of the `gateway
+// import` CLI, so a viewer (TUI, MCP) can import without shelling out. Paths resolve on the
+// gateway host (the local host under one-command mode).
+func (c *Control) ImportCapture(ctx context.Context, req *trafficv1.ImportCaptureRequest) (*trafficv1.ImportCaptureResponse, error) {
+	if req.GetPcapPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "import capture: pcap_path is required")
+	}
+	res, err := importer.Import(ctx, c.st, c.obj, importer.Options{
+		PcapPath:   req.GetPcapPath(),
+		KeylogPath: req.GetKeylogPath(),
+		Label:      req.GetLabel(),
+		TsharkPath: c.tshark,
+		Engine:     req.GetEngine(),
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "import capture: %v", err)
+	}
+	sess, err := c.st.GetSession(ctx, res.SessionID)
+	if err != nil {
+		return nil, storeStatus(err, "import capture")
+	}
+	return &trafficv1.ImportCaptureResponse{Session: sess}, nil
 }
 
 // --- groups ---

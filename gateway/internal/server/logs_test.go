@@ -43,7 +43,7 @@ func TestListAndGetLog(t *testing.T) {
 
 	// A manager that knows a "chrome" source, so the catalog can label and locate its log.
 	mgr := sourcemgr.New("127.0.0.1:0", map[string]sourcemgr.Spec{"chrome": {Label: "Chrome"}})
-	c := NewControl(nil, dir, mgr, sourcemgr.NewServices("127.0.0.1:0", nil))
+	c := NewControl(nil, nil, dir, "", mgr, sourcemgr.NewServices("127.0.0.1:0", nil))
 
 	list, err := c.ListLogs(context.Background(), &trafficv1.Empty{})
 	if err != nil {
@@ -91,7 +91,7 @@ func TestModuleProcessLogIsListed(t *testing.T) {
 	svcs := sourcemgr.NewServices("127.0.0.1:0", map[string]sourcemgr.ServiceSpec{
 		key: {Module: "acme", Label: "acme / adapter"},
 	})
-	c := NewControl(nil, dir, sourcemgr.New("127.0.0.1:0", nil), svcs)
+	c := NewControl(nil, nil, dir, "", sourcemgr.New("127.0.0.1:0", nil), svcs)
 
 	list, err := c.ListLogs(context.Background(), &trafficv1.Empty{})
 	if err != nil {

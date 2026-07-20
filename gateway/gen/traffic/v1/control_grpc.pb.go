@@ -34,6 +34,7 @@ const (
 	ControlService_SetSessionLabel_FullMethodName       = "/traffic.v1.ControlService/SetSessionLabel"
 	ControlService_DeleteSession_FullMethodName         = "/traffic.v1.ControlService/DeleteSession"
 	ControlService_ImportSession_FullMethodName         = "/traffic.v1.ControlService/ImportSession"
+	ControlService_ImportCapture_FullMethodName         = "/traffic.v1.ControlService/ImportCapture"
 	ControlService_CreateTag_FullMethodName             = "/traffic.v1.ControlService/CreateTag"
 	ControlService_DeleteTag_FullMethodName             = "/traffic.v1.ControlService/DeleteTag"
 	ControlService_ListTags_FullMethodName              = "/traffic.v1.ControlService/ListTags"
@@ -90,6 +91,11 @@ type ControlServiceClient interface {
 	// Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
 	// The session is registered under a fresh id; returns the imported session.
 	ImportSession(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse], error)
+	// Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
+	// gateway with the chosen engine, then registering the session. Mirrors the
+	// `gateway import` CLI. Paths resolve on the gateway host — which is the local host
+	// under the default one-command mode. Returns the imported session.
+	ImportCapture(ctx context.Context, in *ImportCaptureRequest, opts ...grpc.CallOption) (*ImportCaptureResponse, error)
 	// Tags (defs are global; assignments per-session).
 	CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Empty, error)
@@ -299,6 +305,16 @@ func (c *controlServiceClient) ImportSession(ctx context.Context, opts ...grpc.C
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ImportSessionClient = grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse]
 
+func (c *controlServiceClient) ImportCapture(ctx context.Context, in *ImportCaptureRequest, opts ...grpc.CallOption) (*ImportCaptureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ImportCaptureResponse)
+	err := c.cc.Invoke(ctx, ControlService_ImportCapture_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlServiceClient) CreateTag(ctx context.Context, in *CreateTagRequest, opts ...grpc.CallOption) (*Tag, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Tag)
@@ -488,6 +504,11 @@ type ControlServiceServer interface {
 	// Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
 	// The session is registered under a fresh id; returns the imported session.
 	ImportSession(grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]) error
+	// Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
+	// gateway with the chosen engine, then registering the session. Mirrors the
+	// `gateway import` CLI. Paths resolve on the gateway host — which is the local host
+	// under the default one-command mode. Returns the imported session.
+	ImportCapture(context.Context, *ImportCaptureRequest) (*ImportCaptureResponse, error)
 	// Tags (defs are global; assignments per-session).
 	CreateTag(context.Context, *CreateTagRequest) (*Tag, error)
 	DeleteTag(context.Context, *DeleteTagRequest) (*Empty, error)
@@ -561,6 +582,9 @@ func (UnimplementedControlServiceServer) DeleteSession(context.Context, *DeleteS
 }
 func (UnimplementedControlServiceServer) ImportSession(grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]) error {
 	return status.Error(codes.Unimplemented, "method ImportSession not implemented")
+}
+func (UnimplementedControlServiceServer) ImportCapture(context.Context, *ImportCaptureRequest) (*ImportCaptureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ImportCapture not implemented")
 }
 func (UnimplementedControlServiceServer) CreateTag(context.Context, *CreateTagRequest) (*Tag, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateTag not implemented")
@@ -865,6 +889,24 @@ func _ControlService_ImportSession_Handler(srv interface{}, stream grpc.ServerSt
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ImportSessionServer = grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]
+
+func _ControlService_ImportCapture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ImportCaptureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).ImportCapture(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_ImportCapture_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).ImportCapture(ctx, req.(*ImportCaptureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _ControlService_CreateTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateTagRequest)
@@ -1186,6 +1228,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteSession",
 			Handler:    _ControlService_DeleteSession_Handler,
+		},
+		{
+			MethodName: "ImportCapture",
+			Handler:    _ControlService_ImportCapture_Handler,
 		},
 		{
 			MethodName: "CreateTag",

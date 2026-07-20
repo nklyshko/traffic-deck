@@ -143,7 +143,12 @@ The `key.log` is an NSS keylog (e.g. from `SSLKEYLOGFILE`); without it HTTPS can
 decrypted. The pcapng-with-embedded-secrets case works too — pass just `--pcap`.
 
 `--decoder` picks the batch decoder: `tshark` (default) orchestrates tshark, while
-`native` runs the same in-process Go pipeline as live capture (no tshark needed).
+`native` runs the same in-process Go pipeline as live capture (no tshark needed). Both
+decoders read classic pcap and pcapng.
+
+You can also import from the TUI: press `I` on the sessions screen to pick a pcap, an
+optional key.log, and the decoder. The paths resolve on the gateway host (the local host
+under one-command mode).
 
 ### B) Live-capture Chrome
 

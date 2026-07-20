@@ -111,6 +111,11 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.ImportChunk.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.ImportSessionResponse.FromString,
                 _registered_method=True)
+        self.ImportCapture = channel.unary_unary(
+                '/traffic.v1.ControlService/ImportCapture',
+                request_serializer=traffic_dot_v1_dot_control__pb2.ImportCaptureRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.ImportCaptureResponse.FromString,
+                _registered_method=True)
         self.CreateTag = channel.unary_unary(
                 '/traffic.v1.ControlService/CreateTag',
                 request_serializer=traffic_dot_v1_dot_control__pb2.CreateTagRequest.SerializeToString,
@@ -300,6 +305,16 @@ class ControlServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ImportCapture(self, request, context):
+        """Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
+        gateway with the chosen engine, then registering the session. Mirrors the
+        `gateway import` CLI. Paths resolve on the gateway host — which is the local host
+        under the default one-command mode. Returns the imported session.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def CreateTag(self, request, context):
         """--- Annotations. Bulk ops take repeated record_ids. ---
 
@@ -473,6 +488,11 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     servicer.ImportSession,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.ImportChunk.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.ImportSessionResponse.SerializeToString,
+            ),
+            'ImportCapture': grpc.unary_unary_rpc_method_handler(
+                    servicer.ImportCapture,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.ImportCaptureRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.ImportCaptureResponse.SerializeToString,
             ),
             'CreateTag': grpc.unary_unary_rpc_method_handler(
                     servicer.CreateTag,
@@ -956,6 +976,33 @@ class ControlService(object):
             '/traffic.v1.ControlService/ImportSession',
             traffic_dot_v1_dot_control__pb2.ImportChunk.SerializeToString,
             traffic_dot_v1_dot_control__pb2.ImportSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ImportCapture(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/ImportCapture',
+            traffic_dot_v1_dot_control__pb2.ImportCaptureRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.ImportCaptureResponse.FromString,
             options,
             channel_credentials,
             insecure,

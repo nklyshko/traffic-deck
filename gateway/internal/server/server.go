@@ -317,6 +317,6 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	svcs.StartAuto()
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, tsharkVerify))
-	trafficv1.RegisterControlServiceServer(s, NewControl(st, dataRoot, mgr, svcs))
+	trafficv1.RegisterControlServiceServer(s, NewControl(st, obj, dataRoot, tshark, mgr, svcs))
 	return mgr, svcs
 }

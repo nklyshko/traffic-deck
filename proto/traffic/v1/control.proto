@@ -47,6 +47,12 @@ service ControlService {
   // The session is registered under a fresh id; returns the imported session.
   rpc ImportSession(stream ImportChunk) returns (ImportSessionResponse);
 
+  // Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
+  // gateway with the chosen engine, then registering the session. Mirrors the
+  // `gateway import` CLI. Paths resolve on the gateway host — which is the local host
+  // under the default one-command mode. Returns the imported session.
+  rpc ImportCapture(ImportCaptureRequest) returns (ImportCaptureResponse);
+
   // --- Annotations. Bulk ops take repeated record_ids. ---
 
   // Tags (defs are global; assignments per-session).
@@ -254,6 +260,19 @@ message ImportChunk {
 }
 
 message ImportSessionResponse {
+  Session session = 1;
+}
+
+message ImportCaptureRequest {
+  string pcap_path = 1;    // path to the .pcap on the gateway host
+  string keylog_path = 2;  // optional NSS key.log path (for TLS decryption)
+  string label = 3;        // optional session label
+  // Batch decoder: "tshark" (default when empty) orchestrates tshark; "native" runs the
+  // in-process Go pipeline (no tshark). See ADR-0009.
+  string engine = 4;
+}
+
+message ImportCaptureResponse {
   Session session = 1;
 }
 

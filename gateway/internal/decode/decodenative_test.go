@@ -42,6 +42,22 @@ func TestDecodeNativeFromFile(t *testing.T) {
 	}
 }
 
+// TestDecodeNativePcapng covers the import format most captures actually use: the native
+// decoder must read a pcapng file (Wireshark/dumpcap default), not just classic pcap —
+// newPacketReader sniffs the magic and dispatches to the pcapng reader.
+func TestDecodeNativePcapng(t *testing.T) {
+	ds, err := DecodeNative(context.Background(), "testdata/sample.pcap", "testdata/sample.key.log")
+	if err != nil {
+		t.Fatalf("DecodeNative(pcapng): %v", err)
+	}
+	if ds.Engine != EngineNative {
+		t.Errorf("engine = %q, want %q", ds.Engine, EngineNative)
+	}
+	if len(ds.Flows) == 0 {
+		t.Fatal("no flows decoded from the pcapng sample")
+	}
+}
+
 // TestDecodeNativeMissingFile checks the open error surfaces rather than panicking.
 func TestDecodeNativeMissingFile(t *testing.T) {
 	if _, err := DecodeNative(context.Background(), filepath.Join(t.TempDir(), "nope.pcap"), ""); err == nil {

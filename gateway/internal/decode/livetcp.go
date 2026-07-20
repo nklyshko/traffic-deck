@@ -12,6 +12,7 @@ package decode
 // which runs on close just when the live decode isn't authoritative — see skippedFate.
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"io"
@@ -46,6 +47,33 @@ func (c assemblerCtx) GetCaptureInfo() gopacket.CaptureInfo {
 // inner IP packet ourselves (nflogIPPayload).
 const linkTypeNFLOG = gplayers.LinkType(239)
 
+// packetReader is the subset of pcapgo's classic and pcapng readers that the decode loop
+// uses, so LiveTCPDecode can drive either from one code path.
+type packetReader interface {
+	ReadPacketData() ([]byte, gopacket.CaptureInfo, error)
+	LinkType() gplayers.LinkType
+}
+
+// newPacketReader picks the classic-pcap or pcapng reader by sniffing the file magic, so
+// both a streamed dumpcap pcap (live capture) and an imported Wireshark pcapng decode with
+// no tshark. The 4 magic bytes are peeked (not consumed) through a bufio.Reader, which is
+// then handed to the chosen reader so it still sees the whole stream.
+func newPacketReader(r io.Reader) (packetReader, error) {
+	br := bufio.NewReader(r)
+	magic, err := br.Peek(4)
+	if err != nil {
+		return nil, err // includes EOF if the session sent no pcap
+	}
+	// pcapng starts with a Section Header Block whose type is 0x0A0D0D0A (chosen to be
+	// byte-order independent); classic pcap starts with 0xA1B2C3D4 / 0xD4C3B2A1.
+	if magic[0] == 0x0A && magic[1] == 0x0D && magic[2] == 0x0D && magic[3] == 0x0A {
+		opts := pcapgo.DefaultNgReaderOptions
+		opts.SkipUnknownVersion = true // tolerate newer sections rather than erroring out
+		return pcapgo.NewNgReader(br, opts)
+	}
+	return pcapgo.NewReader(br)
+}
+
 // LiveTCPDecode reads a live pcap byte stream from r, reassembles TCP, decrypts TLS
 // using the (growing) key-log at keylogPath, and emits decoded flows and frames via
 // onFlow/onMsg. Returns when r reaches EOF (the capture's pipe is closed).
@@ -55,7 +83,7 @@ const linkTypeNFLOG = gplayers.LinkType(239)
 // a connection this decoder skips — nothing else will decode it when authoritative.
 func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage),
 	recordLive bool) error {
-	reader, err := pcapgo.NewReader(r)
+	reader, err := newPacketReader(r)
 	if err != nil {
 		return err // includes EOF if the session sent no pcap
 	}

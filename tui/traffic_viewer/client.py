@@ -218,6 +218,14 @@ class GatewayClient:
         resp = await call
         return resp.session
 
+    async def import_capture(self, pcap_path: str, keylog_path: str, label: str, engine: str):
+        """Decode a pre-captured pcap (+ optional key.log) on the gateway with the chosen
+        engine ("tshark" | "native"); returns the imported Session. Paths resolve on the
+        gateway host (the local host under one-command mode)."""
+        resp = await self._ctrl().ImportCapture(control_pb2.ImportCaptureRequest(
+            pcap_path=pcap_path, keylog_path=keylog_path, label=label, engine=engine))
+        return resp.session
+
     # --- capture control (ADR-0010) -------------------------------------
 
     async def list_capture_sources(self):
