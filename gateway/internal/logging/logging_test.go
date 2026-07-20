@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +10,47 @@ import (
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
 )
+
+// captureStderr swaps os.Stderr for a pipe while fn runs and returns what was written there.
+// setup() reads os.Stderr when it wires the logger, so replacing it first captures the
+// fallback destination it chooses.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	fn()
+	log.SetOutput(io.Discard) // detach the logger from the pipe before we close it
+	_ = w.Close()
+	os.Stderr = orig
+	b, _ := io.ReadAll(r)
+	_ = r.Close()
+	return string(b)
+}
+
+// When file logging can't be set up, fused mode must still keep off the terminal: the
+// error path used to fall back to os.Stderr unconditionally, dumping gateway logs (a failed
+// module capture's error among them) over the TUI. With the terminal ours, the failure is
+// still surfaced so it isn't lost.
+func TestSetupErrorFallbackRespectsTerminalOwnership(t *testing.T) {
+	t.Cleanup(func() { Setup(config.Config{LogFile: "off"}) })
+	// A LogFile whose parent is a regular file makes MkdirAll — and so writer() — fail.
+	notDir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(notDir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	badCfg := config.Config{LogFile: filepath.Join(notDir, "gateway.log"), LogMaxSizeMB: 1}
+
+	if got := captureStderr(t, func() { SetupFused(badCfg) }); got != "" {
+		t.Errorf("fused setup wrote %q to the terminal on error; it must stay silent", got)
+	}
+	if got := captureStderr(t, func() { Setup(badCfg) }); !strings.Contains(got, "file logging disabled") {
+		t.Errorf("non-fused setup should surface the failure to stderr, got %q", got)
+	}
+}
 
 func TestWriterRollingFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "logs", "gateway.log") // nested dir must be created

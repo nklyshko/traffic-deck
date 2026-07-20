@@ -45,9 +45,17 @@ func setup(cfg config.Config, terminal bool) {
 
 	w, err := writer(cfg, terminal)
 	if err != nil {
-		log.SetOutput(os.Stderr)
+		// File logging failed. Fall back to the terminal only when it's ours; in fused mode
+		// it belongs to the TUI, so drop the logs rather than scribble over the viewer — the
+		// same invariant writer() keeps on its success paths. The failure resurfaces once the
+		// viewer exits and Setup restores terminal ownership.
+		fallback := io.Writer(io.Discard)
+		if terminal {
+			fallback = os.Stderr
+		}
+		log.SetOutput(fallback)
 		mu.Lock()
-		current.LogFile = "off" // no usable file: children get the tee alone
+		current.LogFile = "off" // no usable file: children fall back the same way (tee or nothing)
 		mu.Unlock()
 		log.Printf("logging: file logging disabled: %v", err)
 		return
