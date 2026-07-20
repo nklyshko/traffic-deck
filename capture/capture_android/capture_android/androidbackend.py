@@ -103,7 +103,8 @@ class RealAndroidBackend:
         if params.get("duration"):
             cmd += ["--duration", params["duration"]]
 
-        # Own process group so a stop signal reaches the capture even through `uv run`.
+        # New session so the capture runs off the TUI's terminal; proc is the `uv run`
+        # wrapper, which forwards a single SIGINT to the headless python it runs (see _reap).
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 text=True, start_new_session=True)
         try:
@@ -129,25 +130,33 @@ class RealAndroidBackend:
         """Bring the (detached) capture process down and wait for it to finish, so its
         session is closed on the gateway before we return. A single SIGINT asks the headless
         run to wind down gracefully — stop tcpdump/frida, drain the upload, CloseSession (see
-        capture_sdk.shutdown.GracefulInterrupt) — then we wait. A *second* SIGINT would abort
-        that close, so we never send one: if the graceful window overruns we escalate to
-        SIGTERM, then SIGKILL, so a wedged capture can't hang a Stop or the gateway shutdown."""
+        capture_sdk.shutdown.GracefulInterrupt) — then we wait.
+
+        The SIGINT goes to `proc` (the `uv run` wrapper) alone, NOT its process group: uv
+        forwards exactly one SIGINT to the headless python, whereas signalling the group
+        delivers one to the python directly *and* one via uv's forward — and the second
+        SIGINT is GracefulInterrupt's "force-quit", which aborts the close and strands the
+        session open. (Verified on-device.) If the graceful window overruns we escalate,
+        force-killing the whole group so no orphan (uv, python, its adb children) is left."""
         if proc.poll() is not None:
             return
-        for sig, grace in ((signal.SIGINT, 15.0), (signal.SIGTERM, 3.0)):
+        try:
+            os.kill(proc.pid, signal.SIGINT)  # uv forwards a single SIGINT to the python
+            proc.wait(timeout=15)
+            return
+        except ProcessLookupError:
+            return  # already gone
+        except subprocess.TimeoutExpired:
+            pass
+        for sig, grace in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
             try:
-                os.killpg(os.getpgid(proc.pid), sig)
+                os.killpg(os.getpgid(proc.pid), sig)  # force-kill the whole group, no orphans
                 proc.wait(timeout=grace)
                 return
             except ProcessLookupError:
-                return  # already gone
+                return
             except subprocess.TimeoutExpired:
                 continue
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            proc.wait(timeout=2)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            pass
 
     def release(self) -> None:
         # Teardown follows ownership: stop only an emulator we booted; a device the user had
