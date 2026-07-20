@@ -220,6 +220,13 @@ type tcpStream struct {
 	httpSess    *httpStream
 	h2Sess      *h2Stream
 	preBuf      []appChunk // decrypted bytes buffered until classification (needs client bytes)
+
+	// HTTP CONNECT proxy tunnel: while inConnect, bytes are the plaintext handshake to the
+	// proxy (buffered here until complete); after a 2xx the connection restarts decoding the
+	// tunneled bytes underneath, and proxy is stamped on every flow the tunnel carries.
+	inConnect         bool
+	connReq, connResp []byte
+	proxy             *FlowProxy
 }
 
 // appChunk is one decrypted application record buffered before classification.
@@ -246,13 +253,42 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 	if n == 0 {
 		return
 	}
-	data := sg.Fetch(n)
-	fromClient := dir == reassembly.TCPDirClientToServer
+	s.reassembled(dir == reassembly.TCPDirClientToServer, sg.Fetch(n))
+}
+
+// reassembled routes one direction's reassembled bytes. Split from ReassembledSG so the
+// classification and CONNECT-tunnel logic can be driven directly in tests.
+func (s *tcpStream) reassembled(fromClient bool, data []byte) {
+	if s.dropped || len(data) == 0 {
+		return
+	}
 	// Classify the transport from the first client→server bytes: a TLS handshake record
 	// (type 22, version 0x03xx) is decrypted by the TLS layer; anything else is treated as
 	// cleartext HTTP and parsed directly (so plaintext HTTP/1.1, HTTP/2 and WebSocket decode
 	// in-process too — no tshark). Clients always speak first on HTTP, so this is decided
-	// before any server bytes arrive.
+	// before any server bytes arrive. A cleartext connection that opens with CONNECT is an
+	// HTTP proxy tunnel: decode the handshake, then the (usually TLS) bytes tunnelled under it.
+	if fromClient && !s.sniffed {
+		s.sniffed = true
+		s.plaintext = len(data) < 2 || data[0] != 0x16 || data[1] != 0x03
+		if s.plaintext && s.proxy == nil && looksLikeConnect(data) {
+			s.inConnect = true
+		}
+	}
+	if s.inConnect {
+		s.feedConnect(fromClient, data)
+		return
+	}
+	s.route(fromClient, data)
+}
+
+// route dispatches post-classification bytes: cleartext straight to the application parser,
+// a TLS handshake through the decryptor. Shared by the normal path and a proxy tunnel's
+// restart, which re-sniffs the tunnelled bytes (they may be TLS or, rarely, cleartext).
+func (s *tcpStream) route(fromClient bool, data []byte) {
+	if len(data) == 0 {
+		return
+	}
 	if fromClient && !s.sniffed {
 		s.sniffed = true
 		s.plaintext = len(data) < 2 || data[0] != 0x16 || data[1] != 0x03
@@ -270,6 +306,87 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 			s.lt.skippedFate())
 		s.dropped = true
 	}
+}
+
+var crlfcrlf = []byte("\r\n\r\n")
+
+// feedConnect buffers a proxy CONNECT handshake until both the request and the proxy's
+// response headers are complete, emits a flow for the CONNECT (with the proxy attached),
+// and on a 2xx restarts decoding of the tunnelled bytes underneath as a fresh connection to
+// the real target — so requests and WebSocket frames inside the tunnel decode like a direct
+// connection. A non-2xx (e.g. a 407 that a second CONNECT with credentials follows) keeps
+// this phase open for the next handshake on the same connection.
+func (s *tcpStream) feedConnect(fromClient bool, data []byte) {
+	if fromClient {
+		s.connReq = append(s.connReq, data...)
+	} else {
+		s.connResp = append(s.connResp, data...)
+	}
+	for s.inConnect {
+		reqEnd := bytes.Index(s.connReq, crlfcrlf)
+		if reqEnd < 0 {
+			return // the CONNECT request header hasn't fully arrived
+		}
+		respEnd := bytes.Index(s.connResp, crlfcrlf)
+		if respEnd < 0 {
+			return // the proxy hasn't answered yet
+		}
+		reqHead, respHead := s.connReq[:reqEnd+4], s.connResp[:respEnd+4]
+		leftClient := append([]byte(nil), s.connReq[reqEnd+4:]...)
+		leftServer := append([]byte(nil), s.connResp[respEnd+4:]...)
+
+		target, headers, ua := parseConnect(reqHead)
+		status := parseStatusCode(respHead)
+
+		// The connection's peer is the proxy; the CONNECT target is the real destination.
+		p := &FlowProxy{Addr: net.JoinHostPort(s.serverHost, s.serverPort), Type: "http"}
+		p.Username, p.Password = parseProxyAuth(headers)
+		s.proxy = p
+
+		cf := s.newHTTPFlow() // stamps s.proxy; DstAddr is still the proxy here
+		cf.Method = "CONNECT"
+		cf.Authority = target
+		cf.RequestHeaders = headers
+		cf.UserAgent = ua
+		cf.Status = uint32(status)
+		s.lt.onFlow(cf, true)
+		s.lt.onFlow(cf, false)
+
+		if status >= 200 && status < 300 {
+			// Tunnel established: everything after is a fresh connection to the real target.
+			s.inConnect = false
+			if host, port, err := net.SplitHostPort(target); err == nil {
+				s.serverHost, s.serverPort = host, port
+			}
+			s.sniffed, s.decided, s.plaintext = false, false, false
+			s.preBuf, s.connReq, s.connResp = nil, nil, nil
+			s.route(true, leftClient)  // the tunnelled client bytes (typically a TLS ClientHello)
+			s.route(false, leftServer) // and any server bytes already past the response header
+			return
+		}
+		// Not established. Another CONNECT may follow on this connection; keep the leftovers
+		// and try to parse the next handshake from what's already buffered.
+		s.connReq, s.connResp = leftClient, leftServer
+	}
+}
+
+// looksLikeConnect reports whether the client bytes open an HTTP CONNECT proxy request.
+func looksLikeConnect(b []byte) bool {
+	return bytes.HasPrefix(b, []byte("CONNECT ")) && looksLikeHTTP1Request(b)
+}
+
+// parseStatusCode reads the numeric status from an HTTP status line ("HTTP/1.1 200 …").
+func parseStatusCode(head []byte) int {
+	line := head
+	if i := bytes.IndexByte(head, '\n'); i >= 0 {
+		line = head[:i]
+	}
+	f := bytes.Fields(line)
+	if len(f) < 2 {
+		return 0
+	}
+	code, _ := strconv.Atoi(string(f[1]))
+	return code
 }
 
 func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
@@ -359,6 +476,7 @@ func (s *tcpStream) classify(firstClient []byte) {
 	}); len(m) > 0 {
 		s.sess = m[0].NewSession()
 		s.flow = customFlowMeta(s.conn.SNI(), s.serverHost, s.serverPort, s.clientAddr, m[0].Name())
+		s.flow.Proxy = s.proxy // a custom protocol tunnelled through a CONNECT proxy
 		// Live has no per-packet time here (the decrypted bytes come from the TLS layer,
 		// not a timestamped frame), so use wall-clock at connection start — same as the
 		// live HTTP path (newHTTPFlow). Without it the persisted flow has time 0 and sorts

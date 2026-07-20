@@ -9,6 +9,7 @@ package decode
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -172,6 +173,20 @@ func (h *httpStream) run() {
 	}
 }
 
+// parseConnect reads a buffered CONNECT request header, returning the tunnel target
+// (host:port), the request headers, and the User-Agent. Empty target on a parse failure.
+func parseConnect(head []byte) (target string, headers []Header, ua string) {
+	req, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(head)))
+	if err != nil {
+		return "", nil, ""
+	}
+	target = req.Host // for CONNECT this is the authority-form target, e.g. "web.max.ru:443"
+	if target == "" {
+		target = req.RequestURI
+	}
+	return target, headersOf(req.Header), req.Header.Get("User-Agent")
+}
+
 func isWSUpgrade(resp *http.Response) bool {
 	return resp.StatusCode == http.StatusSwitchingProtocols &&
 		strings.EqualFold(resp.Header.Get("Upgrade"), "websocket")
@@ -281,6 +296,7 @@ func (s *tcpStream) newHTTPFlow() *Flow {
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
 		TLSDecrypted: !s.plaintext,
 		TCPStream:    s.connID,
+		Proxy:        s.proxy, // set once a CONNECT tunnel is established; nil otherwise
 	}
 	s.applyTLSFingerprint(f)
 	return f
