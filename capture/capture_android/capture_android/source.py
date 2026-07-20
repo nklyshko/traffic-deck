@@ -65,8 +65,16 @@ class AndroidSource(source.CaptureSource):
             backend = RealAndroidBackend(gateway)
         self._backend = backend
         self._provisioned = False
-        self._captures: dict[str, threading.Event] = {}  # session id -> stop event
+        # session id -> (stop, closed): set `stop` to ask the capture to wind down; `closed`
+        # is set by the capture thread once teardown + CloseSession has finished, so a stop is
+        # synchronous (the caller waits for the session to actually close).
+        self._captures: dict[str, tuple[threading.Event, threading.Event]] = {}
         self._caps_lock = threading.Lock()
+        # How long stop_capture waits for the capture to finish closing its session before
+        # giving up. Comfortably covers the headless teardown (upload drain + CloseSession);
+        # the gateway's own shutdown grace is set larger still, so a viewer-driven quit doesn't
+        # SIGKILL a source mid-close. See gateway sourcemgr.sourceShutdownGrace.
+        self._stop_timeout = 25.0
         # Provisioning runs in the background so Describe never blocks the viewer on a ~30s
         # emulator boot; the viewer polls Describe and shows progress.
         self._provision_lock = threading.Lock()
@@ -139,6 +147,7 @@ class AndroidSource(source.CaptureSource):
         if not package:
             raise ValueError("no app package selected")
         stop = threading.Event()
+        closed = threading.Event()  # set once the capture has fully torn down + closed
         holder: dict[str, str] = {}
         opened = threading.Event()
 
@@ -155,20 +164,30 @@ class AndroidSource(source.CaptureSource):
                     with self._caps_lock:
                         self._captures.pop(sid, None)
                     self.session_ended(sid)  # capture ended (duration/stop/error)
+                closed.set()  # unblock a stop_capture / shutdown waiting on the close
 
         threading.Thread(target=run, daemon=True).start()
         if not opened.wait(timeout=120):
+            stop.set()  # never opened — make sure the run thread unwinds
             raise RuntimeError("capture did not start (device not ready?)")
         sid = holder["sid"]
         with self._caps_lock:
-            self._captures[sid] = stop
+            self._captures[sid] = (stop, closed)
         return sid
 
     def stop_capture(self, session_id: str) -> None:
         with self._caps_lock:
-            stop = self._captures.pop(session_id, None)
-        if stop is not None:
-            stop.set()  # keep_warm: the capture ends, the emulator stays up
+            entry = self._captures.pop(session_id, None)
+        if entry is None:
+            return
+        stop, closed = entry
+        stop.set()  # keep_warm: the capture ends, the emulator stays up
+        # Wait for the capture to actually finish closing its gateway session, so a
+        # viewer's Stop (and shutdown's _shutdown) returns only once the session is closed —
+        # not while the detached headless is still racing to CloseSession. Bounded, since the
+        # backend escalates SIGINT→SIGTERM→SIGKILL if the capture won't wind down.
+        if not closed.wait(timeout=self._stop_timeout):
+            pass  # gave up waiting; the backend's escalation still tears the process down
 
     def release(self) -> None:
         self._backend.release()  # tears down only if it owns the emulator

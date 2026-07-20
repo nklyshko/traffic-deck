@@ -264,25 +264,50 @@ func (m *Manager) StopCapture(ctx context.Context, sessionID string) error {
 	return err
 }
 
-// Close reaps every running source (whole process group) and drops the connections.
+// sourceShutdownGrace bounds how long conn.close waits for a signalled source to exit on
+// its own. A source's SIGTERM handler stops each live capture — which closes that session
+// on the still-running Ingest server — before it exits, so the gateway must let that finish
+// before it tears Ingest down (otherwise the close races GracefulStop and the session is
+// stranded open). Larger than a source's own stop timeout so a normal teardown never hits
+// it; escalates to SIGKILL past it so a wedged source can't hang the gateway's shutdown.
+const sourceShutdownGrace = 30 * time.Second
+
+// Close reaps every running source (whole process group) and drops the connections. Sources
+// are closed concurrently so the total wait is one grace period, not one per source.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	conns := m.conns
 	m.conns = map[string]*conn{}
 	m.mu.Unlock()
+	var wg sync.WaitGroup
 	for _, c := range conns {
-		c.close()
+		wg.Add(1)
+		go func(c *conn) { defer wg.Done(); c.close() }(c)
 	}
+	wg.Wait()
 }
 
-func (c *conn) close() {
+func (c *conn) close() { c.closeWithGrace(sourceShutdownGrace) }
+
+func (c *conn) closeWithGrace(grace time.Duration) {
 	if c.cc != nil {
 		_ = c.cc.Close()
 	}
 	if c.proc != nil && c.proc.Process != nil {
 		// Kill the whole group so the source's own children (dumpcap, a browser, an
-		// emulator) go too — a plain kill of the parent would strand them.
+		// emulator) go too — a plain kill of the parent would strand them. Then wait for the
+		// source to finish its graceful shutdown (it closes its open sessions on the still-up
+		// Ingest server before exiting); SIGKILL the group if it overruns the grace, so a
+		// wedged source can't block teardown.
 		_ = syscall.Kill(-c.proc.Process.Pid, syscall.SIGTERM)
+		done := make(chan struct{})
+		go func() { _ = c.proc.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(grace):
+			_ = syscall.Kill(-c.proc.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
 	}
 	if c.log != nil { // flush its last partial line and release the file
 		_ = c.log.Close()

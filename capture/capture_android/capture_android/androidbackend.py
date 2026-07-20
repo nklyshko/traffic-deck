@@ -103,15 +103,16 @@ class RealAndroidBackend:
         if params.get("duration"):
             cmd += ["--duration", params["duration"]]
 
-        # Own process group so a stop (SIGINT) reaches the capture even through `uv run`.
+        # Own process group so a stop signal reaches the capture even through `uv run`.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 text=True, start_new_session=True)
         try:
             self._relay_session(proc, on_session)
-            self._await_stop(proc, stop_event)
+            # Run until the capture exits on its own (duration) or a stop is requested.
+            while proc.poll() is None and not stop_event.wait(0.5):
+                pass
         finally:
-            if proc.poll() is None:
-                proc.wait(timeout=30)
+            self._reap(proc)  # signal + wait for a graceful close, then escalate
 
     @staticmethod
     def _relay_session(proc, on_session) -> None:
@@ -124,16 +125,29 @@ class RealAndroidBackend:
         threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
 
     @staticmethod
-    def _await_stop(proc, stop_event: threading.Event) -> None:
-        """Wait until the capture exits on its own (duration) or a stop is requested, then
-        SIGINT the group so run_capture finalizes gracefully (closes its session)."""
-        while proc.poll() is None:
-            if stop_event.wait(0.5):
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-                except ProcessLookupError:
-                    pass
+    def _reap(proc) -> None:
+        """Bring the (detached) capture process down and wait for it to finish, so its
+        session is closed on the gateway before we return. A single SIGINT asks the headless
+        run to wind down gracefully — stop tcpdump/frida, drain the upload, CloseSession (see
+        capture_sdk.shutdown.GracefulInterrupt) — then we wait. A *second* SIGINT would abort
+        that close, so we never send one: if the graceful window overruns we escalate to
+        SIGTERM, then SIGKILL, so a wedged capture can't hang a Stop or the gateway shutdown."""
+        if proc.poll() is not None:
+            return
+        for sig, grace in ((signal.SIGINT, 15.0), (signal.SIGTERM, 3.0)):
+            try:
+                os.killpg(os.getpgid(proc.pid), sig)
+                proc.wait(timeout=grace)
                 return
+            except ProcessLookupError:
+                return  # already gone
+            except subprocess.TimeoutExpired:
+                continue
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.wait(timeout=2)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
 
     def release(self) -> None:
         # Teardown follows ownership: stop only an emulator we booted; a device the user had

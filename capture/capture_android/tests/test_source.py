@@ -152,6 +152,34 @@ def test_start_and_stop_through_the_served_harness():
         server.stop(None)
 
 
+def test_stop_capture_waits_for_the_session_to_close():
+    """Stop returns only once the capture has finished tearing down (its CloseSession has
+    run) — not while a detached capture is still racing to close. This is the fix for
+    Android sessions stranded open on Stop / app exit; the same synchronous wait lets the
+    served harness' _shutdown finish closing sessions before the source process exits."""
+    torn_down = threading.Event()
+
+    class SlowCloseBackend(FakeBackend):
+        def start(self, package, label, params, on_session, stop_event):
+            self.started.append((package, label, dict(params)))
+            on_session("android-sess-1")
+            stop_event.wait()   # run until stopped
+            time.sleep(0.2)     # simulate teardown + CloseSession after the stop request
+            torn_down.set()
+
+    src = AndroidSource("gw", SlowCloseBackend())
+    sid = src.start_capture("run", {"provision": "attach", "package": "com.a"})
+    src._track(sid)  # the harness servicer does this on StartCapture; mirror it here
+    assert src._status().state == ctl.SOURCE_STATE_CAPTURING
+
+    t0 = time.monotonic()
+    src.stop_capture(sid)
+    assert torn_down.is_set(), "stop returned before the capture finished tearing down"
+    assert time.monotonic() - t0 >= 0.2
+    # The capture thread's teardown ran session_ended, so Status is back to READY.
+    assert src._status().state == ctl.SOURCE_STATE_READY
+
+
 def test_release_tears_down_and_resets_provisioning():
     b = FakeBackend()
     src = AndroidSource("gw", b)
