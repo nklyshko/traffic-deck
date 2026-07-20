@@ -1,6 +1,6 @@
 # 0010 — The gateway supervises capture; viewers are clients
 
-Status: proposed — not implemented. The design is settled; no code yet.
+Status: accepted; implemented. `ReDecode` remains unwired (never part of this decision).
 
 ## Context
 

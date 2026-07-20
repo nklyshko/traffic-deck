@@ -14,4 +14,4 @@ reasoning at the time. Format: Context → Decision → Consequences.
 | [0007](0007-android-per-app-capture.md) | Android per-app capture via a Frida key-log and UID→NFLOG |
 | [0008](0008-independent-capture-apps.md) | Capture tools are independent apps over a shared SDK |
 | [0009](0009-native-live-decode-default.md) | The native in-process decoder is the default, authoritative path |
-| [0010](0010-supervisor-and-capture-modules.md) | The gateway supervises capture; viewers are clients *(proposed)* |
+| [0010](0010-supervisor-and-capture-modules.md) | The gateway supervises capture; viewers are clients |
