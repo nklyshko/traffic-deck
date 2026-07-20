@@ -5,6 +5,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // servicesWithSleeps wires a Services whose spawn launches a real `sleep`, so Stop can
@@ -62,6 +64,34 @@ func TestServiceReapsWhenItExits(t *testing.T) {
 	}
 	if !eventually(t, func() bool { return !svcs.List()[0].Running }) {
 		t.Error("a service that exits on its own should drop from running")
+	}
+}
+
+// A spawned service must run in its own session, not the gateway's: under one-command mode
+// the gateway shares the TUI's controlling terminal, and only a session with no controlling
+// terminal keeps a child (or grandchild) from writing over the viewer via /dev/tty. Uses the
+// real realSpawn (not the sleep-stub) so it exercises the SysProcAttr the code sets.
+func TestSpawnedServiceRunsInOwnSession(t *testing.T) {
+	svcs := NewServices("127.0.0.1:0", map[string]ServiceSpec{
+		"sleeper": {Argv: []string{"sleep", "30"}},
+	})
+	t.Cleanup(svcs.Close)
+	if _, err := svcs.Start("sleeper"); err != nil {
+		t.Fatal(err)
+	}
+	svcs.mu.Lock()
+	pid := svcs.running["sleeper"].Process.Pid
+	svcs.mu.Unlock()
+
+	sid, err := unix.Getsid(pid)
+	if err != nil {
+		t.Fatalf("getsid(%d): %v", pid, err)
+	}
+	if sid != pid {
+		t.Errorf("service sid=%d, want it to lead its own session (== pid %d)", sid, pid)
+	}
+	if own, _ := unix.Getsid(0); sid == own {
+		t.Errorf("service shares the gateway's session %d — it can still reach the terminal", own)
 	}
 }
 
