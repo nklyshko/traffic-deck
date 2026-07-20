@@ -37,7 +37,7 @@ func feedProxyTunnel(t *testing.T, wantFlows int, chunks []tunnelChunk) []*Flow 
 	}
 	s.conn = tlsdecrypt.NewConn(tlsdecrypt.NewKeylog(""), s.onApp)
 	for _, c := range chunks {
-		s.reassembled(c.fromClient, c.data)
+		s.reassembled(c.fromClient, c.data, c.ts)
 	}
 	s.ReassemblyComplete(nil)
 
@@ -63,6 +63,7 @@ func feedProxyTunnel(t *testing.T, wantFlows int, chunks []tunnelChunk) []*Flow 
 type tunnelChunk struct {
 	fromClient bool
 	data       []byte
+	ts         time.Time
 }
 
 // TestLiveHTTPConnectTunnelDecodesInnerFlow: over an HTTP CONNECT proxy, the live decoder
@@ -70,12 +71,13 @@ type tunnelChunk struct {
 // case that previously showed only the CONNECT. Both flows carry the proxy (with decoded
 // credentials); the inner flow keeps the real target as its authority.
 func TestLiveHTTPConnectTunnelDecodesInnerFlow(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
 	flows := feedProxyTunnel(t, 2, []tunnelChunk{
 		{true, []byte("CONNECT plain.example:80 HTTP/1.1\r\nHost: plain.example:80\r\n" +
-			"Proxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n")},
-		{false, []byte("HTTP/1.1 200 Connection established\r\n\r\n")},
-		{true, []byte("GET /v1 HTTP/1.1\r\nHost: plain.example\r\n\r\n")},
-		{false, []byte("HTTP/1.1 204 No Content\r\n\r\n")},
+			"Proxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\n"), base},
+		{false, []byte("HTTP/1.1 200 Connection established\r\n\r\n"), base.Add(1 * time.Millisecond)},
+		{true, []byte("GET /v1 HTTP/1.1\r\nHost: plain.example\r\n\r\n"), base.Add(2 * time.Millisecond)},
+		{false, []byte("HTTP/1.1 204 No Content\r\n\r\n"), base.Add(52 * time.Millisecond)},
 	})
 
 	if len(flows) != 2 {
@@ -87,6 +89,10 @@ func TestLiveHTTPConnectTunnelDecodesInnerFlow(t *testing.T) {
 	}
 	if inner.Method != "GET" || inner.Authority != "plain.example" || inner.Status != 204 {
 		t.Errorf("inner flow = %s %q status=%d", inner.Method, inner.Authority, inner.Status)
+	}
+	// Duration comes from packet capture time (52ms - 2ms), not decode wall-clock (~0).
+	if inner.DurationMicros != 50_000 {
+		t.Errorf("inner duration = %dµs, want 50000 (from packet timestamps)", inner.DurationMicros)
 	}
 	for _, f := range flows {
 		if f.Proxy == nil {
@@ -104,9 +110,10 @@ func TestLiveHTTPConnectTunnelDecodesInnerFlow(t *testing.T) {
 // A CONNECT the proxy refuses (407) is emitted, but nothing is tunnelled — the connection
 // stays in the handshake phase for a retry rather than mis-decoding the next bytes.
 func TestLiveHTTPConnectTunnelProxyRefused(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
 	flows := feedProxyTunnel(t, 1, []tunnelChunk{
-		{true, []byte("CONNECT plain.example:80 HTTP/1.1\r\nHost: plain.example:80\r\n\r\n")},
-		{false, []byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")},
+		{true, []byte("CONNECT plain.example:80 HTTP/1.1\r\nHost: plain.example:80\r\n\r\n"), base},
+		{false, []byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"), base.Add(time.Millisecond)},
 	})
 	if len(flows) != 1 || flows[0].Method != "CONNECT" || flows[0].Status != 407 {
 		t.Fatalf("want a single 407 CONNECT flow, got %+v", flows)

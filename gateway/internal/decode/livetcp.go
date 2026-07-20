@@ -32,6 +32,14 @@ import (
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
+// assemblerCtx carries a packet's capture time into the reassembler, so ReassembledSG can
+// recover it via GetCaptureInfo — the only field the live decoder needs off the context.
+type assemblerCtx struct{ ts time.Time }
+
+func (c assemblerCtx) GetCaptureInfo() gopacket.CaptureInfo {
+	return gopacket.CaptureInfo{Timestamp: c.ts}
+}
+
 // linkTypeNFLOG is LINKTYPE_NFLOG (239), used by the Android per-app capture
 // (`tcpdump -i nflog:<group>`). gopacket has no decoder for it, so we extract the
 // inner IP packet ourselves (nflogIPPayload).
@@ -63,7 +71,7 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 	asm := reassembly.NewAssembler(reassembly.NewStreamPool(lt))
 	linkType := reader.LinkType()
 	for {
-		data, _, err := reader.ReadPacketData()
+		data, ci, err := reader.ReadPacketData()
 		if err == io.EOF {
 			break
 		}
@@ -85,9 +93,11 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 			continue
 		}
 		if tcpLayer := pkt.Layer(gplayers.LayerTypeTCP); tcpLayer != nil {
-			asm.Assemble(netLayer.NetworkFlow(), tcpLayer.(*gplayers.TCP))
+			// Carry the packet's capture time to ReassembledSG so flows are timed from
+			// capture, not from when the (possibly much later) decode runs.
+			asm.AssembleWithContext(netLayer.NetworkFlow(), tcpLayer.(*gplayers.TCP), assemblerCtx{ci.Timestamp})
 		} else if udpLayer := pkt.Layer(gplayers.LayerTypeUDP); udpLayer != nil {
-			lt.handleUDP(netLayer.NetworkFlow(), udpLayer.(*gplayers.UDP))
+			lt.handleUDP(netLayer.NetworkFlow(), udpLayer.(*gplayers.UDP), ci.Timestamp)
 		}
 	}
 	asm.FlushAll() // TCP only: closes each tcpStream via ReassemblyComplete
@@ -156,7 +166,7 @@ type quicConnState struct {
 
 // handleUDP routes a UDP datagram to its QUIC connection's HTTP/3 decoder, starting one
 // when a datagram first looks like a QUIC client Initial. Non-QUIC UDP is ignored.
-func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP) {
+func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP, ts time.Time) {
 	payload := udp.Payload
 	if len(payload) < 5 {
 		return
@@ -181,7 +191,7 @@ func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP) {
 		}
 		f.quic[key] = st
 	}
-	st.sess.feed(src == st.client, payload)
+	st.sess.feed(src == st.client, payload, ts)
 }
 
 func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassembly.AssemblerContext) reassembly.Stream {
@@ -227,12 +237,21 @@ type tcpStream struct {
 	inConnect         bool
 	connReq, connResp []byte
 	proxy             *FlowProxy
+
+	// curTS is the capture time of the packet currently being processed, set on each
+	// reassembled() call and read by the flow builders — so flows are timed from packet
+	// capture, not wall-clock at decode. It travels with the bytes into the byteStreams
+	// (see byteStream.WriteTS) because the HTTP/2 parsers run asynchronously.
+	curTS time.Time
 }
 
-// appChunk is one decrypted application record buffered before classification.
+// appChunk is one decrypted application record buffered before classification, with the
+// capture time of the packet it came from so the replay after classification times each
+// chunk correctly (the buffered chunks may span several packets).
 type appChunk struct {
 	fromClient bool
 	data       []byte
+	ts         time.Time
 }
 
 func (s *tcpStream) Accept(tcp *gplayers.TCP, _ gopacket.CaptureInfo, _ reassembly.TCPFlowDirection,
@@ -244,7 +263,7 @@ func (s *tcpStream) Accept(tcp *gplayers.TCP, _ gopacket.CaptureInfo, _ reassemb
 	return true
 }
 
-func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.AssemblerContext) {
+func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, ac reassembly.AssemblerContext) {
 	if s.dropped {
 		return
 	}
@@ -253,15 +272,18 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, _ reassembly.Asse
 	if n == 0 {
 		return
 	}
-	s.reassembled(dir == reassembly.TCPDirClientToServer, sg.Fetch(n))
+	s.reassembled(dir == reassembly.TCPDirClientToServer, sg.Fetch(n), ac.GetCaptureInfo().Timestamp)
 }
 
-// reassembled routes one direction's reassembled bytes. Split from ReassembledSG so the
-// classification and CONNECT-tunnel logic can be driven directly in tests.
-func (s *tcpStream) reassembled(fromClient bool, data []byte) {
+// reassembled routes one direction's reassembled bytes, captured at ts. Split from
+// ReassembledSG so the classification and CONNECT-tunnel logic can be driven directly in
+// tests. ts is stashed on the stream (curTS) so the flow builders and the byteStreams the
+// async parsers read time each message from packet capture rather than decode wall-clock.
+func (s *tcpStream) reassembled(fromClient bool, data []byte, ts time.Time) {
 	if s.dropped || len(data) == 0 {
 		return
 	}
+	s.curTS = ts
 	// Classify the transport from the first client→server bytes: a TLS handshake record
 	// (type 22, version 0x03xx) is decrypted by the TLS layer; anything else is treated as
 	// cleartext HTTP and parsed directly (so plaintext HTTP/1.1, HTTP/2 and WebSocket decode
@@ -344,6 +366,7 @@ func (s *tcpStream) feedConnect(fromClient bool, data []byte) {
 		s.proxy = p
 
 		cf := s.newHTTPFlow() // stamps s.proxy; DstAddr is still the proxy here
+		cf.TSUnixMicros = tsMicros(s.curTS)
 		cf.Method = "CONNECT"
 		cf.Authority = target
 		cf.RequestHeaders = headers
@@ -430,16 +453,19 @@ func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 	if !s.decided {
 		// Buffer (copy: the decryptor reuses its plaintext buffer). Classification needs
 		// the first client bytes — to match a custom decoder and to spot an HTTP/2 preface.
-		s.preBuf = append(s.preBuf, appChunk{fromClient, append([]byte(nil), plain...)})
+		s.preBuf = append(s.preBuf, appChunk{fromClient, append([]byte(nil), plain...), s.curTS})
 		if !fromClient {
 			return
 		}
 		s.classify(plain)
 		buffered := s.preBuf
 		s.preBuf = nil
+		cur := s.curTS
 		for _, c := range buffered {
+			s.curTS = c.ts // dispatch reads curTS (into the byteStreams), so restore each chunk's
 			s.dispatch(c.fromClient, c.data)
 		}
+		s.curTS = cur
 		return
 	}
 	s.dispatch(fromClient, plain)
@@ -477,11 +503,9 @@ func (s *tcpStream) classify(firstClient []byte) {
 		s.sess = m[0].NewSession()
 		s.flow = customFlowMeta(s.conn.SNI(), s.serverHost, s.serverPort, s.clientAddr, m[0].Name())
 		s.flow.Proxy = s.proxy // a custom protocol tunnelled through a CONNECT proxy
-		// Live has no per-packet time here (the decrypted bytes come from the TLS layer,
-		// not a timestamped frame), so use wall-clock at connection start — same as the
-		// live HTTP path (newHTTPFlow). Without it the persisted flow has time 0 and sorts
-		// to the top of the list with a blank time column.
-		s.flow.TSUnixMicros = time.Now().UnixMicro()
+		// Time the connection from the packet that opened it, falling back to wall-clock
+		// only when the bytes carried no capture time (a test, or the untimed path).
+		s.flow.TSUnixMicros = tsMicros(s.curTS)
 		s.flow.TLSDecrypted = !s.plaintext
 		s.applyTLSFingerprint(s.flow)
 		s.matched = true
@@ -545,7 +569,7 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 		// time, so stop the viewer's stopwatch at the first server byte (time-to-first-byte)
 		// instead of ticking for the connection's whole lifetime. Re-emit so it propagates.
 		if s.flow.DurationMicros == 0 {
-			s.flow.DurationMicros = uint64(max(time.Now().UnixMicro()-s.flow.TSUnixMicros, 0))
+			s.flow.DurationMicros = uint64(max(tsMicros(s.curTS)-s.flow.TSUnixMicros, 0))
 			if s.flowEmitted {
 				s.lt.onFlow(s.flow, false)
 			}
@@ -561,7 +585,7 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 		s.lt.onMsg(&WsMessage{
 			ID:           uuid.NewString(),
 			FlowID:       s.flow.ID,
-			TSUnixMicros: time.Now().UnixMicro(),
+			TSUnixMicros: tsMicros(s.curTS),
 			FromClient:   msg.FromClient,
 			Opcode:       msg.Opcode,
 			Payload:      msg.Payload,

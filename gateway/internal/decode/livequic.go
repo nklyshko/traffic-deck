@@ -37,6 +37,7 @@ type quicSession struct {
 	connID                             string // this connection's id; goes on every flow it carries
 	serverHost, serverPort, clientAddr string
 
+	curTS       time.Time // capture time of the datagram being processed (QUIC decode is synchronous)
 	mu          sync.Mutex
 	streams     map[uint64]*h3Stream
 	uni         map[uint64]*uniStream // unidirectional streams (control, QPACK enc/dec, push)
@@ -114,7 +115,8 @@ func (s *quicSession) close() {
 	}
 }
 
-func (s *quicSession) feed(fromClient bool, datagram []byte) {
+func (s *quicSession) feed(fromClient bool, datagram []byte, ts time.Time) {
+	s.curTS = ts // times the flows this datagram produces (decode is synchronous, so no race)
 	s.conn.Feed(fromClient, datagram)
 	if !s.loggedUnsup && s.conn.Unsupported() {
 		// Nothing on this connection decodes — whole-connection wording applies.
@@ -285,9 +287,9 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 			if hf.Name == ":status" {
 				if code, e := strconv.Atoi(hf.Value); e == nil {
 					f.Status = uint32(code)
-					// Response headers mark completion — record request→response elapsed,
-					// as the H1/H2 live paths do (the QUIC path had been leaving it 0).
-					f.DurationMicros = uint64(max(time.Now().UnixMicro()-f.TSUnixMicros, 0))
+					// Response headers mark completion — record request→response elapsed
+					// from datagram capture time, as the H1/H2 live paths now do.
+					f.DurationMicros = uint64(max(tsMicros(s.curTS)-f.TSUnixMicros, 0))
 				}
 			} else if !strings.HasPrefix(hf.Name, ":") {
 				f.ResponseHeaders = append(f.ResponseHeaders, Header{Name: hf.Name, Value: hf.Value})
@@ -324,7 +326,7 @@ func (s *quicSession) newFlow(streamID uint64) *Flow {
 	}
 	f := &Flow{
 		ID:           uuid.NewString(),
-		TSUnixMicros: time.Now().UnixMicro(),
+		TSUnixMicros: tsMicros(s.curTS), // datagram capture time, not decode wall-clock
 		Protocol:     "HTTP/3",
 		Scheme:       "https",
 		Authority:    host,

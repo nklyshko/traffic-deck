@@ -141,6 +141,80 @@ func TestLiveHTTP2RequestResponse(t *testing.T) {
 	}
 }
 
+// TestLiveHTTP2DurationFromPacketTime: an h2 request whose whole exchange is already
+// buffered when the parser runs (the common live case — the key-log lags, then a burst
+// decrypts) must still get a real duration from packet capture time, not the ~0 that
+// wall-clock at decode gives. Here the request and response frames carry capture times 30ms
+// apart, so the flow's duration must be 30ms regardless of how fast decode ran.
+func TestLiveHTTP2DurationFromPacketTime(t *testing.T) {
+	var cbuf bytes.Buffer
+	cbuf.WriteString(http2.ClientPreface)
+	cf := http2.NewFramer(&cbuf, nil)
+	if err := cf.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1,
+		BlockFragment: h2encode(
+			hpack.HeaderField{Name: ":method", Value: "GET"},
+			hpack.HeaderField{Name: ":authority", Value: "example.com"},
+			hpack.HeaderField{Name: ":path", Value: "/"},
+		),
+		EndStream: true, EndHeaders: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var sbuf bytes.Buffer
+	sf := http2.NewFramer(&sbuf, nil)
+	if err := sf.WriteHeaders(http2.HeadersFrameParam{
+		StreamID:      1,
+		BlockFragment: h2encode(hpack.HeaderField{Name: ":status", Value: "200"}),
+		EndStream:     true, EndHeaders: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	latest := map[string]*Flow{}
+	var order []string
+	lt := &liveTCP{onFlow: func(f *Flow, _ bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if _, ok := latest[f.ID]; !ok {
+			order = append(order, f.ID)
+		}
+		latest[f.ID] = f
+	}}
+	s := &tcpStream{lt: lt, connID: "7", serverHost: "203.0.113.5", serverPort: "443",
+		clientAddr: "198.51.100.2:51000", conn: tlsdecrypt.NewConn(tlsdecrypt.NewKeylog(""), nil)}
+	h := newH2Stream(s)
+
+	base := time.Unix(1_700_000_000, 0)
+	s.curTS = base // the request frames' capture time
+	h.feed(true, cbuf.Bytes())
+	s.curTS = base.Add(30 * time.Millisecond) // the response arrived 30ms later
+	h.feed(false, sbuf.Bytes())
+	h.close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		// Wait for both directions to settle: the response emit sets Status, the request
+		// emit pairs the times into DurationMicros (either goroutine may run first).
+		done := len(order) > 0 && latest[order[0]].Status != 0 && latest[order[0]].DurationMicros != 0
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 1 {
+		t.Fatalf("want 1 flow, got %d", len(order))
+	}
+	if f := latest[order[0]]; f.DurationMicros != 30_000 {
+		t.Errorf("duration = %dµs, want 30000 (from packet timestamps, not decode time)", f.DurationMicros)
+	}
+}
+
 // TestLiveHTTP2MultiplexedStreamsShareConnID covers the whole point of HTTP/2
 // multiplexing being visible: two requests sent over one connection get one shared
 // connection id and their own stream ids, so a viewer can group them.

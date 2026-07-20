@@ -57,6 +57,17 @@ func quicTestSession(recordLive bool) *quicSession {
 	return newQUICSession(lt, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 }
 
+// TestQUICFlowTimedFromDatagram: an HTTP/3 flow is timed from the datagram's capture time
+// (set on each feed), not decode wall-clock — the QUIC analog of the H1/H2 fix.
+func TestQUICFlowTimedFromDatagram(t *testing.T) {
+	s := quicTestSession(false)
+	base := time.Unix(1_700_000_000, 0)
+	s.curTS = base
+	if f := s.newFlow(0); f.TSUnixMicros != base.UnixMicro() {
+		t.Errorf("flow TSUnixMicros = %d, want %d (datagram capture time)", f.TSUnixMicros, base.UnixMicro())
+	}
+}
+
 // TestQUICCloseReportsBlockedHeaders covers the silent gap QUIC had with no close hook:
 // HEADERS buffered waiting on QPACK inserts that never arrive are requests that never
 // become flows, so ending the capture has to say so instead of dropping them quietly.

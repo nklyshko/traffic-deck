@@ -29,6 +29,9 @@ type h2flow struct {
 	flow     *Flow
 	added    bool
 	respGzip bool
+	respTS   time.Time // capture time of the latest server frame; paired with the request
+	// time in emitLocked to get the duration. Kept separate because the request and response
+	// directions decode on different goroutines and can be applied in either order.
 }
 
 // h2Stream decodes one TLS-decrypted connection as HTTP/2: a goroutine per direction
@@ -74,10 +77,11 @@ func newH2Stream(owner *tcpStream) *h2Stream {
 }
 
 func (h *h2Stream) feed(fromClient bool, data []byte) {
+	ts := h.owner.curTS // capture time of the packet these bytes came from
 	if fromClient {
-		_, _ = h.client.Write(data)
+		_, _ = h.client.WriteTS(data, ts)
 	} else {
-		_, _ = h.server.Write(data)
+		_, _ = h.server.WriteTS(data, ts)
 	}
 }
 
@@ -103,11 +107,14 @@ func (h *h2Stream) read(src *byteStream, fromClient bool) {
 		if err != nil {
 			return
 		}
+		// The framer reads one frame at a time, so the byteStream's last-read byte is this
+		// frame's — its capture time, which times the request/response instead of wall-clock.
+		ts := src.LastTS()
 		switch frm := f.(type) {
 		case *http2.MetaHeadersFrame:
-			h.onHeaders(frm, fromClient)
+			h.onHeaders(frm, fromClient, ts)
 		case *http2.DataFrame:
-			h.onData(frm, fromClient)
+			h.onData(frm, fromClient, ts)
 		case *http2.RSTStreamFrame:
 			h.onRSTStream(frm)
 		case *http2.GoAwayFrame:
@@ -232,6 +239,12 @@ func (h *h2Stream) getLocked(id uint32) *h2flow {
 // racing on the shared Flow. A stream-level failure recorded before the flow existed (a
 // RST_STREAM/GOAWAY that raced ahead of the request HEADERS) is applied here.
 func (h *h2Stream) emitLocked(hf *h2flow) {
+	// Duration from packet capture times: the request and response directions decode on
+	// separate goroutines and can be applied in either order, so pair them here once both
+	// the request time and a response frame time are known.
+	if hf.flow.TSUnixMicros != 0 && !hf.respTS.IsZero() {
+		hf.flow.DurationMicros = uint64(max(hf.respTS.UnixMicro()-hf.flow.TSUnixMicros, 0))
+	}
 	if hf.flow.Status == 0 && hf.flow.Error == "" {
 		if r, ok := h.pendingRST[hf.id]; ok {
 			hf.flow.Error = r
@@ -244,12 +257,16 @@ func (h *h2Stream) emitLocked(hf *h2flow) {
 	h.onFlow(hf.flow, first)
 }
 
-func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool) {
+func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool, ts time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	hf := h.getLocked(mh.StreamID)
 	f := hf.flow
 	if fromClient {
+		// Time the request from its own HEADERS frame (each multiplexed stream is timed
+		// independently), not decode wall-clock — the whole connection often decrypts and
+		// parses in one burst, which is why so many h2 requests read as 0 ms.
+		f.TSUnixMicros = tsMicros(ts)
 		// The client fingerprint (SETTINGS/WINDOW_UPDATE/PRIORITY already captured on the
 		// connection) plus this request's pseudo-header order.
 		f.Http2Fingerprint = h.akamaiFingerprint(mh)
@@ -273,10 +290,10 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool) {
 			}
 		}
 	} else {
+		hf.respTS = ts // response activity; duration is paired up in emitLocked
 		if v := mh.PseudoValue("status"); v != "" {
 			if code, err := strconv.Atoi(v); err == nil {
 				f.Status = uint32(code)
-				f.DurationMicros = uint64(max(time.Now().UnixMicro()-f.TSUnixMicros, 0))
 			}
 		}
 		for _, hd := range mh.RegularFields() {
@@ -292,17 +309,22 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool) {
 	h.emitLocked(hf)
 }
 
-func (h *h2Stream) onData(df *http2.DataFrame, fromClient bool) {
+func (h *h2Stream) onData(df *http2.DataFrame, fromClient bool, ts time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	hf := h.getLocked(df.Header().StreamID)
 	f := hf.flow
 	if fromClient {
+		if f.TSUnixMicros == 0 { // DATA before HEADERS (unusual) — time it from this frame
+			f.TSUnixMicros = tsMicros(ts)
+		}
 		f.RequestBody = appendCapped(f.RequestBody, df.Data())
 		f.RequestBytes = uint64(len(f.RequestBody))
 	} else if !hf.respGzip {
+		hf.respTS = ts
 		f.ResponseBody = appendCapped(f.ResponseBody, df.Data())
 	} else {
+		hf.respTS = ts
 		// gzip: keep the compressed bytes in ResponseBody until end-of-stream, then
 		// gunzip in place (finalize). Capped to bound memory.
 		f.ResponseBody = appendCapped(f.ResponseBody, df.Data())
