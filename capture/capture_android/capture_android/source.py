@@ -106,11 +106,13 @@ class AndroidSource(source.CaptureSource):
                if packages else
                source.param("package", "App package", source.STRING, required=True))
         return source.descriptor([
-            # Frida must match the device's Android release; the recommended one is default,
-            # picked interactively like the CLI.
+            # Frida must match the device's Android release; the recommended one is the
+            # default (preselected) and labelled "(recommended)" so every viewer surfaces it
+            # the way the CLI picker does — the descriptor is the single option model.
             source.param("frida", "Frida version", source.CHOICE, required=True,
                          default=params.get("frida") or recommended,
-                         choices=[source.choice(v) for v in versions]),
+                         choices=[source.choice(v, f"{v}  (recommended)" if v == recommended else v)
+                                  for v in versions]),
             pkg,
             source.param("url", "Open URL (optional)", source.STRING),
             source.param("duration", "Auto-stop after (seconds)", source.INT),

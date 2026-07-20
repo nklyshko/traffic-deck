@@ -82,9 +82,13 @@ def test_describe_after_provisioning_offers_frida_and_packages():
     src = AndroidSource("gw", b)
     d = describe_provisioned(src)
     assert [p.key for p in d.params] == ["frida", "package", "url", "duration"]
-    # Frida version is a choice, defaulting to the device recommendation.
+    # Frida version is a choice, defaulting to the device recommendation, which is also
+    # labelled "(recommended)" so viewers surface it like the CLI picker (not just preselect).
     assert [c.value for c in d.params[0].choices] == ["16.7.19", "17.15.1"]
     assert d.params[0].default == "16.7.19"
+    frida_labels = {c.value: c.label for c in d.params[0].choices}
+    assert "(recommended)" in frida_labels["16.7.19"]
+    assert "(recommended)" not in frida_labels["17.15.1"]
     assert [c.value for c in d.params[1].choices] == ["com.a", "com.b"]
     assert b.provisioned == 1
 
