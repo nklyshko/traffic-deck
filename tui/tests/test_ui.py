@@ -266,6 +266,49 @@ async def test_sessions_screen_lists():
         assert table.row_count == 2  # two sessions in the fixture
 
 
+async def test_sessions_list_refreshes_when_reopened():
+    """Returning to the session list (e.g. exiting a session) auto-refreshes it, so a
+    session that appeared on the gateway while the user was away shows up."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        sessions = app.screen
+        assert isinstance(sessions, SessionsScreen)
+        assert sessions.query_one("#sessions", DataTable).row_count == 2
+
+        await focus(pilot, "#sessions")
+        await pilot.press("enter")        # drill into a session (pushes the workspace)
+        await settle(pilot)
+        assert isinstance(app.screen, WorkspaceScreen)
+
+        # A new session appears on the gateway while we're inside the workspace.
+        app.client._sessions.append(
+            cp.Session(id="sess-3", label="fresh", status=3, flow_count=0))
+
+        app.pop_screen()                  # exit back to the list → ScreenResume refreshes it
+        await settle(pilot)
+        assert app.screen is sessions
+        assert sessions.query_one("#sessions", DataTable).row_count == 3
+
+
+async def test_sessions_refresh_keeps_the_cursor_put():
+    """An auto-refresh must not yank the selection back to the top row."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        table = app.screen.query_one("#sessions", DataTable)
+        await focus(pilot, "#sessions")
+        await pilot.press("down")         # move off the first row
+        await settle(pilot)
+        assert table.cursor_coordinate.row == 1
+        key_before = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
+        app.screen.load_sessions(quiet=True)  # a periodic refresh
+        await settle(pilot)
+        key_after = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        assert key_after == key_before        # same session still selected
+
+
 async def test_delete_session():
     app = make_app()
     async with app.run_test() as pilot:

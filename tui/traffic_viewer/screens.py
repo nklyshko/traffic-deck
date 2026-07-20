@@ -341,6 +341,21 @@ class SessionsScreen(Screen):
         self.sub_title = "sessions"
         self.query_one("#sessions", DataTable).focus()  # so nav keys work immediately
         self.load_sessions()
+        # Keep the list current while it's on screen: flow counts and capture status change
+        # under it. Paused while another screen (a session) is on top; see on_screen_suspend.
+        self._refresh_timer = self.set_interval(5, lambda: self.load_sessions(quiet=True))
+
+    def on_screen_resume(self) -> None:
+        """Re-shown after a pushed screen (a session) was popped: refresh at once so the list
+        reflects anything that changed while away, and resume the periodic refresh."""
+        self.load_sessions(quiet=True)
+        if getattr(self, "_refresh_timer", None) is not None:
+            self._refresh_timer.resume()
+
+    def on_screen_suspend(self) -> None:
+        """Another screen is on top — stop polling until we're shown again."""
+        if getattr(self, "_refresh_timer", None) is not None:
+            self._refresh_timer.pause()
 
     def action_refresh(self) -> None:
         self.load_sessions()
@@ -407,14 +422,25 @@ class SessionsScreen(Screen):
         self.app.push_screen(LogsScreen())
 
     @work(exclusive=True)
-    async def load_sessions(self) -> None:
+    async def load_sessions(self, quiet: bool = False) -> None:
+        """(Re)load the session list. quiet suppresses the empty/error notifications, for the
+        periodic and on-reopen auto-refreshes, which must not pop a toast every few seconds."""
         table = self.query_one("#sessions", DataTable)
-        table.clear()
+        # Keep the cursor on the same session across the rebuild (clear() resets it to the
+        # top), so an auto-refresh doesn't yank the selection out from under the user.
+        prev_key = None
+        if table.cursor_coordinate is not None and table.row_count:
+            try:
+                prev_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+            except Exception:  # noqa: BLE001
+                prev_key = None
         try:
             sessions = await self.app.client.list_sessions()
         except Exception as exc:  # noqa: BLE001
-            self.notify(f"list_sessions failed: {exc}", severity="error")
+            if not quiet:
+                self.notify(f"list_sessions failed: {exc}", severity="error")
             return
+        table.clear()
         self._labels = {s.id: s.label for s in sessions}  # for the workspace tab title
         # Source-declared default table columns (viewer.columns), by session.
         self._source_columns = {s.id: _session_view_columns(s) for s in sessions}
@@ -439,7 +465,12 @@ class SessionsScreen(Screen):
                 created,
                 key=s.id,
             )
-        if not sessions:
+        if prev_key is not None:  # put the cursor back on the previously selected session
+            try:
+                table.move_cursor(row=table.get_row_index(prev_key))
+            except Exception:  # noqa: BLE001 — that session is gone (deleted / no longer listed)
+                pass
+        if not sessions and not quiet:
             self.notify("no sessions — import one with `gateway import`")
 
     def _selected_session(self) -> str | None:
