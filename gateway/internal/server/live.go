@@ -196,6 +196,96 @@ func (ls *liveSession) flow(id string) *trafficv1.Flow {
 	return nil
 }
 
+// liveFlows returns clones of the flows published so far, in arrival order — the
+// unpersisted counterpart of store.ListFlows, for reading a session that is still open
+// (the live decode paths persist nothing until close).
+func (ls *liveSession) liveFlows() []*trafficv1.Flow {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := make([]*trafficv1.Flow, 0, len(ls.order))
+	for _, id := range ls.order {
+		if f := ls.flows[id]; f != nil {
+			out = append(out, proto.Clone(f).(*trafficv1.Flow))
+		}
+	}
+	return out
+}
+
+// messagesForFlow returns clones of the frames decoded so far for one flow, in order —
+// the live counterpart of store.ListMessages.
+func (ls *liveSession) messagesForFlow(flowID string) []*trafficv1.WsMessage {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	var out []*trafficv1.WsMessage
+	for _, m := range ls.messages {
+		if m.GetFlowId() == flowID {
+			out = append(out, proto.Clone(m).(*trafficv1.WsMessage))
+		}
+	}
+	return out
+}
+
+// bodyBytes serves a live flow's request or response body: the bytes held for it, and
+// whether those are a prefix (the live cap cut the body short) rather than the whole
+// thing. ok is false only when there is no such live flow, or that direction has no body.
+//
+// Under record-live the retained decode flow carries whole bodies of any size, so it wins
+// over the proto's copy, which inlines only up to InlineBlobMax. Without it the flow's
+// preview is all there is until the batch decode on close.
+func (ls *liveSession) bodyBytes(flowID string, response bool) (data []byte, truncated, ok bool) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if df := ls.dflows[flowID]; df != nil {
+		b, cut := df.RequestBody, df.RequestBodyTruncated
+		if response {
+			b, cut = df.ResponseBody, df.ResponseBodyTruncated
+		}
+		if len(b) > 0 {
+			return b, cut, true
+		}
+	}
+	f := ls.flows[flowID]
+	if f == nil {
+		return nil, false, false
+	}
+	body := f.GetRequestBody()
+	if response {
+		body = f.GetResponseBody()
+	}
+	if body.GetSize() == 0 {
+		return nil, false, false
+	}
+	if inline := body.GetInline(); len(inline) > 0 {
+		return inline, body.GetTruncated(), true
+	}
+	// The flow says the body exists but carries none of it (a pushed flow whose bytes
+	// went to the store, which the caller has already missed). Nothing to hand over —
+	// report it as a truncated body of zero bytes rather than as a body-less flow.
+	return nil, true, true
+}
+
+// messageBody returns a live message's decoded payload (or its original undecoded bytes
+// when raw is set) and whether it was found. Live frames carry both inline, so unlike
+// bodyBytes there is no "present but unavailable" case.
+func (ls *liveSession) messageBody(messageID string, raw bool) ([]byte, bool) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	for _, m := range ls.messages {
+		if m.GetId() != messageID {
+			continue
+		}
+		body := m.GetPayload()
+		if raw {
+			body = m.GetRaw()
+		}
+		if body == nil {
+			return nil, false
+		}
+		return body.GetInline(), true
+	}
+	return nil, false
+}
+
 // message returns a clone of the live WebSocket/parsed message with the given id, or nil.
 // Cloned for the same reason as flow: the live proto is shared with subscribers.
 func (ls *liveSession) message(id string) *trafficv1.WsMessage {
@@ -391,8 +481,8 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 	for _, h := range f.ResponseHeaders {
 		pf.ResponseHeaders = append(pf.ResponseHeaders, &trafficv1.Header{Name: h.Name, Value: h.Value})
 	}
-	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders))
-	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders))
+	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders), f.RequestBodyTruncated)
+	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders), f.ResponseBodyTruncated)
 	return pf
 }
 
@@ -423,11 +513,11 @@ func wsMsgToProto(m *decode.WsMessage) *trafficv1.WsMessage {
 	return pm
 }
 
-func liveBody(b []byte, ct string) *trafficv1.Body {
+func liveBody(b []byte, ct string, truncated bool) *trafficv1.Body {
 	if len(b) == 0 {
 		return nil
 	}
-	body := &trafficv1.Body{Size: uint64(len(b)), ContentType: ct}
+	body := &trafficv1.Body{Size: uint64(len(b)), ContentType: ct, Truncated: truncated}
 	if len(b) <= store.InlineBlobMax {
 		body.Content = &trafficv1.Body_Inline{Inline: b}
 	}

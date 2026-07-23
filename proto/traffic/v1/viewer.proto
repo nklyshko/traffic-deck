@@ -65,6 +65,11 @@ message GetBodyRequest {
 
 message BodyChunk {
   bytes payload = 1;
+  // Set on every chunk of a body the live decode only kept the start of (see
+  // Body.truncated): the payloads add up to a prefix, not the whole body. A caller that
+  // needs all of it has to wait for the session to close and re-fetch. A truncated body
+  // always sends at least one chunk, so the flag is never lost to an empty stream.
+  bool truncated = 2;
 }
 
 message ListMessagesRequest {

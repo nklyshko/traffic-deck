@@ -112,6 +112,7 @@ class FakeClient:
         self.mcp_running = False
         self.android_provision_calls = 0
         self.hold_flows = False   # keep stream_flows open, as a live session's would be
+        self.partial_bodies = False  # serve bodies as live previews (capped mid-capture)
         self.artifacts = {}       # GetSessionArtifacts reply fields (pcap/keylog paths)
 
     async def list_capture_sources(self):
@@ -214,7 +215,8 @@ class FakeClient:
         raise KeyError(flow_id)
 
     async def get_body(self, session_id, flow_id, response):
-        return b'{"k":1}'
+        # (bytes, partial) — partial marks a body the live decode only kept the start of.
+        return b'{"k":1}', self.partial_bodies
 
     async def stream_messages(self, session_id, flow_id, follow=True):
         for m in _ws_messages():
@@ -799,13 +801,37 @@ async def test_body_view_renders_small_body_inline():
         assert '"k"' in rendered.plain  # JSON pretty-printed inline, not handed off
 
 
+async def test_body_view_flags_a_live_preview():
+    """A body the live decode only kept the start of must say so on screen — otherwise a
+    prefix reads as the whole body (and the JSON below it looks merely malformed)."""
+    app = make_app()
+    app.client.partial_bodies = True
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(BodyScreen(SESSION_ID, "f1", "application/json", False, "f1"))
+        await settle(pilot)
+        meta = app.screen.query_one("#pmeta", Static)
+        assert meta.display
+        assert "live preview" in meta.render().plain
+        assert "session closes" in meta.render().plain
+
+
+async def test_body_view_has_no_preview_notice_for_a_whole_body():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(BodyScreen(SESSION_ID, "f1", "application/json", False, "f1"))
+        await settle(pilot)
+        assert not app.screen.query_one("#pmeta", Static).display
+
+
 async def test_body_view_opens_editor_for_large_body(monkeypatch):
     opened = []
     monkeypatch.setattr(BodyScreen, "_open_external", lambda self: opened.append(self._label))
     big = b"x" * (BodyScreen._VIEW_LIMIT + 10)
 
     async def big_body(session_id, flow_id, response):
-        return big
+        return big, False
 
     app = make_app()
     app.client.get_body = big_body

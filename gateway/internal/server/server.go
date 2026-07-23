@@ -99,14 +99,20 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	if err != nil {
 		return storeStatus(err, "list flows")
 	}
+	sent := make(map[string]bool, len(flows))
 	for _, f := range flows {
 		if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
 			return err
 		}
+		sent[f.GetId()] = true
 	}
 
 	if !req.GetFollow() {
-		return nil
+		// The live decode paths persist nothing until close, so a non-following reader
+		// (the MCP server, a script) would see an open session as empty. Serve the hub's
+		// flows too — skipping ids the backfill already covered, since the pushed
+		// (mitmproxy) path persists incrementally and so appears in both.
+		return v.sendLiveFlows(srv, req.GetSessionId(), sent)
 	}
 	ls := v.waitForLive(srv.Context(), req.GetSessionId())
 	if ls == nil {
@@ -132,6 +138,30 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 			}
 		}
 	}
+}
+
+// sendLiveFlows sends the in-progress (unpersisted) flows of an open session as
+// flow_added events, skipping ids already sent from the store, with the bundle's
+// annotations folded in. A no-op when the session isn't live. Annotation attach is
+// best-effort: the flows are still worth sending if that read fails.
+func (v *Viewer) sendLiveFlows(srv grpc.ServerStreamingServer[trafficv1.FlowEvent], sessionID string, sent map[string]bool) error {
+	ls := v.hub.get(sessionID)
+	if ls == nil {
+		return nil
+	}
+	var live []*trafficv1.Flow
+	for _, f := range ls.liveFlows() {
+		if !sent[f.GetId()] {
+			live = append(live, f)
+		}
+	}
+	_ = v.st.AttachFlowAnnotations(srv.Context(), sessionID, live...)
+	for _, f := range live {
+		if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // waitForLive returns the live-hub session for sessionID, briefly waiting out the race
@@ -166,18 +196,35 @@ func (v *Viewer) waitForLive(ctx context.Context, sessionID string) *liveSession
 func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
 	body, _, err := v.st.GetBodyBytes(srv.Context(), req.GetSessionId(), req.GetFlowId(), req.GetResponse())
 	if errors.Is(err, store.ErrNotFound) {
+		// Like GetFlow: an unpersisted live flow's body is served from the hub. Whatever
+		// the live decode kept is streamed, flagged truncated when that is only the start
+		// of the body — so a caller can't read a prefix as if it were the whole thing.
+		if ls := v.hub.get(req.GetSessionId()); ls != nil {
+			if data, truncated, ok := ls.bodyBytes(req.GetFlowId(), req.GetResponse()); ok {
+				return streamBytes(srv, data, truncated)
+			}
+		}
 		return status.Error(codes.NotFound, "body not found")
 	}
 	if err != nil {
 		return storeStatus(err, "get body")
 	}
-	return streamBytes(srv, body)
+	return streamBytes(srv, body, false)
 }
 
 func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRequest) (*trafficv1.MessageList, error) {
 	msgs, err := v.st.ListMessages(ctx, req.GetSessionId(), req.GetFlowId())
 	if err != nil {
 		return nil, storeStatus(err, "list messages")
+	}
+	if len(msgs) == 0 {
+		// Nothing stored: the frames of an open session live only in the hub until close,
+		// so serve those (with their annotations) — otherwise a live WebSocket timeline
+		// reads as empty. GetMessage/StreamMessages already have this fallback.
+		if ls := v.hub.get(req.GetSessionId()); ls != nil {
+			msgs = ls.messagesForFlow(req.GetFlowId())
+			_ = v.st.AttachMessageAnnotations(ctx, req.GetSessionId(), msgs...)
+		}
 	}
 	return &trafficv1.MessageList{Messages: msgs}, nil
 }
@@ -274,20 +321,32 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
 	body, err := v.st.GetWsMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId(), req.GetRaw())
 	if errors.Is(err, store.ErrNotFound) {
+		// Unpersisted live frame: its payload (and raw bytes) are inline in the hub. Frames
+		// are small and kept whole, so nothing here is ever a prefix.
+		if ls := v.hub.get(req.GetSessionId()); ls != nil {
+			if data, ok := ls.messageBody(req.GetMessageId(), req.GetRaw()); ok {
+				return streamBytes(srv, data, false)
+			}
+		}
 		return status.Error(codes.NotFound, "message body not found")
 	}
 	if err != nil {
 		return storeStatus(err, "get message body")
 	}
-	return streamBytes(srv, body)
+	return streamBytes(srv, body, false)
 }
 
-// streamBytes sends a byte slice as BodyChunks over a server stream.
-func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byte) error {
+// streamBytes sends a byte slice as BodyChunks over a server stream. truncated marks the
+// bytes as a prefix of a longer body; it rides on every chunk, and forces one empty chunk
+// when there are no bytes at all, so the flag can't be lost to an empty stream.
+func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byte, truncated bool) error {
 	const chunk = 64 << 10
+	if len(body) == 0 && truncated {
+		return srv.Send(&trafficv1.BodyChunk{Truncated: true})
+	}
 	for off := 0; off < len(body); off += chunk {
 		end := min(off+chunk, len(body))
-		if err := srv.Send(&trafficv1.BodyChunk{Payload: body[off:end]}); err != nil {
+		if err := srv.Send(&trafficv1.BodyChunk{Payload: body[off:end], Truncated: truncated}); err != nil {
 			return err
 		}
 	}

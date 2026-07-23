@@ -241,6 +241,78 @@ def test_export_client_hellos_empty_for_plaintext(monkeypatch):
     assert out == {"flow_id": "p", "tls_hrr": False, "client_hellos": []}
 
 
+# --- body fetch -----------------------------------------------------------
+
+def _rpc_error(code, details):
+    import grpc
+    return grpc.aio.AioRpcError(code, grpc.aio.Metadata(), grpc.aio.Metadata(), details=details)
+
+
+def _with_body(monkeypatch, result):
+    """Point the tools at a client whose get_body returns (bytes, partial) — or raises."""
+    class FakeClient:
+        async def get_body(self, sid, fid, response):
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: FakeClient())
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+
+
+def test_get_body_marks_a_live_preview_as_partial(monkeypatch):
+    """A whole body reads as itself; the leading bytes of one still being captured must
+    carry `partial` + a note, or the model reads a prefix as the entire body."""
+    import asyncio
+
+    _with_body(monkeypatch, (b'{"k":1}', False))
+    whole = asyncio.run(S.get_body("s", "f"))
+    assert whole["text"] == '{"k":1}' and whole["size"] == 7
+    assert "partial" not in whole and "note" not in whole
+
+    _with_body(monkeypatch, (b'{"k":1', True))
+    part = asyncio.run(S.get_body("s", "f"))
+    assert part["text"] == '{"k":1' and part["partial"] is True
+    assert "once the session closes" in part["note"]
+
+
+def test_get_body_error_mapping(monkeypatch):
+    """A body-less flow reads as "no body"; a bundle the gateway refuses to read reports
+    its reason rather than looking body-less; real faults propagate."""
+    import asyncio
+
+    import grpc
+
+    _with_body(monkeypatch, _rpc_error(grpc.StatusCode.NOT_FOUND, "body not found"))
+    assert asyncio.run(S.get_body("s", "f")) == {"size": 0, "note": "no body"}
+
+    msg = "session bundle schema is outdated — re-import this session"
+    _with_body(monkeypatch, _rpc_error(grpc.StatusCode.FAILED_PRECONDITION, msg))
+    assert asyncio.run(S.get_body("s", "f")) == {"size": 0, "note": msg}
+
+    _with_body(monkeypatch, _rpc_error(grpc.StatusCode.INTERNAL, "boom"))
+    try:
+        asyncio.run(S.get_body("s", "f"))
+    except grpc.aio.AioRpcError:
+        pass
+    else:
+        raise AssertionError("INTERNAL should propagate")
+
+
+def test_flow_detail_marks_a_partial_body(monkeypatch):
+    """The flow detail's body metadata carries the same signal, so `size` there isn't
+    mistaken for the body's own length."""
+    f = _flow(id="f1")
+    f.response_body.CopyFrom(cp.Body(size=6, content_type="application/json",
+                                     inline=b'{"k":1', truncated=True))
+    d = S._flow_detail(f, {}, {})
+    assert d["response_body"]["partial"] is True
+    assert d["response_body"]["text"] == '{"k":1'
+
+
 # --- compare_flows --------------------------------------------------------
 
 def _hdr(name, value):

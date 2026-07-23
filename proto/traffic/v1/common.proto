@@ -78,6 +78,11 @@ message Body {
     bytes inline = 3;
     string object_ref = 4; // sha256 key; fetch full bytes via GetBody
   }
+  // Set when `size`/`inline` hold only the leading bytes the live decode kept, because
+  // the body ran past its preview cap while the session was still capturing. The whole
+  // body is decoded from the capture when the session closes. Never set on a stored
+  // body, or on a live one under record-live (which keeps bodies whole).
+  bool truncated = 5;
 }
 
 // One decoded HTTP exchange (request + optional response).

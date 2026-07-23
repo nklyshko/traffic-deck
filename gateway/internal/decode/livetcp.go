@@ -614,10 +614,10 @@ func (s *tcpStream) dispatch(fromClient bool, plain []byte) {
 // the flow's request/response body so the original bytes remain queryable.
 func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 	if fromClient {
-		s.flow.RequestBody = appendCapped(s.flow.RequestBody, plain)
+		s.flow.appendReqBody(plain)
 		s.flow.RequestBytes = uint64(len(s.flow.RequestBody))
 	} else {
-		s.flow.ResponseBody = appendCapped(s.flow.ResponseBody, plain)
+		s.flow.appendRespBody(plain)
 		// A raw/custom connection has no request→response boundary and lives for a long
 		// time, so stop the viewer's stopwatch at the first server byte (time-to-first-byte)
 		// instead of ticking for the connection's whole lifetime. Re-emit so it propagates.

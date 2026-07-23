@@ -370,26 +370,41 @@ func msgRecords(msgs map[string]*trafficv1.WsMessage) map[string]annotatable {
 	return out
 }
 
-// AttachFlowAnnotations folds the session bundle's annotations onto an in-memory flow that
-// isn't persisted yet — one that exists only in the live hub during capture. Its
-// annotations still live in the bundle DB (keyed by the flow id), so the live GetFlow path
-// can surface them (comments, marks, tags, …) while the session is still open.
-func (s *Store) AttachFlowAnnotations(ctx context.Context, sessionID string, f *trafficv1.Flow) error {
+// AttachFlowAnnotations folds the session bundle's annotations onto in-memory flows that
+// aren't persisted yet — ones that exist only in the live hub during capture. Their
+// annotations still live in the bundle DB (keyed by the flow id), so the live GetFlow and
+// StreamFlows paths can surface them (comments, marks, tags, …) while the session is still
+// open. Variadic so a whole live listing is annotated in one pass.
+func (s *Store) AttachFlowAnnotations(ctx context.Context, sessionID string, flows ...*trafficv1.Flow) error {
+	if len(flows) == 0 {
+		return nil
+	}
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	return s.attachAnnotations(ctx, db, flowRecords(map[string]*trafficv1.Flow{f.Id: f}))
+	byID := make(map[string]*trafficv1.Flow, len(flows))
+	for _, f := range flows {
+		byID[f.Id] = f
+	}
+	return s.attachAnnotations(ctx, db, flowRecords(byID))
 }
 
-// AttachMessageAnnotations is the message-side counterpart of AttachFlowAnnotations, for a
-// live WebSocket/parsed message not yet persisted.
-func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, m *trafficv1.WsMessage) error {
+// AttachMessageAnnotations is the message-side counterpart of AttachFlowAnnotations, for
+// live WebSocket/parsed messages not yet persisted.
+func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, msgs ...*trafficv1.WsMessage) error {
+	if len(msgs) == 0 {
+		return nil
+	}
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	return s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.WsMessage{m.Id: m}))
+	byID := make(map[string]*trafficv1.WsMessage, len(msgs))
+	for _, m := range msgs {
+		byID[m.Id] = m
+	}
+	return s.attachAnnotations(ctx, db, msgRecords(byID))
 }
 
 // attachAnnotations folds tags, favorites, marks, groups and comments onto the given

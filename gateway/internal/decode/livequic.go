@@ -305,10 +305,10 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 func (s *quicSession) onData(st *h3Stream, fromClient bool, payload []byte) {
 	f := st.flow
 	if fromClient {
-		f.RequestBody = appendCapped(f.RequestBody, payload)
+		f.appendReqBody(payload)
 		f.RequestBytes = uint64(len(f.RequestBody))
 	} else {
-		f.ResponseBody = appendCapped(f.ResponseBody, payload)
+		f.appendRespBody(payload)
 	}
 	s.emit(st)
 }

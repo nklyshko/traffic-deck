@@ -489,7 +489,12 @@ type Body struct {
 	//
 	//	*Body_Inline
 	//	*Body_ObjectRef
-	Content       isBody_Content `protobuf_oneof:"content"`
+	Content isBody_Content `protobuf_oneof:"content"`
+	// Set when `size`/`inline` hold only the leading bytes the live decode kept, because
+	// the body ran past its preview cap while the session was still capturing. The whole
+	// body is decoded from the capture when the session closes. Never set on a stored
+	// body, or on a live one under record-live (which keeps bodies whole).
+	Truncated     bool `protobuf:"varint,5,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -561,6 +566,13 @@ func (x *Body) GetObjectRef() string {
 		}
 	}
 	return ""
+}
+
+func (x *Body) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
 }
 
 type isBody_Content interface {
@@ -1572,13 +1584,14 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\amax_age\x18\x06 \x01(\x03R\x06maxAge\x12\x16\n" +
 	"\x06secure\x18\a \x01(\bR\x06secure\x12\x1b\n" +
 	"\thttp_only\x18\b \x01(\bR\bhttpOnly\x12\x1b\n" +
-	"\tsame_site\x18\t \x01(\tR\bsameSite\"\x83\x01\n" +
+	"\tsame_site\x18\t \x01(\tR\bsameSite\"\xa1\x01\n" +
 	"\x04Body\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x04R\x04size\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x18\n" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
-	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRefB\t\n" +
+	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRef\x12\x1c\n" +
+	"\ttruncated\x18\x05 \x01(\bR\ttruncatedB\t\n" +
 	"\acontent\"\x91\r\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +

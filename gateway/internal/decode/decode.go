@@ -56,6 +56,13 @@ type Flow struct {
 	RequestBody  []byte
 	ResponseBody []byte
 
+	// RequestBodyTruncated / ResponseBodyTruncated mark a body the live decode kept only
+	// the start of, having hit maxLiveBody. The batch pass on close (and record-live,
+	// which lifts the cap) leave them false, so they say exactly one thing: what is in
+	// the field above is a prefix, not the body.
+	RequestBodyTruncated  bool
+	ResponseBodyTruncated bool
+
 	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
 	// frames; the frames themselves are WsMessages keyed by this flow's ID.
 	Websocket bool

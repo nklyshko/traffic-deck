@@ -173,7 +173,18 @@ def _body_ref(body) -> dict | None:
     """Body metadata only (content-type + size) — no bytes. Fetch bytes via get_body."""
     if body is None or body.size == 0:
         return None
-    return {"content_type": body.content_type or None, "size": body.size}
+    d = {"content_type": body.content_type or None, "size": body.size}
+    if body.truncated:
+        d |= _PARTIAL
+    return d
+
+
+# What a live decode reports for a body it only kept the start of: `size` counts the bytes
+# it has, not the body's own length, and the rest arrives when the session is decoded on
+# close. Only sessions captured with record-live off can produce this.
+_PARTIAL = {"partial": True,
+            "note": "live preview — only the start of the body was kept while capturing; "
+                    "the whole body is readable once the session closes"}
 
 
 def _body_meta(body) -> dict | None:
@@ -181,6 +192,8 @@ def _body_meta(body) -> dict | None:
     if body is None or body.size == 0:
         return None
     meta = {"content_type": body.content_type or None, "size": body.size}
+    if body.truncated:
+        meta |= _PARTIAL
     if body.WhichOneof("content") != "inline":
         meta["note"] = "large body — fetch with get_body"
         return meta
@@ -489,16 +502,26 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
     `offset` is returned (page large bodies with `offset`). Bodies are stored
     decompressed. `response=False` for the request body.
 
+    Works on a session that is still capturing. There a body can come back `partial` —
+    its leading bytes, with a `note` — when the capture kept only a preview of it; fetch
+    it again once the session closes to get all of it.
+
     For a custom-protocol flow (a decoded raw-TCP connection), this returns the original
     *undecoded* bytes: `response=False` = the raw client->server stream, `response=True` =
     the raw server->client stream — the bytes that were fed to the decoder."""
     try:
-        data = await client().get_body(await _resolve_session(session_id), flow_id, response)
+        data, partial = await client().get_body(
+            await _resolve_session(session_id), flow_id, response)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no body"}
+        if e.code() == grpc.StatusCode.FAILED_PRECONDITION:
+            # The bundle can't be read as it stands (an outdated schema, say): report the
+            # gateway's own reason instead of an empty body that reads as "no body".
+            return {"size": 0, "note": e.details() or "body not available"}
         raise
-    return _bytes_payload(data, as_hex=as_hex, start=offset)
+    out = _bytes_payload(data, as_hex=as_hex, start=offset)
+    return out | _PARTIAL if partial else out
 
 
 @mcp.tool()

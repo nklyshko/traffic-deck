@@ -84,13 +84,19 @@ class GatewayClient:
             viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)
         )
 
-    async def get_body(self, session_id: str, flow_id: str, response: bool) -> bytes:
-        """Fetch a full body (any size) via the streaming GetBody RPC."""
+    async def get_body(self, session_id: str, flow_id: str, response: bool) -> tuple[bytes, bool]:
+        """Fetch a full body (any size) via the streaming GetBody RPC. Returns the bytes
+        and whether they are only the body's start — what a live decode has for a body
+        that outran its preview cap while the session is still capturing."""
         call = self._ensure().GetBody(
             viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=response)
         )
-        chunks = [c.payload async for c in call]
-        return b"".join(chunks)
+        chunks: list[bytes] = []
+        truncated = False
+        async for c in call:
+            chunks.append(c.payload)
+            truncated = truncated or c.truncated
+        return b"".join(chunks), truncated
 
     async def list_messages(self, session_id: str, flow_id: str):
         """WebSocket frames for an Upgrade flow, in timeline order."""

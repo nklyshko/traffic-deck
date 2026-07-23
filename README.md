@@ -130,6 +130,12 @@ bodies), `export_client_hellos` (a flow's raw TLS ClientHello bytes), `list_ws_m
 (paginated) + `get_ws_message_body` (WebSocket frames; `as_hex` for byte inspection).
 Session args accept an id prefix.
 
+Sessions still being captured are readable too: flows, WebSocket frames and bodies are
+served from the live decode until the session closes and they are persisted. Under
+record-live (the default) bodies come back whole at any size; with `GATEWAY_RECORD_LIVE=off`
+the live decode keeps only the first 256 KiB of a body, and `get_body` marks what it
+returns `partial` — fetch it again once the session closes for all of it.
+
 It runs **read-only by default**: only the inspection tools above are exposed. Set
 `MCP_READONLY=0` to additionally expose the mutating tools `rename_session` and
 `set_session_group` (relabel / regroup a recorded session).
@@ -384,7 +390,7 @@ label  = "Acme"
 | `GATEWAY_ADDR` | `127.0.0.1:8080` | gRPC listen / viewer + tools connect addr |
 | `TSHARK_PATH` | `tshark` | batch-decode / import binary (not used by the default live path) |
 | `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
-| `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass. Set `off` to run an authoritative batch tshark re-decode on close instead (full bodies; useful to verify the live decoder). |
+| `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass, keeping bodies whole (so they are readable in full mid-capture). Set `off` to run an authoritative batch tshark re-decode on close instead (useful to verify the live decoder) — then a live body is capped at 256 KiB and the viewer labels it a preview until the session closes. |
 | `GATEWAY_TSHARK_VERIFY` | `false` | on close, compare the live-decoded flows against a tshark decode and log the differences. |
 | `GATEWAY_MCP` | `false` | auto-start the MCP server on launch (headless agent access without a viewer). The TUI can also toggle it with `X`; either way the gateway owns it, so it outlives the viewer. |
 | `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. Size/retention: `GATEWAY_LOG_MAX_SIZE_MB` (50), `GATEWAY_LOG_MAX_BACKUPS` (10), `GATEWAY_LOG_MAX_AGE_DAYS` (30), `GATEWAY_LOG_COMPRESS` (true). Under `trafficdeck` (one-command mode) the terminal belongs to the TUI, so the gateway and its children log to the file only — `tail -f` it to watch, or use `trafficdeck serve`. Each spawned child (capture source, MCP, a module's processes) also gets its own rolling file in the same directory — `logs/chrome.log`, `logs/mcp.log` — so one tool can be read on its own; under `serve` its output is additionally teed to the terminal tagged `[chrome]`. |

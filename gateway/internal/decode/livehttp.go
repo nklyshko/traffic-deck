@@ -177,7 +177,7 @@ func (h *httpStream) run() {
 		if err != nil {
 			return
 		}
-		reqBody := drainBody(req.Body)
+		reqBody, reqTruncated := drainBody(req.Body)
 		f := h.owner.newHTTPFlow()
 		// Time the request from the packet that carried its last byte, not wall-clock at
 		// parse time — the parser reads already-buffered bytes, so wall-clock is meaningless.
@@ -191,6 +191,7 @@ func (h *httpStream) run() {
 		f.RequestHeaders = headersOf(req.Header)
 		f.UserAgent = req.Header.Get("User-Agent")
 		f.RequestBody = reqBody
+		f.RequestBodyTruncated = reqTruncated
 		f.RequestBytes = uint64(len(reqBody))
 		h.onFlow(f, true)
 
@@ -222,7 +223,7 @@ func (h *httpStream) run() {
 			return
 		}
 
-		f.ResponseBody = readRespBody(resp)
+		f.ResponseBody, f.ResponseBodyTruncated = readRespBody(resp)
 		h.onFlow(f, false)
 	}
 }
@@ -291,21 +292,26 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 }
 
 // drainBody reads up to maxLiveBody bytes, then drains the rest so the next message on a
-// kept-alive connection stays byte-aligned. (chunked transfer-encoding is undone by the
-// stdlib body reader; gzip Content-Encoding is not — see readRespBody.)
-func drainBody(rc io.ReadCloser) []byte {
+// kept-alive connection stays byte-aligned. Reports whether that drain threw anything
+// away — i.e. whether the returned bytes are a prefix rather than the body. (chunked
+// transfer-encoding is undone by the stdlib body reader; gzip Content-Encoding is not —
+// see readRespBody.)
+func drainBody(rc io.ReadCloser) ([]byte, bool) {
 	if rc == nil {
-		return nil
+		return nil, false
 	}
 	defer rc.Close()
 	data, _ := io.ReadAll(io.LimitReader(rc, int64(maxLiveBody)))
-	_, _ = io.Copy(io.Discard, rc)
-	return data
+	dropped, _ := io.Copy(io.Discard, rc)
+	return data, dropped > 0
 }
 
 // readRespBody captures the response body, gunzipping a gzip Content-Encoding so the
 // preview is readable, and always drains the underlying body for keep-alive alignment.
-func readRespBody(resp *http.Response) []byte {
+// Also reports whether the cap cut the body short. The overflow is drained through the
+// same (decoded) reader the capture used, so on a gzip body the flag describes the
+// decompressed bytes the viewer shows, not the compressed ones on the wire.
+func readRespBody(resp *http.Response) ([]byte, bool) {
 	defer resp.Body.Close()
 	var r io.Reader = resp.Body
 	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
@@ -315,8 +321,9 @@ func readRespBody(resp *http.Response) []byte {
 		}
 	}
 	data, _ := io.ReadAll(io.LimitReader(r, int64(maxLiveBody)))
+	dropped, _ := io.Copy(io.Discard, r)
 	_, _ = io.Copy(io.Discard, resp.Body) // drain remaining compressed/raw bytes
-	return data
+	return data, dropped > 0
 }
 
 func headersOf(h http.Header) []Header {

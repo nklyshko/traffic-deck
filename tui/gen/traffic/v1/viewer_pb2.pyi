@@ -70,10 +70,12 @@ class GetBodyRequest(_message.Message):
     def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., response: bool = ...) -> None: ...
 
 class BodyChunk(_message.Message):
-    __slots__ = ("payload",)
+    __slots__ = ("payload", "truncated")
     PAYLOAD_FIELD_NUMBER: _ClassVar[int]
+    TRUNCATED_FIELD_NUMBER: _ClassVar[int]
     payload: bytes
-    def __init__(self, payload: _Optional[bytes] = ...) -> None: ...
+    truncated: bool
+    def __init__(self, payload: _Optional[bytes] = ..., truncated: bool = ...) -> None: ...
 
 class ListMessagesRequest(_message.Message):
     __slots__ = ("session_id", "flow_id")
