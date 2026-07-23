@@ -226,6 +226,12 @@ class GatewayClient:
             pcap_path=pcap_path, keylog_path=keylog_path, label=label, engine=engine))
         return resp.session
 
+    async def get_session_artifacts(self, session_id: str):
+        """Where the session's pcap + key.log live on the gateway host (empty paths when
+        the session has none), for handing to an external analyzer like Wireshark."""
+        return await self._ctrl().GetSessionArtifacts(
+            control_pb2.GetSessionArtifactsRequest(session_id=session_id))
+
     # --- capture control (ADR-0010) -------------------------------------
 
     async def list_capture_sources(self):

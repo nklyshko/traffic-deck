@@ -425,6 +425,40 @@ func (c *Control) ImportCapture(ctx context.Context, req *trafficv1.ImportCaptur
 	return &trafficv1.ImportCaptureResponse{Session: sess}, nil
 }
 
+// GetSessionArtifacts reports where a session's pcap + key.log sit on the gateway host,
+// for a viewer that wants to open them in an external analyzer (the TUI's "open in
+// Wireshark"). Absent, empty, or non-local artifacts come back as empty paths rather than
+// an error — the session itself still exists, it just has nothing to hand over.
+func (c *Control) GetSessionArtifacts(ctx context.Context, req *trafficv1.GetSessionArtifactsRequest) (*trafficv1.SessionArtifacts, error) {
+	sid := req.GetSessionId()
+	if sid == "" {
+		return nil, status.Error(codes.InvalidArgument, "get session artifacts: session_id required")
+	}
+	if _, err := c.st.GetSession(ctx, sid); err != nil {
+		return nil, ctrlErr("get session artifacts", err)
+	}
+	host, _ := os.Hostname()
+	out := &trafficv1.SessionArtifacts{Hostname: host}
+	out.PcapPath, out.PcapBytes = c.localArtifact(pcapKey(sid))
+	out.KeylogPath, out.KeylogBytes = c.localArtifact(keylogKey(sid))
+	return out, nil
+}
+
+// localArtifact resolves a bundle object to an on-disk path, if the object store is
+// filesystem-backed and the file exists with content. An S3-backed store (or a missing
+// artifact) yields ("", 0).
+func (c *Control) localArtifact(key string) (string, uint64) {
+	path, ok := c.obj.LocalPath(key)
+	if !ok {
+		return "", 0
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() == 0 {
+		return "", 0
+	}
+	return path, uint64(fi.Size())
+}
+
 // --- groups ---
 
 func (c *Control) CreateGroup(ctx context.Context, req *trafficv1.CreateGroupRequest) (*trafficv1.Group, error) {

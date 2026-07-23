@@ -68,8 +68,8 @@ Several sessions can be open at once as tabs in the workspace. Keys by screen:
 |---|---|
 | Sessions | `a` new capture (pick a source, then step through its options — binary, profile, … — and start) · `s` stop the focused capture · `X` start/stop the MCP server · `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `c` force-close a session left open · `d` delete |
 | Workspace (tabs) | `o` open another session in a tab · `[` / `]` prev/next tab · `w` close tab |
-| Flow list | `f` filter (see below) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow |
-| Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages |
+| Flow list | `f` filter (see below) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow · `W` open the request in Wireshark |
+| Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages · `W` open in Wireshark |
 | WS messages | `space` select / `D` deselect · `t` `F` `m` `n` `g` annotate · `l` follow new |
 | Compare A/B | `s` switch A/B · `h` copy header order · `p` copy pseudo-header order · `k` copy cookie order |
 
@@ -97,6 +97,25 @@ The pcap-based sources (`capture_chrome`, `capture_android`) show both columns b
 default — they decode the frames off the wire, so the ids are the client's real ones.
 `capture_mitmproxy` doesn't: mitmproxy terminates the connection, and its addon API
 never exposes the HTTP/2 stream id, so both fields stay empty for proxy-captured flows.
+
+#### Open a request in Wireshark
+
+`W` — on a flow row or in the flow detail — hands the request to Wireshark for
+packet-level inspection: the session's own `capture.pcap`, its `key.log` as
+`tls.keylog_file` (so TLS decrypts there too), a display filter scoped to the flow's
+connection, and the packet cursor on the request's frame. On an HTTP/2 connection the
+filter also drops the *other* streams' frames (`http2.streamid eq N or not http2`), which
+leaves the target request plus the connection's handshake/ACK packets around it. Widen it
+in Wireshark's filter bar to see the whole connection again.
+
+The filter pins the connection by its address/port 4-tuple, not by the `Conn` id: that id
+matches Wireshark's `tcp.stream` index only on the tshark decode path — the native decoder
+numbers the connections it tracks, which is its own sequence.
+
+Needs the `wireshark` GUI on `PATH` (or `TRAFFICDECK_WIRESHARK` pointing at it) and the
+pcap readable locally — the gateway reports where it keeps the session's files, so a
+viewer attached to a *remote* gateway is told the path is on that host instead. Sessions
+without a pcap (`capture_mitmproxy`) have nothing to open.
 
 ### MCP server (for LLM/agent clients)
 

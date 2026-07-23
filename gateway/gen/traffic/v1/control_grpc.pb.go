@@ -34,6 +34,7 @@ const (
 	ControlService_SetSessionLabel_FullMethodName       = "/traffic.v1.ControlService/SetSessionLabel"
 	ControlService_DeleteSession_FullMethodName         = "/traffic.v1.ControlService/DeleteSession"
 	ControlService_ImportSession_FullMethodName         = "/traffic.v1.ControlService/ImportSession"
+	ControlService_GetSessionArtifacts_FullMethodName   = "/traffic.v1.ControlService/GetSessionArtifacts"
 	ControlService_ImportCapture_FullMethodName         = "/traffic.v1.ControlService/ImportCapture"
 	ControlService_CreateTag_FullMethodName             = "/traffic.v1.ControlService/CreateTag"
 	ControlService_DeleteTag_FullMethodName             = "/traffic.v1.ControlService/DeleteTag"
@@ -91,6 +92,12 @@ type ControlServiceClient interface {
 	// Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
 	// The session is registered under a fresh id; returns the imported session.
 	ImportSession(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse], error)
+	// Locate a session's raw capture artifacts (pcap + NSS key.log) on the gateway host,
+	// so a viewer running there can hand the same files to an external analyzer — the TUI
+	// opens a flow in Wireshark this way. Paths resolve on the gateway host (the local
+	// host under one-command mode); `hostname` lets a remote viewer tell they aren't its
+	// own. A proxy-captured session has no pcap and reports empty paths.
+	GetSessionArtifacts(ctx context.Context, in *GetSessionArtifactsRequest, opts ...grpc.CallOption) (*SessionArtifacts, error)
 	// Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
 	// gateway with the chosen engine, then registering the session. Mirrors the
 	// `gateway import` CLI. Paths resolve on the gateway host — which is the local host
@@ -305,6 +312,16 @@ func (c *controlServiceClient) ImportSession(ctx context.Context, opts ...grpc.C
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ImportSessionClient = grpc.ClientStreamingClient[ImportChunk, ImportSessionResponse]
 
+func (c *controlServiceClient) GetSessionArtifacts(ctx context.Context, in *GetSessionArtifactsRequest, opts ...grpc.CallOption) (*SessionArtifacts, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SessionArtifacts)
+	err := c.cc.Invoke(ctx, ControlService_GetSessionArtifacts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlServiceClient) ImportCapture(ctx context.Context, in *ImportCaptureRequest, opts ...grpc.CallOption) (*ImportCaptureResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ImportCaptureResponse)
@@ -504,6 +521,12 @@ type ControlServiceServer interface {
 	// Import a .tar.gz session bundle (as produced by ExportSession), streamed in chunks.
 	// The session is registered under a fresh id; returns the imported session.
 	ImportSession(grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]) error
+	// Locate a session's raw capture artifacts (pcap + NSS key.log) on the gateway host,
+	// so a viewer running there can hand the same files to an external analyzer — the TUI
+	// opens a flow in Wireshark this way. Paths resolve on the gateway host (the local
+	// host under one-command mode); `hostname` lets a remote viewer tell they aren't its
+	// own. A proxy-captured session has no pcap and reports empty paths.
+	GetSessionArtifacts(context.Context, *GetSessionArtifactsRequest) (*SessionArtifacts, error)
 	// Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
 	// gateway with the chosen engine, then registering the session. Mirrors the
 	// `gateway import` CLI. Paths resolve on the gateway host — which is the local host
@@ -582,6 +605,9 @@ func (UnimplementedControlServiceServer) DeleteSession(context.Context, *DeleteS
 }
 func (UnimplementedControlServiceServer) ImportSession(grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]) error {
 	return status.Error(codes.Unimplemented, "method ImportSession not implemented")
+}
+func (UnimplementedControlServiceServer) GetSessionArtifacts(context.Context, *GetSessionArtifactsRequest) (*SessionArtifacts, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSessionArtifacts not implemented")
 }
 func (UnimplementedControlServiceServer) ImportCapture(context.Context, *ImportCaptureRequest) (*ImportCaptureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ImportCapture not implemented")
@@ -889,6 +915,24 @@ func _ControlService_ImportSession_Handler(srv interface{}, stream grpc.ServerSt
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_ImportSessionServer = grpc.ClientStreamingServer[ImportChunk, ImportSessionResponse]
+
+func _ControlService_GetSessionArtifacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSessionArtifactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).GetSessionArtifacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_GetSessionArtifacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).GetSessionArtifacts(ctx, req.(*GetSessionArtifactsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _ControlService_ImportCapture_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ImportCaptureRequest)
@@ -1228,6 +1272,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteSession",
 			Handler:    _ControlService_DeleteSession_Handler,
+		},
+		{
+			MethodName: "GetSessionArtifacts",
+			Handler:    _ControlService_GetSessionArtifacts_Handler,
 		},
 		{
 			MethodName: "ImportCapture",

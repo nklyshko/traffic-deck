@@ -1770,6 +1770,131 @@ func (x *ImportCaptureResponse) GetSession() *Session {
 	return nil
 }
 
+type GetSessionArtifactsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetSessionArtifactsRequest) Reset() {
+	*x = GetSessionArtifactsRequest{}
+	mi := &file_traffic_v1_control_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetSessionArtifactsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetSessionArtifactsRequest) ProtoMessage() {}
+
+func (x *GetSessionArtifactsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_control_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetSessionArtifactsRequest.ProtoReflect.Descriptor instead.
+func (*GetSessionArtifactsRequest) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *GetSessionArtifactsRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// Where a session's raw capture files live on the gateway host. A path is empty when
+// that artifact is absent or empty (a proxy-captured session has no pcap; a capture
+// without TLS keys has no key.log).
+type SessionArtifacts struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	PcapPath    string                 `protobuf:"bytes,1,opt,name=pcap_path,json=pcapPath,proto3" json:"pcap_path,omitempty"`
+	KeylogPath  string                 `protobuf:"bytes,2,opt,name=keylog_path,json=keylogPath,proto3" json:"keylog_path,omitempty"`
+	PcapBytes   uint64                 `protobuf:"varint,3,opt,name=pcap_bytes,json=pcapBytes,proto3" json:"pcap_bytes,omitempty"`
+	KeylogBytes uint64                 `protobuf:"varint,4,opt,name=keylog_bytes,json=keylogBytes,proto3" json:"keylog_bytes,omitempty"`
+	// Host the paths resolve on (the gateway's hostname), so a viewer can tell a remote
+	// gateway's paths from its own filesystem.
+	Hostname      string `protobuf:"bytes,5,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionArtifacts) Reset() {
+	*x = SessionArtifacts{}
+	mi := &file_traffic_v1_control_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionArtifacts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionArtifacts) ProtoMessage() {}
+
+func (x *SessionArtifacts) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_control_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionArtifacts.ProtoReflect.Descriptor instead.
+func (*SessionArtifacts) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *SessionArtifacts) GetPcapPath() string {
+	if x != nil {
+		return x.PcapPath
+	}
+	return ""
+}
+
+func (x *SessionArtifacts) GetKeylogPath() string {
+	if x != nil {
+		return x.KeylogPath
+	}
+	return ""
+}
+
+func (x *SessionArtifacts) GetPcapBytes() uint64 {
+	if x != nil {
+		return x.PcapBytes
+	}
+	return 0
+}
+
+func (x *SessionArtifacts) GetKeylogBytes() uint64 {
+	if x != nil {
+		return x.KeylogBytes
+	}
+	return 0
+}
+
+func (x *SessionArtifacts) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
 type ReDecodeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -1779,7 +1904,7 @@ type ReDecodeRequest struct {
 
 func (x *ReDecodeRequest) Reset() {
 	*x = ReDecodeRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[31]
+	mi := &file_traffic_v1_control_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1791,7 +1916,7 @@ func (x *ReDecodeRequest) String() string {
 func (*ReDecodeRequest) ProtoMessage() {}
 
 func (x *ReDecodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[31]
+	mi := &file_traffic_v1_control_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1804,7 +1929,7 @@ func (x *ReDecodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReDecodeRequest.ProtoReflect.Descriptor instead.
 func (*ReDecodeRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{31}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ReDecodeRequest) GetSessionId() string {
@@ -1824,7 +1949,7 @@ type CreateTagRequest struct {
 
 func (x *CreateTagRequest) Reset() {
 	*x = CreateTagRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[32]
+	mi := &file_traffic_v1_control_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1836,7 +1961,7 @@ func (x *CreateTagRequest) String() string {
 func (*CreateTagRequest) ProtoMessage() {}
 
 func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[32]
+	mi := &file_traffic_v1_control_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1849,7 +1974,7 @@ func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTagRequest.ProtoReflect.Descriptor instead.
 func (*CreateTagRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{32}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CreateTagRequest) GetName() string {
@@ -1875,7 +2000,7 @@ type DeleteTagRequest struct {
 
 func (x *DeleteTagRequest) Reset() {
 	*x = DeleteTagRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[33]
+	mi := &file_traffic_v1_control_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1887,7 +2012,7 @@ func (x *DeleteTagRequest) String() string {
 func (*DeleteTagRequest) ProtoMessage() {}
 
 func (x *DeleteTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[33]
+	mi := &file_traffic_v1_control_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1900,7 +2025,7 @@ func (x *DeleteTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTagRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTagRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{33}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DeleteTagRequest) GetId() string {
@@ -1918,7 +2043,7 @@ type ListTagsRequest struct {
 
 func (x *ListTagsRequest) Reset() {
 	*x = ListTagsRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[34]
+	mi := &file_traffic_v1_control_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1930,7 +2055,7 @@ func (x *ListTagsRequest) String() string {
 func (*ListTagsRequest) ProtoMessage() {}
 
 func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[34]
+	mi := &file_traffic_v1_control_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1943,7 +2068,7 @@ func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTagsRequest.ProtoReflect.Descriptor instead.
 func (*ListTagsRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{34}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{36}
 }
 
 type TagList struct {
@@ -1955,7 +2080,7 @@ type TagList struct {
 
 func (x *TagList) Reset() {
 	*x = TagList{}
-	mi := &file_traffic_v1_control_proto_msgTypes[35]
+	mi := &file_traffic_v1_control_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1967,7 +2092,7 @@ func (x *TagList) String() string {
 func (*TagList) ProtoMessage() {}
 
 func (x *TagList) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[35]
+	mi := &file_traffic_v1_control_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1980,7 +2105,7 @@ func (x *TagList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TagList.ProtoReflect.Descriptor instead.
 func (*TagList) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{35}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *TagList) GetTags() []*Tag {
@@ -2002,7 +2127,7 @@ type SetTagsRequest struct {
 
 func (x *SetTagsRequest) Reset() {
 	*x = SetTagsRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[36]
+	mi := &file_traffic_v1_control_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2014,7 +2139,7 @@ func (x *SetTagsRequest) String() string {
 func (*SetTagsRequest) ProtoMessage() {}
 
 func (x *SetTagsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[36]
+	mi := &file_traffic_v1_control_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2027,7 +2152,7 @@ func (x *SetTagsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTagsRequest.ProtoReflect.Descriptor instead.
 func (*SetTagsRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{36}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *SetTagsRequest) GetSessionId() string {
@@ -2068,7 +2193,7 @@ type ToggleFavoriteRequest struct {
 
 func (x *ToggleFavoriteRequest) Reset() {
 	*x = ToggleFavoriteRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[37]
+	mi := &file_traffic_v1_control_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2080,7 +2205,7 @@ func (x *ToggleFavoriteRequest) String() string {
 func (*ToggleFavoriteRequest) ProtoMessage() {}
 
 func (x *ToggleFavoriteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[37]
+	mi := &file_traffic_v1_control_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2093,7 +2218,7 @@ func (x *ToggleFavoriteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToggleFavoriteRequest.ProtoReflect.Descriptor instead.
 func (*ToggleFavoriteRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{37}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ToggleFavoriteRequest) GetSessionId() string {
@@ -2121,7 +2246,7 @@ type AddCommentRequest struct {
 
 func (x *AddCommentRequest) Reset() {
 	*x = AddCommentRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[38]
+	mi := &file_traffic_v1_control_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2133,7 +2258,7 @@ func (x *AddCommentRequest) String() string {
 func (*AddCommentRequest) ProtoMessage() {}
 
 func (x *AddCommentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[38]
+	mi := &file_traffic_v1_control_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2146,7 +2271,7 @@ func (x *AddCommentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddCommentRequest.ProtoReflect.Descriptor instead.
 func (*AddCommentRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{38}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *AddCommentRequest) GetSessionId() string {
@@ -2181,7 +2306,7 @@ type EditCommentRequest struct {
 
 func (x *EditCommentRequest) Reset() {
 	*x = EditCommentRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[39]
+	mi := &file_traffic_v1_control_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2193,7 +2318,7 @@ func (x *EditCommentRequest) String() string {
 func (*EditCommentRequest) ProtoMessage() {}
 
 func (x *EditCommentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[39]
+	mi := &file_traffic_v1_control_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2206,7 +2331,7 @@ func (x *EditCommentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EditCommentRequest.ProtoReflect.Descriptor instead.
 func (*EditCommentRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{39}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *EditCommentRequest) GetSessionId() string {
@@ -2240,7 +2365,7 @@ type DeleteCommentRequest struct {
 
 func (x *DeleteCommentRequest) Reset() {
 	*x = DeleteCommentRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[40]
+	mi := &file_traffic_v1_control_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2252,7 +2377,7 @@ func (x *DeleteCommentRequest) String() string {
 func (*DeleteCommentRequest) ProtoMessage() {}
 
 func (x *DeleteCommentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[40]
+	mi := &file_traffic_v1_control_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2265,7 +2390,7 @@ func (x *DeleteCommentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteCommentRequest.ProtoReflect.Descriptor instead.
 func (*DeleteCommentRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{40}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeleteCommentRequest) GetSessionId() string {
@@ -2293,7 +2418,7 @@ type SetMarkRequest struct {
 
 func (x *SetMarkRequest) Reset() {
 	*x = SetMarkRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[41]
+	mi := &file_traffic_v1_control_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2305,7 +2430,7 @@ func (x *SetMarkRequest) String() string {
 func (*SetMarkRequest) ProtoMessage() {}
 
 func (x *SetMarkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[41]
+	mi := &file_traffic_v1_control_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2318,7 +2443,7 @@ func (x *SetMarkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetMarkRequest.ProtoReflect.Descriptor instead.
 func (*SetMarkRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{41}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *SetMarkRequest) GetSessionId() string {
@@ -2352,7 +2477,7 @@ type ClearMarkRequest struct {
 
 func (x *ClearMarkRequest) Reset() {
 	*x = ClearMarkRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[42]
+	mi := &file_traffic_v1_control_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2364,7 +2489,7 @@ func (x *ClearMarkRequest) String() string {
 func (*ClearMarkRequest) ProtoMessage() {}
 
 func (x *ClearMarkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[42]
+	mi := &file_traffic_v1_control_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2377,7 +2502,7 @@ func (x *ClearMarkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearMarkRequest.ProtoReflect.Descriptor instead.
 func (*ClearMarkRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{42}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ClearMarkRequest) GetSessionId() string {
@@ -2405,7 +2530,7 @@ type CreateGroupRequest struct {
 
 func (x *CreateGroupRequest) Reset() {
 	*x = CreateGroupRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[43]
+	mi := &file_traffic_v1_control_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2417,7 +2542,7 @@ func (x *CreateGroupRequest) String() string {
 func (*CreateGroupRequest) ProtoMessage() {}
 
 func (x *CreateGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[43]
+	mi := &file_traffic_v1_control_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2430,7 +2555,7 @@ func (x *CreateGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateGroupRequest.ProtoReflect.Descriptor instead.
 func (*CreateGroupRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{43}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *CreateGroupRequest) GetName() string {
@@ -2466,7 +2591,7 @@ type UpdateGroupRequest struct {
 
 func (x *UpdateGroupRequest) Reset() {
 	*x = UpdateGroupRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[44]
+	mi := &file_traffic_v1_control_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2478,7 +2603,7 @@ func (x *UpdateGroupRequest) String() string {
 func (*UpdateGroupRequest) ProtoMessage() {}
 
 func (x *UpdateGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[44]
+	mi := &file_traffic_v1_control_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2491,7 +2616,7 @@ func (x *UpdateGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateGroupRequest.ProtoReflect.Descriptor instead.
 func (*UpdateGroupRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{44}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *UpdateGroupRequest) GetId() string {
@@ -2531,7 +2656,7 @@ type DeleteGroupRequest struct {
 
 func (x *DeleteGroupRequest) Reset() {
 	*x = DeleteGroupRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[45]
+	mi := &file_traffic_v1_control_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2543,7 +2668,7 @@ func (x *DeleteGroupRequest) String() string {
 func (*DeleteGroupRequest) ProtoMessage() {}
 
 func (x *DeleteGroupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[45]
+	mi := &file_traffic_v1_control_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2556,7 +2681,7 @@ func (x *DeleteGroupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteGroupRequest.ProtoReflect.Descriptor instead.
 func (*DeleteGroupRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{45}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *DeleteGroupRequest) GetId() string {
@@ -2574,7 +2699,7 @@ type ListGroupsRequest struct {
 
 func (x *ListGroupsRequest) Reset() {
 	*x = ListGroupsRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[46]
+	mi := &file_traffic_v1_control_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2586,7 +2711,7 @@ func (x *ListGroupsRequest) String() string {
 func (*ListGroupsRequest) ProtoMessage() {}
 
 func (x *ListGroupsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[46]
+	mi := &file_traffic_v1_control_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2599,7 +2724,7 @@ func (x *ListGroupsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListGroupsRequest.ProtoReflect.Descriptor instead.
 func (*ListGroupsRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{46}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{48}
 }
 
 type GroupList struct {
@@ -2611,7 +2736,7 @@ type GroupList struct {
 
 func (x *GroupList) Reset() {
 	*x = GroupList{}
-	mi := &file_traffic_v1_control_proto_msgTypes[47]
+	mi := &file_traffic_v1_control_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2623,7 +2748,7 @@ func (x *GroupList) String() string {
 func (*GroupList) ProtoMessage() {}
 
 func (x *GroupList) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[47]
+	mi := &file_traffic_v1_control_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2636,7 +2761,7 @@ func (x *GroupList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GroupList.ProtoReflect.Descriptor instead.
 func (*GroupList) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{47}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GroupList) GetGroups() []*Group {
@@ -2658,7 +2783,7 @@ type SetGroupsRequest struct {
 
 func (x *SetGroupsRequest) Reset() {
 	*x = SetGroupsRequest{}
-	mi := &file_traffic_v1_control_proto_msgTypes[48]
+	mi := &file_traffic_v1_control_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2670,7 +2795,7 @@ func (x *SetGroupsRequest) String() string {
 func (*SetGroupsRequest) ProtoMessage() {}
 
 func (x *SetGroupsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_control_proto_msgTypes[48]
+	mi := &file_traffic_v1_control_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2683,7 +2808,7 @@ func (x *SetGroupsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetGroupsRequest.ProtoReflect.Descriptor instead.
 func (*SetGroupsRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_control_proto_rawDescGZIP(), []int{48}
+	return file_traffic_v1_control_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *SetGroupsRequest) GetSessionId() string {
@@ -2825,7 +2950,18 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\x05label\x18\x03 \x01(\tR\x05label\x12\x16\n" +
 	"\x06engine\x18\x04 \x01(\tR\x06engine\"F\n" +
 	"\x15ImportCaptureResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.traffic.v1.SessionR\asession\"0\n" +
+	"\asession\x18\x01 \x01(\v2\x13.traffic.v1.SessionR\asession\";\n" +
+	"\x1aGetSessionArtifactsRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"\xae\x01\n" +
+	"\x10SessionArtifacts\x12\x1b\n" +
+	"\tpcap_path\x18\x01 \x01(\tR\bpcapPath\x12\x1f\n" +
+	"\vkeylog_path\x18\x02 \x01(\tR\n" +
+	"keylogPath\x12\x1d\n" +
+	"\n" +
+	"pcap_bytes\x18\x03 \x01(\x04R\tpcapBytes\x12!\n" +
+	"\fkeylog_bytes\x18\x04 \x01(\x04R\vkeylogBytes\x12\x1a\n" +
+	"\bhostname\x18\x05 \x01(\tR\bhostname\"0\n" +
 	"\x0fReDecodeRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\"<\n" +
@@ -2910,7 +3046,7 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\x18SOURCE_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SOURCE_STATE_PROVISIONING\x10\x01\x12\x16\n" +
 	"\x12SOURCE_STATE_READY\x10\x02\x12\x1a\n" +
-	"\x16SOURCE_STATE_CAPTURING\x10\x032\xe6\x10\n" +
+	"\x16SOURCE_STATE_CAPTURING\x10\x032\xc3\x11\n" +
 	"\x0eControlService\x12F\n" +
 	"\x12ListCaptureSources\x12\x11.traffic.v1.Empty\x1a\x1d.traffic.v1.CaptureSourceList\x12_\n" +
 	"\x15DescribeCaptureSource\x12(.traffic.v1.DescribeCaptureSourceRequest\x1a\x1c.traffic.v1.SourceDescriptor\x12Q\n" +
@@ -2926,7 +3062,8 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\x0fSetSessionGroup\x12\".traffic.v1.SetSessionGroupRequest\x1a\x11.traffic.v1.Empty\x12H\n" +
 	"\x0fSetSessionLabel\x12\".traffic.v1.SetSessionLabelRequest\x1a\x11.traffic.v1.Empty\x12D\n" +
 	"\rDeleteSession\x12 .traffic.v1.DeleteSessionRequest\x1a\x11.traffic.v1.Empty\x12M\n" +
-	"\rImportSession\x12\x17.traffic.v1.ImportChunk\x1a!.traffic.v1.ImportSessionResponse(\x01\x12T\n" +
+	"\rImportSession\x12\x17.traffic.v1.ImportChunk\x1a!.traffic.v1.ImportSessionResponse(\x01\x12[\n" +
+	"\x13GetSessionArtifacts\x12&.traffic.v1.GetSessionArtifactsRequest\x1a\x1c.traffic.v1.SessionArtifacts\x12T\n" +
 	"\rImportCapture\x12 .traffic.v1.ImportCaptureRequest\x1a!.traffic.v1.ImportCaptureResponse\x12:\n" +
 	"\tCreateTag\x12\x1c.traffic.v1.CreateTagRequest\x1a\x0f.traffic.v1.Tag\x12<\n" +
 	"\tDeleteTag\x12\x1c.traffic.v1.DeleteTagRequest\x1a\x11.traffic.v1.Empty\x12<\n" +
@@ -2962,7 +3099,7 @@ func file_traffic_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_traffic_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_traffic_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
+var file_traffic_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_traffic_v1_control_proto_goTypes = []any{
 	(Readiness)(0),                       // 0: traffic.v1.Readiness
 	(ParamType)(0),                       // 1: traffic.v1.ParamType
@@ -2998,57 +3135,59 @@ var file_traffic_v1_control_proto_goTypes = []any{
 	(*ImportSessionResponse)(nil),        // 31: traffic.v1.ImportSessionResponse
 	(*ImportCaptureRequest)(nil),         // 32: traffic.v1.ImportCaptureRequest
 	(*ImportCaptureResponse)(nil),        // 33: traffic.v1.ImportCaptureResponse
-	(*ReDecodeRequest)(nil),              // 34: traffic.v1.ReDecodeRequest
-	(*CreateTagRequest)(nil),             // 35: traffic.v1.CreateTagRequest
-	(*DeleteTagRequest)(nil),             // 36: traffic.v1.DeleteTagRequest
-	(*ListTagsRequest)(nil),              // 37: traffic.v1.ListTagsRequest
-	(*TagList)(nil),                      // 38: traffic.v1.TagList
-	(*SetTagsRequest)(nil),               // 39: traffic.v1.SetTagsRequest
-	(*ToggleFavoriteRequest)(nil),        // 40: traffic.v1.ToggleFavoriteRequest
-	(*AddCommentRequest)(nil),            // 41: traffic.v1.AddCommentRequest
-	(*EditCommentRequest)(nil),           // 42: traffic.v1.EditCommentRequest
-	(*DeleteCommentRequest)(nil),         // 43: traffic.v1.DeleteCommentRequest
-	(*SetMarkRequest)(nil),               // 44: traffic.v1.SetMarkRequest
-	(*ClearMarkRequest)(nil),             // 45: traffic.v1.ClearMarkRequest
-	(*CreateGroupRequest)(nil),           // 46: traffic.v1.CreateGroupRequest
-	(*UpdateGroupRequest)(nil),           // 47: traffic.v1.UpdateGroupRequest
-	(*DeleteGroupRequest)(nil),           // 48: traffic.v1.DeleteGroupRequest
-	(*ListGroupsRequest)(nil),            // 49: traffic.v1.ListGroupsRequest
-	(*GroupList)(nil),                    // 50: traffic.v1.GroupList
-	(*SetGroupsRequest)(nil),             // 51: traffic.v1.SetGroupsRequest
-	nil,                                  // 52: traffic.v1.DescribeCaptureSourceRequest.ParamsEntry
-	nil,                                  // 53: traffic.v1.DescribeRequest.ParamsEntry
-	nil,                                  // 54: traffic.v1.StartCaptureRequest.ParamsEntry
-	(SourceKind)(0),                      // 55: traffic.v1.SourceKind
-	(*Session)(nil),                      // 56: traffic.v1.Session
-	(*Tag)(nil),                          // 57: traffic.v1.Tag
-	(*Group)(nil),                        // 58: traffic.v1.Group
-	(*DecodeProgress)(nil),               // 59: traffic.v1.DecodeProgress
-	(*Comment)(nil),                      // 60: traffic.v1.Comment
+	(*GetSessionArtifactsRequest)(nil),   // 34: traffic.v1.GetSessionArtifactsRequest
+	(*SessionArtifacts)(nil),             // 35: traffic.v1.SessionArtifacts
+	(*ReDecodeRequest)(nil),              // 36: traffic.v1.ReDecodeRequest
+	(*CreateTagRequest)(nil),             // 37: traffic.v1.CreateTagRequest
+	(*DeleteTagRequest)(nil),             // 38: traffic.v1.DeleteTagRequest
+	(*ListTagsRequest)(nil),              // 39: traffic.v1.ListTagsRequest
+	(*TagList)(nil),                      // 40: traffic.v1.TagList
+	(*SetTagsRequest)(nil),               // 41: traffic.v1.SetTagsRequest
+	(*ToggleFavoriteRequest)(nil),        // 42: traffic.v1.ToggleFavoriteRequest
+	(*AddCommentRequest)(nil),            // 43: traffic.v1.AddCommentRequest
+	(*EditCommentRequest)(nil),           // 44: traffic.v1.EditCommentRequest
+	(*DeleteCommentRequest)(nil),         // 45: traffic.v1.DeleteCommentRequest
+	(*SetMarkRequest)(nil),               // 46: traffic.v1.SetMarkRequest
+	(*ClearMarkRequest)(nil),             // 47: traffic.v1.ClearMarkRequest
+	(*CreateGroupRequest)(nil),           // 48: traffic.v1.CreateGroupRequest
+	(*UpdateGroupRequest)(nil),           // 49: traffic.v1.UpdateGroupRequest
+	(*DeleteGroupRequest)(nil),           // 50: traffic.v1.DeleteGroupRequest
+	(*ListGroupsRequest)(nil),            // 51: traffic.v1.ListGroupsRequest
+	(*GroupList)(nil),                    // 52: traffic.v1.GroupList
+	(*SetGroupsRequest)(nil),             // 53: traffic.v1.SetGroupsRequest
+	nil,                                  // 54: traffic.v1.DescribeCaptureSourceRequest.ParamsEntry
+	nil,                                  // 55: traffic.v1.DescribeRequest.ParamsEntry
+	nil,                                  // 56: traffic.v1.StartCaptureRequest.ParamsEntry
+	(SourceKind)(0),                      // 57: traffic.v1.SourceKind
+	(*Session)(nil),                      // 58: traffic.v1.Session
+	(*Tag)(nil),                          // 59: traffic.v1.Tag
+	(*Group)(nil),                        // 60: traffic.v1.Group
+	(*DecodeProgress)(nil),               // 61: traffic.v1.DecodeProgress
+	(*Comment)(nil),                      // 62: traffic.v1.Comment
 }
 var file_traffic_v1_control_proto_depIdxs = []int32{
 	6,  // 0: traffic.v1.ServiceList.services:type_name -> traffic.v1.ServiceInfo
 	8,  // 1: traffic.v1.LogList.logs:type_name -> traffic.v1.LogInfo
 	12, // 2: traffic.v1.CaptureSourceList.sources:type_name -> traffic.v1.CaptureSourceInfo
-	52, // 3: traffic.v1.DescribeCaptureSourceRequest.params:type_name -> traffic.v1.DescribeCaptureSourceRequest.ParamsEntry
-	53, // 4: traffic.v1.DescribeRequest.params:type_name -> traffic.v1.DescribeRequest.ParamsEntry
+	54, // 3: traffic.v1.DescribeCaptureSourceRequest.params:type_name -> traffic.v1.DescribeCaptureSourceRequest.ParamsEntry
+	55, // 4: traffic.v1.DescribeRequest.params:type_name -> traffic.v1.DescribeRequest.ParamsEntry
 	16, // 5: traffic.v1.SourceDescriptor.params:type_name -> traffic.v1.Param
 	0,  // 6: traffic.v1.SourceDescriptor.readiness:type_name -> traffic.v1.Readiness
 	1,  // 7: traffic.v1.Param.type:type_name -> traffic.v1.ParamType
 	17, // 8: traffic.v1.Param.choices:type_name -> traffic.v1.Choice
 	2,  // 9: traffic.v1.SourceStatus.state:type_name -> traffic.v1.SourceState
-	55, // 10: traffic.v1.StartCaptureRequest.source_kind:type_name -> traffic.v1.SourceKind
-	54, // 11: traffic.v1.StartCaptureRequest.params:type_name -> traffic.v1.StartCaptureRequest.ParamsEntry
-	56, // 12: traffic.v1.StopCaptureResponse.session:type_name -> traffic.v1.Session
-	56, // 13: traffic.v1.ImportSessionResponse.session:type_name -> traffic.v1.Session
-	56, // 14: traffic.v1.ImportCaptureResponse.session:type_name -> traffic.v1.Session
-	57, // 15: traffic.v1.TagList.tags:type_name -> traffic.v1.Tag
-	58, // 16: traffic.v1.GroupList.groups:type_name -> traffic.v1.Group
+	57, // 10: traffic.v1.StartCaptureRequest.source_kind:type_name -> traffic.v1.SourceKind
+	56, // 11: traffic.v1.StartCaptureRequest.params:type_name -> traffic.v1.StartCaptureRequest.ParamsEntry
+	58, // 12: traffic.v1.StopCaptureResponse.session:type_name -> traffic.v1.Session
+	58, // 13: traffic.v1.ImportSessionResponse.session:type_name -> traffic.v1.Session
+	58, // 14: traffic.v1.ImportCaptureResponse.session:type_name -> traffic.v1.Session
+	59, // 15: traffic.v1.TagList.tags:type_name -> traffic.v1.Tag
+	60, // 16: traffic.v1.GroupList.groups:type_name -> traffic.v1.Group
 	3,  // 17: traffic.v1.ControlService.ListCaptureSources:input_type -> traffic.v1.Empty
 	13, // 18: traffic.v1.ControlService.DescribeCaptureSource:input_type -> traffic.v1.DescribeCaptureSourceRequest
 	21, // 19: traffic.v1.ControlService.StartCapture:input_type -> traffic.v1.StartCaptureRequest
 	23, // 20: traffic.v1.ControlService.StopCapture:input_type -> traffic.v1.StopCaptureRequest
-	34, // 21: traffic.v1.ControlService.ReDecode:input_type -> traffic.v1.ReDecodeRequest
+	36, // 21: traffic.v1.ControlService.ReDecode:input_type -> traffic.v1.ReDecodeRequest
 	3,  // 22: traffic.v1.ControlService.ListServices:input_type -> traffic.v1.Empty
 	4,  // 23: traffic.v1.ControlService.StartService:input_type -> traffic.v1.ServiceRequest
 	4,  // 24: traffic.v1.ControlService.StopService:input_type -> traffic.v1.ServiceRequest
@@ -3059,55 +3198,57 @@ var file_traffic_v1_control_proto_depIdxs = []int32{
 	28, // 29: traffic.v1.ControlService.SetSessionLabel:input_type -> traffic.v1.SetSessionLabelRequest
 	29, // 30: traffic.v1.ControlService.DeleteSession:input_type -> traffic.v1.DeleteSessionRequest
 	30, // 31: traffic.v1.ControlService.ImportSession:input_type -> traffic.v1.ImportChunk
-	32, // 32: traffic.v1.ControlService.ImportCapture:input_type -> traffic.v1.ImportCaptureRequest
-	35, // 33: traffic.v1.ControlService.CreateTag:input_type -> traffic.v1.CreateTagRequest
-	36, // 34: traffic.v1.ControlService.DeleteTag:input_type -> traffic.v1.DeleteTagRequest
-	37, // 35: traffic.v1.ControlService.ListTags:input_type -> traffic.v1.ListTagsRequest
-	39, // 36: traffic.v1.ControlService.SetTags:input_type -> traffic.v1.SetTagsRequest
-	40, // 37: traffic.v1.ControlService.ToggleFavorite:input_type -> traffic.v1.ToggleFavoriteRequest
-	41, // 38: traffic.v1.ControlService.AddComment:input_type -> traffic.v1.AddCommentRequest
-	42, // 39: traffic.v1.ControlService.EditComment:input_type -> traffic.v1.EditCommentRequest
-	43, // 40: traffic.v1.ControlService.DeleteComment:input_type -> traffic.v1.DeleteCommentRequest
-	44, // 41: traffic.v1.ControlService.SetMark:input_type -> traffic.v1.SetMarkRequest
-	45, // 42: traffic.v1.ControlService.ClearMark:input_type -> traffic.v1.ClearMarkRequest
-	46, // 43: traffic.v1.ControlService.CreateGroup:input_type -> traffic.v1.CreateGroupRequest
-	47, // 44: traffic.v1.ControlService.UpdateGroup:input_type -> traffic.v1.UpdateGroupRequest
-	48, // 45: traffic.v1.ControlService.DeleteGroup:input_type -> traffic.v1.DeleteGroupRequest
-	49, // 46: traffic.v1.ControlService.ListGroups:input_type -> traffic.v1.ListGroupsRequest
-	51, // 47: traffic.v1.ControlService.SetGroups:input_type -> traffic.v1.SetGroupsRequest
-	11, // 48: traffic.v1.ControlService.ListCaptureSources:output_type -> traffic.v1.CaptureSourceList
-	15, // 49: traffic.v1.ControlService.DescribeCaptureSource:output_type -> traffic.v1.SourceDescriptor
-	22, // 50: traffic.v1.ControlService.StartCapture:output_type -> traffic.v1.StartCaptureResponse
-	24, // 51: traffic.v1.ControlService.StopCapture:output_type -> traffic.v1.StopCaptureResponse
-	59, // 52: traffic.v1.ControlService.ReDecode:output_type -> traffic.v1.DecodeProgress
-	5,  // 53: traffic.v1.ControlService.ListServices:output_type -> traffic.v1.ServiceList
-	6,  // 54: traffic.v1.ControlService.StartService:output_type -> traffic.v1.ServiceInfo
-	3,  // 55: traffic.v1.ControlService.StopService:output_type -> traffic.v1.Empty
-	7,  // 56: traffic.v1.ControlService.ListLogs:output_type -> traffic.v1.LogList
-	10, // 57: traffic.v1.ControlService.GetLog:output_type -> traffic.v1.LogChunk
-	26, // 58: traffic.v1.ControlService.ExportSession:output_type -> traffic.v1.ExportChunk
-	3,  // 59: traffic.v1.ControlService.SetSessionGroup:output_type -> traffic.v1.Empty
-	3,  // 60: traffic.v1.ControlService.SetSessionLabel:output_type -> traffic.v1.Empty
-	3,  // 61: traffic.v1.ControlService.DeleteSession:output_type -> traffic.v1.Empty
-	31, // 62: traffic.v1.ControlService.ImportSession:output_type -> traffic.v1.ImportSessionResponse
-	33, // 63: traffic.v1.ControlService.ImportCapture:output_type -> traffic.v1.ImportCaptureResponse
-	57, // 64: traffic.v1.ControlService.CreateTag:output_type -> traffic.v1.Tag
-	3,  // 65: traffic.v1.ControlService.DeleteTag:output_type -> traffic.v1.Empty
-	38, // 66: traffic.v1.ControlService.ListTags:output_type -> traffic.v1.TagList
-	3,  // 67: traffic.v1.ControlService.SetTags:output_type -> traffic.v1.Empty
-	3,  // 68: traffic.v1.ControlService.ToggleFavorite:output_type -> traffic.v1.Empty
-	60, // 69: traffic.v1.ControlService.AddComment:output_type -> traffic.v1.Comment
-	60, // 70: traffic.v1.ControlService.EditComment:output_type -> traffic.v1.Comment
-	3,  // 71: traffic.v1.ControlService.DeleteComment:output_type -> traffic.v1.Empty
-	3,  // 72: traffic.v1.ControlService.SetMark:output_type -> traffic.v1.Empty
-	3,  // 73: traffic.v1.ControlService.ClearMark:output_type -> traffic.v1.Empty
-	58, // 74: traffic.v1.ControlService.CreateGroup:output_type -> traffic.v1.Group
-	58, // 75: traffic.v1.ControlService.UpdateGroup:output_type -> traffic.v1.Group
-	3,  // 76: traffic.v1.ControlService.DeleteGroup:output_type -> traffic.v1.Empty
-	50, // 77: traffic.v1.ControlService.ListGroups:output_type -> traffic.v1.GroupList
-	3,  // 78: traffic.v1.ControlService.SetGroups:output_type -> traffic.v1.Empty
-	48, // [48:79] is the sub-list for method output_type
-	17, // [17:48] is the sub-list for method input_type
+	34, // 32: traffic.v1.ControlService.GetSessionArtifacts:input_type -> traffic.v1.GetSessionArtifactsRequest
+	32, // 33: traffic.v1.ControlService.ImportCapture:input_type -> traffic.v1.ImportCaptureRequest
+	37, // 34: traffic.v1.ControlService.CreateTag:input_type -> traffic.v1.CreateTagRequest
+	38, // 35: traffic.v1.ControlService.DeleteTag:input_type -> traffic.v1.DeleteTagRequest
+	39, // 36: traffic.v1.ControlService.ListTags:input_type -> traffic.v1.ListTagsRequest
+	41, // 37: traffic.v1.ControlService.SetTags:input_type -> traffic.v1.SetTagsRequest
+	42, // 38: traffic.v1.ControlService.ToggleFavorite:input_type -> traffic.v1.ToggleFavoriteRequest
+	43, // 39: traffic.v1.ControlService.AddComment:input_type -> traffic.v1.AddCommentRequest
+	44, // 40: traffic.v1.ControlService.EditComment:input_type -> traffic.v1.EditCommentRequest
+	45, // 41: traffic.v1.ControlService.DeleteComment:input_type -> traffic.v1.DeleteCommentRequest
+	46, // 42: traffic.v1.ControlService.SetMark:input_type -> traffic.v1.SetMarkRequest
+	47, // 43: traffic.v1.ControlService.ClearMark:input_type -> traffic.v1.ClearMarkRequest
+	48, // 44: traffic.v1.ControlService.CreateGroup:input_type -> traffic.v1.CreateGroupRequest
+	49, // 45: traffic.v1.ControlService.UpdateGroup:input_type -> traffic.v1.UpdateGroupRequest
+	50, // 46: traffic.v1.ControlService.DeleteGroup:input_type -> traffic.v1.DeleteGroupRequest
+	51, // 47: traffic.v1.ControlService.ListGroups:input_type -> traffic.v1.ListGroupsRequest
+	53, // 48: traffic.v1.ControlService.SetGroups:input_type -> traffic.v1.SetGroupsRequest
+	11, // 49: traffic.v1.ControlService.ListCaptureSources:output_type -> traffic.v1.CaptureSourceList
+	15, // 50: traffic.v1.ControlService.DescribeCaptureSource:output_type -> traffic.v1.SourceDescriptor
+	22, // 51: traffic.v1.ControlService.StartCapture:output_type -> traffic.v1.StartCaptureResponse
+	24, // 52: traffic.v1.ControlService.StopCapture:output_type -> traffic.v1.StopCaptureResponse
+	61, // 53: traffic.v1.ControlService.ReDecode:output_type -> traffic.v1.DecodeProgress
+	5,  // 54: traffic.v1.ControlService.ListServices:output_type -> traffic.v1.ServiceList
+	6,  // 55: traffic.v1.ControlService.StartService:output_type -> traffic.v1.ServiceInfo
+	3,  // 56: traffic.v1.ControlService.StopService:output_type -> traffic.v1.Empty
+	7,  // 57: traffic.v1.ControlService.ListLogs:output_type -> traffic.v1.LogList
+	10, // 58: traffic.v1.ControlService.GetLog:output_type -> traffic.v1.LogChunk
+	26, // 59: traffic.v1.ControlService.ExportSession:output_type -> traffic.v1.ExportChunk
+	3,  // 60: traffic.v1.ControlService.SetSessionGroup:output_type -> traffic.v1.Empty
+	3,  // 61: traffic.v1.ControlService.SetSessionLabel:output_type -> traffic.v1.Empty
+	3,  // 62: traffic.v1.ControlService.DeleteSession:output_type -> traffic.v1.Empty
+	31, // 63: traffic.v1.ControlService.ImportSession:output_type -> traffic.v1.ImportSessionResponse
+	35, // 64: traffic.v1.ControlService.GetSessionArtifacts:output_type -> traffic.v1.SessionArtifacts
+	33, // 65: traffic.v1.ControlService.ImportCapture:output_type -> traffic.v1.ImportCaptureResponse
+	59, // 66: traffic.v1.ControlService.CreateTag:output_type -> traffic.v1.Tag
+	3,  // 67: traffic.v1.ControlService.DeleteTag:output_type -> traffic.v1.Empty
+	40, // 68: traffic.v1.ControlService.ListTags:output_type -> traffic.v1.TagList
+	3,  // 69: traffic.v1.ControlService.SetTags:output_type -> traffic.v1.Empty
+	3,  // 70: traffic.v1.ControlService.ToggleFavorite:output_type -> traffic.v1.Empty
+	62, // 71: traffic.v1.ControlService.AddComment:output_type -> traffic.v1.Comment
+	62, // 72: traffic.v1.ControlService.EditComment:output_type -> traffic.v1.Comment
+	3,  // 73: traffic.v1.ControlService.DeleteComment:output_type -> traffic.v1.Empty
+	3,  // 74: traffic.v1.ControlService.SetMark:output_type -> traffic.v1.Empty
+	3,  // 75: traffic.v1.ControlService.ClearMark:output_type -> traffic.v1.Empty
+	60, // 76: traffic.v1.ControlService.CreateGroup:output_type -> traffic.v1.Group
+	60, // 77: traffic.v1.ControlService.UpdateGroup:output_type -> traffic.v1.Group
+	3,  // 78: traffic.v1.ControlService.DeleteGroup:output_type -> traffic.v1.Empty
+	52, // 79: traffic.v1.ControlService.ListGroups:output_type -> traffic.v1.GroupList
+	3,  // 80: traffic.v1.ControlService.SetGroups:output_type -> traffic.v1.Empty
+	49, // [49:81] is the sub-list for method output_type
+	17, // [17:49] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
 	17, // [17:17] is the sub-list for extension extendee
 	0,  // [0:17] is the sub-list for field type_name
@@ -3125,7 +3266,7 @@ func file_traffic_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_control_proto_rawDesc), len(file_traffic_v1_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   52,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -302,6 +302,26 @@ class ImportCaptureResponse(_message.Message):
     session: _common_pb2.Session
     def __init__(self, session: _Optional[_Union[_common_pb2.Session, _Mapping]] = ...) -> None: ...
 
+class GetSessionArtifactsRequest(_message.Message):
+    __slots__ = ("session_id",)
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
+class SessionArtifacts(_message.Message):
+    __slots__ = ("pcap_path", "keylog_path", "pcap_bytes", "keylog_bytes", "hostname")
+    PCAP_PATH_FIELD_NUMBER: _ClassVar[int]
+    KEYLOG_PATH_FIELD_NUMBER: _ClassVar[int]
+    PCAP_BYTES_FIELD_NUMBER: _ClassVar[int]
+    KEYLOG_BYTES_FIELD_NUMBER: _ClassVar[int]
+    HOSTNAME_FIELD_NUMBER: _ClassVar[int]
+    pcap_path: str
+    keylog_path: str
+    pcap_bytes: int
+    keylog_bytes: int
+    hostname: str
+    def __init__(self, pcap_path: _Optional[str] = ..., keylog_path: _Optional[str] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., hostname: _Optional[str] = ...) -> None: ...
+
 class ReDecodeRequest(_message.Message):
     __slots__ = ("session_id",)
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]

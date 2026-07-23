@@ -111,6 +111,11 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.ImportChunk.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.ImportSessionResponse.FromString,
                 _registered_method=True)
+        self.GetSessionArtifacts = channel.unary_unary(
+                '/traffic.v1.ControlService/GetSessionArtifacts',
+                request_serializer=traffic_dot_v1_dot_control__pb2.GetSessionArtifactsRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.SessionArtifacts.FromString,
+                _registered_method=True)
         self.ImportCapture = channel.unary_unary(
                 '/traffic.v1.ControlService/ImportCapture',
                 request_serializer=traffic_dot_v1_dot_control__pb2.ImportCaptureRequest.SerializeToString,
@@ -305,6 +310,17 @@ class ControlServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetSessionArtifacts(self, request, context):
+        """Locate a session's raw capture artifacts (pcap + NSS key.log) on the gateway host,
+        so a viewer running there can hand the same files to an external analyzer — the TUI
+        opens a flow in Wireshark this way. Paths resolve on the gateway host (the local
+        host under one-command mode); `hostname` lets a remote viewer tell they aren't its
+        own. A proxy-captured session has no pcap and reports empty paths.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ImportCapture(self, request, context):
         """Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
         gateway with the chosen engine, then registering the session. Mirrors the
@@ -488,6 +504,11 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     servicer.ImportSession,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.ImportChunk.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.ImportSessionResponse.SerializeToString,
+            ),
+            'GetSessionArtifacts': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetSessionArtifacts,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.GetSessionArtifactsRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.SessionArtifacts.SerializeToString,
             ),
             'ImportCapture': grpc.unary_unary_rpc_method_handler(
                     servicer.ImportCapture,
@@ -976,6 +997,33 @@ class ControlService(object):
             '/traffic.v1.ControlService/ImportSession',
             traffic_dot_v1_dot_control__pb2.ImportChunk.SerializeToString,
             traffic_dot_v1_dot_control__pb2.ImportSessionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetSessionArtifacts(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/GetSessionArtifacts',
+            traffic_dot_v1_dot_control__pb2.GetSessionArtifactsRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.SessionArtifacts.FromString,
             options,
             channel_credentials,
             insecure,

@@ -47,6 +47,13 @@ service ControlService {
   // The session is registered under a fresh id; returns the imported session.
   rpc ImportSession(stream ImportChunk) returns (ImportSessionResponse);
 
+  // Locate a session's raw capture artifacts (pcap + NSS key.log) on the gateway host,
+  // so a viewer running there can hand the same files to an external analyzer — the TUI
+  // opens a flow in Wireshark this way. Paths resolve on the gateway host (the local
+  // host under one-command mode); `hostname` lets a remote viewer tell they aren't its
+  // own. A proxy-captured session has no pcap and reports empty paths.
+  rpc GetSessionArtifacts(GetSessionArtifactsRequest) returns (SessionArtifacts);
+
   // Import a pre-captured pcap (+ optional NSS key.log) by batch-decoding it on the
   // gateway with the chosen engine, then registering the session. Mirrors the
   // `gateway import` CLI. Paths resolve on the gateway host — which is the local host
@@ -274,6 +281,23 @@ message ImportCaptureRequest {
 
 message ImportCaptureResponse {
   Session session = 1;
+}
+
+message GetSessionArtifactsRequest {
+  string session_id = 1;
+}
+
+// Where a session's raw capture files live on the gateway host. A path is empty when
+// that artifact is absent or empty (a proxy-captured session has no pcap; a capture
+// without TLS keys has no key.log).
+message SessionArtifacts {
+  string pcap_path = 1;
+  string keylog_path = 2;
+  uint64 pcap_bytes = 3;
+  uint64 keylog_bytes = 4;
+  // Host the paths resolve on (the gateway's hostname), so a viewer can tell a remote
+  // gateway's paths from its own filesystem.
+  string hostname = 5;
 }
 
 message ReDecodeRequest {

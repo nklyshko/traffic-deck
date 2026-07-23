@@ -10,6 +10,7 @@ import asyncio
 from textual.widgets import DataTable, Input, OptionList, Static, TabPane
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
+from traffic_viewer import screens
 from traffic.v1 import common_pb2 as cp
 from traffic.v1 import control_pb2 as cp2
 from traffic.v1 import viewer_pb2 as vp
@@ -45,7 +46,11 @@ def _session():
 def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id=""):
     f = cp.Flow(id=fid, method=method, scheme="https", authority="api.example.com",
                 path="/" + fid, protocol="HTTP/2", status=status, ts_unix_micros=1,
-                tcp_stream=tcp_stream, h2_stream_id=h2_stream_id)
+                tcp_stream=tcp_stream, h2_stream_id=h2_stream_id, frame_number=204,
+                # The 4-tuple the Wireshark hand-off filters on; a shared connection
+                # (tcp_stream 12) shares the client port, as on the wire.
+                src_addr="192.168.1.5:5100" + (tcp_stream[-1] if tcp_stream else "0"),
+                dst_addr="93.184.216.34:443")
     if method:
         f.request_headers.append(cp.Header(name="content-type", value="application/json"))
         f.request_body.CopyFrom(cp.Body(size=7, content_type="application/json", inline=b'{"k":1}'))
@@ -107,6 +112,7 @@ class FakeClient:
         self.mcp_running = False
         self.android_provision_calls = 0
         self.hold_flows = False   # keep stream_flows open, as a live session's would be
+        self.artifacts = {}       # GetSessionArtifacts reply fields (pcap/keylog paths)
 
     async def list_capture_sources(self):
         return list(self.capture_sources)
@@ -187,6 +193,11 @@ class FakeClient:
 
     async def force_close_session(self, session_id):
         self.force_closed.append(session_id)
+
+    async def get_session_artifacts(self, session_id):
+        # Where the gateway keeps the session's raw capture; tests point these at real
+        # temp files (see _stub_wireshark) so the local-readability check passes.
+        return cp2.SessionArtifacts(hostname="gw-host", **self.artifacts)
 
     async def stream_flows(self, session_id, follow=False):
         for f in _BY_SESSION.get(session_id, _FLOWS):
@@ -686,6 +697,95 @@ async def test_export_client_hellos_noop_without_hellos(tmp_path):
         await settle(pilot)
         # No TextPrompt was pushed (still on the detail screen).
         assert isinstance(app.screen, FlowDetailScreen)
+
+
+def _stub_wireshark(monkeypatch, app, tmp_path, keylog=True):
+    """Point the hand-off at a fake Wireshark and a real (temp) session bundle, and
+    capture the argv instead of launching anything. Returns the list it records into."""
+    pcap = tmp_path / "capture.pcap"
+    pcap.write_bytes(b"\xd4\xc3\xb2\xa1")
+    app.client.artifacts = {"pcap_path": str(pcap), "pcap_bytes": 4}
+    if keylog:
+        klog = tmp_path / "key.log"
+        klog.write_text("CLIENT_RANDOM aa bb\n")
+        app.client.artifacts |= {"keylog_path": str(klog), "keylog_bytes": klog.stat().st_size}
+
+    launched: list[list[str]] = []
+
+    async def fake_exec(*cmd, **kw):
+        launched.append(list(cmd))
+
+    monkeypatch.setattr(screens, "find_wireshark", lambda: "/usr/bin/wireshark")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    return launched
+
+
+async def test_flow_list_opens_wireshark_on_the_focused_flow(monkeypatch, tmp_path):
+    app = make_app()
+    async with app.run_test() as pilot:
+        launched = _stub_wireshark(monkeypatch, app, tmp_path)
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("enter")
+        await settle(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("W")            # f1: HTTP/2, conn 12, stream 1
+        await settle(pilot)
+        assert len(launched) == 1
+        cmd = launched[0]
+        assert cmd[0] == "/usr/bin/wireshark"
+        assert cmd[1:3] == ["-r", str(tmp_path / "capture.pcap")]
+        assert f"tls.keylog_file:{tmp_path / 'key.log'}" in cmd
+        assert cmd[cmd.index("-Y") + 1] == (
+            "ip.addr eq 192.168.1.5 and tcp.port eq 51002 and "
+            "ip.addr eq 93.184.216.34 and tcp.port eq 443 and "
+            "(http2.streamid eq 1 or not http2)")
+        assert cmd[cmd.index("-g") + 1] == "204"   # cursor parked on the request's frame
+
+
+async def test_flow_detail_opens_wireshark(monkeypatch, tmp_path):
+    app = make_app()
+    async with app.run_test() as pilot:
+        launched = _stub_wireshark(monkeypatch, app, tmp_path, keylog=False)
+        await _open_first_flow_detail(pilot)
+        assert isinstance(app.screen, FlowDetailScreen)
+        await pilot.press("W")
+        await settle(pilot)
+        assert len(launched) == 1
+        # No key.log in this bundle (a pcapng with embedded secrets): no override option.
+        assert "-o" not in launched[0]
+
+
+async def test_wireshark_skipped_when_the_pcap_is_on_another_host(monkeypatch, tmp_path):
+    """A remote gateway's pcap path means nothing locally — say so instead of launching
+    Wireshark on a path that doesn't exist here."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        launched = _stub_wireshark(monkeypatch, app, tmp_path)
+        app.client.artifacts["pcap_path"] = str(tmp_path / "elsewhere" / "capture.pcap")
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("enter")
+        await settle(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("W")
+        await settle(pilot)
+        assert launched == []
+
+
+async def test_wireshark_skipped_for_a_session_without_a_pcap(monkeypatch, tmp_path):
+    app = make_app()
+    async with app.run_test() as pilot:
+        launched = _stub_wireshark(monkeypatch, app, tmp_path)
+        app.client.artifacts = {}   # proxy-captured session: no pcap at all
+        await settle(pilot)
+        await focus(pilot, "#sessions")
+        await pilot.press("enter")
+        await settle(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("W")
+        await settle(pilot)
+        assert launched == []
 
 
 async def test_body_view_renders_small_body_inline():

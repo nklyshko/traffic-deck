@@ -45,6 +45,12 @@ from .render import (
     raw_message,
     status_cell,
 )
+from .wireshark import (
+    build_display_filter,
+    describe_filter,
+    find_wireshark,
+    wireshark_command,
+)
 
 
 class NavDataTable(DataTable):
@@ -931,6 +937,48 @@ class AnnotatableTable:
         await self._refresh(targets)
 
 
+async def open_flow_in_wireshark(widget, session_id: str, flow) -> None:
+    """Open one flow's packets in Wireshark: the session's own capture.pcap + key.log,
+    a display filter isolating the flow's connection (its stream, on an HTTP/2 one), and
+    the packet cursor on the request's frame.
+
+    The pcap has to be readable from *this* machine: the gateway reports where it keeps a
+    session's artifacts, which is a path on the gateway host — the local host under
+    one-command mode, someone else's disk when the viewer is remote."""
+    if flow is None:
+        return
+    binary = find_wireshark()
+    if binary is None:
+        widget.notify("wireshark not found — install it, or point TRAFFICDECK_WIRESHARK at it",
+                      severity="error")
+        return
+    try:
+        art = await widget.app.client.get_session_artifacts(session_id)
+    except Exception as exc:  # noqa: BLE001
+        widget.notify(f"could not locate the pcap: {exc}", severity="error")
+        return
+    if not art.pcap_path:
+        widget.notify("no pcap for this session — only pcap-based sources have one",
+                      severity="warning")
+        return
+    if not os.path.exists(art.pcap_path):
+        widget.notify(f"pcap is on the gateway host {art.hostname or '?'} "
+                      f"({art.pcap_path}) — not readable from here", severity="error")
+        return
+    keylog = art.keylog_path if art.keylog_path and os.path.exists(art.keylog_path) else ""
+    dfilter = build_display_filter(flow)
+    cmd = wireshark_command(binary, art.pcap_path, keylog, dfilter, flow.frame_number)
+    try:
+        # A GUI program of its own: launch detached, don't suspend the TUI, don't wait.
+        await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    except OSError as exc:
+        widget.notify(f"could not launch wireshark ({cmd[0]}): {exc}", severity="error")
+        return
+    scope = describe_filter(flow) if dfilter else "whole capture — no connection id on this flow"
+    widget.notify(f"wireshark → {scope}" + ("" if keylog else " · no key.log"))
+
+
 class SessionPane(AnnotatableTable, Vertical):
     """One session's live flow table + filtering + annotations. Hosted as a tab in the
     WorkspaceScreen so several sessions can be open and compared side by side. (Was a
@@ -948,6 +996,7 @@ class SessionPane(AnnotatableTable, Vertical):
         Binding("g", "group", "Group"),
         Binding("C", "columns", "Columns"),
         Binding("M", "messages", "WS msgs"),
+        Binding("W", "wireshark", "Wireshark"),
         Binding("l", "follow", "Follow new"),
     ]
 
@@ -1240,6 +1289,14 @@ class SessionPane(AnnotatableTable, Vertical):
             return
         self.app.push_screen(WsMessagesScreen(self.session_id, fid))
 
+    @work(exclusive=True, group="wireshark")
+    async def action_wireshark(self) -> None:
+        """Open the focused flow's packets in Wireshark (pcap-based sessions)."""
+        fid = self._focused_flow_id()
+        if fid is None:
+            return
+        await open_flow_in_wireshark(self, self.session_id, self.flows.get(fid))
+
     # --- annotation hooks (see AnnotatableTable) -------------------
     def _focused_record_id(self):
         return self._focused_flow_id()
@@ -1404,6 +1461,7 @@ class FlowDetailScreen(Screen):
         Binding("w", "export_raw", "Export raw"),
         Binding("H", "export_client_hellos", "Export CHs"),
         Binding("M", "messages", "WS msgs"),
+        Binding("W", "wireshark", "Wireshark"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -1448,6 +1506,11 @@ class FlowDetailScreen(Screen):
             self.notify("not a WebSocket flow", severity="warning")
             return
         self.app.push_screen(WsMessagesScreen(self.session_id, self.flow_id))
+
+    @work(exclusive=True, group="wireshark")
+    async def action_wireshark(self) -> None:
+        """Open this flow's packets in Wireshark (pcap-based sessions)."""
+        await open_flow_in_wireshark(self, self.session_id, self._flow or self.cached)
 
     async def _full_body(self, response: bool) -> bytes:
         try:

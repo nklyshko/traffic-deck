@@ -197,10 +197,13 @@ func (f *liveTCP) partialFate() string {
 	return "the affected requests come from the authoritative batch tshark pass on close"
 }
 
-// connID assigns the next connection identifier, numbering connections in first-seen
-// order the way tshark's tcp.stream index does — the same identity the PDML decode path
-// puts on Flow.TCPStream. Requests sharing one id shared one connection, which is what
-// makes HTTP/2 multiplexing legible in the viewer.
+// connID assigns the next connection identifier, numbering in first-seen order the
+// connections this decoder tracks. Requests sharing one id shared one connection, which is
+// what makes HTTP/2 multiplexing legible in the viewer — that grouping is all the id
+// promises. It is *not* interchangeable with the tcp.stream index the PDML path records
+// under the same field: tshark numbers every TCP conversation in the capture, we number
+// only the ones we follow (and share the counter with QUIC), so the two sequences diverge.
+// Anything handing the id to Wireshark has to key on the connection's addresses instead.
 func (f *liveTCP) connID() string {
 	id := strconv.Itoa(f.nextConn)
 	f.nextConn++
