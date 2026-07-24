@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 type Config struct {
@@ -36,6 +38,12 @@ type Config struct {
 	// StartMCP auto-starts the MCP server on launch (GATEWAY_MCP), for headless agent
 	// access without a viewer. Default false; the TUI can also toggle it.
 	StartMCP bool
+
+	// FingerprintsDir is the directory of user TLS-fingerprint files (*.json) that
+	// register additional well-known ClientHello fingerprints on top of the compiled-in
+	// builtin set. Default ~/.traffic-deck/fingerprints; override with TRAFFICDECK_FP_DIR.
+	// Empty (home undeterminable and unset) means builtin-only.
+	FingerprintsDir string
 
 	// Logging. File logging is on by default (no env needed): logs are teed to stderr and
 	// to a size-rolling file. Set GATEWAY_LOG_FILE=off to log to stderr only.
@@ -79,17 +87,18 @@ func getint(key string, def int) int {
 func Load() Config {
 	dataRoot := getenv("DATA_ROOT", "./data")
 	return Config{
-		GRPCAddr:      getenv("GATEWAY_ADDR", "127.0.0.1:8080"),
-		DataRoot:      dataRoot,
-		TsharkPath:    getenv("TSHARK_PATH", "tshark"),
-		LiveDecode:    getbool("GATEWAY_LIVE_DECODE", true),
-		RecordLive:    getbool("GATEWAY_RECORD_LIVE", true),
-		TsharkVerify:  getbool("GATEWAY_TSHARK_VERIFY", false),
-		StartMCP:      getbool("GATEWAY_MCP", false),
-		LogFile:       getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
-		LogMaxSizeMB:  getint("GATEWAY_LOG_MAX_SIZE_MB", 50),
-		LogMaxBackups: getint("GATEWAY_LOG_MAX_BACKUPS", 10),
-		LogMaxAgeDays: getint("GATEWAY_LOG_MAX_AGE_DAYS", 30),
-		LogCompress:   getbool("GATEWAY_LOG_COMPRESS", true),
+		GRPCAddr:        getenv("GATEWAY_ADDR", "127.0.0.1:8080"),
+		DataRoot:        dataRoot,
+		TsharkPath:      getenv("TSHARK_PATH", "tshark"),
+		LiveDecode:      getbool("GATEWAY_LIVE_DECODE", true),
+		RecordLive:      getbool("GATEWAY_RECORD_LIVE", true),
+		TsharkVerify:    getbool("GATEWAY_TSHARK_VERIFY", false),
+		StartMCP:        getbool("GATEWAY_MCP", false),
+		FingerprintsDir: getenv("TRAFFICDECK_FP_DIR", tlsfp.DefaultDir()),
+		LogFile:         getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
+		LogMaxSizeMB:    getint("GATEWAY_LOG_MAX_SIZE_MB", 50),
+		LogMaxBackups:   getint("GATEWAY_LOG_MAX_BACKUPS", 10),
+		LogMaxAgeDays:   getint("GATEWAY_LOG_MAX_AGE_DAYS", 30),
+		LogCompress:     getbool("GATEWAY_LOG_COMPRESS", true),
 	}
 }

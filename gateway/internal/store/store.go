@@ -25,6 +25,7 @@ import (
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 // ErrNotFound is returned when a requested row does not exist.
@@ -965,6 +966,7 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 			Username: proxyUser.String, Password: proxyPass.String,
 		}
 	}
+	f.TlsClientName = tlsfp.Name(tlsfp.Fingerprint{JA4: f.Ja4, JA3: f.Ja3, SNI: f.Authority})
 	return f, nil
 }
 

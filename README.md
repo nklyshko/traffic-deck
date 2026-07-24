@@ -382,11 +382,51 @@ source = "acme"
 label  = "Acme"
 ```
 
+## TLS client fingerprint names
+
+Every decrypted ClientHello already yields a **JA3** and **JA4** (see *Fingerprinting*).
+On top of that the gateway names the client — `Chrome 150`, `OkHttp (Android)`,
+`Firefox`, … — shown as **Client:** in a flow's *TLS ClientHello* detail block. Names come
+from a registry of well-known fingerprints: a **compiled-in builtin set**
+([`gateway/internal/tlsfp/builtin.json`](gateway/internal/tlsfp/builtin.json), embedded)
+plus any files you drop in — no rebuild.
+
+Classification is a pure function of the fingerprint, run **at serve time**, so editing the
+registry re-labels flows you already captured — no re-decode.
+
+**Register your own** (like [`plugins/`](#third-party-captureviewer-modules), it's just a
+drop-in dir): put `*.json` in `~/.traffic-deck/fingerprints/` (override with
+`TRAFFICDECK_FP_DIR`). Same schema as the builtin; **later files win ties**, so a row can
+add a new name or override a builtin one:
+
+```json
+{"fingerprints": [
+  {"name": "AcmeApp", "version": "3", "ja4": "t13d1516h2_8daaf6152771_806a8c22fdea"},
+  {"name": "Internal tool", "ja4_pre": "t13d1715h2_5b57614c22b0", "sni": "api.acme.internal"}
+]}
+```
+
+Match keys, most specific wins: **`ja4`** (exact) › **`ja4_pre`** (a JA4 prefix — the
+`a_b` sections, i.e. client + version era, robust while only the trailing extension hash
+changes across minor versions) › **`ja4_b`** (just the cipher-list hash = a whole client
+family) › **`ja3`** (legacy, exact). An optional **`sni`** further constrains any row.
+Malformed rows are skipped and logged, never fatal; the dir is hot-reloaded, so a new file
+takes effect on the next flow without a restart.
+
+> **On versions:** JA4 is deliberately stable across browser releases — one JA4 spans many
+> versions (Chrome 120–131 all share `…_02713d6af862`), and FoxIO's ja4db doesn't version
+> Chrome at all. So builtin rows carry a version *range*, and the `ja4_b` family rows
+> recognize **any** version — including ones with no exact row, like Chrome 139/144 — as
+> `Chrome`. To pin a version you care about, capture it once and add its exact `ja4` as a
+> user row. The seed set is real (computed by this repo's parser over uTLS ClientHellos +
+> FoxIO ja4db + local captures); grow it from <https://ja4db.com>.
+
 ## Configuration (gateway)
 
 | Env | Default | Meaning |
 |-----|---------|---------|
 | `DATA_ROOT` | `./data` | SQLite bundles + catalog |
+| `TRAFFICDECK_FP_DIR` | `~/.traffic-deck/fingerprints` | dir of user TLS-fingerprint `*.json` files (on top of the builtin set) — see [TLS client fingerprint names](#tls-client-fingerprint-names) |
 | `GATEWAY_ADDR` | `127.0.0.1:8080` | gRPC listen / viewer + tools connect addr |
 | `TSHARK_PATH` | `tshark` | batch-decode / import binary (not used by the default live path) |
 | `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
@@ -400,9 +440,11 @@ label  = "Acme"
 - **Protocols** — HTTP/1.1, HTTP/2, HTTP/3 + QUIC, WebSocket, and custom binary
   protocols over TLS (compiled-in Go decoders; first decoder: **MAX** / `ru.oneme`).
 - **Fingerprinting** — what a client's stack looks like on the wire, from the raw
-  frames the native decoder sees: **JA3/JA4** and the verbatim TLS ClientHello bytes
-  (exportable, incl. the second one after a HelloRetryRequest), and the Akamai
-  **HTTP/2 fingerprint** (client SETTINGS, connection WINDOW_UPDATE, PRIORITY,
+  frames the native decoder sees: **JA3/JA4** with a **named client** (`Chrome 150`,
+  `OkHttp (Android)`, …) classified from a registry you can extend without a rebuild
+  (see [TLS client fingerprint names](#tls-client-fingerprint-names)), the verbatim TLS
+  ClientHello bytes (exportable, incl. the second one after a HelloRetryRequest), and the
+  Akamai **HTTP/2 fingerprint** (client SETTINGS, connection WINDOW_UPDATE, PRIORITY,
   pseudo-header order) — decoded to named settings in the detail view. Compare A/B
   diffs two requests' header/pseudo-header/cookie order across sessions.
 - **HTTP/2 connections** — a flow records the connection it rode on and its stream

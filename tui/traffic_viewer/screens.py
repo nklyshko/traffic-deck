@@ -1688,6 +1688,9 @@ class FlowDetailScreen(Screen):
         if f.ja3 or f.ja4:
             lines.append(Content(""))
             lines.append(Content.from_markup("[b u]TLS ClientHello[/b u]"))
+            if f.tls_client_name:
+                lines.append(Content.from_markup(
+                    "  [cyan]Client:[/cyan] [b green]$v[/b green]", v=f.tls_client_name))
             if f.ja4:
                 lines.append(Content.from_markup("  [cyan]JA4:[/cyan] $v", v=f.ja4))
             if f.ja3:

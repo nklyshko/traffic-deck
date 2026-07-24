@@ -10,6 +10,7 @@ import (
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 const liveEventBuffer = 256
@@ -465,6 +466,7 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		Http2Fingerprint: f.Http2Fingerprint,
 		Ja3:              f.JA3,
 		Ja4:              f.JA4,
+		TlsClientName:    tlsfp.Name(tlsfp.Fingerprint{JA4: f.JA4, JA3: f.JA3, SNI: f.Authority}),
 		TlsClientHello:   f.TLSClientHello,
 		ClientHellos:     f.ClientHellos,
 		TlsHrr:           f.TLSHRR,
