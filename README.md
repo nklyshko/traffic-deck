@@ -450,9 +450,11 @@ takes effect on the next flow without a restart.
 - **HTTP/2 connections** — a flow records the connection it rode on and its stream
   within it, so multiplexed requests can be grouped back onto one connection
   (`Conn`/`Stream` columns, `~conn`/`~stream` filters).
-- **Proxy detection** — connections through an HTTP `CONNECT` or SOCKS proxy are
-  flagged per flow (proxy address, type, and any credentials seen on the wire),
-  detected from the captured handshake.
+- **Proxy tunnels** — connections through an HTTP `CONNECT` or SOCKS4/4a/5 proxy are
+  decoded *through* the handshake: the tunnelled requests decode as they would on a
+  direct connection (keeping the real target as their authority), and each flow is
+  flagged with the proxy it rode — address, type, and any credentials seen on the wire
+  (`Proxy-Authorization`, SOCKS5 username/password, SOCKS4 user id).
 - **Capture sources** — live Chrome (`dumpcap` + `SSLKEYLOGFILE`), mitmproxy (any
   device, incl. WireGuard), and per-app Android from a rooted device/emulator (Frida
   `libssl` key-log + UID→NFLOG `tcpdump`).

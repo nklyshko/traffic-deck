@@ -291,6 +291,11 @@ type tcpStream struct {
 	connReq, connResp []byte
 	proxy             *FlowProxy
 
+	// SOCKS proxy tunnel, the same idea in binary: non-nil while the handshake is being
+	// parsed (see livesocks.go), cleared once the proxy grants the CONNECT and decoding
+	// restarts on the tunnelled bytes.
+	socks *socksHandshake
+
 	// curTS is the capture time of the packet currently being processed, set on each
 	// reassembled() call and read by the flow builders — so flows are timed from packet
 	// capture, not wall-clock at decode. It travels with the bytes into the byteStreams
@@ -341,17 +346,26 @@ func (s *tcpStream) reassembled(fromClient bool, data []byte, ts time.Time) {
 	// (type 22, version 0x03xx) is decrypted by the TLS layer; anything else is treated as
 	// cleartext HTTP and parsed directly (so plaintext HTTP/1.1, HTTP/2 and WebSocket decode
 	// in-process too — no tshark). Clients always speak first on HTTP, so this is decided
-	// before any server bytes arrive. A cleartext connection that opens with CONNECT is an
-	// HTTP proxy tunnel: decode the handshake, then the (usually TLS) bytes tunnelled under it.
+	// before any server bytes arrive. A cleartext connection that opens with CONNECT or a
+	// SOCKS4/SOCKS5 greeting is a proxy tunnel: decode the handshake, then the (usually TLS)
+	// bytes tunnelled under it.
 	if fromClient && !s.sniffed {
 		s.sniffed = true
 		s.plaintext = len(data) < 2 || data[0] != 0x16 || data[1] != 0x03
-		if s.plaintext && s.proxy == nil && looksLikeConnect(data) {
-			s.inConnect = true
+		if s.plaintext && s.proxy == nil {
+			if looksLikeConnect(data) {
+				s.inConnect = true
+			} else if v := looksLikeSocks(data); v != 0 {
+				s.socks = newSocksHandshake(v)
+			}
 		}
 	}
 	if s.inConnect {
 		s.feedConnect(fromClient, data)
+		return
+	}
+	if s.socks != nil {
+		s.feedSocks(fromClient, data)
 		return
 	}
 	s.route(fromClient, data)
