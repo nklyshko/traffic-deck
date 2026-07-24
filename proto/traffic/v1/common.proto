@@ -162,6 +162,13 @@ message Flow {
   string ja4 = 39;
   string tls_client_hello = 40;
 
+  // Human-readable name of the recognized TLS client, classified from the ClientHello
+  // fingerprint (e.g. "Chrome 150", "OkHttp (Android)"). Empty when no known fingerprint
+  // matched. Computed at serve time from a registry of well-known fingerprints (a compiled
+  // -in builtin set plus user files under ~/.traffic-deck/fingerprints), so editing that
+  // registry re-labels existing flows without re-decoding. Not persisted in the store.
+  string tls_client_name = 46;
+
   // Response cookies parsed from Set-Cookie, with full attributes (request_cookies above
   // are the bare name=value pairs from the Cookie request header). Derived from headers.
   repeated Cookie response_cookies = 41;

@@ -660,6 +660,12 @@ type Flow struct {
 	Ja3            string `protobuf:"bytes,38,opt,name=ja3,proto3" json:"ja3,omitempty"`
 	Ja4            string `protobuf:"bytes,39,opt,name=ja4,proto3" json:"ja4,omitempty"`
 	TlsClientHello string `protobuf:"bytes,40,opt,name=tls_client_hello,json=tlsClientHello,proto3" json:"tls_client_hello,omitempty"`
+	// Human-readable name of the recognized TLS client, classified from the ClientHello
+	// fingerprint (e.g. "Chrome 150", "OkHttp (Android)"). Empty when no known fingerprint
+	// matched. Computed at serve time from a registry of well-known fingerprints (a compiled
+	// -in builtin set plus user files under ~/.traffic-deck/fingerprints), so editing that
+	// registry re-labels existing flows without re-decoding. Not persisted in the store.
+	TlsClientName string `protobuf:"bytes,46,opt,name=tls_client_name,json=tlsClientName,proto3" json:"tls_client_name,omitempty"`
 	// Response cookies parsed from Set-Cookie, with full attributes (request_cookies above
 	// are the bare name=value pairs from the Cookie request header). Derived from headers.
 	ResponseCookies []*Cookie `protobuf:"bytes,41,rep,name=response_cookies,json=responseCookies,proto3" json:"response_cookies,omitempty"`
@@ -985,6 +991,13 @@ func (x *Flow) GetJa4() string {
 func (x *Flow) GetTlsClientHello() string {
 	if x != nil {
 		return x.TlsClientHello
+	}
+	return ""
+}
+
+func (x *Flow) GetTlsClientName() string {
+	if x != nil {
+		return x.TlsClientName
 	}
 	return ""
 }
@@ -1592,7 +1605,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRef\x12\x1c\n" +
 	"\ttruncated\x18\x05 \x01(\bR\ttruncatedB\t\n" +
-	"\acontent\"\x91\r\n" +
+	"\acontent\"\xb9\r\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1640,7 +1653,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x11http2_fingerprint\x18% \x01(\tR\x10http2Fingerprint\x12\x10\n" +
 	"\x03ja3\x18& \x01(\tR\x03ja3\x12\x10\n" +
 	"\x03ja4\x18' \x01(\tR\x03ja4\x12(\n" +
-	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x12=\n" +
+	"\x10tls_client_hello\x18( \x01(\tR\x0etlsClientHello\x12&\n" +
+	"\x0ftls_client_name\x18. \x01(\tR\rtlsClientName\x12=\n" +
 	"\x10response_cookies\x18) \x03(\v2\x12.traffic.v1.CookieR\x0fresponseCookies\x12+\n" +
 	"\x11redirect_location\x18* \x01(\tR\x10redirectLocation\x12,\n" +
 	"\x12redirected_from_id\x18+ \x01(\tR\x10redirectedFromId\x12#\n" +

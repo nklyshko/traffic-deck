@@ -30,6 +30,7 @@ import (
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/server"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 
 	// Custom protocol decoders self-register via init(). Add a blank import
 	// here to compile a decoder into the gateway.
@@ -66,6 +67,21 @@ func usage() {
 }
 
 // openDeps opens the object store (session bundles) and the SQLite store.
+// configureFingerprints points the TLS-fingerprint classifier at the user's directory
+// (default ~/.traffic-deck/fingerprints) on top of the compiled-in builtin set, and
+// routes load errors (malformed rows/files) to the gateway log instead of failing.
+func configureFingerprints(cfg config.Config) {
+	tlsfp.LogErrors = func(errs []error) {
+		for _, err := range errs {
+			log.Printf("tlsfp: %v", err)
+		}
+	}
+	tlsfp.Configure(cfg.FingerprintsDir)
+	if cfg.FingerprintsDir != "" {
+		log.Printf("TLS fingerprints: builtin + %s", cfg.FingerprintsDir)
+	}
+}
+
 func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.Store) {
 	obj, err := objstore.NewFSStore(cfg.DataRoot)
 	if err != nil {
@@ -82,6 +98,7 @@ func serve() {
 	ctx := context.Background()
 	cfg := config.Load()
 	logging.Setup(cfg) // tee logs to stderr + a rolling file (default on)
+	configureFingerprints(cfg)
 	obj, st := openDeps(ctx, cfg)
 	defer st.Close()
 
@@ -124,6 +141,7 @@ func runFused() {
 	ctx := context.Background()
 	cfg := config.Load()
 	logging.Setup(cfg)
+	configureFingerprints(cfg)
 
 	tuiDir := findTUIDir()
 	if tuiDir == "" {
