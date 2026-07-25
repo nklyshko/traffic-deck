@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// Real JA4s (see builtin.json provenance): chromeExact/okhttp* are verified captures,
+// Real JA4s (see builtin.json provenance): chromeExact/okhttpJA4 are verified captures,
 // chromeFamilyOnly is a synthetic Chromium-cipher JA4 whose exact era hash isn't listed
-// (stands in for a future Chrome like 139/144), fxPre matches the Firefox a_b prefix.
+// (stands in for a future Chrome like 139/144), firefoxPre matches the Firefox a_b prefix.
 const (
 	chromeExact      = "t13d1516h2_8daaf6152771_806a8c22fdea" // Chrome 150
 	chrome120        = "t13d1516h2_8daaf6152771_02713d6af862" // Chrome 120-131
@@ -18,6 +18,18 @@ const (
 	unknownJA4       = "t13d9999h2_ffffffffffff_ffffffffffff"
 )
 
+// Chrome 133, YaBrowser Android and the Yamarket WebView all present this one JA4 and are
+// only distinguishable by JA3 — the case combined ja4+ja3 rows exist for. Verified captures.
+const (
+	sharedJA4    = "t13d1516h2_8daaf6152771_d8a2da3f94cd"
+	chrome133JA3 = "5edab8002293165cb74a0f79175dcdbc"
+	yamarketJA3  = "cacebb32470a74ee9ab712dc919118b3"
+	yaBrowserJA3 = "093e9cab323b23c342d26b3bea10bc82"
+)
+
+// Every builtin row is single-key, so the count term of score is 1 across the board and
+// classification reduces to the historical key-tier ordering — the builtin set must behave
+// exactly as it did before match keys could be combined.
 func TestBuiltinClassify(t *testing.T) {
 	reg, errs := LoadRegistry("")
 	if len(errs) != 0 {
@@ -32,11 +44,18 @@ func TestBuiltinClassify(t *testing.T) {
 	}{
 		{"chrome 150 exact", Fingerprint{JA4: chromeExact}, "Chrome 150", true},
 		{"chrome 120-131 exact", Fingerprint{JA4: chrome120}, "Chrome 120-131", true},
+		{"chrome 133 exact", Fingerprint{JA4: sharedJA4}, "Chrome 133", true},
 		{"chrome future/family", Fingerprint{JA4: chromeFamilyOnly}, "Chrome/Chromium", true},
 		{"okhttp exact", Fingerprint{JA4: okhttpJA4}, "OkHttp (Android)", true},
 		{"firefox prefix", Fingerprint{JA4: firefoxPre}, "Firefox", true},
 		{"unknown", Fingerprint{JA4: unknownJA4}, "", false},
 		{"empty", Fingerprint{}, "", false},
+		// A JA3 on the fingerprint must not disturb a single-key ja4 row: the row simply
+		// doesn't constrain JA3, so it still matches and still wins.
+		{"exact ja4 with a ja3 present", Fingerprint{JA4: chromeExact, JA3: yamarketJA3}, "Chrome 150", true},
+		{"family ja4 with a ja3 present", Fingerprint{JA4: chromeFamilyOnly, JA3: yamarketJA3}, "Chrome/Chromium", true},
+		// No builtin row carries a ja3 key, so a JA3-only fingerprint matches nothing.
+		{"ja3 only", Fingerprint{JA3: chrome133JA3}, "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -64,13 +83,56 @@ func TestFirefoxOkHttpNotConflated(t *testing.T) {
 	}
 }
 
-// Specificity order: exact JA4 > ja4_pre > ja4_b.
+// Specificity order among single-key rows: exact JA4 > ja4_pre > ja4_b. Score is now
+// primarily the number of match keys a row constrains, so this ordering rides on the
+// within-count tie-break — and it must hold even though the ja4_b family row loads after
+// (builtin.json) the exact rows it overlaps, which the load-order tie-break alone would
+// resolve the wrong way.
 func TestSpecificityOrdering(t *testing.T) {
 	reg, _ := LoadRegistry("")
-	// chromeExact hits an exact row (Chrome 150) even though it also matches the ja4_b
-	// Chromium family — exact must win.
-	if m, _ := reg.Classify(Fingerprint{JA4: chromeExact}); m.String() != "Chrome 150" {
-		t.Fatalf("exact did not beat family: %q", m.String())
+	// Each of these also matches the ja4_b Chromium family row; the exact row must win.
+	for _, ja4 := range []string{chromeExact, chrome120, sharedJA4} {
+		m, _ := reg.Classify(Fingerprint{JA4: ja4})
+		if m.Name == "Chrome/Chromium" {
+			t.Fatalf("%s: family row beat the exact row (got %q)", ja4, m.String())
+		}
+		if m.Version == "" {
+			t.Fatalf("%s: expected a versioned exact match, got %q", ja4, m.String())
+		}
+	}
+}
+
+// The score invariants the registry's precedence rests on: a row constraining more keys
+// always outranks one constraining fewer (that's what lets a ja4+ja3 row pin a sub-variant),
+// and within an equal count the key tiers keep their historical order.
+func TestScoreOrdering(t *testing.T) {
+	var (
+		exact    = row{JA4: chromeExact}
+		pre      = row{JA4Pre: "t13d1516h2_8daaf6152771"}
+		family   = row{JA4B: "8daaf6152771"}
+		ja3Only  = row{JA3: chrome133JA3}
+		combined = row{JA4: chromeExact, JA3: chrome133JA3}
+		weakPair = row{JA4B: "8daaf6152771", JA3: chrome133JA3}
+	)
+	if !(score(exact) > score(pre) && score(pre) > score(family) && score(family) > score(ja3Only)) {
+		t.Fatalf("single-key tiers out of order: ja4=%d ja4_pre=%d ja4_b=%d ja3=%d",
+			score(exact), score(pre), score(family), score(ja3Only))
+	}
+	// Count dominates the tier sum: even the weakest two-key row beats the strongest one-key row.
+	if score(weakPair) <= score(exact) {
+		t.Fatalf("two keys did not beat one: ja4_b+ja3=%d ja4=%d", score(weakPair), score(exact))
+	}
+	if score(combined) <= score(exact) {
+		t.Fatalf("ja4+ja3 (%d) did not beat bare ja4 (%d)", score(combined), score(exact))
+	}
+	// sni is a constraint but not a match key: it must not inflate the count, or an
+	// sni-scoped family row would outrank an exact-JA4 row. Classify tie-breaks on it instead.
+	if got := score(row{JA4B: "8daaf6152771", SNI: "api.acme.test"}); got != score(family) {
+		t.Fatalf("sni changed the score: %d, want %d", got, score(family))
+	}
+	// A keyless row scores 0; parse rejects these, so this is just the floor.
+	if got := score(row{Name: "x"}); got != 0 {
+		t.Fatalf("keyless row scored %d, want 0", got)
 	}
 }
 
@@ -103,6 +165,67 @@ func TestUserDirOverrides(t *testing.T) {
 	fp.SNI = "other.test"
 	if m, _ := reg.Classify(fp); m.Name != "Chrome/Chromium" {
 		t.Fatalf("sni fallback failed: got %q", m.Name)
+	}
+}
+
+// A row carrying both ja4 and ja3 outranks a row with only ja4, so two clients
+// sharing a JA4 but differing in JA3 get distinct names.
+func TestCombinedJA4JA3Row(t *testing.T) {
+	dir := t.TempDir()
+	const custom = `{"fingerprints":[
+		{"name":"Chrome","version":"133","ja4":"` + sharedJA4 + `"},
+		{"name":"Yamarket","version":"WebView","ja4":"` + sharedJA4 + `","ja3":"` + yamarketJA3 + `"},
+		{"name":"YaBrowser","version":"Android 26","ja4":"` + sharedJA4 + `","ja3":"` + yaBrowserJA3 + `"}
+	]}`
+	if err := os.WriteFile(filepath.Join(dir, "sub.json"), []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, errs := LoadRegistry(dir)
+	if len(errs) != 0 {
+		t.Fatalf("load errors: %v", errs)
+	}
+	tests := []struct {
+		name string
+		ja3  string
+		want string
+	}{
+		// Chrome 133's own JA3 is in no combined row → falls through to the bare-JA4 row.
+		{"bare ja4 fallback", chrome133JA3, "Chrome 133"},
+		// These two JA3s each pin a combined row, which outranks the bare-JA4 row.
+		{"yamarket", yamarketJA3, "Yamarket WebView"},
+		{"yabrowser", yaBrowserJA3, "YaBrowser Android 26"},
+		// No JA3 at all → only the bare-JA4 row can match.
+		{"ja4 only", "", "Chrome 133"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, ok := reg.Classify(Fingerprint{JA4: sharedJA4, JA3: tc.ja3})
+			if !ok || m.String() != tc.want {
+				t.Fatalf("got %q (ok=%v), want %q", m.String(), ok, tc.want)
+			}
+		})
+	}
+}
+
+// A combined row must match on ALL its keys: the right JA3 under the wrong JA4 is not a
+// match, so it does not steal a name from another client's fingerprint.
+func TestCombinedRowRequiresBothKeys(t *testing.T) {
+	dir := t.TempDir()
+	const custom = `{"fingerprints":[
+		{"name":"Yamarket","version":"WebView","ja4":"` + sharedJA4 + `","ja3":"` + yamarketJA3 + `"}
+	]}`
+	if err := os.WriteFile(filepath.Join(dir, "sub.json"), []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := LoadRegistry(dir)
+	// Yamarket's JA3 but Chrome 150's JA4 → the combined row is out; the builtin exact
+	// JA4 row answers instead.
+	if m, _ := reg.Classify(Fingerprint{JA4: chromeExact, JA3: yamarketJA3}); m.String() != "Chrome 150" {
+		t.Fatalf("combined row matched on ja3 alone: got %q", m.String())
+	}
+	// Neither key matches anything → unrecognized.
+	if m, ok := reg.Classify(Fingerprint{JA4: unknownJA4, JA3: yamarketJA3}); ok {
+		t.Fatalf("unexpected match: %q", m.String())
 	}
 }
 

@@ -50,8 +50,11 @@ func (m Match) String() string {
 	return m.Name
 }
 
-// row is one fingerprint entry as stored in JSON. Exactly one match key
-// (ja4 / ja4_pre / ja4_b / ja3) is expected; sni optionally constrains the row.
+// row is one fingerprint entry as stored in JSON. At least one match key
+// (ja4 / ja4_pre / ja4_b / ja3) is required; several may be combined, in which case all of
+// them must match (AND) and the row outranks a row constraining fewer keys — that's how
+// two clients sharing a JA4 but differing in JA3 get told apart. sni further constrains
+// any row.
 type row struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -77,18 +80,25 @@ type Registry struct {
 	rows []row
 }
 
+// score is the match specificity: primarily the number of match keys the row constrains,
+// tie-broken by how tightly those keys pin a client (exact JA4 > ja4_pre > ja4_b > exact
+// legacy JA3). So a row carrying both ja4 and ja3 (2 keys) outranks a row with only ja4,
+// while among single-key rows the ordering is the historical one — an exact-JA4 row still
+// beats the cipher-family row it also matches, whatever their load order. Classify's
+// remaining tie-breaks (SNI-constrained, then later load order) apply within equal scores.
 func score(r row) int {
-	switch {
-	case r.JA4 != "":
-		return 100
-	case r.JA4Pre != "":
-		return 70
-	case r.JA4B != "":
-		return 50
-	case r.JA3 != "":
-		return 40
+	keys := []struct {
+		val    string
+		weight int
+	}{{r.JA4, 100}, {r.JA4Pre, 70}, {r.JA4B, 50}, {r.JA3, 40}}
+	n, w := 0, 0
+	for _, k := range keys {
+		if k.val != "" {
+			n, w = n+1, w+k.weight
+		}
 	}
-	return 0
+	// The weight sum maxes out at 260, so the key count always dominates.
+	return n*1000 + w
 }
 
 // ja4B returns the cipher section of a JA4 string (the middle of a_b_c), or "".
@@ -100,22 +110,25 @@ func ja4B(ja4 string) string {
 	return parts[1]
 }
 
-// matches reports whether r claims fp.
+// matches reports whether r claims fp. Every non-empty key on the row must match
+// (AND); a row with multiple keys is more specific than one with a single key.
 func (r row) matches(fp Fingerprint) bool {
 	if r.SNI != "" && !strings.EqualFold(r.SNI, fp.SNI) {
 		return false
 	}
-	switch {
-	case r.JA4 != "":
-		return r.JA4 == fp.JA4
-	case r.JA4Pre != "":
-		return fp.JA4 != "" && strings.HasPrefix(fp.JA4, r.JA4Pre)
-	case r.JA4B != "":
-		return fp.JA4 != "" && r.JA4B == ja4B(fp.JA4)
-	case r.JA3 != "":
-		return r.JA3 == fp.JA3
+	if r.JA4 != "" && r.JA4 != fp.JA4 {
+		return false
 	}
-	return false
+	if r.JA4Pre != "" && (fp.JA4 == "" || !strings.HasPrefix(fp.JA4, r.JA4Pre)) {
+		return false
+	}
+	if r.JA4B != "" && (fp.JA4 == "" || r.JA4B != ja4B(fp.JA4)) {
+		return false
+	}
+	if r.JA3 != "" && r.JA3 != fp.JA3 {
+		return false
+	}
+	return r.JA4 != "" || r.JA4Pre != "" || r.JA4B != "" || r.JA3 != ""
 }
 
 // Classify returns the best match for fp. ok is false when nothing matched.
