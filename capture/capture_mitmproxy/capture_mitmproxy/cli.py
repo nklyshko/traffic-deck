@@ -101,7 +101,7 @@ def _serve(argv) -> None:
 
     ap = argparse.ArgumentParser(prog="capture-mitmproxy serve",
                                  description="Serve mitmproxy as a CaptureSourceService")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
                     help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
     args = ap.parse_args(argv)
@@ -122,8 +122,8 @@ def _interactive() -> None:
     ap.add_argument("--listen-host", default=None,
                     help="bind/endpoint address; in wireguard mode this is what the device "
                          "connects to (omit to choose interactively from local interfaces)")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"),
-                    help="gateway address (default 127.0.0.1:8080)")
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"),
+                    help="gateway address (default 127.0.0.1:7331)")
     ap.add_argument("passthrough", nargs="*",
                     help="extra args forwarded to mitmdump (use `--` to separate)")
     args = ap.parse_args()

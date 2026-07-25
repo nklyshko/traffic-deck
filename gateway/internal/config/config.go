@@ -87,7 +87,7 @@ func getint(key string, def int) int {
 func Load() Config {
 	dataRoot := getenv("DATA_ROOT", "./data")
 	return Config{
-		GRPCAddr:        getenv("GATEWAY_ADDR", "127.0.0.1:8080"),
+		GRPCAddr:        getenv("GATEWAY_ADDR", "127.0.0.1:7331"),
 		DataRoot:        dataRoot,
 		TsharkPath:      getenv("TSHARK_PATH", "tshark"),
 		LiveDecode:      getbool("GATEWAY_LIVE_DECODE", true),

@@ -73,7 +73,7 @@ class TrafficViewerApp(App):
 
 
 def main() -> None:
-    address = os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080")
+    address = os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331")
     TrafficViewerApp(address).run()
 
 

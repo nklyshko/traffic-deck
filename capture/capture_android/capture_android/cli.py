@@ -270,7 +270,7 @@ def _serve(argv) -> None:
 
     ap = argparse.ArgumentParser(prog="capture-android serve",
                                  description="Serve Android as a CaptureSourceService")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
                     help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
     args = ap.parse_args(argv)
@@ -279,7 +279,7 @@ def _serve(argv) -> None:
 
 def _interactive(argv) -> None:
     ap = argparse.ArgumentParser(description="Interactive Android capture")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")
     ap.add_argument("--sdk", default=None, help="Android SDK root (default: $ANDROID_HOME / ~/Android/Sdk)")
     ap.add_argument("--scripts-dir", default=_DEFAULT_SCRIPTS_DIR)

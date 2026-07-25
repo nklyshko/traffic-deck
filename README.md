@@ -145,7 +145,7 @@ Run it (defaults to the `streamable-http` transport, binding `MCP_HOST:MCP_PORT`
 
 ```sh
 mcp/run.sh                                            # GATEWAY_ADDR / MCP_PORT overridable
-# or: GATEWAY_ADDR=127.0.0.1:8080 uv run --directory mcp python -m traffic_mcp.server
+# or: GATEWAY_ADDR=127.0.0.1:7331 uv run --directory mcp python -m traffic_mcp.server
 ```
 
 For a client that speaks MCP over stdio instead, set `MCP_TRANSPORT=stdio` (other
@@ -222,7 +222,7 @@ Useful flags / env:
 | `--duration N` | auto-stop after N seconds |
 | `--iface IFACE` | capture interface (default: auto-detected) |
 | `--filter BPF` | dumpcap capture filter (default empty = capture everything, so proxies/non-standard ports/HTTP3 are all included; decode only surfaces Chrome-decryptable + plaintext HTTP. Narrow to e.g. `tcp port 443` for smaller captures) |
-| `--gateway ADDR` | gateway address (default `127.0.0.1:8080`) |
+| `--gateway ADDR` | gateway address (default `127.0.0.1:7331`) |
 | `CHROME_BIN` | Chrome/Chromium binary (e.g. `google-chrome-canary`) |
 | `DUMPCAP_BIN` / `CAPTURE_IFACE` | override dumpcap / interface |
 
@@ -427,7 +427,7 @@ takes effect on the next flow without a restart.
 |-----|---------|---------|
 | `DATA_ROOT` | `./data` | SQLite bundles + catalog |
 | `TRAFFICDECK_FP_DIR` | `~/.traffic-deck/fingerprints` | dir of user TLS-fingerprint `*.json` files (on top of the builtin set) — see [TLS client fingerprint names](#tls-client-fingerprint-names) |
-| `GATEWAY_ADDR` | `127.0.0.1:8080` | gRPC listen / viewer + tools connect addr |
+| `GATEWAY_ADDR` | `127.0.0.1:7331` | gRPC listen / viewer + tools connect addr |
 | `TSHARK_PATH` | `tshark` | batch-decode / import binary (not used by the default live path) |
 | `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
 | `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass, keeping bodies whole (so they are readable in full mid-capture). Set `off` to run an authoritative batch tshark re-decode on close instead (useful to verify the live decoder) — then a live body is capped at 256 KiB and the viewer labels it a preview until the session closes. |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch the trafficdeck-mcp server. Exposes recorded sessions over the Model Context
-# Protocol, backed by the gateway at $GATEWAY_ADDR (default 127.0.0.1:8080). Point your
+# Protocol, backed by the gateway at $GATEWAY_ADDR (default 127.0.0.1:7331). Point your
 # MCP client at this command; any extra args pass through. Run from anywhere.
 #
 # Transport via $MCP_TRANSPORT: streamable-http (default), sse, or stdio. The HTTP

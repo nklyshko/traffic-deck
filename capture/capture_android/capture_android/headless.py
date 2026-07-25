@@ -22,7 +22,7 @@ from capture_android.frida_server import ensure_target_ready
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="Per-app Android capture → gateway")
     ap.add_argument("--package", required=True, help="target app package name")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--label", default=None, help="session label (default: the package)")
     ap.add_argument("--url", default=None, help="open this URL in the app after launch")
     ap.add_argument("--duration", type=float, default=None, help="auto-stop after N seconds")

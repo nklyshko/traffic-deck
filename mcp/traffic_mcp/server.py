@@ -2,7 +2,7 @@
 clients. Backed by the gateway's ViewerService over gRPC — it does not
 touch SQLite directly, so it works locally or against a remote gateway.
 
-Run (stdio transport):  GATEWAY_ADDR=127.0.0.1:8080 uv run trafficdeck-mcp
+Run (stdio transport):  GATEWAY_ADDR=127.0.0.1:7331 uv run trafficdeck-mcp
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ _client: GatewayClient | None = None
 def client() -> GatewayClient:
     global _client
     if _client is None:
-        _client = GatewayClient(os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+        _client = GatewayClient(os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     return _client
 
 

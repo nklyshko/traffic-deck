@@ -156,7 +156,7 @@ class GatewayPusher:
     """Pushes completed flows to the gateway; opens the session on startup."""
 
     def __init__(self) -> None:
-        self.addr = os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080")
+        self.addr = os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331")
         self.label = os.environ.get("CAPTURE_LABEL", "mitmproxy")
         # Metadata keys this source stashes on flows that the viewer should show as table
         # columns by default (comma-separated); declared to the gateway at OpenSession.

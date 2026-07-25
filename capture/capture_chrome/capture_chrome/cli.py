@@ -125,7 +125,7 @@ def _serve(argv) -> None:
 
     ap = argparse.ArgumentParser(prog="capture-chrome serve",
                                  description="Serve Chrome as a CaptureSourceService")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
                     help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
     args = ap.parse_args(argv)
@@ -134,7 +134,7 @@ def _serve(argv) -> None:
 
 def _capture(argv) -> None:
     ap = argparse.ArgumentParser(description="Stream a live Chrome capture to the gateway")
-    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:8080"))
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--label", default="chrome")
     ap.add_argument("--iface", default=None, help="capture interface (default: auto)")
     ap.add_argument("--filter", default="",

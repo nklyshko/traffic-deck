@@ -81,7 +81,7 @@ def run_capture(
     adb: AdbClient,
     package: str,
     *,
-    gateway: str = "127.0.0.1:8080",
+    gateway: str = "127.0.0.1:7331",
     label: str | None = None,
     url: str | None = None,
     duration: float | None = None,
