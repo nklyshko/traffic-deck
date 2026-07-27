@@ -7,8 +7,13 @@ Run (stdio transport):  GATEWAY_ADDR=127.0.0.1:7331 uv run trafficdeck-mcp
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import itertools
 import os
+import re
+import time
+from datetime import datetime
 
 import grpc
 from mcp.server.fastmcp import FastMCP
@@ -257,10 +262,93 @@ def _bytes_payload(data: bytes, *, as_hex: bool = False, start: int = 0) -> dict
     return out
 
 
+# --- search criteria -----------------------------------------------------
+
+def _parse_status_set(spec: str) -> set[int] | None:
+    """Parse a status-code *set* — "401,403" (codes), "400-499" (range), "4xx"/"40x"
+    (wildcard class) — into the codes it covers, or None for an empty spec. Parts are
+    separated by commas and/or spaces and unioned, so "4xx,500-503" is one criterion."""
+    if not (spec or "").strip():
+        return None
+    out: set[int] = set()
+    for part in re.split(r"[,\s]+", spec.strip()):
+        if not part:
+            continue
+        if m := re.fullmatch(r"(\d{3})-(\d{3})", part):
+            lo, hi = int(m[1]), int(m[2])
+            if lo > hi:
+                raise ValueError(f"bad status range {part!r}: {lo} > {hi}")
+            out |= set(range(lo, hi + 1))
+        elif m := re.fullmatch(r"(\d{1,2})(x{1,2})", part, re.IGNORECASE):
+            if len(m[1]) + len(m[2]) != 3:
+                raise ValueError(f"bad status class {part!r} — 3 characters, e.g. 4xx or 40x")
+            lo = int(m[1].ljust(3, "0"))
+            out |= set(range(lo, lo + 10 ** len(m[2])))
+        elif re.fullmatch(r"\d{3}", part):
+            out.add(int(part))
+        else:
+            raise ValueError(f"bad status spec {part!r} — use a code (403), a set (401,403), "
+                             f"a range (400-499) or a class (4xx)")
+    return out
+
+
+def _parse_time(v: str) -> int | None:
+    """Parse a time bound to unix micros; "" -> None (unbounded).
+
+    Accepts an ISO-8601 timestamp ("2026-07-27T06:08:00", "2026-07-27T06:08:00Z",
+    "2026-07-27"), a bare clock time meaning today ("06:08", "06:08:30"), a relative
+    offset back from now ("-15m", "-2h", "-90s", "-1d"), or a unix epoch number in
+    seconds / milliseconds / microseconds (told apart by magnitude). Clock times and
+    ISO timestamps without an offset are read as *local* time — the same wall clock as
+    an application log you are correlating against.
+    """
+    s = (v or "").strip()
+    if not s:
+        return None
+    if m := re.fullmatch(r"-\s*(\d+)\s*([smhd])", s, re.IGNORECASE):
+        mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m[2].lower()]
+        return int((time.time() - int(m[1]) * mult) * 1_000_000)
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        n = float(s)
+        if n < 1e11:        # plausible only as seconds (1e11 s is the year 5138)
+            n *= 1e6
+        elif n < 1e14:      # milliseconds
+            n *= 1e3
+        return int(n)       # already microseconds
+    if m := re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", s):
+        now = datetime.now()
+        dt = now.replace(hour=int(m[1]), minute=int(m[2]), second=int(m[3] or 0), microsecond=0)
+    else:
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError(f"bad time {s!r} — use ISO-8601 (2026-07-27T06:08), a clock time "
+                             f"today (06:08), a relative offset (-15m) or a unix epoch number")
+    if dt.tzinfo is None:
+        dt = dt.astimezone()  # naive -> local time
+    return int(dt.timestamp() * 1_000_000)
+
+
+def _snippet(hay: str, needle: str, ctx: int = 60) -> str | None:
+    """The first case-insensitive occurrence of `needle` in `hay` with up to `ctx`
+    characters of surrounding context (whitespace collapsed, elided ends marked "…"),
+    or None when it doesn't occur — the match preview carried by a search hit."""
+    i = hay.lower().find(needle.lower())
+    if i < 0:
+        return None
+    start, end = max(0, i - ctx), min(len(hay), i + len(needle) + ctx)
+    text = re.sub(r"\s+", " ", hay[start:end]).strip()
+    return ("…" if start else "") + text + ("…" if end < len(hay) else "")
+
+
 def _matches(f, *, domain: str, method: str, content_type: str, status: int,
-             path_contains: str, url_contains: str, websocket, has_response) -> bool:
-    """Predicate for `search`: all given criteria ANDed. Substring fields are
-    case-insensitive; method/status are exact; websocket/has_response are tri-state."""
+             path_contains: str, url_contains: str, websocket, has_response,
+             status_set: set[int] | None = None,
+             since: int | None = None, until: int | None = None) -> bool:
+    """Predicate for `search` over a flow *summary*: all given criteria ANDed. Substring
+    fields are case-insensitive; method/status are exact; `status_set` matches any code in
+    it; `since`/`until` bound ts_unix_micros (inclusive); websocket/has_response are
+    tri-state. Content criteria (headers/bodies) need a second fetch — see _deep_match."""
     if domain and domain.lower() not in (f.authority or "").lower():
         return False
     if method and method.upper() != (f.method or "").upper():
@@ -268,6 +356,8 @@ def _matches(f, *, domain: str, method: str, content_type: str, status: int,
     if content_type and content_type.lower() not in (f.content_type or "").lower():
         return False
     if status and f.status != status:
+        return False
+    if status_set is not None and f.status not in status_set:
         return False
     if path_contains and path_contains.lower() not in (f.path or "").lower():
         return False
@@ -277,7 +367,89 @@ def _matches(f, *, domain: str, method: str, content_type: str, status: int,
         return False
     if has_response is not None and bool(f.status) != has_response:
         return False
+    # An unstamped flow (ts 0) can't be placed in time, so a time window excludes it.
+    if (since is not None or until is not None) and not f.ts_unix_micros:
+        return False
+    if since is not None and f.ts_unix_micros < since:
+        return False
+    if until is not None and f.ts_unix_micros > until:
+        return False
     return True
+
+
+# Content search (headers/bodies) is a second fetch per candidate flow, so it is bounded:
+# only `max_scan` candidates are examined, each body is matched over its first
+# _SCAN_BYTES, and a stored body bigger than _SCAN_FETCH_MAX is skipped rather than pulled
+# over the wire. _SCAN_CONCURRENCY fetches are in flight at once.
+_SCAN_BYTES = 128 * 1024
+_SCAN_FETCH_MAX = 2 * 1024 * 1024
+_SCAN_CONCURRENCY = 8
+_LIMIT_MAX = 500
+
+
+def _header_text(hs) -> str:
+    """Headers as "name: value" lines — the haystack for *_header_contains."""
+    return "\n".join(f"{h.name}: {h.value}" for h in hs)
+
+
+async def _body_text(sid: str, flow_id: str, body, response: bool) -> str:
+    """Up to _SCAN_BYTES of a body as text, for content matching. Uses the bytes GetFlow
+    inlined; falls back to a GetBody fetch for a body stored out of line (unless it is
+    over _SCAN_FETCH_MAX). Undecodable bytes are replaced, not an error — a substring
+    search over a binary body should just not match."""
+    if body is None or not body.size:
+        return ""
+    if body.WhichOneof("content") == "inline":
+        data = body.inline
+    elif body.size > _SCAN_FETCH_MAX:
+        return ""
+    else:
+        try:
+            data, _ = await client().get_body(sid, flow_id, response)
+        except grpc.aio.AioRpcError:
+            return ""
+    return data[:_SCAN_BYTES].decode("utf-8", "replace")
+
+
+async def _deep_match(sid: str, flow_id: str, crit: dict) -> dict | None:
+    """Match a candidate flow's headers/bodies against the content criteria in `crit`.
+
+    Returns the match previews ({field: snippet}) when every content criterion matches,
+    or None when one doesn't — or when the flow can't be read (a bundle the gateway
+    refuses, a flow that vanished): unreadable is treated as no match, never as a fault
+    that aborts the whole search. Headers come free with the flow detail and are checked
+    first, so a body is only fetched once the header criteria have passed.
+    """
+    try:
+        f = await client().get_flow(sid, flow_id)
+    except grpc.aio.AioRpcError:
+        return None
+    prev: dict[str, str] = {}
+    for field, hay in (("request_header", _header_text(f.request_headers)),
+                       ("response_header", _header_text(f.response_headers))):
+        if needle := crit[f"{field}_contains"]:
+            if (hit := _snippet(hay, needle)) is None:
+                return None
+            prev[field] = hit
+    for field, body, response in (("request_body", f.request_body, False),
+                                  ("response_body", f.response_body, True)):
+        if needle := crit[f"{field}_contains"]:
+            hit = _snippet(await _body_text(sid, flow_id, body, response), needle)
+            if hit is None:
+                return None
+            prev[field] = hit
+    return prev
+
+
+def _url_previews(f, crit: dict) -> dict:
+    """Match previews for the substring criteria that match a flow summary — so a hit
+    from a loose url/path filter shows *what* matched without a get_flow round trip."""
+    prev = {}
+    for field, hay in (("url", flow_url(f)), ("path", f.path or "")):
+        if needle := crit[f"{field}_contains"]:
+            if (hit := _snippet(hay, needle)) is not None:
+                prev[field] = hit
+    return prev
 
 
 def _timeline_row(seq: int, f, t0: int) -> dict:
@@ -356,32 +528,15 @@ async def network_timeline(session_id: str, limit: int = 200, offset: int = 0) -
     return {"session_id": sid, "total": len(flows), "count": len(rows), "flows": rows}
 
 
-@mcp.tool()
-async def search(session_id: str = "", domain: str = "", method: str = "",
-                 content_type: str = "", status: int = 0, path_contains: str = "",
-                 url_contains: str = "", websocket: bool | None = None,
-                 has_response: bool | None = None, limit: int = 100) -> list[dict]:
-    """Combined structured search over flows — every criterion you pass is ANDed in
-    one query, e.g. domain="api.oneme.ru" + method="POST" + content_type="json".
-
-    `domain`, `content_type`, `path_contains`, `url_contains` are case-insensitive
-    substrings; `method` is exact (case-insensitive); `status` is an exact HTTP code
-    (0 = any); `websocket`/`has_response` are tri-state (omit = any). Leave
-    `session_id` empty to search across every session (each result carries its
-    `session_id`/`session_label`). Returns time-ordered flow summaries (no
-    headers/bodies — use get_flow / get_body / export_request for those).
-    """
-    tagnames, groupnames = await _name_maps()
-    crit = dict(domain=domain, method=method, content_type=content_type, status=status,
-                path_contains=path_contains, url_contains=url_contains,
-                websocket=websocket, has_response=has_response)
-
+async def _session_flows(session_id: str) -> list[tuple[str, str | None, object]]:
+    """(session_id, session_label, flow) for every flow to search, time-ordered within a
+    session. An empty `session_id` spans every session."""
     if session_id:
         sessions = [(await _resolve_session(session_id), None)]
     else:
         sessions = [(s.id, s.label) for s in await client().list_sessions()]
 
-    out: list[dict] = []
+    out: list[tuple[str, str | None, object]] = []
     for sid, label in sessions:
         try:
             flows = await client().list_flows(sid)
@@ -395,35 +550,145 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
                 raise
             continue
         flows.sort(key=lambda f: f.ts_unix_micros)
-        for f in flows:
-            if not _matches(f, **crit):
-                continue
-            row = _flow_summary(f, tagnames, groupnames)
-            row["session_id"] = sid
-            if label is not None:
-                row["session_label"] = label
-            out.append(row)
-            if len(out) >= limit:
-                return out
+        out += [(sid, label, f) for f in flows]
     return out
 
 
 @mcp.tool()
-async def search_flows(session_id: str, filter: str = "", limit: int = 100) -> list[dict]:
+async def search(session_id: str = "", domain: str = "", method: str = "",
+                 content_type: str = "", status: int = 0, status_in: str = "",
+                 path_contains: str = "", url_contains: str = "",
+                 request_header_contains: str = "", response_header_contains: str = "",
+                 request_body_contains: str = "", response_body_contains: str = "",
+                 since: str = "", until: str = "", websocket: bool | None = None,
+                 has_response: bool | None = None, limit: int = 100, offset: int = 0,
+                 max_scan: int = 400) -> dict:
+    """Combined structured search over flows — every criterion you pass is ANDed in
+    one query, e.g. domain="api.oneme.ru" + status_in="4xx" + response_body_contains="BanShadow".
+
+    Metadata criteria (matched on the flow summary, no extra fetch):
+      `domain`, `content_type`, `path_contains`, `url_contains` — case-insensitive
+      substrings; `method` — exact (case-insensitive); `status` — one exact code
+      (0 = any); `status_in` — a code *set*: "401,403", "400-499", "4xx", "4xx,500-503";
+      `websocket`/`has_response` — tri-state (omit = any).
+
+    Time window: `since`/`until` bound the request timestamp, each an ISO-8601 stamp
+    ("2026-07-27T06:08"), a clock time today ("06:08"), a relative offset back from now
+    ("-15m", "-2h"), or a unix epoch number (s/ms/µs). Bare clock times and offset-less
+    ISO stamps are local time. Flows with no timestamp are excluded by a window.
+
+    Content criteria — `request_header_contains`, `response_header_contains`,
+    `request_body_contains`, `response_body_contains` — are case-insensitive substrings
+    over the headers ("name: value" lines) and the first 128 KiB of the body, so a
+    Set-Cookie name, a script URL in HTML or a JSON key can be found directly instead of
+    paging through get_flow/get_body. They cost one fetch per candidate flow, so narrow
+    with the metadata criteria first: only `max_scan` candidates (default 400) are
+    examined and the result reports `scanned`/`scan_limited`. Scanning stops as soon as
+    the requested page is full, so a later page re-scans from the start — prefer one
+    query with a bigger `limit` over walking many pages.
+
+    Every hit carries `match_preview` — {field: matched substring in context} for the
+    substring criteria — so you can see *why* it matched without a get_flow.
+
+    Leave `session_id` empty to search across every session (each result carries its
+    `session_id`/`session_label`). Returns time-ordered flow summaries (no headers/bodies
+    — use get_flow / get_body / export_request for those):
+    {count, total, complete, offset, next_offset, scanned, scan_limited, flows:[…]}.
+    `total` is the number of matches found; `complete` says whether every candidate was
+    examined (so `total` is exact and `next_offset` null means the end). Page with
+    `offset`/`limit` (limit default 100, max 500) — passing the returned `next_offset`
+    walks the whole result set.
+    """
+    limit = max(1, min(limit, _LIMIT_MAX))
+    offset = max(0, offset)
+    max_scan = max(1, max_scan)
+    tagnames, groupnames = await _name_maps()
+    crit = dict(domain=domain, method=method, content_type=content_type, status=status,
+                status_set=_parse_status_set(status_in),  # raises ValueError on a bad spec
+                path_contains=path_contains, url_contains=url_contains,
+                websocket=websocket, has_response=has_response,
+                since=_parse_time(since), until=_parse_time(until))
+    content = dict(request_header_contains=request_header_contains,
+                   response_header_contains=response_header_contains,
+                   request_body_contains=request_body_contains,
+                   response_body_contains=response_body_contains)
+    deep = any(content.values())
+
+    candidates = (c for c in await _session_flows(session_id) if _matches(c[2], **crit))
+
+    # Collect matches up to the page we need. Without content criteria that is the whole
+    # candidate list (cheap, in memory); with them, fetches run _SCAN_CONCURRENCY at a
+    # time and stop at the page's end or the scan budget, whichever comes first.
+    matched: list[tuple[str, str | None, object, dict]] = []
+    scanned = 0
+    complete = True
+    if not deep:
+        matched = [(sid, label, f, {}) for sid, label, f in candidates]
+    else:
+        want = offset + limit
+        while len(matched) < want and scanned < max_scan:
+            batch = list(itertools.islice(candidates, min(_SCAN_CONCURRENCY, max_scan - scanned)))
+            if not batch:
+                break
+            scanned += len(batch)
+            previews = await asyncio.gather(
+                *(_deep_match(sid, f.id, content) for sid, _, f in batch))
+            matched += [(sid, label, f, p)
+                        for (sid, label, f), p in zip(batch, previews) if p is not None]
+        # Anything left unexamined (page filled early, or the budget ran out).
+        complete = next(candidates, None) is None
+
+    page = matched[offset:offset + limit]
+    rows = []
+    for sid, label, f, previews in page:
+        row = _flow_summary(f, tagnames, groupnames)
+        row["session_id"] = sid
+        if label is not None:
+            row["session_label"] = label
+        if preview := _url_previews(f, crit) | previews:
+            row["match_preview"] = preview
+        rows.append(row)
+
+    more = len(matched) > offset + len(page) or not complete
+    out = {"count": len(rows), "total": len(matched), "complete": complete,
+           "offset": offset, "next_offset": offset + len(rows) if more and rows else None,
+           "flows": rows}
+    if deep:
+        out["scanned"] = scanned
+        out["scan_limited"] = scanned >= max_scan and not complete
+        if out["scan_limited"]:
+            out["note"] = (f"stopped after scanning {scanned} candidates — narrow the "
+                           f"metadata criteria or raise max_scan")
+    return out
+
+
+@mcp.tool()
+async def search_flows(session_id: str, filter: str = "", limit: int = 100,
+                       offset: int = 0) -> dict:
     """Search a session's flows with a mitmproxy-style filter expression.
 
     Terms (ANDed, `!` negates): ~m method, ~d host, ~u url, ~c status, ~t content-type,
     ~s/~q has/no response, ~fav, ~mark <color>, ~tag <name>, ~group <name>,
-    ~comment <regex>; a naked regex matches the URL. Empty filter returns all flows.
-    Returns flow summaries (no headers/bodies — use get_flow for those). For plain
-    field matching prefer the structured `search` tool.
+    ~comment <regex>; a naked regex matches the URL. Each term's argument is a regex, so
+    ~c 40[13] matches 401 or 403 and ~c 4.. matches any 4xx. Empty filter returns all
+    flows.
+
+    Returns {total, count, offset, next_offset, flows:[…]} — flow summaries, no
+    headers/bodies (use get_flow for those). `total` is the number of flows matching the
+    filter; page with `offset`/`limit` (default 100, max 500). For field matching, status
+    sets, time windows and header/body content search prefer the structured `search` tool.
     """
+    limit = max(1, min(limit, _LIMIT_MAX))
+    offset = max(0, offset)
     flows = await client().list_flows(await _resolve_session(session_id))
     tagnames, groupnames = await _name_maps()
     pred = compile_filter(filter, tagnames, groupnames)  # raises ValueError on bad expr
     if pred is not None:
         flows = [f for f in flows if pred(f)]
-    return [_flow_summary(f, tagnames, groupnames) for f in flows[:limit]]
+    page = flows[offset:offset + limit]
+    return {"total": len(flows), "count": len(page), "offset": offset,
+            "next_offset": offset + len(page) if offset + len(page) < len(flows) else None,
+            "flows": [_flow_summary(f, tagnames, groupnames) for f in page]}
 
 
 @mcp.tool()

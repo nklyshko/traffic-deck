@@ -130,6 +130,20 @@ bodies), `export_client_hellos` (a flow's raw TLS ClientHello bytes), `list_ws_m
 (paginated) + `get_ws_message_body` (WebSocket frames; `as_hex` for byte inspection).
 Session args accept an id prefix.
 
+`search` is the one to reach for on a large capture. Criteria are ANDed in a single
+query: `status` (one code) or `status_in` (a set — `401,403`, `400-499`, `4xx,500-503`);
+`since`/`until` (ISO-8601, a clock time today like `06:08`, a relative `-15m`, or a unix
+epoch number — bare times are local, for lining up with an application log);
+`domain`/`method`/`content_type`/`path_contains`/`url_contains`; and content search over
+what the response actually said — `response_header_contains`, `response_body_contains`
+(and the request-side pair), matched over the headers and the first 128 KiB of the body,
+so a `Set-Cookie` name or a marker string in HTML is found without fetching each flow.
+Every hit carries a `match_preview` showing the matched substring in context, and the
+result is paginated (`offset`/`limit`, with `total` and a `next_offset` to walk on).
+Content search costs a fetch per candidate flow, so narrow with the metadata criteria
+first: it examines at most `max_scan` candidates (default 400) and reports
+`scanned`/`scan_limited` when it stops early.
+
 Sessions still being captured are readable too: flows, WebSocket frames and bodies are
 served from the live decode until the session closes and they are persisted. Under
 record-live (the default) bodies come back whole at any size; with `GATEWAY_RECORD_LIVE=off`

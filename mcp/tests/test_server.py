@@ -77,6 +77,109 @@ def test_search_path_and_url_substring():
     assert not S._matches(f, **crit(path_contains="/v4"))
 
 
+# --- status sets ----------------------------------------------------------
+
+def test_parse_status_set_codes_ranges_classes():
+    assert S._parse_status_set("") is None
+    assert S._parse_status_set("   ") is None
+    assert S._parse_status_set("403") == {403}
+    assert S._parse_status_set("401,403") == {401, 403}
+    assert S._parse_status_set("401 403") == {401, 403}
+    assert S._parse_status_set("4xx") == set(range(400, 500))
+    assert S._parse_status_set("40x") == set(range(400, 410))
+    assert S._parse_status_set("400-404") == {400, 401, 402, 403, 404}
+    # Parts are unioned into one criterion.
+    assert S._parse_status_set("4xx,500-503") == set(range(400, 500)) | {500, 501, 502, 503}
+
+
+def test_parse_status_set_rejects_nonsense():
+    for bad in ("4x", "xx", "40", "abc", "499-400", "4xxx"):
+        try:
+            S._parse_status_set(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"{bad!r} should not parse")
+
+
+def test_search_matches_status_set():
+    f403 = _flow(authority="h", status=403)
+    f200 = _flow(authority="h", status=200)
+    fnone = _flow(authority="h")
+    codes = S._parse_status_set("401,403")
+    assert S._matches(f403, **crit(status_set=codes))
+    assert not S._matches(f200, **crit(status_set=codes))
+    assert not S._matches(fnone, **crit(status_set=codes))  # no response, no code
+    assert S._matches(f200, **crit(status_set=S._parse_status_set("2xx")))
+
+
+# --- time window ----------------------------------------------------------
+
+def test_parse_time_epoch_scales_and_empty():
+    assert S._parse_time("") is None
+    secs = 1_774_000_000
+    assert S._parse_time(str(secs)) == secs * 1_000_000
+    assert S._parse_time(str(secs * 1_000)) == secs * 1_000_000
+    assert S._parse_time(str(secs * 1_000_000)) == secs * 1_000_000
+
+
+def test_parse_time_iso_clock_and_relative():
+    from datetime import datetime, timezone
+
+    # An offset-bearing ISO stamp is absolute.
+    assert S._parse_time("2026-07-27T06:08:00Z") == int(
+        datetime(2026, 7, 27, 6, 8, tzinfo=timezone.utc).timestamp() * 1_000_000)
+    # A naive stamp is local time.
+    assert S._parse_time("2026-07-27T06:08") == int(
+        datetime(2026, 7, 27, 6, 8).astimezone().timestamp() * 1_000_000)
+    # A bare clock time means today, local.
+    today = datetime.now().replace(hour=6, minute=8, second=0, microsecond=0)
+    assert S._parse_time("06:08") == int(today.astimezone().timestamp() * 1_000_000)
+    # A relative offset counts back from now.
+    import time as _t
+    now = int(_t.time() * 1_000_000)
+    assert abs(S._parse_time("-15m") - (now - 15 * 60 * 1_000_000)) < 2_000_000
+
+
+def test_parse_time_rejects_garbage():
+    for bad in ("yesterday", "2026-13-45", "6pm"):
+        try:
+            S._parse_time(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"{bad!r} should not parse")
+
+
+def test_search_time_window_bounds_are_inclusive():
+    f = _flow(authority="h", ts_unix_micros=1_000_000)
+    assert S._matches(f, **crit(since=1_000_000, until=1_000_000))
+    assert not S._matches(f, **crit(since=1_000_001))
+    assert not S._matches(f, **crit(until=999_999))
+    # An unstamped flow can't be placed in time, so a window excludes it.
+    unstamped = _flow(authority="h")
+    assert S._matches(unstamped, **crit())
+    assert not S._matches(unstamped, **crit(since=1))
+
+
+# --- match previews -------------------------------------------------------
+
+def test_snippet_context_and_miss():
+    hay = "x" * 100 + "Set-Cookie: spid=abc123; Path=/" + "y" * 100
+    s = S._snippet(hay, "spid=")
+    assert "spid=abc123" in s
+    assert s.startswith("…") and s.endswith("…")   # both ends elided
+    assert len(s) < len(hay)
+    assert S._snippet(hay, "nope") is None
+    # Whitespace is collapsed so a preview stays one line.
+    assert S._snippet("a\n\n  b needle c", "needle") == "a b needle c"
+
+
+def test_url_previews_only_for_matching_criteria():
+    f = _flow(scheme="https", authority="api.oneme.ru", path="/v3/items", query="a=1")
+    prev = S._url_previews(f, crit(url_contains="v3/items", path_contains="/v3"))
+    assert prev == {"url": "https://api.oneme.ru/v3/items?a=1", "path": "/v3/items"}
+    assert S._url_previews(f, crit()) == {}
+
+
 # --- timeline -------------------------------------------------------------
 
 def test_timeline_row_relative_time():
@@ -311,6 +414,229 @@ def test_flow_detail_marks_a_partial_body(monkeypatch):
     d = S._flow_detail(f, {}, {})
     assert d["response_body"]["partial"] is True
     assert d["response_body"]["text"] == '{"k":1'
+
+
+# --- search tool: paging + content search ---------------------------------
+
+class _Sess:
+    def __init__(self, sid, label):
+        self.id, self.label = sid, label
+
+
+class _SearchClient:
+    """Serves flow summaries per session, plus details for the content-search fetches.
+    `details` maps flow id -> a Flow with headers/bodies; `bodies` maps
+    (flow_id, response) -> bytes for out-of-line bodies fetched via get_body."""
+
+    def __init__(self, flows, details=None, bodies=None):
+        self.flows, self.details, self.bodies = flows, details or {}, bodies or {}
+        self.get_flow_calls, self.get_body_calls = [], []
+
+    async def list_sessions(self):
+        return [_Sess(sid, f"label-{sid}") for sid in self.flows]
+
+    async def list_flows(self, sid):
+        return list(self.flows[sid])
+
+    async def get_flow(self, sid, fid):
+        self.get_flow_calls.append(fid)
+        return self.details.get(fid, _flow(id=fid))
+
+    async def get_body(self, sid, fid, response):
+        self.get_body_calls.append((fid, response))
+        return self.bodies.get((fid, response), b""), False
+
+
+def _run_search(monkeypatch, fake, **kw):
+    import asyncio
+
+    async def _names():
+        return {}, {}
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_name_maps", _names)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    return asyncio.run(S.search(**kw))
+
+
+def _seq(n, **kw):
+    return [_flow(id=f"f{i}", authority="h", path=f"/{i}", scheme="https",
+                  ts_unix_micros=(i + 1) * 1_000_000, **kw) for i in range(n)]
+
+
+def test_search_pages_with_offset_and_next_offset(monkeypatch):
+    fake = _SearchClient({"s1": _seq(5, status=200)})
+
+    first = _run_search(monkeypatch, fake, limit=2)
+    assert first["count"] == 2 and first["total"] == 5 and first["complete"] is True
+    assert first["offset"] == 0 and first["next_offset"] == 2
+    assert [f["id"] for f in first["flows"]] == ["f0", "f1"]
+
+    nxt = _run_search(monkeypatch, fake, limit=2, offset=first["next_offset"])
+    assert [f["id"] for f in nxt["flows"]] == ["f2", "f3"]
+    assert nxt["next_offset"] == 4
+
+    last = _run_search(monkeypatch, fake, limit=2, offset=4)
+    assert [f["id"] for f in last["flows"]] == ["f4"]
+    assert last["next_offset"] is None      # end of the result set
+    # A metadata-only search never fetches flow detail.
+    assert fake.get_flow_calls == []
+
+
+def test_search_status_set_and_time_window(monkeypatch):
+    flows = [_flow(id="a", authority="h", status=403, ts_unix_micros=1_000_000),
+             _flow(id="b", authority="h", status=401, ts_unix_micros=2_000_000),
+             _flow(id="c", authority="h", status=200, ts_unix_micros=3_000_000)]
+    fake = _SearchClient({"s1": flows})
+
+    out = _run_search(monkeypatch, fake, status_in="4xx")
+    assert [f["id"] for f in out["flows"]] == ["a", "b"] and out["total"] == 2
+
+    # ANDed with a time window (epoch micros bounds).
+    out = _run_search(monkeypatch, fake, status_in="401,403", since="2", until="3")
+    assert [f["id"] for f in out["flows"]] == ["b"]
+
+
+def test_search_across_sessions_labels_each_hit(monkeypatch):
+    fake = _SearchClient({"s1": [_flow(id="a", authority="h", status=200)],
+                          "s2": [_flow(id="b", authority="h", status=200)]})
+    out = _run_search(monkeypatch, fake)
+    assert {(f["session_id"], f["session_label"]) for f in out["flows"]} == {
+        ("s1", "label-s1"), ("s2", "label-s2")}
+
+
+def _detail(fid, *, resp_headers=(), body=None, body_ref=False):
+    f = _flow(id=fid)
+    for name, value in resp_headers:
+        f.response_headers.append(cp.Header(name=name, value=value))
+    if body is not None:
+        b = cp.Body(size=len(body), content_type="text/html")
+        if body_ref:
+            b.object_ref = "sha"        # stored out of line -> needs a get_body fetch
+        else:
+            b.inline = body
+        f.response_body.CopyFrom(b)
+    return f
+
+
+def test_search_response_body_contains_returns_preview(monkeypatch):
+    summaries = _seq(3, status=200)
+    details = {
+        "f0": _detail("f0", body=b"<html>nothing here</html>"),
+        "f1": _detail("f1", body=b"<html>" + b"x" * 200 + b'{"__NUXT_DATA__":1}</html>'),
+        "f2": _detail("f2", body=b"<html>also nothing</html>"),
+    }
+    fake = _SearchClient({"s1": summaries}, details)
+
+    out = _run_search(monkeypatch, fake, response_body_contains="__NUXT_DATA__")
+    assert [f["id"] for f in out["flows"]] == ["f1"]
+    assert "__NUXT_DATA__" in out["flows"][0]["match_preview"]["response_body"]
+    assert out["scanned"] == 3 and out["scan_limited"] is False and out["complete"] is True
+
+
+def test_search_response_header_contains_skips_body_fetch(monkeypatch):
+    summaries = _seq(2, status=403)
+    details = {
+        "f0": _detail("f0", resp_headers=[("server", "nginx")],
+                      body=b"body", body_ref=True),
+        "f1": _detail("f1", resp_headers=[("set-cookie", "spid=abc123; Path=/")],
+                      body=b"body", body_ref=True),
+    }
+    fake = _SearchClient({"s1": summaries}, details)
+
+    out = _run_search(monkeypatch, fake, response_header_contains="spid=")
+    assert [f["id"] for f in out["flows"]] == ["f1"]
+    assert out["flows"][0]["match_preview"]["response_header"] == "set-cookie: spid=abc123; Path=/"
+    # Headers come with the flow detail — no body was pulled over the wire.
+    assert fake.get_body_calls == []
+
+
+def test_search_fetches_an_out_of_line_body_to_match_it(monkeypatch):
+    fake = _SearchClient({"s1": _seq(1, status=200)},
+                         {"f0": _detail("f0", body=b"placeholder", body_ref=True)},
+                         {("f0", True): b"...servicepipe.tech/script.js..."})
+    out = _run_search(monkeypatch, fake, response_body_contains="servicepipe.tech")
+    assert [f["id"] for f in out["flows"]] == ["f0"]
+    assert fake.get_body_calls == [("f0", True)]
+
+
+def test_search_content_scan_is_bounded_by_max_scan(monkeypatch):
+    fake = _SearchClient({"s1": _seq(20, status=403)},
+                         {f"f{i}": _detail(f"f{i}", body=b"no match") for i in range(20)})
+    out = _run_search(monkeypatch, fake, response_body_contains="BanShadow", max_scan=8)
+    assert out["flows"] == [] and out["scanned"] == 8
+    assert out["scan_limited"] is True and out["complete"] is False
+    assert "max_scan" in out["note"]
+    # complete=False means `total` is a floor, so paging must not report the end.
+    assert out["next_offset"] is None or out["next_offset"] > 0
+
+
+def test_search_content_scan_stops_once_the_page_is_full(monkeypatch):
+    """A content search must not read every candidate just to fill a small page — it
+    stops at offset+limit matches and says the result is incomplete."""
+    fake = _SearchClient({"s1": _seq(40, status=200)},
+                         {f"f{i}": _detail(f"f{i}", body=b"hit: BanShadow") for i in range(40)})
+    out = _run_search(monkeypatch, fake, response_body_contains="banshadow", limit=2)
+    assert [f["id"] for f in out["flows"]] == ["f0", "f1"]
+    assert out["scanned"] <= 8 + S._SCAN_CONCURRENCY      # not all 40
+    assert out["complete"] is False and out["next_offset"] == 2
+
+
+def test_search_unreadable_flow_is_not_a_match_and_does_not_abort(monkeypatch):
+    import grpc
+
+    class Flaky(_SearchClient):
+        async def get_flow(self, sid, fid):
+            if fid == "f0":
+                raise _rpc_error(grpc.StatusCode.NOT_FOUND, "flow not found")
+            return await super().get_flow(sid, fid)
+
+    fake = Flaky({"s1": _seq(2, status=200)},
+                 {"f1": _detail("f1", body=b"BanShadow")})
+    out = _run_search(monkeypatch, fake, response_body_contains="BanShadow")
+    assert [f["id"] for f in out["flows"]] == ["f1"]
+
+
+def test_search_limit_is_clamped(monkeypatch):
+    fake = _SearchClient({"s1": _seq(3, status=200)})
+    out = _run_search(monkeypatch, fake, limit=10_000)
+    assert out["count"] == 3          # clamped to _LIMIT_MAX, still under it here
+    assert _run_search(monkeypatch, fake, limit=0)["count"] == 1
+
+
+def test_search_rejects_a_bad_status_spec(monkeypatch):
+    fake = _SearchClient({"s1": _seq(1)})
+    try:
+        _run_search(monkeypatch, fake, status_in="4x")
+    except ValueError as e:
+        assert "status" in str(e)
+    else:
+        raise AssertionError("a bad status spec should raise")
+
+
+def test_search_flows_pages_and_reports_total(monkeypatch):
+    import asyncio
+
+    fake = _SearchClient({"s1": _seq(5, status=200)})
+
+    async def _names():
+        return {}, {}
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_name_maps", _names)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+
+    out = asyncio.run(S.search_flows("s1", "~c 200", limit=2))
+    assert out["total"] == 5 and out["count"] == 2 and out["next_offset"] == 2
+    assert [f["id"] for f in out["flows"]] == ["f0", "f1"]
+    tail = asyncio.run(S.search_flows("s1", "~c 200", limit=2, offset=4))
+    assert tail["count"] == 1 and tail["next_offset"] is None
 
 
 # --- compare_flows --------------------------------------------------------
