@@ -2378,6 +2378,12 @@ class CompareScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
 
+    # Request bodies, fetched rather than taken from the flow's inline copy. None means
+    # the bytes could not be had, which the diff reports instead of assuming equal.
+    # Class-level so a screen built without __init__ still renders.
+    _ba: bytes | None = None
+    _bb: bytes | None = None
+
     def __init__(self, a: tuple[str, str], b: tuple[str, str]) -> None:
         super().__init__()
         self.a, self.b = a, b
@@ -2411,7 +2417,23 @@ class CompareScreen(Screen):
                 f"sessions can't be compared yet — close them first)[/dim]")
             self.query_one("#diff-b", Static).update("")
             return
+        self._ba = await self._fetch_body(self.a, self._fa)
+        self._bb = await self._fetch_body(self.b, self._fb)
         self._refresh()
+
+    async def _fetch_body(self, ref: tuple[str, str], f) -> bytes | None:
+        """The request body to diff, fetched over GetBody rather than read from the
+        flow's inline copy. A flow whose body has been written to the bundle carries its
+        size but no inline bytes, so comparing `.inline` would read two *different*
+        bodies as identical — a wrong answer rather than an error. Returns None when the
+        bytes can't be had, which the diff reports instead of guessing."""
+        if not f.request_body.size:
+            return b""
+        try:
+            data, _ = await self.app.client.get_body(*ref, False)
+            return data
+        except Exception:  # noqa: BLE001 — unreadable is reported, not fatal
+            return None
 
     def _refresh(self) -> None:
         if self._fa is None or self._fb is None:
@@ -2571,11 +2593,14 @@ class CompareScreen(Screen):
             else:
                 chg(la, lb)
 
-        # Request body (size only; bodies may be large/binary)
-        ba = a.request_body.inline if a.request_body.size else b""
-        bb = b.request_body.inline if b.request_body.size else b""
-        title("Request body", ba == bb)
-        (eq if ba == bb else chg)(f"{a.request_body.size}B", f"{b.request_body.size}B")
+        # Request body — the fetched bytes (see _fetch_body), shown as sizes since a body
+        # may be large or binary. An unreadable side is said so, never treated as equal.
+        ba, bb = self._ba, self._bb
+        same = ba is not None and bb is not None and ba == bb
+        la = f"{a.request_body.size}B" + ("" if ba is not None else " (unreadable)")
+        lb = f"{b.request_body.size}B" + ("" if bb is not None else " (unreadable)")
+        title("Request body", same)
+        (eq if same else chg)(la, lb)
 
         return Content("\n").join(left), Content("\n").join(right)
 

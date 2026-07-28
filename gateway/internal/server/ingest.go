@@ -38,8 +38,15 @@ type Ingest struct {
 
 	// pushAnalyses gives each pushed (mitmproxy) session a single analysis, shared across
 	// its many PushFlows streams — the addon opens one stream per flow/message.
+	// liveAnalyses is the record-live counterpart, created at session start because rows
+	// reference it throughout the capture now, not only at close (ADR-0011 §7).
 	pushMu       sync.Mutex
 	pushAnalyses map[string]string // sessionID -> analysisID
+	liveAnalyses map[string]string // sessionID -> analysisID
+
+	// stopCapture ends the capture feeding a session, for when its flush fails and the
+	// session can no longer be recorded (ADR-0011 §5). Set by Register; nil in tests.
+	stopCapture func(ctx context.Context, sessionID string) error
 
 	// wsStates runs custom WebSocket decoders over pushed binary frames (the push path
 	// bypasses the tshark/Go decoders), keyed by the parent flow id.
@@ -60,6 +67,49 @@ func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub,
 		st: st, obj: obj, tshark: tshark, hub: hub,
 		liveDecode: liveDecode, recordLive: recordLive, tsharkVerify: tsharkVerify,
 		pushAnalyses: map[string]string{},
+		liveAnalyses: map[string]string{},
+	}
+}
+
+// liveAnalysis returns a record-live session's analysis, creating it on first use. The
+// flusher needs it from the first written row, so unlike the old close-time path this
+// runs at session start (ADR-0011 §7).
+func (i *Ingest) liveAnalysis(sid string) (string, error) {
+	i.pushMu.Lock()
+	defer i.pushMu.Unlock()
+	if i.liveAnalyses == nil {
+		i.liveAnalyses = map[string]string{}
+	}
+	if aid, ok := i.liveAnalyses[sid]; ok {
+		return aid, nil
+	}
+	aid := uuid.NewString()
+	if err := i.st.CreateAnalysis(context.Background(), store.NewAnalysis{
+		ID: aid, SessionID: sid, Engine: "live", TLSKeyLogUsed: true,
+	}); err != nil {
+		return "", err
+	}
+	i.liveAnalyses[sid] = aid
+	return aid, nil
+}
+
+// onFlushError ends a session whose incremental flush failed. Its record is no longer
+// being written, so the capture must not keep running: mark the session errored and stop
+// the source. Everything flushed before the failure stays readable in the bundle, which
+// is what makes stopping the recoverable choice (ADR-0011 §5).
+func (i *Ingest) onFlushError(sid string, ferr error) {
+	ctx := context.Background()
+	n, err := i.st.CountFlows(ctx, sid)
+	if err != nil {
+		log.Printf("session %s: counting flows after flush failure: %v", sid, err)
+	}
+	if err := i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_ERROR, n); err != nil {
+		log.Printf("session %s: marking errored after flush failure: %v", sid, err)
+	}
+	if i.stopCapture != nil {
+		if err := i.stopCapture(ctx, sid); err != nil {
+			log.Printf("session %s: stopping capture after flush failure: %v", sid, err)
+		}
 	}
 }
 
@@ -433,15 +483,27 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 // "live" analysis, then finishes the session — the record-live alternative to the batch
 // tshark pass. The flows are the live path's final state (bodies capped at maxLiveBody).
 func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) error {
-	flows, msgs := ls.snapshotForRecord()
-
-	aid := uuid.NewString()
-	if err := i.st.CreateAnalysis(ctx, store.NewAnalysis{
-		ID: aid, SessionID: sid, Engine: "live", TLSKeyLogUsed: true,
-	}); err != nil {
-		return fmt.Errorf("create analysis: %w", err)
+	if ls.sink != nil {
+		// The flusher has been writing throughout the capture, so closing is a final
+		// flush of the unwritten tail rather than a transaction over the whole session
+		// (ADR-0011 §7). The count comes from the bundle, which now holds every flow.
+		if err := ls.flush(ctx, true); err != nil {
+			return fmt.Errorf("final flush: %w", err)
+		}
+		n, err := i.st.CountFlows(ctx, sid)
+		if err != nil {
+			return fmt.Errorf("count flows: %w", err)
+		}
+		return i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n)
 	}
 
+	// No flusher ran (its analysis could not be created), so the session accumulated in
+	// memory as it used to: write it in one pass.
+	flows, msgs := ls.snapshotForRecord()
+	aid, err := i.liveAnalysis(sid)
+	if err != nil {
+		return fmt.Errorf("create analysis: %w", err)
+	}
 	n, err := i.st.InsertFlows(ctx, sid, aid, flows)
 	if err != nil {
 		return fmt.Errorf("insert flows: %w", err)
@@ -449,7 +511,6 @@ func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) e
 	if _, err := i.st.InsertWsMessages(ctx, sid, msgs); err != nil {
 		return fmt.Errorf("insert ws messages: %w", err)
 	}
-
 	return i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n)
 }
 

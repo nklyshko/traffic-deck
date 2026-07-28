@@ -2,6 +2,7 @@ package server
 
 import (
 	"io"
+	"log"
 	"strings"
 	"sync"
 
@@ -22,10 +23,25 @@ type liveHub struct {
 	mu         sync.Mutex
 	sessions   map[string]*liveSession
 	recordLive bool // retain full decode flows so they can be persisted on close
+
+	// Incremental persistence wiring (ADR-0011), set by setPersistence once the owner
+	// that can reach the store exists. Unset means sessions accumulate until close.
+	sink        flushSink
+	analysisFor func(sessionID string) (string, error)
+	onFlushErr  func(sessionID string, err error)
 }
 
 func newLiveHub(recordLive bool) *liveHub {
 	return &liveHub{sessions: map[string]*liveSession{}, recordLive: recordLive}
+}
+
+// setPersistence gives the hub what its flushers need: somewhere to write, the session's
+// analysis id, and what to do when a write fails.
+func (h *liveHub) setPersistence(sink flushSink, analysisFor func(string) (string, error),
+	onFlushErr func(string, error)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sink, h.analysisFor, h.onFlushErr = sink, analysisFor, onFlushErr
 }
 
 type liveSession struct {
@@ -42,11 +58,30 @@ type liveSession struct {
 	nextID int
 	closed bool
 
-	// WebSocket frames decoded so far (live), and their subscribers. Frames are
-	// immutable once decoded, so this is append-only; the stored path is empty until
-	// the session is persisted on close.
+	// WebSocket frames decoded so far and not yet written, plus their subscribers. Frames
+	// are immutable once decoded, so this is append-only until the flusher trims what it
+	// has persisted; with no flusher it holds the whole session, as before.
 	messages []*trafficv1.WsMessage
 	msgSubs  map[int]chan *trafficv1.WsMessage
+
+	// Incremental persistence (ADR-0011), active only when sink is set. Without it the
+	// session accumulates until close — the pushed path, which persists itself, and
+	// record-live off, which re-decodes the pcap instead.
+	sink       flushSink
+	sessionID  string
+	analysisID string
+	onFlushErr func(sessionID string, err error)
+	wake       chan struct{}
+	stopFlush  chan struct{}
+	flushDone  chan struct{}
+
+	// Flush bookkeeping, guarded by mu. dirty is what changed since the last flush;
+	// pending is what has been written but whose bodies are still arriving; stored is
+	// what has been written in full and released from memory.
+	dirty    map[string]struct{}
+	pending  map[string]struct{}
+	stored   map[string]storedBody
+	flushErr error
 }
 
 func (h *liveHub) get(sessionID string) *liveSession {
@@ -81,11 +116,30 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		dflows:     map[string]*decode.Flow{},
 		subs:       map[int]chan *trafficv1.FlowEvent{},
 		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+		sessionID:  sessionID,
+		dirty:      map[string]struct{}{},
+		pending:    map[string]struct{}{},
+		stored:     map[string]storedBody{},
+		wake:       make(chan struct{}, 1),
+		stopFlush:  make(chan struct{}),
+		flushDone:  make(chan struct{}),
 	}
-
 	h.mu.Lock()
+	sink, analysisFor, onFlushErr := h.sink, h.analysisFor, h.onFlushErr
 	h.sessions[sessionID] = ls
 	h.mu.Unlock()
+
+	// Record-live persists as it goes; the analysis those rows reference is created up
+	// front rather than at close, since they now reference it throughout the capture
+	// (ADR-0011 §7). Without one the session simply accumulates until close, as before.
+	if h.recordLive && sink != nil && analysisFor != nil {
+		if aid, err := analysisFor(sessionID); err == nil {
+			ls.sink, ls.analysisID, ls.onFlushErr = sink, aid, onFlushErr
+			ls.startFlusher()
+		} else {
+			log.Printf("session %s: no analysis; keeping flows in memory until close: %v", sessionID, err)
+		}
+	}
 
 	go func() {
 		defer close(ls.done)
@@ -136,6 +190,9 @@ func (h *liveHub) stop(sessionID string) *liveSession {
 		_ = ls.pw.Close()
 		<-ls.done
 	}
+	// End the flush loop before the caller runs the final flush, so the two can't race
+	// over the dirty set.
+	ls.stopFlusher()
 
 	ls.mu.Lock()
 	closedEv := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
@@ -315,9 +372,12 @@ func (ls *liveSession) protoFlows() []*trafficv1.Flow {
 func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
 	if ls.recordLive {
 		// Retain the full-body decode flow (the proto below is a capped preview for
-		// streaming). f is updated in place across calls, so this holds its final state.
+		// streaming). Snapshot rather than keep f: the decoder mutates one Flow in place
+		// across callbacks and holds no lock of ours while doing it, so only this
+		// callback is synchronous with it. Keeping the pointer would race with every
+		// later reader — the flusher, and a body read served from the hub.
 		ls.mu.Lock()
-		ls.dflows[f.ID] = f
+		ls.dflows[f.ID] = copyFlow(f)
 		ls.mu.Unlock()
 	}
 	ls.publish(flowToProto(f), isNew)
@@ -347,6 +407,7 @@ func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
 	if f := ls.flows[pm.GetFlowId()]; f != nil {
 		f.Websocket = true
 		f.WsMessageCount++
+		ls.markDirtyLocked(pm.GetFlowId())
 		ev := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: f}}
 		for _, ch := range ls.subs {
 			select {
@@ -396,6 +457,7 @@ func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
 	}
 	_, existed := ls.flows[pf.Id]
 	ls.flows[pf.Id] = pf
+	ls.markDirtyLocked(pf.Id)
 	var ev *trafficv1.FlowEvent
 	if isNew && !existed {
 		ls.order = append(ls.order, pf.Id)

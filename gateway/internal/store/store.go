@@ -281,8 +281,47 @@ func (s *Store) CreateAnalysis(ctx context.Context, na NewAnalysis) error {
 	return err
 }
 
-// InsertFlows writes flows and their headers into the session bundle in one tx.
+// BodyDisposition says how a flow's body bytes should be treated when it is written.
+type BodyDisposition int
+
+const (
+	// BodiesFinal stores the flow's body bytes and sets its refs. The default, and what
+	// every non-live path uses: a batch decode and a pushed flow both arrive complete.
+	BodiesFinal BodyDisposition = iota
+	// BodiesPending leaves the body refs NULL because the body is still arriving. Writing
+	// it now would content-address a prefix and strand that blob when the body grows
+	// (ADR-0011 §3b) — blobs are never deleted, so the only safe move is not to write one.
+	BodiesPending
+	// BodiesStored reuses refs written by an earlier flush, for a flow whose bytes have
+	// since been released from memory. Without this a re-flush would null the refs and
+	// orphan the body it already wrote.
+	BodiesStored
+)
+
+// FlowWrite is one flow to persist plus how to treat its bodies. On return from
+// InsertFlowWrites, ReqRef/RespRef hold the refs actually written, so a caller that
+// releases the bytes afterwards can quote them back with BodiesStored.
+type FlowWrite struct {
+	Flow    *decode.Flow
+	Bodies  BodyDisposition
+	ReqRef  string
+	RespRef string
+}
+
+// InsertFlows writes flows and their headers into the session bundle in one tx, storing
+// each flow's bodies. For the live path, which writes a flow before its body is complete,
+// see InsertFlowWrites.
 func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, flows []*decode.Flow) (int, error) {
+	writes := make([]FlowWrite, len(flows))
+	for i, f := range flows {
+		writes[i] = FlowWrite{Flow: f, Bodies: BodiesFinal}
+	}
+	return s.InsertFlowWrites(ctx, sessionID, analysisID, writes)
+}
+
+// InsertFlowWrites writes flows and their headers in one tx, honouring each write's body
+// disposition. It updates writes[i].ReqRef/RespRef with the refs written.
+func (s *Store) InsertFlowWrites(ctx context.Context, sessionID, analysisID string, writes []FlowWrite) (int, error) {
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return 0, err
@@ -298,19 +337,28 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 	stmts := newTxStmts(ctx, tx)
 	defer stmts.close()
 
-	for _, f := range flows {
+	for wi := range writes {
+		w := &writes[wi]
+		f := w.Flow
 		id := f.ID
 		if id == "" {
 			id = uuid.NewString()
 		}
-		reqRef, err := s.storeBlob(stmts, sessionID, f.RequestBody, ctFromHeaders(f.RequestHeaders))
-		if err != nil {
-			return 0, err
+		var reqRef, respRef string
+		switch w.Bodies {
+		case BodiesPending:
+			// Refs stay NULL; the bytes are still in the hub and are written once final.
+		case BodiesStored:
+			reqRef, respRef = w.ReqRef, w.RespRef
+		default:
+			if reqRef, err = s.storeBlob(stmts, sessionID, f.RequestBody, ctFromHeaders(f.RequestHeaders)); err != nil {
+				return 0, err
+			}
+			if respRef, err = s.storeBlob(stmts, sessionID, f.ResponseBody, ctFromHeaders(f.ResponseHeaders)); err != nil {
+				return 0, err
+			}
 		}
-		respRef, err := s.storeBlob(stmts, sessionID, f.ResponseBody, ctFromHeaders(f.ResponseHeaders))
-		if err != nil {
-			return 0, err
-		}
+		w.ReqRef, w.RespRef = reqRef, respRef
 		var pAddr, pType, pUser, pPass string
 		if f.Proxy != nil {
 			pAddr, pType, pUser, pPass = f.Proxy.Addr, f.Proxy.Type, f.Proxy.Username, f.Proxy.Password
@@ -362,7 +410,7 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	return len(flows), nil
+	return len(writes), nil
 }
 
 // insertMetadata writes a flow's opaque source-supplied key/value metadata.

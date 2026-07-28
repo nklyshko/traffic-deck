@@ -99,3 +99,41 @@ def test_render_marks_copy_target_side():
     assert "▸ A" in left
     _, right = _render(a, b, focus="B")
     assert "▸ B" in right
+
+
+# --- request-body diff (ADR-0011 §3a) -------------------------------------
+
+
+def _render_bodies(a, b, ba, bb):
+    """Render with explicit fetched request bodies (what _fetch_body returns)."""
+    screen = CompareScreen.__new__(CompareScreen)
+    screen._side = "A"
+    screen._ba, screen._bb = ba, bb
+    left, right = CompareScreen._render_columns(screen, a, b)
+    return left.plain, right.plain
+
+
+def _bodyless(size):
+    """A flow whose body is in the bundle: it has a size but carries no inline bytes."""
+    f = flow([("accept", "*/*")])
+    f.request_body = types.SimpleNamespace(size=size, inline=b"")
+    return f
+
+
+def test_different_bodies_are_not_reported_equal_when_inline_is_empty():
+    """Once a body lives in the bundle, `.inline` is empty for every flow. Comparing it
+    would read two different bodies as identical — a wrong answer, not an error."""
+    left, _ = _render_bodies(_bodyless(11), _bodyless(11), b"hello world", b"world hello")
+    assert "Request body  \u2717 differ" in left
+    assert "Request body  \u2713 match" not in left
+
+
+def test_identical_fetched_bodies_match():
+    left, _ = _render_bodies(_bodyless(5), _bodyless(5), b"hello", b"hello")
+    assert "Request body  \u2713 match" in left
+
+
+def test_unreadable_body_is_reported_not_assumed_equal():
+    left, right = _render_bodies(_bodyless(9), _bodyless(9), None, None)
+    assert "unreadable" in left and "unreadable" in right
+    assert "Request body  \u2713 match" not in left

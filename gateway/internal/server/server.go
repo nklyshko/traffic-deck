@@ -269,30 +269,48 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 		return srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_MessageAdded{MessageAdded: m}})
 	}
 
-	// Backfill from the store (populated once the session is persisted on close).
+	// Subscribe *before* reading the store, so a frame the flusher moves from the hub to
+	// the bundle mid-read lands in one of the two rather than falling between them. The
+	// cost is that a frame can appear in both, which the id set below drops — a duplicate
+	// is recoverable, a gap in a live timeline is not.
+	var (
+		ls       *liveSession
+		snapshot []*trafficv1.WsMessage
+		ch       chan *trafficv1.WsMessage
+	)
+	if req.GetFollow() {
+		if ls = v.waitForLive(srv.Context(), req.GetSessionId()); ls != nil {
+			var cancel func()
+			snapshot, ch, cancel = ls.subscribeMessages(req.GetFlowId())
+			defer cancel()
+		}
+	}
+
+	// Backfill from the store: everything already flushed, plus the whole session once
+	// it is closed.
 	stored, err := v.st.ListMessages(srv.Context(), req.GetSessionId(), req.GetFlowId())
 	if err != nil {
 		return storeStatus(err, "list messages")
 	}
+	sent := make(map[string]bool, len(stored))
 	for _, m := range stored {
 		if err := send(m); err != nil {
 			return err
 		}
+		sent[m.GetId()] = true
 	}
 
-	if !req.GetFollow() {
-		return nil
-	}
-	ls := v.waitForLive(srv.Context(), req.GetSessionId())
-	if ls == nil {
+	if !req.GetFollow() || ls == nil {
 		return nil // not live; the backfill is all there is
 	}
-	snapshot, ch, cancel := ls.subscribeMessages(req.GetFlowId())
-	defer cancel()
 	for _, m := range snapshot {
+		if sent[m.GetId()] {
+			continue // already served from the bundle
+		}
 		if err := send(m); err != nil {
 			return err
 		}
+		sent[m.GetId()] = true
 	}
 	for {
 		select {
@@ -311,9 +329,13 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 			if m.GetFlowId() != req.GetFlowId() {
 				continue // other flows share the channel; only forward this flow's frames
 			}
+			if sent[m.GetId()] {
+				continue // already served from the bundle or the snapshot
+			}
 			if err := send(m); err != nil {
 				return err
 			}
+			sent[m.GetId()] = true
 		}
 	}
 }
@@ -374,8 +396,13 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	// now; only services with no owning capture type auto-start at launch.
 	mgr.SetModuleStarter(svcs.StartModule)
 	svcs.StartAuto()
+	ingest := NewIngest(st, obj, tshark, hub, liveDecode, recordLive, tsharkVerify)
+	// Incremental persistence (ADR-0011): the hub's flushers write through the store,
+	// take their analysis from the ingest side, and end the capture if a write fails.
+	ingest.stopCapture = mgr.StopCapture
+	hub.setPersistence(st, ingest.liveAnalysis, ingest.onFlushError)
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
-	trafficv1.RegisterIngestServiceServer(s, NewIngest(st, obj, tshark, hub, liveDecode, recordLive, tsharkVerify))
+	trafficv1.RegisterIngestServiceServer(s, ingest)
 	trafficv1.RegisterControlServiceServer(s, NewControl(st, obj, dataRoot, tshark, mgr, svcs))
 	return mgr, svcs
 }
