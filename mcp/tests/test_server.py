@@ -637,6 +637,75 @@ def test_search_flows_pages_and_reports_total(monkeypatch):
     assert [f["id"] for f in out["flows"]] == ["f0", "f1"]
     tail = asyncio.run(S.search_flows("s1", "~c 200", limit=2, offset=4))
     assert tail["count"] == 1 and tail["next_offset"] is None
+    # A filter that matched carries no recovery payload.
+    assert "filter_syntax" not in out and "hints" not in out
+
+
+# --- filter syntax diagnostics -------------------------------------------
+
+def _run_search_flows(monkeypatch, flows, expr):
+    import asyncio
+
+    fake = _SearchClient({"s1": flows})
+
+    async def _names():
+        return {}, {}
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_name_maps", _names)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    return asyncio.run(S.search_flows("s1", expr))
+
+
+def test_search_flows_empty_result_returns_the_syntax_reference(monkeypatch):
+    out = _run_search_flows(monkeypatch, _seq(5, status=200), "~d nosuchhost\\.example")
+    assert out["total"] == 0
+    assert out["session_flow_count"] == 5          # the session itself wasn't empty
+    assert "no boolean operators" in " ".join(out["filter_syntax"].lower().split())
+    assert out["hints"]                            # a nudge on how to narrow down
+
+
+def test_search_flows_empty_session_says_so_rather_than_blaming_the_filter(monkeypatch):
+    out = _run_search_flows(monkeypatch, [], "~c 200")
+    assert out["session_flow_count"] == 0
+    assert "no flows at all" in out["hints"][0]
+
+
+def test_search_flows_flags_ampersand_as_a_non_operator(monkeypatch):
+    """The mistake that motivated this: `&` parses fine (as a URL regex), so without a
+    hint the caller just sees an empty result and retries the same shape."""
+    out = _run_search_flows(monkeypatch, _seq(3, status=200), "~d h & ~s 200")
+    joined = " ".join(out["hints"])
+    assert "`&` is not an operator" in joined
+    assert "~c 200" in joined                      # the bare 200 is called out too
+
+
+def test_search_flows_hints_fire_even_when_the_filter_matched(monkeypatch):
+    """`&` degrades into a URL regex, so a query string containing "&" still matches —
+    a silently wrong result, which is exactly when the hint matters most."""
+    flows = [_flow(id="f0", authority="h", path="/p", query="a=1&b=2", scheme="https")]
+    out = _run_search_flows(monkeypatch, flows, "~d h & ~q")
+    assert out["total"] == 1                       # matched, wrongly
+    assert any("not an operator" in h for h in out["hints"])
+    assert "filter_syntax" not in out              # only attached on an empty result
+
+
+def test_search_flows_flags_quoted_arguments(monkeypatch):
+    out = _run_search_flows(monkeypatch, _seq(3, status=200), "~d 'h'")
+    assert any("quoted" in h for h in out["hints"])
+
+
+def test_search_flows_bad_expression_error_carries_the_syntax(monkeypatch):
+    try:
+        _run_search_flows(monkeypatch, _seq(1, status=200), "~d")
+    except ValueError as e:
+        assert "~d needs an argument" in str(e)
+        assert "Terms taking NO argument" in str(e)
+    else:
+        raise AssertionError("a term missing its argument should raise")
 
 
 # --- compare_flows --------------------------------------------------------

@@ -80,8 +80,17 @@ key/value).
 The filter (`f`) is mitmproxy-style: `~m ~d ~u ~c ~t` (method, domain, url, status,
 content-type), connection identity `~conn ~stream`, annotations `~fav ~mark ~tag
 ~group ~comment`, source metadata `~meta <key>=<re>`, `~s`/`~q` (has/no response). A
-naked regex matches the URL and `!` negates a term; terms are ANDed. The cheat sheet
-shows while the filter input is focused.
+naked regex matches the URL and `!` negates a term. The cheat sheet shows while the
+filter input is focused.
+
+Terms are separated by **spaces** and ANDed — there are no boolean operators. `&`, `|`,
+`and`, `or` and parentheses are not part of the grammar, and a stray one is matched as a
+regex against the URL rather than rejected, so `~d example\.com & ~c 200` quietly filters
+on something else. Arguments are unquoted regexes (`~d api\.example\.com`, not
+`~d 'api\.example\.com'` — the quotes would match literally), and `~s`/`~q`/`~fav` take
+no argument, so a status code goes in `~c 200`, never `~s 200`. Anything the parser
+accepts but that looks like one of these mistakes is reported as a warning when the
+filter is applied.
 
 #### HTTP/2 connections and streams
 
@@ -91,7 +100,8 @@ and its stream id within that connection. The flow detail always shows them
 (`conn=12  stream=5`), and the flow table has optional `Conn`/`Stream` columns — one
 `Conn` value repeated across rows with different `Stream` values *is* connection reuse.
 Filter with `~conn`/`~stream` to isolate one connection's streams (both are regexes
-like every other term, so anchor to pin an exact id: `~conn '^12$'`).
+like every other term, so anchor to pin an exact id: `~conn ^12$` — unquoted, since
+arguments are not quote-parsed).
 
 The pcap-based sources (`capture_chrome`, `capture_android`) show both columns by
 default — they decode the frames off the wire, so the ids are the client's real ones.

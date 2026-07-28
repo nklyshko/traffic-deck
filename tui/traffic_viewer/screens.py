@@ -26,7 +26,7 @@ from traffic_viewer.client import control_pb2 as cpb
 from textual.widgets.option_list import Option
 from rich.text import Text
 
-from .filters import FILTER_HELP, compile_filter
+from .filters import FILTER_HELP, compile_filter, filter_hints
 from .render import (
     MARK_COLORS,
     SESSION_STATUS,
@@ -1157,6 +1157,11 @@ class SessionPane(AnnotatableTable, Vertical):
             self.notify(f"bad filter: {exc}", severity="error")
             return
         self._apply_filter()
+        # A term the grammar accepts but that means something else (`&`, a bare status
+        # code, quoted args) filters on the wrong thing instead of failing, so warn even
+        # when rows came back — a silently wrong result is the case worth catching.
+        for hint in filter_hints(event.value):
+            self.notify(hint, title="filter", severity="warning")
         self.query_one("#flows", DataTable).focus()
 
     def _apply_filter(self) -> None:

@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from traffic_viewer.filters import compile_filter
+from traffic_viewer.filters import compile_filter, filter_hints
 
 
 def comment(body):
@@ -140,3 +140,46 @@ def test_bad_regex_raises():
 def test_field_missing_argument_raises():
     with pytest.raises(ValueError):
         compile_filter("~m")
+
+
+# --- syntax hints ---------------------------------------------------------
+# These cover mistakes the grammar accepts (every stray token is legal as a URL regex),
+# so they filter on the wrong thing instead of raising — the reason hints exist at all.
+
+
+def test_no_hints_for_a_well_formed_filter():
+    assert filter_hints("~d example\\.com ~u /product/ ~c 200") == []
+    assert filter_hints("") == []
+    assert filter_hints("~conn ^12$ ~meta pool=eu") == []
+
+
+def test_boolean_operators_are_flagged():
+    for expr in ("~d h & ~c 200", "~d h | ~c 200", "~d h and ~c 200", "~d h AND ~c 200"):
+        assert any("not an operator" in h for h in filter_hints(expr)), expr
+
+
+def test_bare_status_code_is_flagged():
+    # `~s` takes no argument, so the 200 lands as a naked URL regex.
+    hints = filter_hints("~d h ~s 200")
+    assert any("~c 200" in h for h in hints)
+    # A 3-digit run that really is a URL regex argument is not a bare token.
+    assert filter_hints("~u /v1/200/ok") == []
+
+
+def test_quoted_arguments_are_flagged():
+    assert any("quoted" in h for h in filter_hints("~conn '^12$'"))
+    assert any("quoted" in h for h in filter_hints('~d "example.com"'))
+
+
+def test_parentheses_are_flagged():
+    assert any("parenthes" in h for h in filter_hints("(~d h ~c 200)"))
+
+
+def test_hints_survive_a_negated_term():
+    assert any("not an operator" in h for h in filter_hints("!~u xpvnsulc & ~c 200"))
+
+
+def test_hints_are_empty_for_an_unparseable_expression():
+    # A missing argument is a real error raised by compile_filter; hints stay quiet
+    # rather than guessing at a half-parsed expression.
+    assert filter_hints("~d") == []

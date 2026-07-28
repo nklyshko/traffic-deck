@@ -19,7 +19,7 @@ import grpc
 from mcp.server.fastmcp import FastMCP
 
 from traffic_mcp.client import GatewayClient
-from traffic_mcp.filter import compile_filter, flow_url
+from traffic_mcp.filter import FILTER_SYNTAX, compile_filter, filter_hints, flow_url
 
 mcp = FastMCP("trafficdeck-mcp", host=os.environ.get("MCP_HOST", "127.0.0.1"),
               port=int(os.environ.get("MCP_PORT", "8765")))
@@ -667,28 +667,61 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
                        offset: int = 0) -> dict:
     """Search a session's flows with a mitmproxy-style filter expression.
 
-    Terms (ANDed, `!` negates): ~m method, ~d host, ~u url, ~c status, ~t content-type,
-    ~s/~q has/no response, ~fav, ~mark <color>, ~tag <name>, ~group <name>,
-    ~comment <regex>; a naked regex matches the URL. Each term's argument is a regex, so
-    ~c 40[13] matches 401 or 403 and ~c 4.. matches any 4xx. Empty filter returns all
-    flows.
+    SYNTAX: terms are separated by SPACES and ANDed automatically. There are NO boolean
+    operators — `&`, `|`, `and`, `or` and parentheses are not supported, and a stray one
+    is silently treated as another regex matched against the URL. `!` before a term
+    negates it. Arguments are unquoted regexes (quotes would be matched literally, and
+    `.` matches any character, so escape dots).
 
-    Returns {total, count, offset, next_offset, flows:[…]} — flow summaries, no
-    headers/bodies (use get_flow for those). `total` is the number of flows matching the
-    filter; page with `offset`/`limit` (default 100, max 500). For field matching, status
-    sets, time windows and header/body content search prefer the structured `search` tool.
+    Terms taking a <regex>: ~m method, ~d domain (the host alone, no scheme/path),
+    ~u full URL (scheme://domain/path?query), ~c status code, ~t content-type,
+    ~mark <color>, ~tag <name>, ~group <name>, ~comment <text>.
+    Terms taking NO argument: ~s has a response, ~q has no response, ~fav favorited.
+    A bare regex with no ~term matches the URL — so a lone `200` matches URLs containing
+    "200" and does NOT filter by status; `~c 200` does.
+
+    Correct:   ~d vseinstrumenti\\.ru ~u /product/ ~c 200
+    Incorrect: ~u vseinstrumenti.ru & ~s 200   (`&` is not an operator; `~s` takes no
+               argument, so `200` became a URL regex — use `~c 200`)
+
+    Empty filter returns all flows. Returns {total, count, offset, next_offset, flows:[…]}
+    — flow summaries, no headers/bodies (use get_flow for those). `total` is the number of
+    flows matching the filter; page with `offset`/`limit` (default 100, max 500). A filter
+    that matches nothing comes back with `filter_syntax` (the full reference) and
+    `session_flow_count`, and anything suspicious in the expression is reported in `hints`
+    whether or not it matched. For status sets, time windows and header/body content
+    search prefer the structured `search` tool.
     """
     limit = max(1, min(limit, _LIMIT_MAX))
     offset = max(0, offset)
-    flows = await client().list_flows(await _resolve_session(session_id))
+    all_flows = await client().list_flows(await _resolve_session(session_id))
     tagnames, groupnames = await _name_maps()
-    pred = compile_filter(filter, tagnames, groupnames)  # raises ValueError on bad expr
-    if pred is not None:
-        flows = [f for f in flows if pred(f)]
+    try:
+        pred = compile_filter(filter, tagnames, groupnames)
+    except ValueError as e:
+        # A rejected filter is the one moment the caller is certain to re-read: hand back
+        # the whole reference with the error rather than just the offending token.
+        raise ValueError(f"{e}\n\n{FILTER_SYNTAX}") from None
+    flows = [f for f in all_flows if pred(f)] if pred is not None else all_flows
     page = flows[offset:offset + limit]
-    return {"total": len(flows), "count": len(page), "offset": offset,
-            "next_offset": offset + len(page) if offset + len(page) < len(flows) else None,
-            "flows": [_flow_summary(f, tagnames, groupnames) for f in page]}
+    out = {"total": len(flows), "count": len(page), "offset": offset,
+           "next_offset": offset + len(page) if offset + len(page) < len(flows) else None,
+           "flows": [_flow_summary(f, tagnames, groupnames) for f in page]}
+    # Terms the grammar accepts but that plainly mean something else (`&`, a bare status
+    # code, quoted arguments) still match *something*, so report them even on a hit.
+    if hints := filter_hints(filter):
+        out["hints"] = hints
+    if not flows and pred is not None:
+        # Nothing matched: say whether the session was empty to begin with, and include
+        # the syntax so a caller that guessed the dialect wrong can fix it in one step.
+        out["session_flow_count"] = len(all_flows)
+        out["filter_syntax"] = FILTER_SYNTAX
+        if not hints:
+            out.setdefault("hints", []).append(
+                "the filter parsed but matched nothing — check it against the syntax "
+                "below, then drop one term at a time to find which excludes everything"
+                if all_flows else "this session has no flows at all")
+    return out
 
 
 @mcp.tool()
