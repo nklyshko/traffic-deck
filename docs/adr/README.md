@@ -15,3 +15,4 @@ reasoning at the time. Format: Context → Decision → Consequences.
 | [0008](0008-independent-capture-apps.md) | Capture tools are independent apps over a shared SDK |
 | [0009](0009-native-live-decode-default.md) | The native in-process decoder is the default, authoritative path |
 | [0010](0010-supervisor-and-capture-modules.md) | The gateway supervises capture; viewers are clients |
+| [0011](0011-incremental-flow-persistence.md) | Live-decoded flows persist incrementally, not on close *(proposed)* |
