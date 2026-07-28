@@ -115,6 +115,12 @@ meaning. A bidi page-request stream was rejected for the reason
 [0010](0010-supervisor-and-capture-modules.md) already gave when it chose unary calls over
 a command stream — a unary call is far easier to debug than correlating responses.
 
+`StreamFlowsRequest.include_backfill` goes at the same time. It is already dead — both
+clients set it and the server has never read it, always backfilling — and with backfill
+becoming `QueryFlows`' job there is nothing left for it to have meant. Removing it is
+part of the same breaking change rather than a field carried forward for compatibility
+with behaviour that never existed.
+
 **5. Pagination is keyset; totals are capped and honest.** A live session grows while it
 is read, so `OFFSET` shifts rows under the cursor. Paging on `(ts_micros, frame_number)`
 against the existing `flows_ts_idx` is stable under append and matches the order the table
@@ -125,6 +131,17 @@ reported against the scan cap instead: a total, plus whether the cap was reached
 shows `500+ matching` rather than a precise number it cannot cheaply have — and never a
 number that is quietly wrong. This is MCP's existing `scanned`/`scan_limited` convention
 rather than a new one.
+
+**Navigation never consults that total.** "Last" means the end of the list, not the Nth
+page of a count: it is a query in descending key order from the end, reversed for display.
+First is the same query ascending from the start, and next/prev step the cursor. Every
+movement is therefore answerable without knowing how many rows match, which is what lets
+the total stay approximate without making the UI lie. It also makes "jump to last" and
+follow mode the same operation — both are the tail of the matching set.
+
+The consequence is that *page numbers* stop being meaningful, and the viewer should stop
+implying them. A window into a list has a position ("showing 250 of 500+"), not an index
+("page 3 of 12"), because the denominator is exactly the thing that is unknowable cheaply.
 
 **6. Membership changes are explicit: a flow that stops matching is retracted.** Once the
 viewer no longer holds the predicate it cannot know that an update pushed a row out of its
@@ -204,6 +221,12 @@ implementations are deleted rather than kept as a compatibility path.
 - The viewer keeps only the flows of the current page, so actions that assumed a
   whole-session model in memory — select-all, cross-page compare — need explicit page or
   server semantics rather than inheriting them.
+- **The flow table stops being paginated and becomes a window.** `_page_count`,
+  `_goto_page` and the `X–Y of Z` subtitle are built on a known total; under a capped
+  count they would have to invent a denominator. They are replaced by cursor movement
+  (first / last / next / prev) and a position, which is both honest and simpler than what
+  they replace — the render-only pagination in `770ce4f` was already a window in
+  everything but its arithmetic.
 - **`FlowEvent` gains a variant, so every event consumer must handle an unknown one.** A
   client that ignores `flow_unmatched` silently shows rows that no longer match — the
   failure is a stale view, not an error, which makes it worth an explicit check in each
