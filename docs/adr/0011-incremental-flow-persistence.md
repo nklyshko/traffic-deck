@@ -246,10 +246,17 @@ on a real capture.
   keep that contained to one capture, and WAL plus `busy_timeout` already cover concurrent
   access — but "a session's DB is only written at close" stops being true, and any code
   that assumed it must be found rather than trusted.
-- **WAL growth needs watching on long captures.** Continuous writes plus a live reader can
-  defer auto-checkpoints, so the `-wal` file may need periodic truncation. Unknown until
-  measured against a multi-hour capture; called out here so it is not discovered as a disk
-  alert.
+- **WAL growth was real, and the cause was not the one anticipated.** This was filed as
+  "watch it on long captures", expecting continuous writes plus a live reader to defer
+  auto-checkpoints. Measured on a real capture, the problem is not the capture at all: the
+  store keeps a session's DB handle pooled for the life of the process, so a *finished*
+  session's log is never folded back in. A two-minute capture left a 4.8 MB `-wal` beside
+  a 6 MB bundle, and it was reclaimed only when the gateway exited — meaning a long-lived
+  gateway carries one stranded log per session it has ever recorded, which is a far worse
+  shape than a single large capture's log. `FinishSession` now checkpoints the bundle when
+  the session reaches a terminal state. Best-effort: a checkpoint blocked by an active
+  reader is reported and left to the next one, since nothing about the session's
+  correctness depends on it.
 - The flush thresholds (128 flows / 2 s) trade memory ceiling against write amplification
   directly, and are starting values to be re-set against a real large session. What is
   committed is that a ceiling exists, not where it currently sits.
