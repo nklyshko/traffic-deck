@@ -79,6 +79,14 @@ body. Bodies are therefore released only for a flow that has gone a full flush c
 without being dirtied, *and* has a status or an error, *and* is not a WebSocket flow.
 Anything still moving keeps its buffer.
 
+The quiet cycle is not belt-and-braces; it is what makes the rule correct. Implementation
+showed that "has a status" alone is *false* as a completion test on HTTP/2: `emitLocked`
+sets the status when the HEADERS frame lands and then emits again for every DATA frame,
+so a flow can carry a status with most of its body still to come. Only a flow that has
+also gone a whole cycle unchanged is actually done — on HTTP/1.1 the two coincide, because
+the body is fully read before the flow is ever emitted with its status, but the rule may
+not be simplified to the status check that path would suggest.
+
 Releasing a body also clears the `inline` bytes from the flow's proto, and that carries a
 hard invariant: **clear `Body.inline`; never clear `Body.size` or `Body.content_type`.**
 The viewer's detail, view and save paths (`_append_body`, `_view_body`, `BodyScreen`) all
@@ -130,6 +138,13 @@ that is exactly the window in which decision 3 keeps it in memory, so `bodyBytes
 from the hub and no reader can tell. A crash mid-stream loses that one body, leaving its
 row with a null ref, which is consistent with the durability this decision claims
 (everything up to the last flush) and strictly better than today's all-or-nothing.
+
+One narrow exception survives, found in implementation. A flow the decoder touches *while
+its write is in flight* has already had a body written that may now be stale; the next
+cycle rewrites it, and if the body grew in that window the first blob is stranded. The
+flusher keeps this to one blob by leaving such a flow owed rather than releasing it, and
+correctness is unaffected — the final body wins — but "no orphans by construction" holds
+for the design, not for every interleaving.
 
 Sweeping unreferenced blobs at close was the alternative, and was rejected: it lets
 orphans accumulate for the whole capture — worst on exactly the long captures this ADR
