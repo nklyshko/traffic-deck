@@ -71,6 +71,26 @@ optimization under it. Terms that map directly to an indexed column — `~d` (au
 full predicate applied to what comes back. Correctness never depends on that push, so it
 can be extended term by term without risk.
 
+**2a. Body content becomes a first-class term, evaluated last.** The DSL has never been
+able to match a body, and not by oversight: filtering ran in the viewer, which holds only
+the bodies it happened to be sent, so the term was unimplementable. Evaluating in the
+gateway puts the predicate in the same process as the bundle that stores them, and the
+term becomes ordinary. Following the mitmproxy naming the rest of the DSL already tracks:
+`~b <re>` matches either direction, `~bq` the request body, `~bs` the response.
+
+It is the one term that cannot be cheap — no index can serve it, and it reads a blob per
+candidate row — so it is ordered last: a body is fetched only for a row that has already
+passed every other term. It is bounded the way MCP's content search is bounded today, and
+for the same reasons: a per-query scan cap, a per-body ceiling above which a body is
+skipped rather than read, and a result that says when either applied.
+
+This retires the parallel mechanism rather than sitting beside it. MCP's `_body_text` /
+`_deep_match` are deleted, and with them the coupling
+[0011](0011-incremental-flow-persistence.md) §3a had to record and could not enforce —
+that `InlineBlobMax` stays below `_SCAN_FETCH_MAX`, or content search silently stops
+matching. Nothing outside the gateway reads `inline` to match a body any more, so the
+hazard stops existing rather than being documented.
+
 **3. Regexes are RE2, and incompatible ones are rejected, not silently re-interpreted.**
 The viewers compile with Python's backtracking `re`; the gateway has Go's RE2. Lookarounds
 and backreferences are accepted today and cannot be. They are refused at compile time with
@@ -147,7 +167,11 @@ implementations are deleted rather than kept as a compatibility path.
   porting. This is arguably the stronger reason to do this — the memory saving is what
   forced the question, not what makes it right.
 - MCP's `network_timeline` `offset`/`limit` becomes real pagination instead of a slice of
-  a fully-materialized session, and `search` gains the same page semantics.
+  a fully-materialized session, and `search` gains the same page semantics — its content
+  criteria becoming DSL terms (§2a) rather than a second search path.
+- **The viewer gains body filtering it has never had.** That is a new capability falling
+  out of the move, not a stated goal of it, and it is the clearest user-visible reason
+  this is worth doing beyond the memory ceiling.
 - **The RE2 restriction is user-visible and cannot be hidden.** A filter using a lookahead
   works today and will be refused. That is acceptable only because it is refused loudly;
   the failure mode to avoid is a filter that quietly matches a different set than it used
