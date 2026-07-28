@@ -95,33 +95,82 @@ func (v *Viewer) liveFlow(ctx context.Context, sessionID, flowID string) *traffi
 // session is live — streams a snapshot + subsequent live flow events until the
 // session closes or the client disconnects.
 func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerStreamingServer[trafficv1.FlowEvent]) error {
-	flows, err := v.st.ListFlows(srv.Context(), req.GetSessionId())
+	sid := req.GetSessionId()
+	pred, err := v.compileFilter(srv.Context(), sid, req.GetFilter())
+	if err != nil {
+		return err
+	}
+	tagNames, groupNames, _ := v.st.AnnotationNames(srv.Context(), sid)
+
+	// The filter is evaluated here, in the subscription's own goroutine, rather than on
+	// the publish path: a per-subscriber predicate on publish would put that work behind
+	// the mutex the decoder publishes through, which is the one place it must not go.
+	matches := func(f *trafficv1.Flow) bool {
+		if pred == nil {
+			return true
+		}
+		ff := filterFlowFromProto(f, tagNames, groupNames)
+		return pred.Match(&ff)
+	}
+	// shown tracks what this subscription has been told about, which is what makes a
+	// retraction possible: only the gateway can see that an update pushed a flow out of
+	// a filtered view, since the viewer no longer holds the predicate (ADR-0012 §6).
+	shown := map[string]bool{}
+	send := func(ev *trafficv1.FlowEvent) error {
+		var f *trafficv1.Flow
+		switch e := ev.GetEvent().(type) {
+		case *trafficv1.FlowEvent_FlowAdded:
+			f = e.FlowAdded
+		case *trafficv1.FlowEvent_FlowUpdated:
+			f = e.FlowUpdated
+		default:
+			return srv.Send(ev) // session events and progress are not filtered
+		}
+		id := f.GetId()
+		switch {
+		case matches(f):
+			if !shown[id] {
+				// First time this subscription sees it — an update that brought a flow
+				// *into* the view is an add for a viewer that never had the row.
+				shown[id] = true
+				return srv.Send(&trafficv1.FlowEvent{
+					Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}})
+			}
+			return srv.Send(&trafficv1.FlowEvent{
+				Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: f}})
+		case shown[id]:
+			delete(shown, id)
+			return srv.Send(&trafficv1.FlowEvent{
+				Event: &trafficv1.FlowEvent_FlowUnmatched{FlowUnmatched: id}})
+		}
+		return nil // never shown and still not matching: nothing to say
+	}
+
+	flows, err := v.st.ListFlows(srv.Context(), sid)
 	if err != nil {
 		return storeStatus(err, "list flows")
 	}
-	sent := make(map[string]bool, len(flows))
 	for _, f := range flows {
-		if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
+		if err := send(&trafficv1.FlowEvent{
+			Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
 			return err
 		}
-		sent[f.GetId()] = true
 	}
 
 	if !req.GetFollow() {
-		// The live decode paths persist nothing until close, so a non-following reader
-		// (the MCP server, a script) would see an open session as empty. Serve the hub's
-		// flows too — skipping ids the backfill already covered, since the pushed
-		// (mitmproxy) path persists incrementally and so appears in both.
-		return v.sendLiveFlows(srv, req.GetSessionId(), sent)
+		// A non-following reader would otherwise miss an open session's unflushed tail,
+		// which is not in the bundle yet. Skipping ids the backfill already covered, since
+		// the pushed (mitmproxy) path persists incrementally and so appears in both.
+		return v.sendLiveFlows(srv, sid, shown, send)
 	}
-	ls := v.waitForLive(srv.Context(), req.GetSessionId())
+	ls := v.waitForLive(srv.Context(), sid)
 	if ls == nil {
 		return nil // not a live session; backfill is all there is
 	}
 	snapshot, ch, cancel := ls.subscribe()
 	defer cancel()
 	for _, ev := range snapshot {
-		if err := srv.Send(ev); err != nil {
+		if err := send(ev); err != nil {
 			return err
 		}
 	}
@@ -133,7 +182,7 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 			if !ok {
 				return nil // session closed
 			}
-			if err := srv.Send(ev); err != nil {
+			if err := send(ev); err != nil {
 				return err
 			}
 		}
@@ -144,20 +193,21 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 // flow_added events, skipping ids already sent from the store, with the bundle's
 // annotations folded in. A no-op when the session isn't live. Annotation attach is
 // best-effort: the flows are still worth sending if that read fails.
-func (v *Viewer) sendLiveFlows(srv grpc.ServerStreamingServer[trafficv1.FlowEvent], sessionID string, sent map[string]bool) error {
+func (v *Viewer) sendLiveFlows(srv grpc.ServerStreamingServer[trafficv1.FlowEvent], sessionID string,
+	sent map[string]bool, send func(*trafficv1.FlowEvent) error) error {
 	ls := v.hub.get(sessionID)
 	if ls == nil {
 		return nil
 	}
 	var live []*trafficv1.Flow
-	for _, f := range ls.liveFlows() {
+	for _, f := range ls.unflushedFlows() {
 		if !sent[f.GetId()] {
 			live = append(live, f)
 		}
 	}
 	_ = v.st.AttachFlowAnnotations(srv.Context(), sessionID, live...)
 	for _, f := range live {
-		if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
+		if err := send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
 			return err
 		}
 	}

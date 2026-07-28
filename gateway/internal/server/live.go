@@ -596,3 +596,27 @@ func contentType(hs []decode.Header) string {
 	}
 	return ""
 }
+
+// unflushedFlows returns clones of the flows the flusher has not written to the bundle
+// yet — the tail a stored query must merge, since the bundle does not have them
+// (ADR-0012 §8). A session with no flusher has no such tail to distinguish, so every live
+// flow is a candidate and the caller dedupes.
+func (ls *liveSession) unflushedFlows() []*trafficv1.Flow {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := make([]*trafficv1.Flow, 0, 8)
+	for _, id := range ls.order {
+		if ls.sink != nil {
+			if _, written := ls.pending[id]; written {
+				continue
+			}
+			if _, written := ls.stored[id]; written {
+				continue
+			}
+		}
+		if f := ls.flows[id]; f != nil {
+			out = append(out, proto.Clone(f).(*trafficv1.Flow))
+		}
+	}
+	return out
+}
