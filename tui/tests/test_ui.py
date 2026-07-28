@@ -6,8 +6,10 @@ covered by test_render.py / test_filters.py."""
 from __future__ import annotations
 
 import asyncio
+import os
 
-from textual.widgets import DataTable, Input, OptionList, Static, TabPane
+from textual.app import App, ComposeResult
+from textual.widgets import DataTable, Input, Label, OptionList, Static, TabPane
 
 import traffic_viewer.client  # noqa: F401 — puts the generated stubs on sys.path
 from traffic_viewer import screens
@@ -982,8 +984,9 @@ async def test_flow_list_jump_and_page_keys():
         table = await _open_flows(pilot)
         assert table.row_count == 3 and table.cursor_coordinate.row == 0
 
-        for key, want in [("end", 2), ("home", 0), ("ctrl+down", 2), ("ctrl+up", 0),
-                          ("cmd+down", 2), ("cmd+up", 0)]:
+        assert isinstance(table, screens.NavDataTable)
+
+        for key, want in [("end", 2), ("home", 0), ("ctrl+down", 2), ("ctrl+up", 0)]:
             await pilot.press(key)
             await pilot.pause()
             assert table.cursor_coordinate.row == want, f"{key} -> {table.cursor_coordinate.row}, want {want}"
@@ -995,6 +998,64 @@ async def test_flow_list_jump_and_page_keys():
         await pilot.press("pageup")
         await pilot.pause()
         assert table.cursor_coordinate.row == 0
+
+
+class _NavTableApp(App):
+    """Bare host for a NavDataTable, so paging can be asserted against a viewport small
+    enough that one page is short of the whole list."""
+
+    def compose(self) -> ComposeResult:
+        table = screens.NavDataTable(id="rows", cursor_type="row")
+        table.add_column("n")
+        for i in range(50):
+            table.add_row(str(i))
+        yield table
+
+
+async def test_nav_table_cmd_arrows_page():
+    """Cmd+Up/Down page the cursor, matching PageUp/PageDown — a Mac keyboard has no
+    PageUp/PageDown key of its own. They must page, not jump to the first/last row."""
+    app = _NavTableApp()
+    async with app.run_test(size=(40, 12)) as pilot:
+        table = app.query_one("#rows", screens.NavDataTable)
+        await pilot.pause()
+
+        await pilot.press("pagedown")
+        await pilot.pause()
+        want = table.cursor_coordinate.row
+        assert 0 < want < 49, f"pagedown landed on row {want}; the list should be longer than a page"
+
+        # ctrl+home/ctrl+end is what a macOS-style remapper (Toshy, or macOS itself)
+        # substitutes for Cmd+↑/↓ before the app ever sees the chord.
+        for down, up in [("cmd+down", "cmd+up"), ("super+down", "super+up"),
+                         ("ctrl+end", "ctrl+home")]:
+            table.move_cursor(row=0)
+            await pilot.pause()
+            await pilot.press(down)
+            await pilot.pause()
+            assert table.cursor_coordinate.row == want, (
+                f"{down} -> row {table.cursor_coordinate.row}, want {want} (same as pagedown)")
+            await pilot.press(up)
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 0, f"{up} -> row {table.cursor_coordinate.row}, want 0"
+
+
+async def test_nav_table_jump_keys_reach_first_and_last_row():
+    """The list start/end jump, on every key that should reach it: Home/End (what most
+    macOS terminals translate Cmd+←/→ into), Ctrl+↑/↓, and Cmd+←/→ delivered as real
+    super+… keys by a kitty-protocol terminal."""
+    app = _NavTableApp()
+    async with app.run_test(size=(40, 12)) as pilot:
+        table = app.query_one("#rows", screens.NavDataTable)
+        await pilot.pause()
+        for last, first in [("end", "home"), ("ctrl+down", "ctrl+up"),
+                            ("cmd+right", "cmd+left"), ("super+right", "super+left")]:
+            await pilot.press(last)
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 49, f"{last} -> row {table.cursor_coordinate.row}, want 49"
+            await pilot.press(first)
+            await pilot.pause()
+            assert table.cursor_coordinate.row == 0, f"{first} -> row {table.cursor_coordinate.row}, want 0"
 
 
 async def test_ws_messages_jump_keys():
@@ -1047,6 +1108,222 @@ async def test_flow_list_follow_mode():
         pane._upsert(_flow("f6", "GET", 200))
         await pilot.pause()
         assert not table.follow and table.cursor_coordinate.row == 0
+
+
+# --- paged flow table -----------------------------------------------------
+#
+# A big session is held whole in memory but rendered a page at a time (rendering every row
+# made a 6000-flow session take minutes to open). These pin down that only a page is
+# drawn, that navigation crosses page boundaries as if it were one list, and — the part
+# paging must not break — that filtering still runs over every flow in the session.
+
+BIG_SESSION_ID = "sess-big"
+_BIG_FLOWS = [_flow(f"b{i:04d}", "POST" if i % 10 == 0 else "GET",
+                    403 if i % 4 == 0 else 200) for i in range(420)]
+_BY_SESSION[BIG_SESSION_ID] = _BIG_FLOWS
+
+
+def _status(pane) -> str:
+    """The pane's status line (flow counts, filter matches, page position) as text."""
+    return pane.query_one("#pane-status", Label).render().plain
+
+
+async def _open_big(pilot, page_size=100):
+    """Open the 420-flow session in a workspace tab, with a small page size."""
+    os.environ["TRAFFICDECK_PAGE_SIZE"] = str(page_size)
+    try:
+        pilot.app.push_screen(WorkspaceScreen(BIG_SESSION_ID, "big"))
+        await settle(pilot)
+    finally:
+        del os.environ["TRAFFICDECK_PAGE_SIZE"]
+    pane = pilot.app.screen.query_one(SessionPane)
+    await focus(pilot, "#flows")
+    return pane, pane.query_one("#flows", DataTable)
+
+
+def test_page_size_env_is_clamped(monkeypatch):
+    monkeypatch.delenv("TRAFFICDECK_PAGE_SIZE", raising=False)
+    assert screens._page_size() == screens._PAGE_SIZE
+    monkeypatch.setenv("TRAFFICDECK_PAGE_SIZE", "300")
+    assert screens._page_size() == 300
+    monkeypatch.setenv("TRAFFICDECK_PAGE_SIZE", "5")       # too small to fill a viewport
+    assert screens._page_size() == 50
+    monkeypatch.setenv("TRAFFICDECK_PAGE_SIZE", "999999")  # back to a repaintable size
+    assert screens._page_size() == 2000
+    monkeypatch.setenv("TRAFFICDECK_PAGE_SIZE", "lots")    # nonsense -> the default
+    assert screens._page_size() == screens._PAGE_SIZE
+
+
+async def test_big_session_renders_one_page_but_loads_every_flow():
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        assert len(pane.flows) == 420          # the whole session is in memory…
+        assert table.row_count == 100          # …only a page of it is rendered
+        assert pane._page == 0 and pane._page_count() == 5
+        assert _status(pane) == "420 flows · showing 1–100 of 420"
+        # The rendered rows are the first page, in order.
+        assert table.get_row_at(0)[7] == "/b0000"
+        assert table.get_row_at(99)[7] == "/b0099"
+
+
+async def test_cursor_walks_off_a_page_onto_the_next():
+    """Paging is invisible to the cursor: ↓ past the last row of a page loads the next one
+    and lands on its first row; ↑ past the first row goes back to the previous page's last."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        table.move_cursor(row=99)              # last row of page 1
+        await pilot.press("down")
+        await settle(pilot)
+        assert pane._page == 1
+        assert table.cursor_coordinate.row == 0
+        assert table.get_row_at(0)[7] == "/b0100"
+
+        await pilot.press("up")                # back over the boundary
+        await settle(pilot)
+        assert pane._page == 0
+        assert table.cursor_coordinate.row == 99
+        assert table.get_row_at(table.cursor_coordinate.row)[7] == "/b0099"
+
+
+async def test_home_and_end_jump_across_the_whole_session():
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await pilot.press("end")
+        await settle(pilot)
+        assert pane._page == pane._page_count() - 1 == 4
+        assert table.cursor_coordinate.row == table.row_count - 1
+        assert table.get_row_at(table.cursor_coordinate.row)[7] == "/b0419"
+
+        await pilot.press("home")
+        await settle(pilot)
+        assert pane._page == 0 and table.cursor_coordinate.row == 0
+        assert table.get_row_at(0)[7] == "/b0000"
+
+
+async def test_page_down_turns_the_page_at_its_end():
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await pilot.press("pagedown")          # moves within the rendered page first
+        await settle(pilot)
+        assert pane._page == 0 and table.cursor_coordinate.row > 0
+        table.move_cursor(row=table.row_count - 1)
+        await pilot.press("pagedown")          # already at the end -> next page
+        await settle(pilot)
+        assert pane._page == 1 and table.cursor_coordinate.row == 0
+
+
+async def test_filter_spans_the_whole_session_not_the_rendered_page():
+    """The point of holding every flow in memory: a filter matches flows that were never
+    rendered, and its result is paged the same way."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        assert table.row_count == 100          # page 1 only
+
+        await focus(pilot, "#filter")
+        pane.query_one("#filter", Input).value = "~m POST"
+        await pilot.press("enter")
+        await settle(pilot)
+
+        # 42 of 420 flows are POSTs, spread over every page — including b0410, which was
+        # never on screen. They all match, and fit on one page now.
+        assert len(pane._view) == 42
+        assert table.row_count == 42
+        assert pane._page == 0 and pane._page_count() == 1
+        assert table.get_row_at(41)[7] == "/b0410"
+        assert "42 matching" in _status(pane)
+
+        # A filter matching more than a page still pages.
+        await focus(pilot, "#filter")
+        pane.query_one("#filter", Input).value = "~c 403"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert len(pane._view) == 105 and table.row_count == 100
+        assert pane._page_count() == 2
+
+        # Clearing it restores the full list, back at page 1.
+        await focus(pilot, "#filter")
+        pane.query_one("#filter", Input).value = ""
+        await pilot.press("enter")
+        await settle(pilot)
+        assert len(pane._view) == 420 and pane._page == 0
+
+
+async def test_paging_within_a_filtered_view():
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#filter")
+        pane.query_one("#filter", Input).value = "~c 403"
+        await pilot.press("enter")
+        await settle(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("end")               # last page of the *filtered* list
+        await settle(pilot)
+        assert pane._page == 1 and table.row_count == 5   # 105 matches, 100 per page
+        # Every rendered row still satisfies the filter.
+        assert all(pane.flows[fid].status == 403 for fid in pane._rendered)
+
+
+async def test_a_flow_from_a_later_page_opens_its_detail():
+    """Row keys stay flow ids across pages, and the detail screen reads the cached flow —
+    so drilling into a flow that isn't on page 1 works."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await pilot.press("end")
+        await settle(pilot)
+        assert pane._focused_flow_id() == "b0419"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, FlowDetailScreen)
+        assert app.screen.flow_id == "b0419"
+
+
+async def test_follow_mode_tails_onto_the_last_page():
+    """Follow means "show me what's arriving": it jumps to the last page and stays there as
+    flows land, even when the user was reading page 1."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        assert pane._page == 0
+        await pilot.press("l")                 # follow on
+        await settle(pilot)
+        assert table.follow
+        assert pane._page == pane._page_count() - 1
+        assert table.cursor_coordinate.row == table.row_count - 1
+
+        pane._upsert(_flow("b9999", "GET", 200))
+        await settle(pilot)
+        assert pane._focused_flow_id() == "b9999"
+
+
+async def test_streamed_flows_do_not_repaint_a_full_page():
+    """The fix that made big sessions openable: arriving flows update the model and are
+    drawn by a flush, and a page that already holds its rows is not repainted again."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        rendered = list(pane._rendered)
+        painted = []
+        original = pane._render_page
+
+        def spy(force=False, cursor="keep"):
+            painted.append((force, cursor))
+            return original(force=force, cursor=cursor)
+
+        pane._render_page = spy
+        for i in range(50):                    # 50 more flows arrive on later pages
+            pane._ingest(_flow(f"z{i:04d}", "GET", 200))
+        pane._flush()
+        await settle(pilot)
+        assert len(pane.flows) == 470          # all ingested…
+        assert pane._rendered == rendered      # …page 1 untouched
+        assert table.row_count == 100
 
 
 async def test_closed_session_shows_no_phantom_stopwatch():
