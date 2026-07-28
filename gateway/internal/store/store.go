@@ -293,16 +293,21 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
+	// One prepared statement per distinct query, reused across every flow — a large
+	// session issues millions of these and re-parsing them dominates otherwise.
+	stmts := newTxStmts(ctx, tx)
+	defer stmts.close()
+
 	for _, f := range flows {
 		id := f.ID
 		if id == "" {
 			id = uuid.NewString()
 		}
-		reqRef, err := s.storeBlob(ctx, tx, sessionID, f.RequestBody, ctFromHeaders(f.RequestHeaders))
+		reqRef, err := s.storeBlob(stmts, sessionID, f.RequestBody, ctFromHeaders(f.RequestHeaders))
 		if err != nil {
 			return 0, err
 		}
-		respRef, err := s.storeBlob(ctx, tx, sessionID, f.ResponseBody, ctFromHeaders(f.ResponseHeaders))
+		respRef, err := s.storeBlob(stmts, sessionID, f.ResponseBody, ctFromHeaders(f.ResponseHeaders))
 		if err != nil {
 			return 0, err
 		}
@@ -314,16 +319,16 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 		// mitmproxy path pushes it request-first, then again on response — upserts to its
 		// latest state instead of hitting the primary-key. The side tables aren't
 		// FK-cascaded, so clear their old rows first (headers have no key; metadata does).
-		if _, err := tx.ExecContext(ctx, `DELETE FROM flow_headers WHERE flow_id=?`, id); err != nil {
+		if err := stmts.exec(`DELETE FROM flow_headers WHERE flow_id=?`, id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM flow_metadata WHERE flow_id=?`, id); err != nil {
+		if err := stmts.exec(`DELETE FROM flow_metadata WHERE flow_id=?`, id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM flow_client_hellos WHERE flow_id=?`, id); err != nil {
+		if err := stmts.exec(`DELETE FROM flow_client_hellos WHERE flow_id=?`, id); err != nil {
 			return 0, err
 		}
-		if _, err := tx.ExecContext(ctx, `
+		if err := stmts.exec(`
 			INSERT OR REPLACE INTO flows (id, session_id, analysis_id, frame_number, ts_micros,
 			    method, scheme, authority, path, query, protocol, status,
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
@@ -341,16 +346,16 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 			f.JA3, f.JA4, f.TLSClientHello, resolveRedirect(f), boolToInt(f.TLSHRR)); err != nil {
 			return 0, err
 		}
-		if err := insertClientHellos(ctx, tx, id, f.ClientHellos); err != nil {
+		if err := insertClientHellos(stmts, id, f.ClientHellos); err != nil {
 			return 0, err
 		}
-		if err := insertHeaders(ctx, tx, id, 0, f.RequestHeaders); err != nil {
+		if err := insertHeaders(stmts, id, 0, f.RequestHeaders); err != nil {
 			return 0, err
 		}
-		if err := insertHeaders(ctx, tx, id, 1, f.ResponseHeaders); err != nil {
+		if err := insertHeaders(stmts, id, 1, f.ResponseHeaders); err != nil {
 			return 0, err
 		}
-		if err := insertMetadata(ctx, tx, id, f.Metadata); err != nil {
+		if err := insertMetadata(stmts, id, f.Metadata); err != nil {
 			return 0, err
 		}
 	}
@@ -361,9 +366,9 @@ func (s *Store) InsertFlows(ctx context.Context, sessionID, analysisID string, f
 }
 
 // insertMetadata writes a flow's opaque source-supplied key/value metadata.
-func insertMetadata(ctx context.Context, tx *sql.Tx, flowID string, md map[string]string) error {
+func insertMetadata(stmts *txStmts, flowID string, md map[string]string) error {
 	for k, v := range md {
-		if _, err := tx.ExecContext(ctx,
+		if err := stmts.exec(
 			`INSERT OR REPLACE INTO flow_metadata (flow_id, key, value) VALUES (?,?,?)`,
 			flowID, k, v); err != nil {
 			return err
@@ -373,9 +378,9 @@ func insertMetadata(ctx context.Context, tx *sql.Tx, flowID string, md map[strin
 }
 
 // insertClientHellos writes a flow's raw ClientHello handshake messages in wire order.
-func insertClientHellos(ctx context.Context, tx *sql.Tx, flowID string, hellos [][]byte) error {
+func insertClientHellos(stmts *txStmts, flowID string, hellos [][]byte) error {
 	for i, raw := range hellos {
-		if _, err := tx.ExecContext(ctx,
+		if err := stmts.exec(
 			`INSERT OR REPLACE INTO flow_client_hellos (flow_id, ord, raw) VALUES (?,?,?)`,
 			flowID, i, raw); err != nil {
 			return err
@@ -384,11 +389,18 @@ func insertClientHellos(ctx context.Context, tx *sql.Tx, flowID string, hellos [
 	return nil
 }
 
-func insertHeaders(ctx context.Context, tx *sql.Tx, flowID string, dir int, hs []decode.Header) error {
-	for i, h := range hs {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO flow_headers (flow_id, direction, ord, name, value) VALUES (?,?,?,?,?)`,
-			flowID, dir, i, h.Name, h.Value); err != nil {
+// insertHeaders writes one direction's headers as multi-row INSERTs of up to
+// headerChunk rows — headers are the highest-volume side table, and one statement per
+// header row is what makes persisting a large session slow. ord stays the header's
+// absolute position, so chunking doesn't disturb wire order.
+func insertHeaders(stmts *txStmts, flowID string, dir int, hs []decode.Header) error {
+	for start := 0; start < len(hs); start += headerChunk {
+		end := min(start+headerChunk, len(hs))
+		args := make([]any, 0, (end-start)*5)
+		for i := start; i < end; i++ {
+			args = append(args, flowID, dir, i, hs[i].Name, hs[i].Value)
+		}
+		if err := stmts.exec(headerInsertSQL[end-start], args...); err != nil {
 			return err
 		}
 	}
@@ -401,7 +413,7 @@ const InlineBlobMax = 1 << 20 // 1 MiB
 
 // storeBlob content-addresses a body and returns its sha256 ("" if empty). Small
 // bodies go inline; large bodies spill to sessions/<id>/blobs/<sha256>.
-func (s *Store) storeBlob(ctx context.Context, tx *sql.Tx, sessionID string, body []byte, contentType string) (string, error) {
+func (s *Store) storeBlob(stmts *txStmts, sessionID string, body []byte, contentType string) (string, error) {
 	if len(body) == 0 {
 		return "", nil
 	}
@@ -409,7 +421,7 @@ func (s *Store) storeBlob(ctx context.Context, tx *sql.Tx, sessionID string, bod
 	sha := hex.EncodeToString(sum[:])
 
 	if len(body) <= InlineBlobMax {
-		_, err := tx.ExecContext(ctx,
+		err := stmts.exec(
 			`INSERT OR IGNORE INTO blobs (sha256, size, content_type, bytes) VALUES (?,?,?,?)`,
 			sha, len(body), contentType, body)
 		return sha, err
@@ -423,7 +435,7 @@ func (s *Store) storeBlob(ctx context.Context, tx *sql.Tx, sessionID string, bod
 	if err := os.WriteFile(abs, body, 0o644); err != nil {
 		return "", err
 	}
-	_, err := tx.ExecContext(ctx,
+	err := stmts.exec(
 		`INSERT OR IGNORE INTO blobs (sha256, size, content_type, external_path) VALUES (?,?,?,?)`,
 		sha, len(body), contentType, rel)
 	return sha, err

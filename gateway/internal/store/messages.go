@@ -24,16 +24,20 @@ func (s *Store) InsertWsMessages(ctx context.Context, sessionID string, msgs []*
 		return 0, err
 	}
 	err = inTx(ctx, db, func(tx *sql.Tx) error {
+		// Same reason as InsertFlows: a chatty WebSocket session is a lot of frames from
+		// three distinct queries, so prepare each once and reuse it.
+		stmts := newTxStmts(ctx, tx)
+		defer stmts.close()
 		for _, m := range msgs {
-			ref, err := s.storeBlob(ctx, tx, sessionID, m.Payload, "")
+			ref, err := s.storeBlob(stmts, sessionID, m.Payload, "")
 			if err != nil {
 				return err
 			}
-			rawRef, err := s.storeBlob(ctx, tx, sessionID, m.Raw, "")
+			rawRef, err := s.storeBlob(stmts, sessionID, m.Raw, "")
 			if err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `
+			if err := stmts.exec(`
 				INSERT INTO ws_messages (id, flow_id, frame_number, ts_micros,
 				    from_client, opcode, payload_len, payload_ref, raw_ref)
 				VALUES (?,?,?,?,?,?,?,?,?)`,
