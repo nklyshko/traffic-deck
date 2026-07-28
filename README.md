@@ -92,6 +92,15 @@ no argument, so a status code goes in `~c 200`, never `~s 200`. Anything the par
 accepts but that looks like one of these mistakes is reported as a warning when the
 filter is applied.
 
+Large sessions open straight away: the flow table renders a page of rows at a time
+(`TRAFFICDECK_PAGE_SIZE`, default 250) while the whole session streams into memory
+behind it, so a 30k-flow session is browsable in well under a second instead of filling
+in row by row. Paging is invisible — `↑`/`↓` and `PageUp`/`PageDown` walk off one page
+onto the next, `Home`/`End` jump to the first/last flow of the session — and the status
+line shows where you are (`30000 flows · showing 1–250 of 30000`). Filtering always runs
+over every flow in the session, not the rendered page, and its matches page the same way
+(`30000 flows · 1499 matching · showing 1–250 of 1499`).
+
 #### HTTP/2 connections and streams
 
 HTTP/2 multiplexes many requests over one connection, so a flow carries both the

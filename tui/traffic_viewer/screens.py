@@ -7,6 +7,7 @@ import asyncio
 import difflib
 import os
 import tempfile
+import time
 from datetime import datetime
 
 from textual import events, work
@@ -54,10 +55,18 @@ from .wireshark import (
 
 
 class NavDataTable(DataTable):
-    """Row DataTable with list-friendly navigation. PageUp/PageDown (inherited) move the
-    cursor a page; Home/End and Ctrl/Cmd+Up/Down jump to the first/last row. By default a
-    row DataTable maps Home/End to horizontal scroll, which isn't useful for these lists.
-    (Terminals that don't deliver Cmd still get the jump via Home/End or Ctrl+Up/Down.)
+    """Row DataTable with list-friendly navigation. PageUp/PageDown and Cmd+Up/Down move
+    the cursor a page; Home/End, Ctrl+Up/Down and Cmd+Left/Right jump to the first/last
+    row. By default a row DataTable maps Home/End to horizontal scroll, which isn't useful
+    for these lists.
+
+    The Cmd pairs follow macOS convention (Cmd+←/→ is line start/end, so here list
+    start/end) and exist because a Mac keyboard has no PageUp/PageDown/Home/End of its own.
+    What actually arrives depends on what sits between the key and us, so each chord is
+    bound in every form it turns up as: a real super+… key (terminals speaking the kitty
+    keyboard protocol — Ghostty, kitty, WezTerm), or the Home/End/Ctrl+Home/Ctrl+End
+    sequences a macOS-style remapper substitutes (Toshy on Linux, the native bindings on
+    macOS). Fn+↑/↓ sends pageup/pagedown everywhere and always pages.
 
     Also implements follow mode for live lists: while `follow` is on, the cursor tracks
     each newly added row (tail -f style). Hosts toggle it and jump to the newest row via
@@ -68,10 +77,22 @@ class NavDataTable(DataTable):
         Binding("end", "scroll_bottom", "Bottom", show=False),
         Binding("ctrl+up", "scroll_top", "Top", show=False),
         Binding("ctrl+down", "scroll_bottom", "Bottom", show=False),
-        Binding("cmd+up", "scroll_top", "Top", show=False),
-        Binding("cmd+down", "scroll_bottom", "Bottom", show=False),
-        Binding("super+up", "scroll_top", "Top", show=False),
-        Binding("super+down", "scroll_bottom", "Bottom", show=False),
+        # Textual names the Mac modifier `super`; `cmd` is accepted too, so bind both.
+        Binding("cmd+up", "page_up", "Page up", show=False),
+        Binding("cmd+down", "page_down", "Page down", show=False),
+        Binding("super+up", "page_up", "Page up", show=False),
+        Binding("super+down", "page_down", "Page down", show=False),
+        Binding("cmd+left", "scroll_top", "Top", show=False),
+        Binding("cmd+right", "scroll_bottom", "Bottom", show=False),
+        Binding("super+left", "scroll_top", "Top", show=False),
+        Binding("super+right", "scroll_bottom", "Bottom", show=False),
+        # Cmd+↑/↓ under a macOS-style remapper (Toshy/xwaykeyz on Linux, the native
+        # bindings on macOS) never reaches us as super+↑/↓: it is rewritten upstream into
+        # Ctrl+Home/Ctrl+End, which DataTable binds to top/bottom. Claim those for paging
+        # so the chord pages here as intended. The jump keeps four other ways in (Home/End,
+        # Ctrl+↑/↓, Cmd+←/→), so nothing is stranded.
+        Binding("ctrl+home", "page_up", "Page up", show=False),
+        Binding("ctrl+end", "page_down", "Page down", show=False),
     ]
 
     follow = False
@@ -86,6 +107,56 @@ class NavDataTable(DataTable):
         self.follow = on
         if on and self.row_count:
             self.move_cursor(row=self.row_count - 1)
+
+
+class PagedDataTable(NavDataTable):
+    """NavDataTable whose rows are one page of a longer list, held by a `pager` host.
+
+    Only a page of rows is ever in the table (see SessionPane), so moving off its end has
+    to turn the page. Navigation stays continuous: ↓ on the last row loads the next page
+    and lands on its first row, ↑ on the first row loads the previous page and lands on
+    its last, and Home/End jump to the first/last page of the whole list. Without a
+    `pager` it behaves exactly like a NavDataTable."""
+
+    pager = None
+
+    def _at_end(self) -> bool:
+        return self.row_count == 0 or self.cursor_row >= self.row_count - 1
+
+    def _at_start(self) -> bool:
+        return self.cursor_row <= 0
+
+    def action_cursor_down(self) -> None:
+        if self.pager is not None and self._at_end() and self.pager.page_next("top"):
+            return
+        super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        if self.pager is not None and self._at_start() and self.pager.page_prev("bottom"):
+            return
+        super().action_cursor_up()
+
+    def action_page_down(self) -> None:
+        # Paging keys move within the rendered page first; once the cursor is already at
+        # its end they turn the page, so held PageDown walks the whole list.
+        if self.pager is not None and self._at_end() and self.pager.page_next("top"):
+            return
+        super().action_page_down()
+
+    def action_page_up(self) -> None:
+        if self.pager is not None and self._at_start() and self.pager.page_prev("bottom"):
+            return
+        super().action_page_up()
+
+    def action_scroll_top(self) -> None:
+        if self.pager is not None:
+            self.pager.page_first("top")
+        super().action_scroll_top()
+
+    def action_scroll_bottom(self) -> None:
+        if self.pager is not None:
+            self.pager.page_last("bottom")
+        super().action_scroll_bottom()
 
 
 class TextPrompt(ModalScreen[str | None]):
@@ -674,6 +745,22 @@ def _env_columns() -> list[str]:
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
+_PAGE_SIZE = 250
+_FLUSH_INTERVAL = 0.2
+
+
+def _page_size() -> int:
+    """Rows rendered at once in the flow table, from TRAFFICDECK_PAGE_SIZE (clamped to
+    50..2000). Repainting a DataTable costs time proportional to the rows it holds, and
+    the table is repainted on every keystroke and every arriving flow — so what bounds
+    this bounds how a big session feels, not how much of it is loaded."""
+    try:
+        n = int(os.environ.get("TRAFFICDECK_PAGE_SIZE", _PAGE_SIZE))
+    except ValueError:
+        return _PAGE_SIZE
+    return max(50, min(n, 2000))
+
+
 def _session_view_columns(session) -> list[str]:
     """Column names the capture source declared as default table columns for a session,
     via the `viewer.columns` session metadata (comma-separated). A pcap-based source
@@ -982,7 +1069,16 @@ async def open_flow_in_wireshark(widget, session_id: str, flow) -> None:
 class SessionPane(AnnotatableTable, Vertical):
     """One session's live flow table + filtering + annotations. Hosted as a tab in the
     WorkspaceScreen so several sessions can be open and compared side by side. (Was a
-    full Screen; the shared Header/Footer now live on the workspace.)"""
+    full Screen; the shared Header/Footer now live on the workspace.)
+
+    Flows are held whole in memory but rendered a page at a time. Rendering every flow was
+    what made a big session unopenable: a DataTable repaint costs time proportional to the
+    rows it holds, and painting one per arriving flow is quadratic — a 6000-flow session
+    took ~3.5 minutes to fill in, all of it repaints (the flows themselves stream from the
+    gateway in ~2s). So the stream only feeds the model, a timer renders the current page
+    when it actually changes, and paging is invisible: the cursor walks off a page and the
+    next one loads (see PagedDataTable). Filtering still runs over every flow in the
+    session, not just the rendered page — the whole session is in `flows`."""
 
     BINDINGS = [
         Binding("f", "filter", "Filter"),
@@ -1005,8 +1101,17 @@ class SessionPane(AnnotatableTable, Vertical):
         super().__init__()
         self.session_id = session_id
         self.label = label
-        self.flows: dict[str, object] = {}  # flow id -> cached Flow (for live detail)
-        self._rows: set[str] = set()
+        self.flows: dict[str, object] = {}  # flow id -> cached Flow (the whole session)
+        self._order: list[str] = []         # every flow id, in arrival (time) order
+        self._view: list[str] = []          # ids passing the filter — what pages walk
+        self._view_ids: set[str] = set()    # same, for O(1) membership
+        self._page = 0
+        self._page_size = _page_size()
+        self._rows: set[str] = set()        # ids rendered right now (the current page)
+        self._rendered: list[str] = []      # the same ids in row order, to skip no-op renders
+        self._dirty = False                 # model changed since the last flush
+        self._loading = True                # backfill still streaming in
+        self._flush_timer = None
         self._cols: list = []                   # base (fixed) column keys
         # Extra (optional) columns, in display order, as column ids: "meta:<key>" for a
         # source-metadata key, or a _FIELD_COLUMNS name. Seeded from what the env default
@@ -1031,7 +1136,8 @@ class SessionPane(AnnotatableTable, Vertical):
     def compose(self) -> ComposeResult:
         yield Label("", id="pane-status")
         yield Input(id="filter", placeholder="filter: ~m GET  ~d example.com  ~fav  ~tag auth  ~mark red  (f focus, Enter apply)")
-        table = NavDataTable(id="flows", cursor_type="row", zebra_stripes=True)
+        table = PagedDataTable(id="flows", cursor_type="row", zebra_stripes=True)
+        table.pager = self
         self._cols = table.add_columns("", "Time", "Method", "Status", "Dur", "Proto", "Authority", "Path")
         self._dur_col = self._cols[4]
         for cid in self._extra_cols:
@@ -1086,6 +1192,10 @@ class SessionPane(AnnotatableTable, Vertical):
         self.query_one("#flows", DataTable).focus()
         self.load_defs()
         self.load_flows()
+        # Render arriving flows on a timer rather than one repaint per flow (see the class
+        # docstring). Flows keep arriving after backfill on a live session, and annotations
+        # can change a row at any time, so this runs for the pane's lifetime.
+        self._flush_timer = self.set_interval(_FLUSH_INTERVAL, self._flush)
         # Tick in-flight requests' duration cells so they read as a live stopwatch. Only
         # a still-capturing session has any; a closed one needs no timer at all.
         if self._live:
@@ -1130,18 +1240,140 @@ class SessionPane(AnnotatableTable, Vertical):
 
     def _update_subtitle(self) -> None:
         base = f"{len(self.flows)} flows"
+        if self._loading:
+            base += " · loading…"
         if self._selected:
             base += f" · {len(self._selected)} selected"
         if self._predicate is not None:
-            base += f" · {len(self._rows)}/{len(self.flows)} shown"
+            base += f" · {len(self._view)} matching"
+        # Position in the list, not "page N of M": PageDown pages the *viewport*, and two
+        # different meanings of "page" on one status line is one too many.
+        if self._page_count() > 1:
+            first = self._page * self._page_size + 1
+            base += (f" · showing {first}–{min(first + self._page_size - 1, len(self._view))}"
+                     f" of {len(self._view)}")
         if self.query_one("#flows", NavDataTable).follow:
             base += " · ⇣ follow"
         self.query_one("#pane-status", Label).update(base)
 
+    # --- paged view model ------------------------------------------------
+    #
+    # `_order` is every flow, `_view` the ones passing the filter, and only the current
+    # page of `_view` is ever rendered as table rows.
+
+    def _page_count(self) -> int:
+        return max(1, -(-len(self._view) // self._page_size))  # ceil
+
+    def _page_ids(self) -> list[str]:
+        start = self._page * self._page_size
+        return self._view[start:start + self._page_size]
+
+    def _rebuild_view(self) -> None:
+        """Re-run the filter over every flow in the session (not just the rendered page)
+        and clamp the page onto the result."""
+        self._view = [fid for fid in self._order if self._matches(self.flows[fid])]
+        self._view_ids = set(self._view)
+        self._page = min(self._page, self._page_count() - 1)
+
+    def _render_page(self, force: bool = False, cursor: str = "keep") -> None:
+        """Put the current page's rows in the table. A no-op when the page already holds
+        exactly these flows and `force` is off — during backfill that means a full page
+        stops being repainted at all, however many flows are still arriving.
+
+        `cursor`: "keep" holds the focused flow (or the row index, if it left the page),
+        "top"/"bottom" land on the page's first/last row — where paging by cursor arrives."""
+        ids = self._page_ids()
+        if ids == self._rendered and not force:
+            return  # same flows already on screen — don't repaint (the whole point)
+        table = self.query_one("#flows", DataTable)
+        focused = self._focused_flow_id()
+        row = table.cursor_row
+        table.clear()
+        for fid in ids:
+            table.add_row(*self._cells(self.flows[fid]), key=fid)
+        self._rendered = ids
+        self._rows = set(ids)
+        if not ids:
+            return
+        if cursor == "top":
+            table.move_cursor(row=0)
+        elif cursor == "bottom":
+            table.move_cursor(row=len(ids) - 1)
+        elif focused in self._rows:
+            table.move_cursor(row=ids.index(focused))
+        else:
+            table.move_cursor(row=min(max(row, 0), len(ids) - 1))
+
+    def _goto_page(self, page: int, cursor: str) -> bool:
+        """Move to `page` (clamped); False when that is where we already are."""
+        page = max(0, min(page, self._page_count() - 1))
+        if page == self._page:
+            return False
+        self._page = page
+        self._render_page(force=True, cursor=cursor)
+        self._update_subtitle()
+        return True
+
+    # The paging protocol PagedDataTable drives when the cursor walks off a page.
+    def page_next(self, cursor: str = "top") -> bool:
+        return self._goto_page(self._page + 1, cursor)
+
+    def page_prev(self, cursor: str = "bottom") -> bool:
+        return self._goto_page(self._page - 1, cursor)
+
+    def page_first(self, cursor: str = "top") -> bool:
+        return self._goto_page(0, cursor)
+
+    def page_last(self, cursor: str = "bottom") -> bool:
+        return self._goto_page(self._page_count() - 1, cursor)
+
+    def _ingest(self, f) -> bool:
+        """Fold one flow into the model without touching the table. Returns whether the
+        filtered view changed (a new match, or an update that changed membership) — the
+        table only needs re-rendering then."""
+        known = f.id in self.flows
+        self.flows[f.id] = f
+        matches = self._matches(f)
+        self._dirty = True
+        if not known:
+            self._order.append(f.id)
+            if matches:
+                self._view.append(f.id)
+                self._view_ids.add(f.id)
+                return True
+            return False
+        if matches != (f.id in self._view_ids):
+            # An update flipped filter membership (a status arrived, a tag was set):
+            # rebuild so the row lands back in timeline order rather than at the end.
+            self._rebuild_view()
+            return True
+        return False
+
+    def _follow_target(self) -> str:
+        """Where the cursor goes on the next render: follow mode tails the newest flows,
+        so it jumps to the last page and stays on its last row; otherwise the focused flow
+        is kept. Returns the cursor mode for _render_page."""
+        if not self.query_one("#flows", NavDataTable).follow:
+            return "keep"
+        self._page = self._page_count() - 1
+        return "bottom"
+
+    def _flush(self) -> None:
+        """Render whatever the stream changed since the last tick (see on_mount)."""
+        if not self._dirty:
+            return
+        self._dirty = False
+        self._render_page(cursor=self._follow_target())
+        self._update_subtitle()
+
     def action_follow(self) -> None:
-        """Toggle follow mode: the cursor tracks each newly arriving flow."""
+        """Toggle follow mode: the view tails the newest flows — the last page, cursor on
+        the last row, both kept there as flows arrive."""
         table = self.query_one("#flows", NavDataTable)
         table.set_follow(not table.follow)
+        if table.follow:
+            self._page = self._page_count() - 1
+            self._render_page(force=True, cursor="bottom")
         self._update_subtitle()
 
     def _matches(self, f) -> bool:
@@ -1165,13 +1397,11 @@ class SessionPane(AnnotatableTable, Vertical):
         self.query_one("#flows", DataTable).focus()
 
     def _apply_filter(self) -> None:
-        table = self.query_one("#flows", DataTable)
-        table.clear()
-        self._rows.clear()
-        for f in self.flows.values():
-            if self._matches(f):
-                table.add_row(*self._cells(f), key=f.id)
-                self._rows.add(f.id)
+        """Re-filter the whole session and show the first page of what matched. The filter
+        always runs over every flow held in memory — paging only bounds what is drawn."""
+        self._rebuild_view()
+        self._page = 0
+        self._render_page(force=True, cursor="top")
         self._update_subtitle()
 
     def on_key(self, event) -> None:
@@ -1194,46 +1424,59 @@ class SessionPane(AnnotatableTable, Vertical):
         )
 
     def _upsert(self, f) -> None:
-        table = self.query_one("#flows", DataTable)
-        self.flows[f.id] = f
-        if not self._matches(f):
-            if f.id in self._rows:
-                table.remove_row(f.id)
-                self._rows.discard(f.id)
-                self._update_subtitle()
-            return
-        cells = self._cells(f)
-        if f.id in self._rows:
+        """Fold in one flow and show the change now — an annotation that just landed, a
+        row the user is looking at. Flows arriving from the stream go through `_ingest`
+        instead and are drawn by the next flush."""
+        view_changed = self._ingest(f)
+        if view_changed:
+            self._render_page(force=True, cursor=self._follow_target())
+        elif f.id in self._rows:
             # update_width: a cell can outgrow the width the column was auto-sized to when
             # its rows were added — the flags cell most visibly, since it starts empty under
             # an empty header (width 0) and only gains content once something is annotated.
-            for col, val in zip(self._ordered_cols(), cells):
+            table = self.query_one("#flows", DataTable)
+            for col, val in zip(self._ordered_cols(), self._cells(f)):
                 table.update_cell(f.id, col, val, update_width=True)
-        else:
-            table.add_row(*cells, key=f.id)
-            self._rows.add(f.id)
-            self._update_subtitle()
+        self._update_subtitle()
 
     @work(exclusive=True)
     async def load_flows(self) -> None:
+        """Stream the session's flows into the model. Deliberately no table work per flow:
+        a repaint per arrival is what made a large session take minutes to open. The flush
+        timer draws the current page as it changes."""
         self.query_one("#flows", DataTable).clear()
         self.flows.clear()
+        self._order.clear()
+        self._view.clear()
+        self._view_ids.clear()
         self._rows.clear()
+        self._rendered = []
+        self._page = 0
+        self._loading = True
+        next_flush = 0.0
         try:
             async for ev in self.app.client.stream_flows(self.session_id, follow=True):
                 kind = ev.WhichOneof("event")
                 if kind == "flow_added":
-                    self._upsert(ev.flow_added)
+                    self._ingest(ev.flow_added)
                 elif kind == "flow_updated":
-                    self._upsert(ev.flow_updated)
+                    self._ingest(ev.flow_updated)
                 elif kind == "session_event":
                     self.notify("session closed — live capture ended")
                     self._finalize_live()
+                # A big backfill arrives in bursts that can starve the flush timer, leaving
+                # the pane blank until the whole session is in. Flush on our own clock too,
+                # so the first page shows up while the rest is still streaming.
+                if (now := time.monotonic()) >= next_flush:
+                    next_flush = now + _FLUSH_INTERVAL
+                    self._flush()
         except Exception as exc:  # noqa: BLE001
             self.notify(f"stream_flows failed: {exc}", severity="error")
         finally:
             # The stream ended: either the session closed, or it was already closed when we
             # opened it (backfill only). Either way nothing is in flight — stop ticking.
+            self._loading = False
+            self._dirty = True  # draw whatever the last tick didn't
             self._finalize_live()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
