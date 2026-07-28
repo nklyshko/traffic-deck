@@ -21,15 +21,55 @@ class SessionList(_message.Message):
     sessions: _containers.RepeatedCompositeFieldContainer[_common_pb2.Session]
     def __init__(self, sessions: _Optional[_Iterable[_Union[_common_pb2.Session, _Mapping]]] = ...) -> None: ...
 
-class StreamFlowsRequest(_message.Message):
-    __slots__ = ("session_id", "include_backfill", "follow")
+class FlowCursor(_message.Message):
+    __slots__ = ("ts_micros", "frame_number")
+    TS_MICROS_FIELD_NUMBER: _ClassVar[int]
+    FRAME_NUMBER_FIELD_NUMBER: _ClassVar[int]
+    ts_micros: int
+    frame_number: int
+    def __init__(self, ts_micros: _Optional[int] = ..., frame_number: _Optional[int] = ...) -> None: ...
+
+class QueryFlowsRequest(_message.Message):
+    __slots__ = ("session_id", "filter", "limit", "after", "before", "last")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    INCLUDE_BACKFILL_FIELD_NUMBER: _ClassVar[int]
-    FOLLOW_FIELD_NUMBER: _ClassVar[int]
+    FILTER_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    AFTER_FIELD_NUMBER: _ClassVar[int]
+    BEFORE_FIELD_NUMBER: _ClassVar[int]
+    LAST_FIELD_NUMBER: _ClassVar[int]
     session_id: str
-    include_backfill: bool
+    filter: str
+    limit: int
+    after: FlowCursor
+    before: FlowCursor
+    last: bool
+    def __init__(self, session_id: _Optional[str] = ..., filter: _Optional[str] = ..., limit: _Optional[int] = ..., after: _Optional[_Union[FlowCursor, _Mapping]] = ..., before: _Optional[_Union[FlowCursor, _Mapping]] = ..., last: bool = ...) -> None: ...
+
+class FlowPage(_message.Message):
+    __slots__ = ("flows", "next", "prev", "matched", "count_capped", "scanned")
+    FLOWS_FIELD_NUMBER: _ClassVar[int]
+    NEXT_FIELD_NUMBER: _ClassVar[int]
+    PREV_FIELD_NUMBER: _ClassVar[int]
+    MATCHED_FIELD_NUMBER: _ClassVar[int]
+    COUNT_CAPPED_FIELD_NUMBER: _ClassVar[int]
+    SCANNED_FIELD_NUMBER: _ClassVar[int]
+    flows: _containers.RepeatedCompositeFieldContainer[_common_pb2.Flow]
+    next: FlowCursor
+    prev: FlowCursor
+    matched: int
+    count_capped: bool
+    scanned: int
+    def __init__(self, flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., next: _Optional[_Union[FlowCursor, _Mapping]] = ..., prev: _Optional[_Union[FlowCursor, _Mapping]] = ..., matched: _Optional[int] = ..., count_capped: bool = ..., scanned: _Optional[int] = ...) -> None: ...
+
+class StreamFlowsRequest(_message.Message):
+    __slots__ = ("session_id", "follow", "filter")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    FOLLOW_FIELD_NUMBER: _ClassVar[int]
+    FILTER_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
     follow: bool
-    def __init__(self, session_id: _Optional[str] = ..., include_backfill: bool = ..., follow: bool = ...) -> None: ...
+    filter: str
+    def __init__(self, session_id: _Optional[str] = ..., follow: bool = ..., filter: _Optional[str] = ...) -> None: ...
 
 class SessionEvent(_message.Message):
     __slots__ = ("session_id", "status")
@@ -40,16 +80,18 @@ class SessionEvent(_message.Message):
     def __init__(self, session_id: _Optional[str] = ..., status: _Optional[_Union[_common_pb2.SessionStatus, str]] = ...) -> None: ...
 
 class FlowEvent(_message.Message):
-    __slots__ = ("flow_added", "flow_updated", "session_event", "decode_progress")
+    __slots__ = ("flow_added", "flow_updated", "session_event", "decode_progress", "flow_unmatched")
     FLOW_ADDED_FIELD_NUMBER: _ClassVar[int]
     FLOW_UPDATED_FIELD_NUMBER: _ClassVar[int]
     SESSION_EVENT_FIELD_NUMBER: _ClassVar[int]
     DECODE_PROGRESS_FIELD_NUMBER: _ClassVar[int]
+    FLOW_UNMATCHED_FIELD_NUMBER: _ClassVar[int]
     flow_added: _common_pb2.Flow
     flow_updated: _common_pb2.Flow
     session_event: SessionEvent
     decode_progress: _common_pb2.DecodeProgress
-    def __init__(self, flow_added: _Optional[_Union[_common_pb2.Flow, _Mapping]] = ..., flow_updated: _Optional[_Union[_common_pb2.Flow, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ..., decode_progress: _Optional[_Union[_common_pb2.DecodeProgress, _Mapping]] = ...) -> None: ...
+    flow_unmatched: str
+    def __init__(self, flow_added: _Optional[_Union[_common_pb2.Flow, _Mapping]] = ..., flow_updated: _Optional[_Union[_common_pb2.Flow, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ..., decode_progress: _Optional[_Union[_common_pb2.DecodeProgress, _Mapping]] = ..., flow_unmatched: _Optional[str] = ...) -> None: ...
 
 class GetFlowRequest(_message.Message):
     __slots__ = ("session_id", "flow_id")

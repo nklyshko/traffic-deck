@@ -117,18 +117,252 @@ func (x *SessionList) GetSessions() []*Session {
 	return nil
 }
 
+// FlowCursor is a position in a session's timeline, not an offset: a live session grows
+// while it is read, so OFFSET would shift rows under the reader. It is the sort key of
+// the last row a page returned — page forward with `after`, backward with `before`.
+type FlowCursor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TsMicros      int64                  `protobuf:"varint,1,opt,name=ts_micros,json=tsMicros,proto3" json:"ts_micros,omitempty"`
+	FrameNumber   uint64                 `protobuf:"varint,2,opt,name=frame_number,json=frameNumber,proto3" json:"frame_number,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlowCursor) Reset() {
+	*x = FlowCursor{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlowCursor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlowCursor) ProtoMessage() {}
+
+func (x *FlowCursor) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlowCursor.ProtoReflect.Descriptor instead.
+func (*FlowCursor) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *FlowCursor) GetTsMicros() int64 {
+	if x != nil {
+		return x.TsMicros
+	}
+	return 0
+}
+
+func (x *FlowCursor) GetFrameNumber() uint64 {
+	if x != nil {
+		return x.FrameNumber
+	}
+	return 0
+}
+
+type QueryFlowsRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Filter expression in the viewer DSL, evaluated by the gateway. Empty matches all.
+	Filter string `protobuf:"bytes,2,opt,name=filter,proto3" json:"filter,omitempty"`
+	Limit  uint32 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Exactly one of after/before, or neither for the first page. `before` walks backwards
+	// from the given position; with no cursor set, `last` starts at the end of the list —
+	// which is how "jump to the end" works without knowing how many rows match.
+	After         *FlowCursor `protobuf:"bytes,4,opt,name=after,proto3" json:"after,omitempty"`
+	Before        *FlowCursor `protobuf:"bytes,5,opt,name=before,proto3" json:"before,omitempty"`
+	Last          bool        `protobuf:"varint,6,opt,name=last,proto3" json:"last,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryFlowsRequest) Reset() {
+	*x = QueryFlowsRequest{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryFlowsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryFlowsRequest) ProtoMessage() {}
+
+func (x *QueryFlowsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryFlowsRequest.ProtoReflect.Descriptor instead.
+func (*QueryFlowsRequest) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *QueryFlowsRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *QueryFlowsRequest) GetFilter() string {
+	if x != nil {
+		return x.Filter
+	}
+	return ""
+}
+
+func (x *QueryFlowsRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *QueryFlowsRequest) GetAfter() *FlowCursor {
+	if x != nil {
+		return x.After
+	}
+	return nil
+}
+
+func (x *QueryFlowsRequest) GetBefore() *FlowCursor {
+	if x != nil {
+		return x.Before
+	}
+	return nil
+}
+
+func (x *QueryFlowsRequest) GetLast() bool {
+	if x != nil {
+		return x.Last
+	}
+	return false
+}
+
+type FlowPage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Flows []*Flow                `protobuf:"bytes,1,rep,name=flows,proto3" json:"flows,omitempty"`
+	// Cursors for stepping on from this page; unset when there is nothing that way.
+	Next *FlowCursor `protobuf:"bytes,2,opt,name=next,proto3" json:"next,omitempty"`
+	Prev *FlowCursor `protobuf:"bytes,3,opt,name=prev,proto3" json:"prev,omitempty"`
+	// Rows matched, and whether the scan cap stopped counting — so a viewer can say
+	// "500+ matching" rather than a precise number it cannot cheaply have (ADR-0012 §5).
+	Matched     uint64 `protobuf:"varint,4,opt,name=matched,proto3" json:"matched,omitempty"`
+	CountCapped bool   `protobuf:"varint,5,opt,name=count_capped,json=countCapped,proto3" json:"count_capped,omitempty"`
+	// Rows examined, for the same reason MCP already reports it: a filter that matched
+	// little may have been cut short rather than genuinely finding little.
+	Scanned       uint64 `protobuf:"varint,6,opt,name=scanned,proto3" json:"scanned,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FlowPage) Reset() {
+	*x = FlowPage{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FlowPage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FlowPage) ProtoMessage() {}
+
+func (x *FlowPage) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FlowPage.ProtoReflect.Descriptor instead.
+func (*FlowPage) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *FlowPage) GetFlows() []*Flow {
+	if x != nil {
+		return x.Flows
+	}
+	return nil
+}
+
+func (x *FlowPage) GetNext() *FlowCursor {
+	if x != nil {
+		return x.Next
+	}
+	return nil
+}
+
+func (x *FlowPage) GetPrev() *FlowCursor {
+	if x != nil {
+		return x.Prev
+	}
+	return nil
+}
+
+func (x *FlowPage) GetMatched() uint64 {
+	if x != nil {
+		return x.Matched
+	}
+	return 0
+}
+
+func (x *FlowPage) GetCountCapped() bool {
+	if x != nil {
+		return x.CountCapped
+	}
+	return false
+}
+
+func (x *FlowPage) GetScanned() uint64 {
+	if x != nil {
+		return x.Scanned
+	}
+	return 0
+}
+
 type StreamFlowsRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	SessionId       string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	IncludeBackfill bool                   `protobuf:"varint,2,opt,name=include_backfill,json=includeBackfill,proto3" json:"include_backfill,omitempty"` // replay stored flows first
-	Follow          bool                   `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`                                          // keep streaming live additions
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Follow    bool                   `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"` // keep streaming live events
+	// Same DSL as QueryFlows: a following viewer receives only events for flows matching
+	// it, and a flow_unmatched when an update pushes one out of that set.
+	Filter        string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamFlowsRequest) Reset() {
 	*x = StreamFlowsRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[2]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -140,7 +374,7 @@ func (x *StreamFlowsRequest) String() string {
 func (*StreamFlowsRequest) ProtoMessage() {}
 
 func (x *StreamFlowsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[2]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -153,7 +387,7 @@ func (x *StreamFlowsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamFlowsRequest.ProtoReflect.Descriptor instead.
 func (*StreamFlowsRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{2}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StreamFlowsRequest) GetSessionId() string {
@@ -163,18 +397,18 @@ func (x *StreamFlowsRequest) GetSessionId() string {
 	return ""
 }
 
-func (x *StreamFlowsRequest) GetIncludeBackfill() bool {
-	if x != nil {
-		return x.IncludeBackfill
-	}
-	return false
-}
-
 func (x *StreamFlowsRequest) GetFollow() bool {
 	if x != nil {
 		return x.Follow
 	}
 	return false
+}
+
+func (x *StreamFlowsRequest) GetFilter() string {
+	if x != nil {
+		return x.Filter
+	}
+	return ""
 }
 
 type SessionEvent struct {
@@ -187,7 +421,7 @@ type SessionEvent struct {
 
 func (x *SessionEvent) Reset() {
 	*x = SessionEvent{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[3]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -199,7 +433,7 @@ func (x *SessionEvent) String() string {
 func (*SessionEvent) ProtoMessage() {}
 
 func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[3]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -212,7 +446,7 @@ func (x *SessionEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
 func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{3}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SessionEvent) GetSessionId() string {
@@ -237,6 +471,7 @@ type FlowEvent struct {
 	//	*FlowEvent_FlowUpdated
 	//	*FlowEvent_SessionEvent
 	//	*FlowEvent_DecodeProgress
+	//	*FlowEvent_FlowUnmatched
 	Event         isFlowEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -244,7 +479,7 @@ type FlowEvent struct {
 
 func (x *FlowEvent) Reset() {
 	*x = FlowEvent{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[4]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -256,7 +491,7 @@ func (x *FlowEvent) String() string {
 func (*FlowEvent) ProtoMessage() {}
 
 func (x *FlowEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[4]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -269,7 +504,7 @@ func (x *FlowEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FlowEvent.ProtoReflect.Descriptor instead.
 func (*FlowEvent) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{4}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *FlowEvent) GetEvent() isFlowEvent_Event {
@@ -315,6 +550,15 @@ func (x *FlowEvent) GetDecodeProgress() *DecodeProgress {
 	return nil
 }
 
+func (x *FlowEvent) GetFlowUnmatched() string {
+	if x != nil {
+		if x, ok := x.Event.(*FlowEvent_FlowUnmatched); ok {
+			return x.FlowUnmatched
+		}
+	}
+	return ""
+}
+
 type isFlowEvent_Event interface {
 	isFlowEvent_Event()
 }
@@ -335,6 +579,14 @@ type FlowEvent_DecodeProgress struct {
 	DecodeProgress *DecodeProgress `protobuf:"bytes,4,opt,name=decode_progress,json=decodeProgress,proto3,oneof"`
 }
 
+type FlowEvent_FlowUnmatched struct {
+	// The flow no longer matches *this subscription's* filter — drop the row. NOT a
+	// deletion: the flow still exists, and a subscriber with a different filter still
+	// sees it. Only the gateway can know this, having evaluated the filter before and
+	// after the update, so a client that ignores this shows stale rows (ADR-0012 §6).
+	FlowUnmatched string `protobuf:"bytes,5,opt,name=flow_unmatched,json=flowUnmatched,proto3,oneof"`
+}
+
 func (*FlowEvent_FlowAdded) isFlowEvent_Event() {}
 
 func (*FlowEvent_FlowUpdated) isFlowEvent_Event() {}
@@ -342,6 +594,8 @@ func (*FlowEvent_FlowUpdated) isFlowEvent_Event() {}
 func (*FlowEvent_SessionEvent) isFlowEvent_Event() {}
 
 func (*FlowEvent_DecodeProgress) isFlowEvent_Event() {}
+
+func (*FlowEvent_FlowUnmatched) isFlowEvent_Event() {}
 
 type GetFlowRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -353,7 +607,7 @@ type GetFlowRequest struct {
 
 func (x *GetFlowRequest) Reset() {
 	*x = GetFlowRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[5]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -365,7 +619,7 @@ func (x *GetFlowRequest) String() string {
 func (*GetFlowRequest) ProtoMessage() {}
 
 func (x *GetFlowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[5]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -378,7 +632,7 @@ func (x *GetFlowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetFlowRequest.ProtoReflect.Descriptor instead.
 func (*GetFlowRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{5}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetFlowRequest) GetSessionId() string {
@@ -406,7 +660,7 @@ type GetBodyRequest struct {
 
 func (x *GetBodyRequest) Reset() {
 	*x = GetBodyRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[6]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +672,7 @@ func (x *GetBodyRequest) String() string {
 func (*GetBodyRequest) ProtoMessage() {}
 
 func (x *GetBodyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[6]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +685,7 @@ func (x *GetBodyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBodyRequest.ProtoReflect.Descriptor instead.
 func (*GetBodyRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{6}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetBodyRequest) GetSessionId() string {
@@ -469,7 +723,7 @@ type BodyChunk struct {
 
 func (x *BodyChunk) Reset() {
 	*x = BodyChunk{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[7]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -481,7 +735,7 @@ func (x *BodyChunk) String() string {
 func (*BodyChunk) ProtoMessage() {}
 
 func (x *BodyChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[7]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -494,7 +748,7 @@ func (x *BodyChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BodyChunk.ProtoReflect.Descriptor instead.
 func (*BodyChunk) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{7}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *BodyChunk) GetPayload() []byte {
@@ -521,7 +775,7 @@ type ListMessagesRequest struct {
 
 func (x *ListMessagesRequest) Reset() {
 	*x = ListMessagesRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[8]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -533,7 +787,7 @@ func (x *ListMessagesRequest) String() string {
 func (*ListMessagesRequest) ProtoMessage() {}
 
 func (x *ListMessagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[8]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -546,7 +800,7 @@ func (x *ListMessagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMessagesRequest.ProtoReflect.Descriptor instead.
 func (*ListMessagesRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{8}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListMessagesRequest) GetSessionId() string {
@@ -572,7 +826,7 @@ type MessageList struct {
 
 func (x *MessageList) Reset() {
 	*x = MessageList{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[9]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +838,7 @@ func (x *MessageList) String() string {
 func (*MessageList) ProtoMessage() {}
 
 func (x *MessageList) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[9]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +851,7 @@ func (x *MessageList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageList.ProtoReflect.Descriptor instead.
 func (*MessageList) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{9}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MessageList) GetMessages() []*WsMessage {
@@ -618,7 +872,7 @@ type StreamMessagesRequest struct {
 
 func (x *StreamMessagesRequest) Reset() {
 	*x = StreamMessagesRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[10]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -630,7 +884,7 @@ func (x *StreamMessagesRequest) String() string {
 func (*StreamMessagesRequest) ProtoMessage() {}
 
 func (x *StreamMessagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[10]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -643,7 +897,7 @@ func (x *StreamMessagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamMessagesRequest.ProtoReflect.Descriptor instead.
 func (*StreamMessagesRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{10}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StreamMessagesRequest) GetSessionId() string {
@@ -680,7 +934,7 @@ type MessageEvent struct {
 
 func (x *MessageEvent) Reset() {
 	*x = MessageEvent{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[11]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +946,7 @@ func (x *MessageEvent) String() string {
 func (*MessageEvent) ProtoMessage() {}
 
 func (x *MessageEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[11]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,7 +959,7 @@ func (x *MessageEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MessageEvent.ProtoReflect.Descriptor instead.
 func (*MessageEvent) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{11}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *MessageEvent) GetEvent() isMessageEvent_Event {
@@ -759,7 +1013,7 @@ type GetMessageRequest struct {
 
 func (x *GetMessageRequest) Reset() {
 	*x = GetMessageRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -771,7 +1025,7 @@ func (x *GetMessageRequest) String() string {
 func (*GetMessageRequest) ProtoMessage() {}
 
 func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[12]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -784,7 +1038,7 @@ func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageRequest.ProtoReflect.Descriptor instead.
 func (*GetMessageRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{12}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetMessageRequest) GetSessionId() string {
@@ -812,7 +1066,7 @@ type GetMessageBodyRequest struct {
 
 func (x *GetMessageBodyRequest) Reset() {
 	*x = GetMessageBodyRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[13]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -824,7 +1078,7 @@ func (x *GetMessageBodyRequest) String() string {
 func (*GetMessageBodyRequest) ProtoMessage() {}
 
 func (x *GetMessageBodyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[13]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -837,7 +1091,7 @@ func (x *GetMessageBodyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageBodyRequest.ProtoReflect.Descriptor instead.
 func (*GetMessageBodyRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{13}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetMessageBodyRequest) GetSessionId() string {
@@ -871,22 +1125,42 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\x05limit\x18\x01 \x01(\rR\x05limit\x12\x16\n" +
 	"\x06offset\x18\x02 \x01(\rR\x06offset\">\n" +
 	"\vSessionList\x12/\n" +
-	"\bsessions\x18\x01 \x03(\v2\x13.traffic.v1.SessionR\bsessions\"v\n" +
+	"\bsessions\x18\x01 \x03(\v2\x13.traffic.v1.SessionR\bsessions\"L\n" +
+	"\n" +
+	"FlowCursor\x12\x1b\n" +
+	"\tts_micros\x18\x01 \x01(\x03R\btsMicros\x12!\n" +
+	"\fframe_number\x18\x02 \x01(\x04R\vframeNumber\"\xd2\x01\n" +
+	"\x11QueryFlowsRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06filter\x18\x02 \x01(\tR\x06filter\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\rR\x05limit\x12,\n" +
+	"\x05after\x18\x04 \x01(\v2\x16.traffic.v1.FlowCursorR\x05after\x12.\n" +
+	"\x06before\x18\x05 \x01(\v2\x16.traffic.v1.FlowCursorR\x06before\x12\x12\n" +
+	"\x04last\x18\x06 \x01(\bR\x04last\"\xe1\x01\n" +
+	"\bFlowPage\x12&\n" +
+	"\x05flows\x18\x01 \x03(\v2\x10.traffic.v1.FlowR\x05flows\x12*\n" +
+	"\x04next\x18\x02 \x01(\v2\x16.traffic.v1.FlowCursorR\x04next\x12*\n" +
+	"\x04prev\x18\x03 \x01(\v2\x16.traffic.v1.FlowCursorR\x04prev\x12\x18\n" +
+	"\amatched\x18\x04 \x01(\x04R\amatched\x12!\n" +
+	"\fcount_capped\x18\x05 \x01(\bR\vcountCapped\x12\x18\n" +
+	"\ascanned\x18\x06 \x01(\x04R\ascanned\"{\n" +
 	"\x12StreamFlowsRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12)\n" +
-	"\x10include_backfill\x18\x02 \x01(\bR\x0fincludeBackfill\x12\x16\n" +
-	"\x06follow\x18\x03 \x01(\bR\x06follow\"`\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06follow\x18\x03 \x01(\bR\x06follow\x12\x16\n" +
+	"\x06filter\x18\x04 \x01(\tR\x06filterJ\x04\b\x02\x10\x03R\x10include_backfill\"`\n" +
 	"\fSessionEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x121\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x19.traffic.v1.SessionStatusR\x06status\"\x86\x02\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x19.traffic.v1.SessionStatusR\x06status\"\xaf\x02\n" +
 	"\tFlowEvent\x121\n" +
 	"\n" +
 	"flow_added\x18\x01 \x01(\v2\x10.traffic.v1.FlowH\x00R\tflowAdded\x125\n" +
 	"\fflow_updated\x18\x02 \x01(\v2\x10.traffic.v1.FlowH\x00R\vflowUpdated\x12?\n" +
 	"\rsession_event\x18\x03 \x01(\v2\x18.traffic.v1.SessionEventH\x00R\fsessionEvent\x12E\n" +
-	"\x0fdecode_progress\x18\x04 \x01(\v2\x1a.traffic.v1.DecodeProgressH\x00R\x0edecodeProgressB\a\n" +
+	"\x0fdecode_progress\x18\x04 \x01(\v2\x1a.traffic.v1.DecodeProgressH\x00R\x0edecodeProgress\x12'\n" +
+	"\x0eflow_unmatched\x18\x05 \x01(\tH\x00R\rflowUnmatchedB\a\n" +
 	"\x05event\"H\n" +
 	"\x0eGetFlowRequest\x12\x1d\n" +
 	"\n" +
@@ -925,9 +1199,11 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x02 \x01(\tR\tmessageId\x12\x10\n" +
-	"\x03raw\x18\x03 \x01(\bR\x03raw2\xc7\x04\n" +
+	"\x03raw\x18\x03 \x01(\bR\x03raw2\x8a\x05\n" +
 	"\rViewerService\x12H\n" +
-	"\fListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12F\n" +
+	"\fListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12A\n" +
+	"\n" +
+	"QueryFlows\x12\x1d.traffic.v1.QueryFlowsRequest\x1a\x14.traffic.v1.FlowPage\x12F\n" +
 	"\vStreamFlows\x12\x1e.traffic.v1.StreamFlowsRequest\x1a\x15.traffic.v1.FlowEvent0\x01\x127\n" +
 	"\aGetFlow\x12\x1a.traffic.v1.GetFlowRequest\x1a\x10.traffic.v1.Flow\x12>\n" +
 	"\aGetBody\x12\x1a.traffic.v1.GetBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12H\n" +
@@ -952,59 +1228,69 @@ func file_traffic_v1_viewer_proto_rawDescGZIP() []byte {
 	return file_traffic_v1_viewer_proto_rawDescData
 }
 
-var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*ListSessionsRequest)(nil),   // 0: traffic.v1.ListSessionsRequest
 	(*SessionList)(nil),           // 1: traffic.v1.SessionList
-	(*StreamFlowsRequest)(nil),    // 2: traffic.v1.StreamFlowsRequest
-	(*SessionEvent)(nil),          // 3: traffic.v1.SessionEvent
-	(*FlowEvent)(nil),             // 4: traffic.v1.FlowEvent
-	(*GetFlowRequest)(nil),        // 5: traffic.v1.GetFlowRequest
-	(*GetBodyRequest)(nil),        // 6: traffic.v1.GetBodyRequest
-	(*BodyChunk)(nil),             // 7: traffic.v1.BodyChunk
-	(*ListMessagesRequest)(nil),   // 8: traffic.v1.ListMessagesRequest
-	(*MessageList)(nil),           // 9: traffic.v1.MessageList
-	(*StreamMessagesRequest)(nil), // 10: traffic.v1.StreamMessagesRequest
-	(*MessageEvent)(nil),          // 11: traffic.v1.MessageEvent
-	(*GetMessageRequest)(nil),     // 12: traffic.v1.GetMessageRequest
-	(*GetMessageBodyRequest)(nil), // 13: traffic.v1.GetMessageBodyRequest
-	(*Session)(nil),               // 14: traffic.v1.Session
-	(SessionStatus)(0),            // 15: traffic.v1.SessionStatus
-	(*Flow)(nil),                  // 16: traffic.v1.Flow
-	(*DecodeProgress)(nil),        // 17: traffic.v1.DecodeProgress
-	(*WsMessage)(nil),             // 18: traffic.v1.WsMessage
+	(*FlowCursor)(nil),            // 2: traffic.v1.FlowCursor
+	(*QueryFlowsRequest)(nil),     // 3: traffic.v1.QueryFlowsRequest
+	(*FlowPage)(nil),              // 4: traffic.v1.FlowPage
+	(*StreamFlowsRequest)(nil),    // 5: traffic.v1.StreamFlowsRequest
+	(*SessionEvent)(nil),          // 6: traffic.v1.SessionEvent
+	(*FlowEvent)(nil),             // 7: traffic.v1.FlowEvent
+	(*GetFlowRequest)(nil),        // 8: traffic.v1.GetFlowRequest
+	(*GetBodyRequest)(nil),        // 9: traffic.v1.GetBodyRequest
+	(*BodyChunk)(nil),             // 10: traffic.v1.BodyChunk
+	(*ListMessagesRequest)(nil),   // 11: traffic.v1.ListMessagesRequest
+	(*MessageList)(nil),           // 12: traffic.v1.MessageList
+	(*StreamMessagesRequest)(nil), // 13: traffic.v1.StreamMessagesRequest
+	(*MessageEvent)(nil),          // 14: traffic.v1.MessageEvent
+	(*GetMessageRequest)(nil),     // 15: traffic.v1.GetMessageRequest
+	(*GetMessageBodyRequest)(nil), // 16: traffic.v1.GetMessageBodyRequest
+	(*Session)(nil),               // 17: traffic.v1.Session
+	(*Flow)(nil),                  // 18: traffic.v1.Flow
+	(SessionStatus)(0),            // 19: traffic.v1.SessionStatus
+	(*DecodeProgress)(nil),        // 20: traffic.v1.DecodeProgress
+	(*WsMessage)(nil),             // 21: traffic.v1.WsMessage
 }
 var file_traffic_v1_viewer_proto_depIdxs = []int32{
-	14, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
-	15, // 1: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
-	16, // 2: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
-	16, // 3: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
-	3,  // 4: traffic.v1.FlowEvent.session_event:type_name -> traffic.v1.SessionEvent
-	17, // 5: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
-	18, // 6: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
-	18, // 7: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
-	3,  // 8: traffic.v1.MessageEvent.session_event:type_name -> traffic.v1.SessionEvent
-	0,  // 9: traffic.v1.ViewerService.ListSessions:input_type -> traffic.v1.ListSessionsRequest
-	2,  // 10: traffic.v1.ViewerService.StreamFlows:input_type -> traffic.v1.StreamFlowsRequest
-	5,  // 11: traffic.v1.ViewerService.GetFlow:input_type -> traffic.v1.GetFlowRequest
-	6,  // 12: traffic.v1.ViewerService.GetBody:input_type -> traffic.v1.GetBodyRequest
-	8,  // 13: traffic.v1.ViewerService.ListMessages:input_type -> traffic.v1.ListMessagesRequest
-	12, // 14: traffic.v1.ViewerService.GetMessage:input_type -> traffic.v1.GetMessageRequest
-	10, // 15: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
-	13, // 16: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
-	1,  // 17: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
-	4,  // 18: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
-	16, // 19: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
-	7,  // 20: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
-	9,  // 21: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
-	18, // 22: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
-	11, // 23: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
-	7,  // 24: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
-	17, // [17:25] is the sub-list for method output_type
-	9,  // [9:17] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	17, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
+	2,  // 1: traffic.v1.QueryFlowsRequest.after:type_name -> traffic.v1.FlowCursor
+	2,  // 2: traffic.v1.QueryFlowsRequest.before:type_name -> traffic.v1.FlowCursor
+	18, // 3: traffic.v1.FlowPage.flows:type_name -> traffic.v1.Flow
+	2,  // 4: traffic.v1.FlowPage.next:type_name -> traffic.v1.FlowCursor
+	2,  // 5: traffic.v1.FlowPage.prev:type_name -> traffic.v1.FlowCursor
+	19, // 6: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
+	18, // 7: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
+	18, // 8: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
+	6,  // 9: traffic.v1.FlowEvent.session_event:type_name -> traffic.v1.SessionEvent
+	20, // 10: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
+	21, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
+	21, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
+	6,  // 13: traffic.v1.MessageEvent.session_event:type_name -> traffic.v1.SessionEvent
+	0,  // 14: traffic.v1.ViewerService.ListSessions:input_type -> traffic.v1.ListSessionsRequest
+	3,  // 15: traffic.v1.ViewerService.QueryFlows:input_type -> traffic.v1.QueryFlowsRequest
+	5,  // 16: traffic.v1.ViewerService.StreamFlows:input_type -> traffic.v1.StreamFlowsRequest
+	8,  // 17: traffic.v1.ViewerService.GetFlow:input_type -> traffic.v1.GetFlowRequest
+	9,  // 18: traffic.v1.ViewerService.GetBody:input_type -> traffic.v1.GetBodyRequest
+	11, // 19: traffic.v1.ViewerService.ListMessages:input_type -> traffic.v1.ListMessagesRequest
+	15, // 20: traffic.v1.ViewerService.GetMessage:input_type -> traffic.v1.GetMessageRequest
+	13, // 21: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
+	16, // 22: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
+	1,  // 23: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
+	4,  // 24: traffic.v1.ViewerService.QueryFlows:output_type -> traffic.v1.FlowPage
+	7,  // 25: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
+	18, // 26: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
+	10, // 27: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
+	12, // 28: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
+	21, // 29: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
+	14, // 30: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
+	10, // 31: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_viewer_proto_init() }
@@ -1013,13 +1299,14 @@ func file_traffic_v1_viewer_proto_init() {
 		return
 	}
 	file_traffic_v1_common_proto_init()
-	file_traffic_v1_viewer_proto_msgTypes[4].OneofWrappers = []any{
+	file_traffic_v1_viewer_proto_msgTypes[7].OneofWrappers = []any{
 		(*FlowEvent_FlowAdded)(nil),
 		(*FlowEvent_FlowUpdated)(nil),
 		(*FlowEvent_SessionEvent)(nil),
 		(*FlowEvent_DecodeProgress)(nil),
+		(*FlowEvent_FlowUnmatched)(nil),
 	}
-	file_traffic_v1_viewer_proto_msgTypes[11].OneofWrappers = []any{
+	file_traffic_v1_viewer_proto_msgTypes[14].OneofWrappers = []any{
 		(*MessageEvent_MessageAdded)(nil),
 		(*MessageEvent_SessionEvent)(nil),
 	}
@@ -1029,7 +1316,7 @@ func file_traffic_v1_viewer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_viewer_proto_rawDesc), len(file_traffic_v1_viewer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -73,7 +73,7 @@ class GatewayClient:
         """Yield FlowEvents: backfill of stored flows, then (if follow) live events."""
         call = self._ensure().StreamFlows(
             viewer_pb2.StreamFlowsRequest(
-                session_id=session_id, include_backfill=True, follow=follow
+                session_id=session_id, follow=follow
             )
         )
         async for event in call:

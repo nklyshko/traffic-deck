@@ -112,7 +112,7 @@ func TestStreamFlowsLiveNoFollow(t *testing.T) {
 	srv := &fakeFlowStream{ctx: ctx}
 	v := NewViewer(st, hub)
 	if err := v.StreamFlows(&trafficv1.StreamFlowsRequest{
-		SessionId: sid, IncludeBackfill: true, Follow: false,
+		SessionId: sid, Follow: false,
 	}, srv); err != nil {
 		t.Fatalf("StreamFlows: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestStreamFlowsLiveNoDuplicates(t *testing.T) {
 
 	srv := &fakeFlowStream{ctx: ctx}
 	if err := NewViewer(st, hub).StreamFlows(&trafficv1.StreamFlowsRequest{
-		SessionId: sid, IncludeBackfill: true, Follow: false,
+		SessionId: sid, Follow: false,
 	}, srv); err != nil {
 		t.Fatalf("StreamFlows: %v", err)
 	}

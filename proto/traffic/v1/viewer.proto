@@ -7,6 +7,10 @@ import "traffic/v1/common.proto";
 // viewer <-> gateway. Read side: list sessions, stream/inspect flows.
 service ViewerService {
   rpc ListSessions(ListSessionsRequest) returns (SessionList);
+  // QueryFlows returns one page of a session's flows, filtered by the gateway. Paging is
+  // a request and liveness is a stream (ADR-0012): a viewer calls this for the rows it
+  // displays and StreamFlows to stay current, and both take the same filter.
+  rpc QueryFlows(QueryFlowsRequest) returns (FlowPage);
   rpc StreamFlows(StreamFlowsRequest) returns (stream FlowEvent);
   rpc GetFlow(GetFlowRequest) returns (Flow);
   rpc GetBody(GetBodyRequest) returns (stream BodyChunk);
@@ -32,10 +36,50 @@ message SessionList {
   repeated Session sessions = 1;
 }
 
+// FlowCursor is a position in a session's timeline, not an offset: a live session grows
+// while it is read, so OFFSET would shift rows under the reader. It is the sort key of
+// the last row a page returned — page forward with `after`, backward with `before`.
+message FlowCursor {
+  int64 ts_micros = 1;
+  uint64 frame_number = 2;
+}
+
+message QueryFlowsRequest {
+  string session_id = 1;
+  // Filter expression in the viewer DSL, evaluated by the gateway. Empty matches all.
+  string filter = 2;
+  uint32 limit = 3;
+  // Exactly one of after/before, or neither for the first page. `before` walks backwards
+  // from the given position; with no cursor set, `last` starts at the end of the list —
+  // which is how "jump to the end" works without knowing how many rows match.
+  FlowCursor after = 4;
+  FlowCursor before = 5;
+  bool last = 6;
+}
+
+message FlowPage {
+  repeated Flow flows = 1;
+  // Cursors for stepping on from this page; unset when there is nothing that way.
+  FlowCursor next = 2;
+  FlowCursor prev = 3;
+  // Rows matched, and whether the scan cap stopped counting — so a viewer can say
+  // "500+ matching" rather than a precise number it cannot cheaply have (ADR-0012 §5).
+  uint64 matched = 4;
+  bool count_capped = 5;
+  // Rows examined, for the same reason MCP already reports it: a filter that matched
+  // little may have been cut short rather than genuinely finding little.
+  uint64 scanned = 6;
+}
+
 message StreamFlowsRequest {
   string session_id = 1;
-  bool include_backfill = 2; // replay stored flows first
-  bool follow = 3;           // keep streaming live additions
+  bool follow = 3;  // keep streaming live events
+  // Same DSL as QueryFlows: a following viewer receives only events for flows matching
+  // it, and a flow_unmatched when an update pushes one out of that set.
+  string filter = 4;
+
+  reserved 2;                    // was include_backfill: never read; backfill is QueryFlows'
+  reserved "include_backfill";   // job now (ADR-0012 §4)
 }
 
 message SessionEvent {
@@ -49,6 +93,11 @@ message FlowEvent {
     Flow flow_updated = 2;
     SessionEvent session_event = 3;
     DecodeProgress decode_progress = 4;
+    // The flow no longer matches *this subscription's* filter — drop the row. NOT a
+    // deletion: the flow still exists, and a subscriber with a different filter still
+    // sees it. Only the gateway can know this, having evaluated the filter before and
+    // after the update, so a client that ignores this shows stale rows (ADR-0012 §6).
+    string flow_unmatched = 5;
   }
 }
 

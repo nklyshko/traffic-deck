@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	ViewerService_ListSessions_FullMethodName   = "/traffic.v1.ViewerService/ListSessions"
+	ViewerService_QueryFlows_FullMethodName     = "/traffic.v1.ViewerService/QueryFlows"
 	ViewerService_StreamFlows_FullMethodName    = "/traffic.v1.ViewerService/StreamFlows"
 	ViewerService_GetFlow_FullMethodName        = "/traffic.v1.ViewerService/GetFlow"
 	ViewerService_GetBody_FullMethodName        = "/traffic.v1.ViewerService/GetBody"
@@ -36,6 +37,10 @@ const (
 // viewer <-> gateway. Read side: list sessions, stream/inspect flows.
 type ViewerServiceClient interface {
 	ListSessions(ctx context.Context, in *ListSessionsRequest, opts ...grpc.CallOption) (*SessionList, error)
+	// QueryFlows returns one page of a session's flows, filtered by the gateway. Paging is
+	// a request and liveness is a stream (ADR-0012): a viewer calls this for the rows it
+	// displays and StreamFlows to stay current, and both take the same filter.
+	QueryFlows(ctx context.Context, in *QueryFlowsRequest, opts ...grpc.CallOption) (*FlowPage, error)
 	StreamFlows(ctx context.Context, in *StreamFlowsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FlowEvent], error)
 	GetFlow(ctx context.Context, in *GetFlowRequest, opts ...grpc.CallOption) (*Flow, error)
 	GetBody(ctx context.Context, in *GetBodyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BodyChunk], error)
@@ -63,6 +68,16 @@ func (c *viewerServiceClient) ListSessions(ctx context.Context, in *ListSessions
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SessionList)
 	err := c.cc.Invoke(ctx, ViewerService_ListSessions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *viewerServiceClient) QueryFlows(ctx context.Context, in *QueryFlowsRequest, opts ...grpc.CallOption) (*FlowPage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FlowPage)
+	err := c.cc.Invoke(ctx, ViewerService_QueryFlows_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -182,6 +197,10 @@ type ViewerService_GetMessageBodyClient = grpc.ServerStreamingClient[BodyChunk]
 // viewer <-> gateway. Read side: list sessions, stream/inspect flows.
 type ViewerServiceServer interface {
 	ListSessions(context.Context, *ListSessionsRequest) (*SessionList, error)
+	// QueryFlows returns one page of a session's flows, filtered by the gateway. Paging is
+	// a request and liveness is a stream (ADR-0012): a viewer calls this for the rows it
+	// displays and StreamFlows to stay current, and both take the same filter.
+	QueryFlows(context.Context, *QueryFlowsRequest) (*FlowPage, error)
 	StreamFlows(*StreamFlowsRequest, grpc.ServerStreamingServer[FlowEvent]) error
 	GetFlow(context.Context, *GetFlowRequest) (*Flow, error)
 	GetBody(*GetBodyRequest, grpc.ServerStreamingServer[BodyChunk]) error
@@ -207,6 +226,9 @@ type UnimplementedViewerServiceServer struct{}
 
 func (UnimplementedViewerServiceServer) ListSessions(context.Context, *ListSessionsRequest) (*SessionList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSessions not implemented")
+}
+func (UnimplementedViewerServiceServer) QueryFlows(context.Context, *QueryFlowsRequest) (*FlowPage, error) {
+	return nil, status.Error(codes.Unimplemented, "method QueryFlows not implemented")
 }
 func (UnimplementedViewerServiceServer) StreamFlows(*StreamFlowsRequest, grpc.ServerStreamingServer[FlowEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamFlows not implemented")
@@ -264,6 +286,24 @@ func _ViewerService_ListSessions_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ViewerServiceServer).ListSessions(ctx, req.(*ListSessionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ViewerService_QueryFlows_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryFlowsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ViewerServiceServer).QueryFlows(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ViewerService_QueryFlows_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ViewerServiceServer).QueryFlows(ctx, req.(*QueryFlowsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -376,6 +416,10 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSessions",
 			Handler:    _ViewerService_ListSessions_Handler,
+		},
+		{
+			MethodName: "QueryFlows",
+			Handler:    _ViewerService_QueryFlows_Handler,
 		},
 		{
 			MethodName: "GetFlow",

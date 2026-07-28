@@ -55,7 +55,7 @@ class GatewayClient:
     async def list_flows(self, session_id: str):
         """All stored flow summaries for a session (StreamFlows backfill, no follow)."""
         call = self._v().StreamFlows(
-            viewer_pb2.StreamFlowsRequest(session_id=session_id, include_backfill=True, follow=False)
+            viewer_pb2.StreamFlowsRequest(session_id=session_id, follow=False)
         )
         flows = []
         async for ev in call:

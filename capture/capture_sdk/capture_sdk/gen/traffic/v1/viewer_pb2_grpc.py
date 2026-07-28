@@ -41,6 +41,11 @@ class ViewerServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.ListSessionsRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_viewer__pb2.SessionList.FromString,
                 _registered_method=True)
+        self.QueryFlows = channel.unary_unary(
+                '/traffic.v1.ViewerService/QueryFlows',
+                request_serializer=traffic_dot_v1_dot_viewer__pb2.QueryFlowsRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_viewer__pb2.FlowPage.FromString,
+                _registered_method=True)
         self.StreamFlows = channel.unary_stream(
                 '/traffic.v1.ViewerService/StreamFlows',
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.StreamFlowsRequest.SerializeToString,
@@ -84,6 +89,15 @@ class ViewerServiceServicer(object):
 
     def ListSessions(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def QueryFlows(self, request, context):
+        """QueryFlows returns one page of a session's flows, filtered by the gateway. Paging is
+        a request and liveness is a stream (ADR-0012): a viewer calls this for the rows it
+        displays and StreamFlows to stay current, and both take the same filter.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -143,6 +157,11 @@ def add_ViewerServiceServicer_to_server(servicer, server):
                     servicer.ListSessions,
                     request_deserializer=traffic_dot_v1_dot_viewer__pb2.ListSessionsRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_viewer__pb2.SessionList.SerializeToString,
+            ),
+            'QueryFlows': grpc.unary_unary_rpc_method_handler(
+                    servicer.QueryFlows,
+                    request_deserializer=traffic_dot_v1_dot_viewer__pb2.QueryFlowsRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_viewer__pb2.FlowPage.SerializeToString,
             ),
             'StreamFlows': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamFlows,
@@ -208,6 +227,33 @@ class ViewerService(object):
             '/traffic.v1.ViewerService/ListSessions',
             traffic_dot_v1_dot_viewer__pb2.ListSessionsRequest.SerializeToString,
             traffic_dot_v1_dot_viewer__pb2.SessionList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def QueryFlows(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ViewerService/QueryFlows',
+            traffic_dot_v1_dot_viewer__pb2.QueryFlowsRequest.SerializeToString,
+            traffic_dot_v1_dot_viewer__pb2.FlowPage.FromString,
             options,
             channel_credentials,
             insecure,
