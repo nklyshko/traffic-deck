@@ -1277,9 +1277,10 @@ class SessionPane(AnnotatableTable, Vertical):
         table = self.query_one("#flows", DataTable)
         focused = self._focused_flow_id()
         row = table.cursor_row
-        table.clear()
-        for fid in ids:
-            table.add_row(*self._cells(self.flows[fid]), key=fid)
+        if force or not self._slide_rows(table, ids):
+            table.clear()
+            for fid in ids:
+                table.add_row(*self._cells(self.flows[fid]), key=fid)
         self._rendered = ids
         self._rows = set(ids)
         if not ids:
@@ -1292,6 +1293,34 @@ class SessionPane(AnnotatableTable, Vertical):
             table.move_cursor(row=ids.index(focused))
         else:
             table.move_cursor(row=min(max(row, 0), len(ids) - 1))
+
+    def _slide_rows(self, table, ids: list[str]) -> bool:
+        """Update the table in place when the window only *slid* — rows dropped from the
+        front and/or appended at the end — and report whether that was possible.
+
+        Following a live session slides the window by one flow at a time, and rebuilding
+        it (clear + re-add every row) resets the scroll to the top on every arrival, so
+        the table visibly jumps to the first row and is then dragged back to the last.
+        Adding and removing the rows that actually changed leaves the scroll alone."""
+        old = self._rendered
+        if not old or not ids:
+            return False
+        # Find where the new window starts within the old one; anything before it dropped.
+        try:
+            drop = old.index(ids[0])
+        except ValueError:
+            return False  # no overlap — a different window entirely
+        kept = old[drop:]
+        if ids[:len(kept)] != kept:
+            return False  # the overlap is not a prefix: rows changed, not just slid
+        for fid in old[:drop]:
+            try:
+                table.remove_row(fid)
+            except Exception:  # noqa: BLE001 — a row already gone is not a failure
+                return False
+        for fid in ids[len(kept):]:
+            table.add_row(*self._cells(self.flows[fid]), key=fid)
+        return True
 
     def _apply_page(self, page, cursor: str) -> None:
         """Adopt a FlowPage from the gateway as the window."""

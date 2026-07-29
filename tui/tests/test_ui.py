@@ -1708,3 +1708,32 @@ async def test_toggle_mcp_starts_then_stops():
         await pilot.press("X")            # stop it
         await settle(pilot)
         assert app.client.mcp_running is False
+
+
+async def test_following_appends_rows_without_rebuilding_the_table():
+    """Following slides the window by one flow at a time. Rebuilding it — clear plus
+    re-add every row — resets the scroll to the top on each arrival, so the table jumps to
+    the first row and is then dragged back to the last. Only the changed rows may move."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("l")                 # follow on -> jump to the end
+        await settle(pilot)
+        assert table.follow and pane._at_end
+
+        cleared = []
+        original = table.clear
+        table.clear = lambda *a, **k: (cleared.append(1), original(*a, **k))[1]
+
+        before = table.row_count
+        for i in range(5):
+            pane._ingest(_flow(f"live{i}", "GET", 200, frame=9000 + i))
+        pane._flush()
+        await settle(pilot)
+
+        assert not cleared, "the table was rebuilt; following must only add and remove rows"
+        assert table.row_count == before        # window slid: 5 in, 5 out
+        # The newest flow is the last row, and the cursor is on it.
+        assert pane._order[-1] == "live4"
+        assert table.cursor_coordinate.row == table.row_count - 1
