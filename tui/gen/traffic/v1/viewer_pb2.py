@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from traffic.v1 import common_pb2 as traffic_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17traffic/v1/viewer.proto\x12\ntraffic.v1\x1a\x17traffic/v1/common.proto\"4\n\x13ListSessionsRequest\x12\r\n\x05limit\x18\x01 \x01(\r\x12\x0e\n\x06offset\x18\x02 \x01(\r\"4\n\x0bSessionList\x12%\n\x08sessions\x18\x01 \x03(\x0b\x32\x13.traffic.v1.Session\"5\n\nFlowCursor\x12\x11\n\tts_micros\x18\x01 \x01(\x03\x12\x14\n\x0c\x66rame_number\x18\x02 \x01(\x04\"\xa3\x01\n\x11QueryFlowsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06\x66ilter\x18\x02 \x01(\t\x12\r\n\x05limit\x18\x03 \x01(\r\x12%\n\x05\x61\x66ter\x18\x04 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12&\n\x06\x62\x65\x66ore\x18\x05 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12\x0c\n\x04last\x18\x06 \x01(\x08\"\xaf\x01\n\x08\x46lowPage\x12\x1f\n\x05\x66lows\x18\x01 \x03(\x0b\x32\x10.traffic.v1.Flow\x12$\n\x04next\x18\x02 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12$\n\x04prev\x18\x03 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12\x0f\n\x07matched\x18\x04 \x01(\x04\x12\x14\n\x0c\x63ount_capped\x18\x05 \x01(\x08\x12\x0f\n\x07scanned\x18\x06 \x01(\x04\"`\n\x12StreamFlowsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06\x66ollow\x18\x03 \x01(\x08\x12\x0e\n\x06\x66ilter\x18\x04 \x01(\tJ\x04\x08\x02\x10\x03R\x10include_backfill\"M\n\x0cSessionEvent\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12)\n\x06status\x18\x02 \x01(\x0e\x32\x19.traffic.v1.SessionStatus\"\xea\x01\n\tFlowEvent\x12&\n\nflow_added\x18\x01 \x01(\x0b\x32\x10.traffic.v1.FlowH\x00\x12(\n\x0c\x66low_updated\x18\x02 \x01(\x0b\x32\x10.traffic.v1.FlowH\x00\x12\x31\n\rsession_event\x18\x03 \x01(\x0b\x32\x18.traffic.v1.SessionEventH\x00\x12\x35\n\x0f\x64\x65\x63ode_progress\x18\x04 \x01(\x0b\x32\x1a.traffic.v1.DecodeProgressH\x00\x12\x18\n\x0e\x66low_unmatched\x18\x05 \x01(\tH\x00\x42\x07\n\x05\x65vent\"5\n\x0eGetFlowRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\"G\n\x0eGetBodyRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\x12\x10\n\x08response\x18\x03 \x01(\x08\"/\n\tBodyChunk\x12\x0f\n\x07payload\x18\x01 \x01(\x0c\x12\x11\n\ttruncated\x18\x02 \x01(\x08\":\n\x13ListMessagesRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\"6\n\x0bMessageList\x12\'\n\x08messages\x18\x01 \x03(\x0b\x32\x15.traffic.v1.WsMessage\"L\n\x15StreamMessagesRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\x12\x0e\n\x06\x66ollow\x18\x03 \x01(\x08\"z\n\x0cMessageEvent\x12.\n\rmessage_added\x18\x01 \x01(\x0b\x32\x15.traffic.v1.WsMessageH\x00\x12\x31\n\rsession_event\x18\x02 \x01(\x0b\x32\x18.traffic.v1.SessionEventH\x00\x42\x07\n\x05\x65vent\";\n\x11GetMessageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x12\n\nmessage_id\x18\x02 \x01(\t\"L\n\x15GetMessageBodyRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x12\n\nmessage_id\x18\x02 \x01(\t\x12\x0b\n\x03raw\x18\x03 \x01(\x08\x32\x8a\x05\n\rViewerService\x12H\n\x0cListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12\x41\n\nQueryFlows\x12\x1d.traffic.v1.QueryFlowsRequest\x1a\x14.traffic.v1.FlowPage\x12\x46\n\x0bStreamFlows\x12\x1e.traffic.v1.StreamFlowsRequest\x1a\x15.traffic.v1.FlowEvent0\x01\x12\x37\n\x07GetFlow\x12\x1a.traffic.v1.GetFlowRequest\x1a\x10.traffic.v1.Flow\x12>\n\x07GetBody\x12\x1a.traffic.v1.GetBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12H\n\x0cListMessages\x12\x1f.traffic.v1.ListMessagesRequest\x1a\x17.traffic.v1.MessageList\x12\x42\n\nGetMessage\x12\x1d.traffic.v1.GetMessageRequest\x1a\x15.traffic.v1.WsMessage\x12O\n\x0eStreamMessages\x12!.traffic.v1.StreamMessagesRequest\x1a\x18.traffic.v1.MessageEvent0\x01\x12L\n\x0eGetMessageBody\x12!.traffic.v1.GetMessageBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17traffic/v1/viewer.proto\x12\ntraffic.v1\x1a\x17traffic/v1/common.proto\"4\n\x13ListSessionsRequest\x12\r\n\x05limit\x18\x01 \x01(\r\x12\x0e\n\x06offset\x18\x02 \x01(\r\"4\n\x0bSessionList\x12%\n\x08sessions\x18\x01 \x03(\x0b\x32\x13.traffic.v1.Session\"5\n\nFlowCursor\x12\x11\n\tts_micros\x18\x01 \x01(\x03\x12\x14\n\x0c\x66rame_number\x18\x02 \x01(\x04\"\xa3\x01\n\x11QueryFlowsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06\x66ilter\x18\x02 \x01(\t\x12\r\n\x05limit\x18\x03 \x01(\r\x12%\n\x05\x61\x66ter\x18\x04 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12&\n\x06\x62\x65\x66ore\x18\x05 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12\x0c\n\x04last\x18\x06 \x01(\x08\"\xbe\x01\n\x08\x46lowPage\x12\x1f\n\x05\x66lows\x18\x01 \x03(\x0b\x32\x10.traffic.v1.Flow\x12$\n\x04next\x18\x02 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12$\n\x04prev\x18\x03 \x01(\x0b\x32\x16.traffic.v1.FlowCursor\x12\x0f\n\x07matched\x18\x04 \x01(\x04\x12\x14\n\x0c\x63ount_capped\x18\x05 \x01(\x08\x12\x0f\n\x07scanned\x18\x06 \x01(\x04\x12\r\n\x05hints\x18\x07 \x03(\t\"`\n\x12StreamFlowsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06\x66ollow\x18\x03 \x01(\x08\x12\x0e\n\x06\x66ilter\x18\x04 \x01(\tJ\x04\x08\x02\x10\x03R\x10include_backfill\"M\n\x0cSessionEvent\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12)\n\x06status\x18\x02 \x01(\x0e\x32\x19.traffic.v1.SessionStatus\"\xea\x01\n\tFlowEvent\x12&\n\nflow_added\x18\x01 \x01(\x0b\x32\x10.traffic.v1.FlowH\x00\x12(\n\x0c\x66low_updated\x18\x02 \x01(\x0b\x32\x10.traffic.v1.FlowH\x00\x12\x31\n\rsession_event\x18\x03 \x01(\x0b\x32\x18.traffic.v1.SessionEventH\x00\x12\x35\n\x0f\x64\x65\x63ode_progress\x18\x04 \x01(\x0b\x32\x1a.traffic.v1.DecodeProgressH\x00\x12\x18\n\x0e\x66low_unmatched\x18\x05 \x01(\tH\x00\x42\x07\n\x05\x65vent\"5\n\x0eGetFlowRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\"G\n\x0eGetBodyRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\x12\x10\n\x08response\x18\x03 \x01(\x08\"/\n\tBodyChunk\x12\x0f\n\x07payload\x18\x01 \x01(\x0c\x12\x11\n\ttruncated\x18\x02 \x01(\x08\":\n\x13ListMessagesRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\"6\n\x0bMessageList\x12\'\n\x08messages\x18\x01 \x03(\x0b\x32\x15.traffic.v1.WsMessage\"L\n\x15StreamMessagesRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x66low_id\x18\x02 \x01(\t\x12\x0e\n\x06\x66ollow\x18\x03 \x01(\x08\"z\n\x0cMessageEvent\x12.\n\rmessage_added\x18\x01 \x01(\x0b\x32\x15.traffic.v1.WsMessageH\x00\x12\x31\n\rsession_event\x18\x02 \x01(\x0b\x32\x18.traffic.v1.SessionEventH\x00\x42\x07\n\x05\x65vent\";\n\x11GetMessageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x12\n\nmessage_id\x18\x02 \x01(\t\"L\n\x15GetMessageBodyRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x12\n\nmessage_id\x18\x02 \x01(\t\x12\x0b\n\x03raw\x18\x03 \x01(\x08\x32\x8a\x05\n\rViewerService\x12H\n\x0cListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12\x41\n\nQueryFlows\x12\x1d.traffic.v1.QueryFlowsRequest\x1a\x14.traffic.v1.FlowPage\x12\x46\n\x0bStreamFlows\x12\x1e.traffic.v1.StreamFlowsRequest\x1a\x15.traffic.v1.FlowEvent0\x01\x12\x37\n\x07GetFlow\x12\x1a.traffic.v1.GetFlowRequest\x1a\x10.traffic.v1.Flow\x12>\n\x07GetBody\x12\x1a.traffic.v1.GetBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12H\n\x0cListMessages\x12\x1f.traffic.v1.ListMessagesRequest\x1a\x17.traffic.v1.MessageList\x12\x42\n\nGetMessage\x12\x1d.traffic.v1.GetMessageRequest\x1a\x15.traffic.v1.WsMessage\x12O\n\x0eStreamMessages\x12!.traffic.v1.StreamMessagesRequest\x1a\x18.traffic.v1.MessageEvent0\x01\x12L\n\x0eGetMessageBody\x12!.traffic.v1.GetMessageBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -41,31 +41,31 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_QUERYFLOWSREQUEST']._serialized_start=228
   _globals['_QUERYFLOWSREQUEST']._serialized_end=391
   _globals['_FLOWPAGE']._serialized_start=394
-  _globals['_FLOWPAGE']._serialized_end=569
-  _globals['_STREAMFLOWSREQUEST']._serialized_start=571
-  _globals['_STREAMFLOWSREQUEST']._serialized_end=667
-  _globals['_SESSIONEVENT']._serialized_start=669
-  _globals['_SESSIONEVENT']._serialized_end=746
-  _globals['_FLOWEVENT']._serialized_start=749
-  _globals['_FLOWEVENT']._serialized_end=983
-  _globals['_GETFLOWREQUEST']._serialized_start=985
-  _globals['_GETFLOWREQUEST']._serialized_end=1038
-  _globals['_GETBODYREQUEST']._serialized_start=1040
-  _globals['_GETBODYREQUEST']._serialized_end=1111
-  _globals['_BODYCHUNK']._serialized_start=1113
-  _globals['_BODYCHUNK']._serialized_end=1160
-  _globals['_LISTMESSAGESREQUEST']._serialized_start=1162
-  _globals['_LISTMESSAGESREQUEST']._serialized_end=1220
-  _globals['_MESSAGELIST']._serialized_start=1222
-  _globals['_MESSAGELIST']._serialized_end=1276
-  _globals['_STREAMMESSAGESREQUEST']._serialized_start=1278
-  _globals['_STREAMMESSAGESREQUEST']._serialized_end=1354
-  _globals['_MESSAGEEVENT']._serialized_start=1356
-  _globals['_MESSAGEEVENT']._serialized_end=1478
-  _globals['_GETMESSAGEREQUEST']._serialized_start=1480
-  _globals['_GETMESSAGEREQUEST']._serialized_end=1539
-  _globals['_GETMESSAGEBODYREQUEST']._serialized_start=1541
-  _globals['_GETMESSAGEBODYREQUEST']._serialized_end=1617
-  _globals['_VIEWERSERVICE']._serialized_start=1620
-  _globals['_VIEWERSERVICE']._serialized_end=2270
+  _globals['_FLOWPAGE']._serialized_end=584
+  _globals['_STREAMFLOWSREQUEST']._serialized_start=586
+  _globals['_STREAMFLOWSREQUEST']._serialized_end=682
+  _globals['_SESSIONEVENT']._serialized_start=684
+  _globals['_SESSIONEVENT']._serialized_end=761
+  _globals['_FLOWEVENT']._serialized_start=764
+  _globals['_FLOWEVENT']._serialized_end=998
+  _globals['_GETFLOWREQUEST']._serialized_start=1000
+  _globals['_GETFLOWREQUEST']._serialized_end=1053
+  _globals['_GETBODYREQUEST']._serialized_start=1055
+  _globals['_GETBODYREQUEST']._serialized_end=1126
+  _globals['_BODYCHUNK']._serialized_start=1128
+  _globals['_BODYCHUNK']._serialized_end=1175
+  _globals['_LISTMESSAGESREQUEST']._serialized_start=1177
+  _globals['_LISTMESSAGESREQUEST']._serialized_end=1235
+  _globals['_MESSAGELIST']._serialized_start=1237
+  _globals['_MESSAGELIST']._serialized_end=1291
+  _globals['_STREAMMESSAGESREQUEST']._serialized_start=1293
+  _globals['_STREAMMESSAGESREQUEST']._serialized_end=1369
+  _globals['_MESSAGEEVENT']._serialized_start=1371
+  _globals['_MESSAGEEVENT']._serialized_end=1493
+  _globals['_GETMESSAGEREQUEST']._serialized_start=1495
+  _globals['_GETMESSAGEREQUEST']._serialized_end=1554
+  _globals['_GETMESSAGEBODYREQUEST']._serialized_start=1556
+  _globals['_GETMESSAGEBODYREQUEST']._serialized_end=1632
+  _globals['_VIEWERSERVICE']._serialized_start=1635
+  _globals['_VIEWERSERVICE']._serialized_end=2285
 # @@protoc_insertion_point(module_scope)

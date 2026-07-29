@@ -69,6 +69,10 @@ message FlowPage {
   // Rows examined, for the same reason MCP already reports it: a filter that matched
   // little may have been cut short rather than genuinely finding little.
   uint64 scanned = 6;
+  // Advisory diagnostics for an expression that parses but does not mean what it looks
+  // like — `~d a & ~c 200` matches `&` as a URL regex rather than failing. Part of the
+  // language, so they come from whoever owns it (ADR-0012 §9).
+  repeated string hints = 7;
 }
 
 message StreamFlowsRequest {

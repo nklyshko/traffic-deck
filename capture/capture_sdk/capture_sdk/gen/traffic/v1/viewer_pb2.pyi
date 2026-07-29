@@ -46,20 +46,22 @@ class QueryFlowsRequest(_message.Message):
     def __init__(self, session_id: _Optional[str] = ..., filter: _Optional[str] = ..., limit: _Optional[int] = ..., after: _Optional[_Union[FlowCursor, _Mapping]] = ..., before: _Optional[_Union[FlowCursor, _Mapping]] = ..., last: bool = ...) -> None: ...
 
 class FlowPage(_message.Message):
-    __slots__ = ("flows", "next", "prev", "matched", "count_capped", "scanned")
+    __slots__ = ("flows", "next", "prev", "matched", "count_capped", "scanned", "hints")
     FLOWS_FIELD_NUMBER: _ClassVar[int]
     NEXT_FIELD_NUMBER: _ClassVar[int]
     PREV_FIELD_NUMBER: _ClassVar[int]
     MATCHED_FIELD_NUMBER: _ClassVar[int]
     COUNT_CAPPED_FIELD_NUMBER: _ClassVar[int]
     SCANNED_FIELD_NUMBER: _ClassVar[int]
+    HINTS_FIELD_NUMBER: _ClassVar[int]
     flows: _containers.RepeatedCompositeFieldContainer[_common_pb2.Flow]
     next: FlowCursor
     prev: FlowCursor
     matched: int
     count_capped: bool
     scanned: int
-    def __init__(self, flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., next: _Optional[_Union[FlowCursor, _Mapping]] = ..., prev: _Optional[_Union[FlowCursor, _Mapping]] = ..., matched: _Optional[int] = ..., count_capped: bool = ..., scanned: _Optional[int] = ...) -> None: ...
+    hints: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., next: _Optional[_Union[FlowCursor, _Mapping]] = ..., prev: _Optional[_Union[FlowCursor, _Mapping]] = ..., matched: _Optional[int] = ..., count_capped: bool = ..., scanned: _Optional[int] = ..., hints: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class StreamFlowsRequest(_message.Message):
     __slots__ = ("session_id", "follow", "filter")

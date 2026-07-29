@@ -146,18 +146,21 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 		return nil // never shown and still not matching: nothing to say
 	}
 
-	flows, err := v.st.ListFlows(srv.Context(), sid)
-	if err != nil {
-		return storeStatus(err, "list flows")
-	}
-	for _, f := range flows {
-		if err := send(&trafficv1.FlowEvent{
-			Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
-			return err
-		}
-	}
-
+	// A following subscription carries liveness only: QueryFlows serves the rows a viewer
+	// displays, so replaying the session here would hand it the whole thing again and undo
+	// the paging (ADR-0012 §4). A non-following reader still gets the replay, since that is
+	// the only thing such a call could mean — and it is the path MCP has yet to migrate off.
 	if !req.GetFollow() {
+		flows, err := v.st.ListFlows(srv.Context(), sid)
+		if err != nil {
+			return storeStatus(err, "list flows")
+		}
+		for _, f := range flows {
+			if err := send(&trafficv1.FlowEvent{
+				Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
+				return err
+			}
+		}
 		// A non-following reader would otherwise miss an open session's unflushed tail,
 		// which is not in the bundle yet. Skipping ids the backfill already covered, since
 		// the pushed (mitmproxy) path persists incrementally and so appears in both.
@@ -167,13 +170,13 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	if ls == nil {
 		return nil // not a live session; backfill is all there is
 	}
-	snapshot, ch, cancel := ls.subscribe()
+	_, ch, cancel := ls.subscribe()
 	defer cancel()
-	for _, ev := range snapshot {
-		if err := send(ev); err != nil {
-			return err
-		}
-	}
+	// The subscription snapshot is skipped for the same reason as the backfill above: it
+	// is the hub's whole session, and replaying it would hand a paging viewer everything.
+	// A flow arriving between the viewer's QueryFlows and this subscribe is therefore not
+	// reported until it next queries — the gap ADR-0012 §8 flags, whose buffer-then-replay
+	// fix belongs with bounding the hub's own row map rather than here.
 	for {
 		select {
 		case <-srv.Context().Done():

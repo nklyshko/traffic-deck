@@ -67,6 +67,18 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("timed out waiting for the stream")
 }
 
+// waitForSubscriber blocks until a StreamFlows call has registered. A following
+// subscription is live-only, so anything published before it is up is simply not its
+// business — the tests publish after this returns.
+func waitForSubscriber(t *testing.T, ls *liveSession) {
+	t.Helper()
+	waitFor(t, func() bool {
+		ls.mu.Lock()
+		defer ls.mu.Unlock()
+		return len(ls.subs) > 0
+	})
+}
+
 func queryTestStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -122,17 +134,17 @@ func TestStreamFlowsRetractsOnUpdate(t *testing.T) {
 	ls := hub.startPassive(sid)
 	v := NewViewer(st, hub)
 
-	// A request with no response yet: matches ~q.
-	pending := &trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com", Path: "/a"}
-	ls.publish(pending, true)
-
 	s := &collectStream{ctx: ctx}
 	done := make(chan error, 1)
 	go func() {
 		done <- v.StreamFlows(&trafficv1.StreamFlowsRequest{
 			SessionId: sid, Filter: "~q", Follow: true}, s)
 	}()
+	waitForSubscriber(t, ls)
 
+	// A request with no response yet: matches ~q.
+	pending := &trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com", Path: "/a"}
+	ls.publish(pending, true)
 	waitFor(t, func() bool { return s.count() >= 1 })
 
 	// The response lands: the flow no longer has "no response".
@@ -162,7 +174,6 @@ func TestStreamFlowsAddsWhenAnUpdateBringsAFlowIn(t *testing.T) {
 	hub := newLiveHub(true)
 	ls := hub.startPassive(sid)
 	v := NewViewer(st, hub)
-	ls.publish(&trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com"}, true)
 
 	s := &collectStream{ctx: ctx}
 	done := make(chan error, 1)
@@ -170,8 +181,10 @@ func TestStreamFlowsAddsWhenAnUpdateBringsAFlowIn(t *testing.T) {
 		done <- v.StreamFlows(&trafficv1.StreamFlowsRequest{
 			SessionId: sid, Filter: "~s", Follow: true}, s) // has a response
 	}()
-	waitFor(t, func() bool { return true })
+	waitForSubscriber(t, ls)
 
+	// Published without a status: it does not match, so the subscription hears nothing.
+	ls.publish(&trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com"}, true)
 	ls.publish(&trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com", Status: 200}, false)
 	waitFor(t, func() bool { return s.count() >= 1 })
 	cancel()

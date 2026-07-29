@@ -72,6 +72,7 @@ func (v *Viewer) QueryFlows(ctx context.Context, req *trafficv1.QueryFlowsReques
 
 	out := &trafficv1.FlowPage{
 		Flows:       page.Flows,
+		Hints:       filter.Hints(req.GetFilter()),
 		Next:        cursorToProto(page.Next),
 		Prev:        cursorToProto(page.Prev),
 		Matched:     page.Matched,

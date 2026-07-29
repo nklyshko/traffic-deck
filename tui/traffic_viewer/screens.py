@@ -27,7 +27,7 @@ from traffic_viewer.client import control_pb2 as cpb
 from textual.widgets.option_list import Option
 from rich.text import Text
 
-from .filters import FILTER_HELP, compile_filter, filter_hints
+from .filters import FILTER_HELP
 from .render import (
     MARK_COLORS,
     SESSION_STATUS,
@@ -1101,12 +1101,18 @@ class SessionPane(AnnotatableTable, Vertical):
         super().__init__()
         self.session_id = session_id
         self.label = label
-        self.flows: dict[str, object] = {}  # flow id -> cached Flow (the whole session)
-        self._order: list[str] = []         # every flow id, in arrival (time) order
-        self._view: list[str] = []          # ids passing the filter — what pages walk
-        self._view_ids: set[str] = set()    # same, for O(1) membership
-        self._page = 0
-        self._page_size = _page_size()
+        # The window, not the session: the gateway filters and pages, so only the rows on
+        # screen are held here (ADR-0012). What was the whole session is now at most
+        # _window flows.
+        self.flows: dict[str, object] = {}  # flow id -> Flow, for the current window
+        self._order: list[str] = []         # window ids, in timeline order
+        self._window = _page_size()
+        self._filter = ""                   # expression as typed; the gateway compiles it
+        self._next = None                   # cursor past the window's last row
+        self._prev = None                   # cursor before its first
+        self._matched = 0                   # rows matching, possibly a lower bound
+        self._capped = False                # ...when the scan cap stopped counting
+        self._at_end = True                 # the window includes the end of the list
         self._rows: set[str] = set()        # ids rendered right now (the current page)
         self._rendered: list[str] = []      # the same ids in row order, to skip no-op renders
         self._dirty = False                 # model changed since the last flush
@@ -1119,7 +1125,6 @@ class SessionPane(AnnotatableTable, Vertical):
         # conn/stream; anything undeclared starts hidden and is toggled on with C.
         self._extra_cols: list[str] = [_col_id(n) for n in _resolve_columns(source_columns)]
         self._extra_col_keys: dict[str, object] = {}      # column id -> DataTable ColumnKey
-        self._predicate = None  # active filter
         self._selected: set[str] = set()       # multi-selection for bulk annotation
         self._tags: list = []                  # tag defs (catalog)
         self._groups: list = []                # group defs (catalog)
@@ -1239,52 +1244,35 @@ class SessionPane(AnnotatableTable, Vertical):
                 pass
 
     def _update_subtitle(self) -> None:
-        base = f"{len(self.flows)} flows"
+        # A window into a filtered list has a position, not an index: "page 3 of 12"
+        # needs a denominator, and a capped count cannot supply one honestly (§5).
+        total = f"{self._matched}+" if self._capped else str(self._matched)
+        base = f"{total} matching" if self._filter else f"{total} flows"
         if self._loading:
             base += " · loading…"
         if self._selected:
             base += f" · {len(self._selected)} selected"
-        if self._predicate is not None:
-            base += f" · {len(self._view)} matching"
-        # Position in the list, not "page N of M": PageDown pages the *viewport*, and two
-        # different meanings of "page" on one status line is one too many.
-        if self._page_count() > 1:
-            first = self._page * self._page_size + 1
-            base += (f" · showing {first}–{min(first + self._page_size - 1, len(self._view))}"
-                     f" of {len(self._view)}")
+        if self._order and (self._next is not None or self._prev is not None):
+            base += f" · showing {len(self._order)}"
         if self.query_one("#flows", NavDataTable).follow:
             base += " · ⇣ follow"
         self.query_one("#pane-status", Label).update(base)
 
-    # --- paged view model ------------------------------------------------
+    # --- windowed view model ----------------------------------------------
     #
-    # `_order` is every flow, `_view` the ones passing the filter, and only the current
-    # page of `_view` is ever rendered as table rows.
-
-    def _page_count(self) -> int:
-        return max(1, -(-len(self._view) // self._page_size))  # ceil
-
-    def _page_ids(self) -> list[str]:
-        start = self._page * self._page_size
-        return self._view[start:start + self._page_size]
-
-    def _rebuild_view(self) -> None:
-        """Re-run the filter over every flow in the session (not just the rendered page)
-        and clamp the page onto the result."""
-        self._view = [fid for fid in self._order if self._matches(self.flows[fid])]
-        self._view_ids = set(self._view)
-        self._page = min(self._page, self._page_count() - 1)
+    # The gateway decides what matches and hands back one window at a time, so there is no
+    # page arithmetic here: movement is a cursor query, and "last" is the end of the list
+    # rather than an index derived from a total (ADR-0012 §5).
 
     def _render_page(self, force: bool = False, cursor: str = "keep") -> None:
-        """Put the current page's rows in the table. A no-op when the page already holds
-        exactly these flows and `force` is off — during backfill that means a full page
-        stops being repainted at all, however many flows are still arriving.
+        """Put the window's rows in the table. A no-op when the table already holds exactly
+        these flows and `force` is off.
 
-        `cursor`: "keep" holds the focused flow (or the row index, if it left the page),
-        "top"/"bottom" land on the page's first/last row — where paging by cursor arrives."""
-        ids = self._page_ids()
+        `cursor`: "keep" holds the focused flow (or the row index, if it left the window),
+        "top"/"bottom" land on the first/last row — where paging by cursor arrives."""
+        ids = list(self._order)
         if ids == self._rendered and not force:
-            return  # same flows already on screen — don't repaint (the whole point)
+            return
         table = self.query_one("#flows", DataTable)
         focused = self._focused_flow_id()
         row = table.cursor_row
@@ -1304,58 +1292,100 @@ class SessionPane(AnnotatableTable, Vertical):
         else:
             table.move_cursor(row=min(max(row, 0), len(ids) - 1))
 
-    def _goto_page(self, page: int, cursor: str) -> bool:
-        """Move to `page` (clamped); False when that is where we already are."""
-        page = max(0, min(page, self._page_count() - 1))
-        if page == self._page:
-            return False
-        self._page = page
+    def _apply_page(self, page, cursor: str) -> None:
+        """Adopt a FlowPage from the gateway as the window."""
+        self.flows = {f.id: f for f in page.flows}
+        self._order = [f.id for f in page.flows]
+        self._next = page.next if page.HasField("next") else None
+        self._prev = page.prev if page.HasField("prev") else None
+        self._matched, self._capped = page.matched, page.count_capped
+        self._at_end = self._next is None
+        self._rendered = []
         self._render_page(force=True, cursor=cursor)
         self._update_subtitle()
+
+    @work(exclusive=True, group="page")
+    async def _load_page(self, cursor: str = "top", after=None, before=None,
+                         last: bool = False) -> None:
+        try:
+            page = await self.app.client.query_flows(
+                self.session_id, self._filter, self._window,
+                after=after, before=before, last=last)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"filter: {exc}", severity="error")
+            return
+        self._apply_page(page, cursor)
+        # A term the grammar accepts but that means something else (`&`, a bare status
+        # code, quoted args) filters on the wrong thing instead of failing, so warn even
+        # when rows came back — a silently wrong result is the case worth catching. The
+        # hints come from the gateway, which owns the language.
+        for hint in page.hints:
+            self.notify(hint, title="filter", severity="warning")
+
+    # The paging protocol PagedDataTable drives when the cursor walks off the window.
+    def page_next(self, cursor: str = "top") -> bool:
+        if self._next is None:
+            return False
+        self._load_page(cursor=cursor, after=self._next)
         return True
 
-    # The paging protocol PagedDataTable drives when the cursor walks off a page.
-    def page_next(self, cursor: str = "top") -> bool:
-        return self._goto_page(self._page + 1, cursor)
-
     def page_prev(self, cursor: str = "bottom") -> bool:
-        return self._goto_page(self._page - 1, cursor)
+        if self._prev is None:
+            return False
+        self._load_page(cursor=cursor, before=self._prev)
+        return True
 
     def page_first(self, cursor: str = "top") -> bool:
-        return self._goto_page(0, cursor)
+        if self._prev is None:
+            return False  # already showing the start; the table just moves its cursor
+        self._load_page(cursor=cursor)
+        return True
 
     def page_last(self, cursor: str = "bottom") -> bool:
-        return self._goto_page(self._page_count() - 1, cursor)
+        """Jump to the end of the list — a query from the end, not an offset computed from
+        a total, which is what lets the count stay approximate."""
+        if self._next is None:
+            return False  # already showing the end
+        self._load_page(cursor=cursor, last=True)
+        return True
 
     def _ingest(self, f) -> bool:
-        """Fold one flow into the model without touching the table. Returns whether the
-        filtered view changed (a new match, or an update that changed membership) — the
-        table only needs re-rendering then."""
-        known = f.id in self.flows
-        self.flows[f.id] = f
-        matches = self._matches(f)
+        """Fold one live flow into the window. Returns whether the table needs redrawing.
+
+        The gateway has already decided this flow matches, so there is no predicate here.
+        A flow arriving while the window sits mid-list changes the count but not what is on
+        screen; only a window holding the end of the list grows."""
         self._dirty = True
-        if not known:
-            self._order.append(f.id)
-            if matches:
-                self._view.append(f.id)
-                self._view_ids.add(f.id)
-                return True
+        if f.id in self.flows:
+            self.flows[f.id] = f
             return False
-        if matches != (f.id in self._view_ids):
-            # An update flipped filter membership (a status arrived, a tag was set):
-            # rebuild so the row lands back in timeline order rather than at the end.
-            self._rebuild_view()
-            return True
-        return False
+        self._matched += 1
+        if not self._at_end:
+            return False  # off-window: it will be there when the user pages down
+        self.flows[f.id] = f
+        self._order.append(f.id)
+        while len(self._order) > self._window:
+            self.flows.pop(self._order.pop(0), None)
+        return True
+
+    def _drop(self, flow_id: str) -> bool:
+        """Handle flow_unmatched: the flow left this subscription's filtered view. Not a
+        deletion — it still exists, it just no longer matches what we asked for. Ignoring
+        it would leave a stale row on screen, which is why the gateway sends it."""
+        self._dirty = True
+        if self._matched > 0:
+            self._matched -= 1
+        if flow_id not in self.flows:
+            return False
+        self.flows.pop(flow_id, None)
+        self._order = [i for i in self._order if i != flow_id]
+        return True
 
     def _follow_target(self) -> str:
         """Where the cursor goes on the next render: follow mode tails the newest flows,
-        so it jumps to the last page and stays on its last row; otherwise the focused flow
-        is kept. Returns the cursor mode for _render_page."""
+        so it stays on the last row; otherwise the focused flow is kept."""
         if not self.query_one("#flows", NavDataTable).follow:
             return "keep"
-        self._page = self._page_count() - 1
         return "bottom"
 
     def _flush(self) -> None:
@@ -1367,42 +1397,24 @@ class SessionPane(AnnotatableTable, Vertical):
         self._update_subtitle()
 
     def action_follow(self) -> None:
-        """Toggle follow mode: the view tails the newest flows — the last page, cursor on
-        the last row, both kept there as flows arrive."""
+        """Toggle follow mode: the view tails the newest flows. Following and jumping to
+        the end are the same thing — both are the tail of the matching set."""
         table = self.query_one("#flows", NavDataTable)
         table.set_follow(not table.follow)
-        if table.follow:
-            self._page = self._page_count() - 1
-            self._render_page(force=True, cursor="bottom")
+        if table.follow and not self._at_end:
+            self.page_last()
         self._update_subtitle()
-
-    def _matches(self, f) -> bool:
-        return self._predicate is None or self._predicate(f)
 
     def action_filter(self) -> None:
         self.query_one("#filter", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        try:
-            self._predicate = compile_filter(event.value, self._tagnames, self._groupnames)
-        except Exception as exc:  # noqa: BLE001 (bad regex / syntax)
-            self.notify(f"bad filter: {exc}", severity="error")
-            return
-        self._apply_filter()
-        # A term the grammar accepts but that means something else (`&`, a bare status
-        # code, quoted args) filters on the wrong thing instead of failing, so warn even
-        # when rows came back — a silently wrong result is the case worth catching.
-        for hint in filter_hints(event.value):
-            self.notify(hint, title="filter", severity="warning")
+        """Apply a filter. It goes to the gateway as typed — parse errors and advisory
+        hints come back from there, since that is where the language lives now."""
+        self._filter = event.value.strip()
+        self._load_page(cursor="top")
+        self.restart_stream()
         self.query_one("#flows", DataTable).focus()
-
-    def _apply_filter(self) -> None:
-        """Re-filter the whole session and show the first page of what matched. The filter
-        always runs over every flow held in memory — paging only bounds what is drawn."""
-        self._rebuild_view()
-        self._page = 0
-        self._render_page(force=True, cursor="top")
-        self._update_subtitle()
 
     def on_key(self, event) -> None:
         # Escape while editing the filter returns to the table without going back.
@@ -1439,42 +1451,41 @@ class SessionPane(AnnotatableTable, Vertical):
                 table.update_cell(f.id, col, val, update_width=True)
         self._update_subtitle()
 
-    @work(exclusive=True)
-    async def load_flows(self) -> None:
-        """Stream the session's flows into the model. Deliberately no table work per flow:
-        a repaint per arrival is what made a large session take minutes to open. The flush
-        timer draws the current page as it changes."""
-        self.query_one("#flows", DataTable).clear()
-        self.flows.clear()
-        self._order.clear()
-        self._view.clear()
-        self._view_ids.clear()
-        self._rows.clear()
-        self._rendered = []
-        self._page = 0
+    def load_flows(self) -> None:
+        """Load the first window, then follow. Paging and filtering are the gateway's job
+        now, so this no longer streams a whole session into memory."""
         self._loading = True
+        self._load_page(cursor="top")
+        self.restart_stream()
+
+    @work(exclusive=True, group="stream")
+    async def restart_stream(self) -> None:
+        """(Re)subscribe with the current filter. Restarted when the filter changes, since
+        a subscription's filter is fixed for its lifetime."""
         next_flush = 0.0
         try:
-            async for ev in self.app.client.stream_flows(self.session_id, follow=True):
+            async for ev in self.app.client.stream_flows(
+                    self.session_id, follow=True, filter_expr=self._filter):
                 kind = ev.WhichOneof("event")
                 if kind == "flow_added":
                     self._ingest(ev.flow_added)
                 elif kind == "flow_updated":
                     self._ingest(ev.flow_updated)
+                elif kind == "flow_unmatched":
+                    self._drop(ev.flow_unmatched)
                 elif kind == "session_event":
                     self.notify("session closed — live capture ended")
                     self._finalize_live()
                 # A big backfill arrives in bursts that can starve the flush timer, leaving
-                # the pane blank until the whole session is in. Flush on our own clock too,
-                # so the first page shows up while the rest is still streaming.
+                # the pane blank until it is all in. Flush on our own clock too.
                 if (now := time.monotonic()) >= next_flush:
                     next_flush = now + _FLUSH_INTERVAL
                     self._flush()
         except Exception as exc:  # noqa: BLE001
             self.notify(f"stream_flows failed: {exc}", severity="error")
         finally:
-            # The stream ended: either the session closed, or it was already closed when we
-            # opened it (backfill only). Either way nothing is in flight — stop ticking.
+            # The stream ended: either the session closed, or it was already closed when
+            # we opened it. Either way nothing is in flight — stop ticking.
             self._loading = False
             self._dirty = True  # draw whatever the last tick didn't
             self._finalize_live()

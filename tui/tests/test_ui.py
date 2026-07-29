@@ -45,10 +45,13 @@ def _session():
                       pcap_bytes=1024, created_at_unix_ms=1_700_000_000_000)
 
 
-def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id=""):
+def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id="", frame=204):
+    # frame defaults to a fixed number for the small fixtures, but paging keys off
+    # (ts_micros, frame_number) and needs it distinct per flow — as it is on the wire,
+    # where a frame number identifies a packet.
     f = cp.Flow(id=fid, method=method, scheme="https", authority="api.example.com",
                 path="/" + fid, protocol="HTTP/2", status=status, ts_unix_micros=1,
-                tcp_stream=tcp_stream, h2_stream_id=h2_stream_id, frame_number=204,
+                tcp_stream=tcp_stream, h2_stream_id=h2_stream_id, frame_number=frame,
                 # The 4-tuple the Wireshark hand-off filters on; a shared connection
                 # (tcp_stream 12) shares the client port, as on the wire.
                 src_addr="192.168.1.5:5100" + (tcp_stream[-1] if tcp_stream else "0"),
@@ -202,9 +205,81 @@ class FakeClient:
         # temp files (see _stub_wireshark) so the local-readability check passes.
         return cp2.SessionArtifacts(hostname="gw-host", **self.artifacts)
 
-    async def stream_flows(self, session_id, follow=False):
-        for f in _BY_SESSION.get(session_id, _FLOWS):
-            yield vp.FlowEvent(flow_added=f)
+    # --- gateway-side filtering and paging (ADR-0012) ---------------------
+    #
+    # The real predicate lives in the gateway; this stands in for it with the handful of
+    # terms the UI tests exercise, so the pane is driven the way the server drives it:
+    # one window at a time, with cursors rather than offsets.
+
+    @staticmethod
+    def _matches(f, expr: str) -> bool:
+        import re as _re
+        if not expr:
+            return True
+        toks = expr.split()
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t == "~m" and i + 1 < len(toks):
+                if not _re.search(toks[i + 1], f.method or "", _re.I):
+                    return False
+                i += 2
+            elif t == "~d" and i + 1 < len(toks):
+                if not _re.search(toks[i + 1], f.authority or "", _re.I):
+                    return False
+                i += 2
+            elif t == "~c" and i + 1 < len(toks):
+                if not _re.search(toks[i + 1], str(f.status or ""), _re.I):
+                    return False
+                i += 2
+            elif t == "~s":
+                if not f.status:
+                    return False
+                i += 1
+            elif t == "~q":
+                if f.status:
+                    return False
+                i += 1
+            else:
+                url = f"{f.scheme or 'https'}://{f.authority}{f.path}"
+                if not _re.search(t, url, _re.I):
+                    return False
+                i += 1
+        return True
+
+    async def query_flows(self, session_id, filter_expr="", limit=250,
+                          after=None, before=None, last=False):
+        rows = [f for f in _BY_SESSION.get(session_id, _FLOWS)
+                if self._matches(f, filter_expr)]
+        rows.sort(key=lambda f: (f.ts_unix_micros, f.frame_number))
+        key = lambda f: (f.ts_unix_micros, f.frame_number)
+        if after is not None:
+            rows = [f for f in rows if key(f) > (after.ts_micros, after.frame_number)]
+        if before is not None:
+            rows = [f for f in rows if key(f) < (before.ts_micros, before.frame_number)]
+        matched = len(rows)
+        window = rows[-limit:] if (last or before is not None) else rows[:limit]
+        page = vp.FlowPage(flows=window, matched=matched)
+        if window:
+            first, lastf = window[0], window[-1]
+            # A cursor is offered only when there is something that way — being at an end
+            # is not the same as the window merely being short.
+            all_rows = [f for f in _BY_SESSION.get(session_id, _FLOWS)
+                        if self._matches(f, filter_expr)]
+            all_rows.sort(key=key)
+            if any(key(f) > key(lastf) for f in all_rows):
+                page.next.ts_micros, page.next.frame_number = lastf.ts_unix_micros, lastf.frame_number
+            if any(key(f) < key(first) for f in all_rows):
+                page.prev.ts_micros, page.prev.frame_number = first.ts_unix_micros, first.frame_number
+        return page
+
+    async def stream_flows(self, session_id, follow=False, filter_expr=""):
+        # A following subscription carries liveness only — query_flows serves the rows a
+        # viewer displays, so replaying here would undo the paging.
+        if not follow:
+            for f in _BY_SESSION.get(session_id, _FLOWS):
+                if self._matches(f, filter_expr):
+                    yield vp.FlowEvent(flow_added=f)
         if self.hold_flows:
             # Stand in for a session still capturing: the real stream stays open until the
             # session closes, so the pane keeps its live state instead of finalizing.
@@ -1119,7 +1194,7 @@ async def test_flow_list_follow_mode():
 
 BIG_SESSION_ID = "sess-big"
 _BIG_FLOWS = [_flow(f"b{i:04d}", "POST" if i % 10 == 0 else "GET",
-                    403 if i % 4 == 0 else 200) for i in range(420)]
+                    403 if i % 4 == 0 else 200, frame=i + 1) for i in range(420)]
 _BY_SESSION[BIG_SESSION_ID] = _BIG_FLOWS
 
 
@@ -1154,106 +1229,109 @@ def test_page_size_env_is_clamped(monkeypatch):
     assert screens._page_size() == screens._PAGE_SIZE
 
 
-async def test_big_session_renders_one_page_but_loads_every_flow():
+async def test_big_session_holds_only_a_window():
+    """The point of ADR-0012: the pane holds the rows on screen, not the session. What
+    used to be 420 flows in memory is now one window, with the total coming from the
+    gateway's match count."""
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
-        assert len(pane.flows) == 420          # the whole session is in memory…
-        assert table.row_count == 100          # …only a page of it is rendered
-        assert pane._page == 0 and pane._page_count() == 5
-        assert _status(pane) == "420 flows · showing 1–100 of 420"
-        # The rendered rows are the first page, in order.
+        assert len(pane.flows) == 100          # the window, not the session
+        assert table.row_count == 100
+        assert pane._matched == 420            # the total is the gateway's, not len()
+        assert pane._next is not None and pane._prev is None   # at the start of the list
+        assert _status(pane) == "420 flows · showing 100"
         assert table.get_row_at(0)[7] == "/b0000"
         assert table.get_row_at(99)[7] == "/b0099"
 
 
-async def test_cursor_walks_off_a_page_onto_the_next():
-    """Paging is invisible to the cursor: ↓ past the last row of a page loads the next one
-    and lands on its first row; ↑ past the first row goes back to the previous page's last."""
+async def test_cursor_walks_off_a_window_onto_the_next():
+    """Paging is invisible to the cursor: ↓ past the last row fetches the next window and
+    lands on its first row; ↑ past the first goes back to the previous window's last."""
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
-        table.move_cursor(row=99)              # last row of page 1
+        table.move_cursor(row=99)
         await pilot.press("down")
         await settle(pilot)
-        assert pane._page == 1
-        assert table.cursor_coordinate.row == 0
         assert table.get_row_at(0)[7] == "/b0100"
+        assert table.cursor_coordinate.row == 0
 
-        await pilot.press("up")                # back over the boundary
+        await pilot.press("up")
         await settle(pilot)
-        assert pane._page == 0
-        assert table.cursor_coordinate.row == 99
         assert table.get_row_at(table.cursor_coordinate.row)[7] == "/b0099"
 
 
-async def test_home_and_end_jump_across_the_whole_session():
+async def test_home_and_end_jump_to_the_ends_of_the_list():
+    """End is a query from the end of the list rather than an index derived from a total —
+    which is what lets the match count stay approximate."""
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
         await pilot.press("end")
         await settle(pilot)
-        assert pane._page == pane._page_count() - 1 == 4
+        assert pane._next is None              # nothing after: this is the end
+        assert table.get_row_at(table.row_count - 1)[7] == "/b0419"
         assert table.cursor_coordinate.row == table.row_count - 1
-        assert table.get_row_at(table.cursor_coordinate.row)[7] == "/b0419"
 
         await pilot.press("home")
         await settle(pilot)
-        assert pane._page == 0 and table.cursor_coordinate.row == 0
+        assert pane._prev is None
         assert table.get_row_at(0)[7] == "/b0000"
+        assert table.cursor_coordinate.row == 0
 
 
-async def test_page_down_turns_the_page_at_its_end():
+async def test_page_down_turns_the_window_at_its_end():
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
-        await pilot.press("pagedown")          # moves within the rendered page first
+        await pilot.press("pagedown")          # moves within the window first
         await settle(pilot)
-        assert pane._page == 0 and table.cursor_coordinate.row > 0
+        assert table.get_row_at(0)[7] == "/b0000" and table.cursor_coordinate.row > 0
         table.move_cursor(row=table.row_count - 1)
-        await pilot.press("pagedown")          # already at the end -> next page
+        await pilot.press("pagedown")          # already at the end -> next window
         await settle(pilot)
-        assert pane._page == 1 and table.cursor_coordinate.row == 0
+        assert table.get_row_at(0)[7] == "/b0100"
+        assert table.cursor_coordinate.row == 0
 
 
-async def test_filter_spans_the_whole_session_not_the_rendered_page():
-    """The point of holding every flow in memory: a filter matches flows that were never
-    rendered, and its result is paged the same way."""
+async def test_filter_is_evaluated_by_the_gateway():
+    """The filter matches flows that were never sent to the viewer, because it is applied
+    where the session lives rather than over what happens to be in memory."""
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
-        assert table.row_count == 100          # page 1 only
+        assert table.row_count == 100          # one window of 420
 
         await focus(pilot, "#filter")
         pane.query_one("#filter", Input).value = "~m POST"
         await pilot.press("enter")
         await settle(pilot)
 
-        # 42 of 420 flows are POSTs, spread over every page — including b0410, which was
-        # never on screen. They all match, and fit on one page now.
-        assert len(pane._view) == 42
+        # 42 of 420 are POSTs, spread across the session — including b0410, which was
+        # never on screen. They all match and fit in one window.
+        assert pane._matched == 42
         assert table.row_count == 42
-        assert pane._page == 0 and pane._page_count() == 1
         assert table.get_row_at(41)[7] == "/b0410"
         assert "42 matching" in _status(pane)
 
-        # A filter matching more than a page still pages.
+        # A filter matching more than a window still pages.
         await focus(pilot, "#filter")
         pane.query_one("#filter", Input).value = "~c 403"
         await pilot.press("enter")
         await settle(pilot)
-        assert len(pane._view) == 105 and table.row_count == 100
-        assert pane._page_count() == 2
+        assert pane._matched == 105 and table.row_count == 100
+        assert pane._next is not None
 
-        # Clearing it restores the full list, back at page 1.
+        # Clearing it restores the full list, back at the start.
         await focus(pilot, "#filter")
         pane.query_one("#filter", Input).value = ""
         await pilot.press("enter")
         await settle(pilot)
-        assert len(pane._view) == 420 and pane._page == 0
+        assert pane._matched == 420 and pane._prev is None
 
 
-async def test_paging_within_a_filtered_view():
+async def test_paging_within_a_filtered_list():
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
@@ -1262,9 +1340,12 @@ async def test_paging_within_a_filtered_view():
         await pilot.press("enter")
         await settle(pilot)
         await focus(pilot, "#flows")
-        await pilot.press("end")               # last page of the *filtered* list
+        await pilot.press("end")               # the end of the *filtered* list
         await settle(pilot)
-        assert pane._page == 1 and table.row_count == 5   # 105 matches, 100 per page
+        # A window, not a page: the end of a 105-match list is the *last* 100 rows, not
+        # the 5-row remainder page arithmetic would have produced.
+        assert pane._next is None and table.row_count == 100
+        assert pane._prev is not None                        # there are 5 more before it
         # Every rendered row still satisfies the filter.
         assert all(pane.flows[fid].status == 403 for fid in pane._rendered)
 
@@ -1284,17 +1365,17 @@ async def test_a_flow_from_a_later_page_opens_its_detail():
         assert app.screen.flow_id == "b0419"
 
 
-async def test_follow_mode_tails_onto_the_last_page():
-    """Follow means "show me what's arriving": it jumps to the last page and stays there as
-    flows land, even when the user was reading page 1."""
+async def test_follow_mode_tails_the_end_of_the_list():
+    """Follow means "show me what's arriving". Following and jumping to the end are the
+    same operation now — both are the tail of the matching set."""
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
-        assert pane._page == 0
+        assert pane._next is not None          # starting at the head of the list
         await pilot.press("l")                 # follow on
         await settle(pilot)
         assert table.follow
-        assert pane._page == pane._page_count() - 1
+        assert pane._next is None              # jumped to the end
         assert table.cursor_coordinate.row == table.row_count - 1
 
         pane._upsert(_flow("b9999", "GET", 200))
@@ -1302,27 +1383,23 @@ async def test_follow_mode_tails_onto_the_last_page():
         assert pane._focused_flow_id() == "b9999"
 
 
-async def test_streamed_flows_do_not_repaint_a_full_page():
-    """The fix that made big sessions openable: arriving flows update the model and are
-    drawn by a flush, and a page that already holds its rows is not repainted again."""
+async def test_flows_arriving_off_window_do_not_repaint_it():
+    """An arrival while the window sits mid-list changes the count, not the screen — and
+    is not held in memory either, which is what keeps the viewer bounded."""
     app = make_app()
     async with app.run_test() as pilot:
         pane, table = await _open_big(pilot)
         rendered = list(pane._rendered)
-        painted = []
-        original = pane._render_page
+        assert not pane._at_end                # showing the head of a 420-flow session
 
-        def spy(force=False, cursor="keep"):
-            painted.append((force, cursor))
-            return original(force=force, cursor=cursor)
-
-        pane._render_page = spy
-        for i in range(50):                    # 50 more flows arrive on later pages
+        for i in range(50):
             pane._ingest(_flow(f"z{i:04d}", "GET", 200))
         pane._flush()
         await settle(pilot)
-        assert len(pane.flows) == 470          # all ingested…
-        assert pane._rendered == rendered      # …page 1 untouched
+
+        assert pane._matched == 470            # counted…
+        assert len(pane.flows) == 100          # …but not retained
+        assert pane._rendered == rendered      # …and the window is untouched
         assert table.row_count == 100
 
 

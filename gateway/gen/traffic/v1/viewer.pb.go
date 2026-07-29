@@ -272,7 +272,11 @@ type FlowPage struct {
 	CountCapped bool   `protobuf:"varint,5,opt,name=count_capped,json=countCapped,proto3" json:"count_capped,omitempty"`
 	// Rows examined, for the same reason MCP already reports it: a filter that matched
 	// little may have been cut short rather than genuinely finding little.
-	Scanned       uint64 `protobuf:"varint,6,opt,name=scanned,proto3" json:"scanned,omitempty"`
+	Scanned uint64 `protobuf:"varint,6,opt,name=scanned,proto3" json:"scanned,omitempty"`
+	// Advisory diagnostics for an expression that parses but does not mean what it looks
+	// like — `~d a & ~c 200` matches `&` as a URL regex rather than failing. Part of the
+	// language, so they come from whoever owns it (ADR-0012 §9).
+	Hints         []string `protobuf:"bytes,7,rep,name=hints,proto3" json:"hints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -347,6 +351,13 @@ func (x *FlowPage) GetScanned() uint64 {
 		return x.Scanned
 	}
 	return 0
+}
+
+func (x *FlowPage) GetHints() []string {
+	if x != nil {
+		return x.Hints
+	}
+	return nil
 }
 
 type StreamFlowsRequest struct {
@@ -1137,14 +1148,15 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\x05limit\x18\x03 \x01(\rR\x05limit\x12,\n" +
 	"\x05after\x18\x04 \x01(\v2\x16.traffic.v1.FlowCursorR\x05after\x12.\n" +
 	"\x06before\x18\x05 \x01(\v2\x16.traffic.v1.FlowCursorR\x06before\x12\x12\n" +
-	"\x04last\x18\x06 \x01(\bR\x04last\"\xe1\x01\n" +
+	"\x04last\x18\x06 \x01(\bR\x04last\"\xf7\x01\n" +
 	"\bFlowPage\x12&\n" +
 	"\x05flows\x18\x01 \x03(\v2\x10.traffic.v1.FlowR\x05flows\x12*\n" +
 	"\x04next\x18\x02 \x01(\v2\x16.traffic.v1.FlowCursorR\x04next\x12*\n" +
 	"\x04prev\x18\x03 \x01(\v2\x16.traffic.v1.FlowCursorR\x04prev\x12\x18\n" +
 	"\amatched\x18\x04 \x01(\x04R\amatched\x12!\n" +
 	"\fcount_capped\x18\x05 \x01(\bR\vcountCapped\x12\x18\n" +
-	"\ascanned\x18\x06 \x01(\x04R\ascanned\"{\n" +
+	"\ascanned\x18\x06 \x01(\x04R\ascanned\x12\x14\n" +
+	"\x05hints\x18\a \x03(\tR\x05hints\"{\n" +
 	"\x12StreamFlowsRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +

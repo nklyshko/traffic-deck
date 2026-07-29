@@ -69,11 +69,33 @@ class GatewayClient:
         resp = await self._ensure().ListSessions(viewer_pb2.ListSessionsRequest(limit=limit))
         return list(resp.sessions)
 
-    async def stream_flows(self, session_id: str, follow: bool = False) -> AsyncIterator:
-        """Yield FlowEvents: backfill of stored flows, then (if follow) live events."""
+    async def query_flows(self, session_id: str, filter_expr: str = "", limit: int = 250,
+                          after=None, before=None, last: bool = False):
+        """One page of a session's flows, filtered by the gateway.
+
+        Navigation is by cursor, never by an offset computed from a total: `last` starts
+        at the end of the list, so jumping there needs no idea how many rows match — which
+        is what lets the match count stay approximate (ADR-0012).
+        """
+        req = viewer_pb2.QueryFlowsRequest(
+            session_id=session_id, filter=filter_expr, limit=limit, last=last)
+        if after is not None:
+            req.after.CopyFrom(after)
+        if before is not None:
+            req.before.CopyFrom(before)
+        return await self._ensure().QueryFlows(req)
+
+    async def stream_flows(self, session_id: str, follow: bool = False,
+                           filter_expr: str = "") -> AsyncIterator:
+        """Yield FlowEvents for a session, filtered by the gateway.
+
+        The same filter as query_flows, so following and filtering compose. Events include
+        flow_unmatched, which says a flow has left this subscription's filtered view — not
+        that it was deleted. Ignoring it leaves stale rows on screen.
+        """
         call = self._ensure().StreamFlows(
             viewer_pb2.StreamFlowsRequest(
-                session_id=session_id, follow=follow
+                session_id=session_id, follow=follow, filter=filter_expr
             )
         )
         async for event in call:
