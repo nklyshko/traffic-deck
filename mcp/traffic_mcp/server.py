@@ -635,11 +635,11 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     Leave `session_id` empty to search across every session (each result carries its
     `session_id`/`session_label`). Returns time-ordered flow summaries (no headers/bodies
     — use get_flow / get_body / export_request for those):
-    {count, total, complete, offset, next_offset, scanned, scan_limited, flows:[…]}.
-    `total` is the number of matches found; `complete` says whether every candidate was
-    examined (so `total` is exact and `next_offset` null means the end). Page with
-    `offset`/`limit` (limit default 100, max 500) — passing the returned `next_offset`
-    walks the whole result set.
+    {count, total, complete, scanned, scan_limited, flows:[…]}, plus `next_cursor` when
+    there is more to read. `total` is the number of matches found; `complete` says whether
+    every candidate was examined (so `total` is exact and an absent `next_cursor` means the
+    end). Paged by cursor, not offset: pass the returned `next_cursor` back as `cursor` to
+    continue (limit default 100, max 500).
     """
     limit = max(1, min(limit, _LIMIT_MAX))
     max_scan = max(1, max_scan)
@@ -760,9 +760,13 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
     Terms taking a <regex>: ~m method, ~d domain (the host alone, no scheme/path),
     ~u full URL (scheme://domain/path?query), ~c status code, ~t content-type,
     ~conn connection, ~stream HTTP/2 stream, ~mark <color>, ~tag <name>, ~group <name>,
-    ~comment <text>, ~meta <key>=<regex>, and the body terms ~b (either direction),
-    ~bq (request body), ~bs (response body).
+    ~comment <text>, ~meta <key>=<regex>, the header terms ~h (either direction),
+    ~hq (request headers), ~hs (response headers) — matched against "name: value" lines
+    — and the body terms ~b (either direction), ~bq (request body), ~bs (response body).
     Terms taking NO argument: ~s has a response, ~q has no response, ~fav favorited.
+
+    Terms are evaluated cheapest-first (columns, then headers, then bodies), so keep the
+    narrowing terms in the same expression as a ~h/~b rather than filtering afterwards.
     A bare regex with no ~term matches the URL — so a lone `200` matches URLs containing
     "200" and does NOT filter by status; `~c 200` does.
 

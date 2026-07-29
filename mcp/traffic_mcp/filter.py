@@ -30,12 +30,24 @@ Terms taking a <regex> argument:
   ~u <re>        the full URL: scheme://domain/path?query
   ~c <re>        response status code
   ~t <re>        content-type
+  ~conn <re>     transport connection id (tcp.stream index, or quic:<id>)
+  ~stream <re>   HTTP/2 or HTTP/3 stream id within that connection
   ~mark <re>     color mark      ~tag <re>      tag name
   ~group <re>    group name      ~comment <re>  comment body
+  ~meta <key>=<re>   source metadata (~meta <key> alone matches presence)
 
-Body terms (read the stored body; slower, so put them with other terms):
+Header terms (read a side table per candidate row, so a little slower than the
+columns above; matched against "name: value" lines):
+  ~h <regex>     either direction    ~hq <regex>  request headers
+  ~hs <regex>    response headers
+
+Body terms (read the stored body; slowest, so pair them with narrowing terms):
   ~b <regex>     either direction    ~bq <regex>  request body
   ~bs <regex>    response body
+
+Terms are evaluated cheapest-first — columns, then headers, then bodies — so a row
+rejected by ~d never costs a header read, and one rejected by a header never costs a
+body read. Narrowing terms in the same expression are what keep ~b/~h cheap.
 
 Terms taking NO argument:
   ~s   has a response      ~q   has no response      ~fav   favorited
@@ -46,8 +58,13 @@ containing "200" — it does NOT filter by status. Use `~c 200` for that.
 Arguments are regexes and are NOT quoted: `'x'` or `"x"` matches those literal quote
 characters. Escape dots, since `.` matches any character.
 
+The engine is RE2 and matching is case-insensitive: lookarounds and backreferences are
+refused with an error rather than reinterpreted.
+
 Examples:
   ~d vseinstrumenti\\.ru ~u /product/ ~c 200      domain + path + status
   ~m POST ~c ^4 !~u /health                       POSTs that 4xx'd, health checks out
   ~d example\\.com ~q                             requests to a host that got no response
+  ~d api\\.example\\.com ~c 5.. ~bs BanShadow     narrow first, then match the body
+  ~hs set-cookie                                  responses that set a cookie
 """
