@@ -123,7 +123,7 @@ func (v *Viewer) mergeUnflushed(ctx context.Context, sid string, pred *filter.Pr
 		if !pred.Match(&ff) {
 			continue
 		}
-		add = append(add, f)
+		add = append(add, summarize(f))
 		page.Matched++
 	}
 	if len(add) == 0 {
@@ -155,6 +155,22 @@ func (v *Viewer) mergeUnflushed(ctx context.Context, sid string, pred *filter.Pr
 			page.Prev = nil
 		}
 	}
+}
+
+// summarize strips a live flow down to the shape a page carries. The hub's protos inline
+// bodies up to InlineBlobMax and hold every header, which is right for an event stream and
+// wrong for a page: a few hundred of them exceed the gRPC message limit on their own. The
+// stored side of a page is already a summary; this makes the tail match it.
+func summarize(f *trafficv1.Flow) *trafficv1.Flow {
+	f.RequestHeaders, f.ResponseHeaders = nil, nil
+	if b := f.GetRequestBody(); b != nil {
+		b.Content = nil // keep size and content-type: the viewer gates its body actions on them
+	}
+	if b := f.GetResponseBody(); b != nil {
+		b.Content = nil
+	}
+	f.ClientHellos = nil
+	return f
 }
 
 func flowLess(a, b *trafficv1.Flow) bool {

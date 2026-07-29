@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/filter"
 )
@@ -278,5 +280,64 @@ func TestQueryFlowsTimeWindow(t *testing.T) {
 	}
 	if page.Scanned > 10 {
 		t.Fatalf("scanned %d rows: the window should narrow the scan, not filter it", page.Scanned)
+	}
+}
+
+// TestQueryFlowsPageCarriesNoBodies pins the shape of a page. Hydrating rows through the
+// detail path inlined every body, so a few hundred flows became tens of megabytes in one
+// response and exceeded the gRPC message limit — a table row needs none of it.
+func TestQueryFlowsPageCarriesNoBodies(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sid := "s1"
+	if err := st.CreateSession(ctx, NewSession{ID: sid}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: "a1", SessionID: sid, Engine: "live"}); err != nil {
+		t.Fatal(err)
+	}
+	// 200 flows with 64 KiB bodies: ~13 MB if a page inlines them.
+	flows := make([]*decode.Flow, 0, 200)
+	for i := range 200 {
+		f := &decode.Flow{
+			ID: fmt.Sprintf("f-%03d", i), FrameNumber: uint64(i), TSUnixMicros: int64(i) * 1000,
+			Method: "GET", Authority: "api.example.com", Path: fmt.Sprintf("/r/%d", i),
+			Status: 200, ResponseBody: make([]byte, 64<<10),
+		}
+		copy(f.ResponseBody, fmt.Sprintf("body-%d", i))
+		for h := range 12 {
+			f.RequestHeaders = append(f.RequestHeaders,
+				decode.Header{Name: fmt.Sprintf("x-%d", h), Value: "some-header-value"})
+		}
+		flows = append(flows, f)
+	}
+	if _, err := st.InsertFlows(ctx, sid, "a1", flows); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := st.QueryFlows(ctx, sid, FlowQuery{Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Flows) != 200 {
+		t.Fatalf("page has %d flows, want 200", len(page.Flows))
+	}
+	var total int
+	for _, f := range page.Flows {
+		total += proto.Size(f)
+		if n := len(f.GetResponseBody().GetInline()); n != 0 {
+			t.Fatalf("flow %s carries %d inline body bytes in a page", f.GetId(), n)
+		}
+		if n := len(f.GetRequestHeaders()); n != 0 {
+			t.Fatalf("flow %s carries %d headers in a page", f.GetId(), n)
+		}
+	}
+	// gRPC's default receive limit is 4 MiB; a full page must sit well inside it.
+	if total > 1<<20 {
+		t.Fatalf("page serializes to %d bytes, want well under the 4 MiB message limit", total)
 	}
 }

@@ -302,3 +302,48 @@ func TestStreamFlowsMarksSubscriptionLive(t *testing.T) {
 		t.Fatalf("marker status = %v, want OPEN — a closed status means something else entirely", got)
 	}
 }
+
+// TestQueryFlowsTailCarriesNoBodies: the unflushed tail is merged from the hub, whose
+// protos inline bodies for the event stream. A page must not inherit that — a few hundred
+// such flows exceed the gRPC message limit on their own.
+func TestQueryFlowsTailCarriesNoBodies(t *testing.T) {
+	ctx := context.Background()
+	st, sid := queryTestStore(t)
+	defer st.Close()
+
+	hub := newLiveHub(true)
+	ls := hub.startPassive(sid)
+	live := &trafficv1.Flow{
+		Id: "tail", Method: "GET", Authority: "api.example.com", Path: "/x",
+		Status: 200, TsUnixMicros: 1,
+		RequestHeaders: []*trafficv1.Header{{Name: "user-agent", Value: "probe"}},
+		ResponseBody: &trafficv1.Body{
+			Size: 64 << 10, ContentType: "text/html",
+			Content: &trafficv1.Body_Inline{Inline: make([]byte, 64<<10)},
+		},
+	}
+	ls.publish(live, true)
+
+	v := NewViewer(st, hub)
+	page, err := v.QueryFlows(ctx, &trafficv1.QueryFlowsRequest{SessionId: sid, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.GetFlows()) != 1 {
+		t.Fatalf("page has %d flows, want the tail", len(page.GetFlows()))
+	}
+	got := page.GetFlows()[0]
+	if n := len(got.GetResponseBody().GetInline()); n != 0 {
+		t.Fatalf("tail flow carries %d inline body bytes in a page", n)
+	}
+	if n := len(got.GetRequestHeaders()); n != 0 {
+		t.Fatalf("tail flow carries %d headers in a page", n)
+	}
+	// Size and content-type stay: the viewer gates its body actions on them.
+	if got.GetResponseBody().GetSize() != 64<<10 {
+		t.Fatalf("body size dropped: %d", got.GetResponseBody().GetSize())
+	}
+	if got.GetResponseBody().GetContentType() != "text/html" {
+		t.Fatalf("content-type dropped: %q", got.GetResponseBody().GetContentType())
+	}
+}

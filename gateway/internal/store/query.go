@@ -287,17 +287,65 @@ func headerLoader(ctx context.Context, db *sql.DB, flowID string) func(filter.Di
 	}
 }
 
-// hydrateFlows loads the full flows for one page, in timeline order — the expensive
-// per-row work (headers, annotations, metadata, WebSocket counts) that the scan avoids.
+// hydrateFlows loads one page's flows in timeline order, as *summaries* — the same shape
+// ListFlows returned, with annotations, metadata and WebSocket counts but no headers and
+// no bodies.
+//
+// Not GetFlow per row, which is the detail path: it inlines bodies, so a page of a few
+// hundred flows became tens of megabytes in one response and blew past the gRPC message
+// limit. A table row needs none of it, and a viewer that opens a flow fetches the detail
+// then.
 func (s *Store) hydrateFlows(ctx context.Context, sessionID string, ids []string) ([]*trafficv1.Flow, error) {
-	out := make([]*trafficv1.Flow, 0, len(ids))
-	for _, id := range ids {
-		f, err := s.GetFlow(ctx, sessionID, id)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	q := `SELECT ` + flowCols + ` FROM flows WHERE id IN (?` +
+		strings.Repeat(",?", len(ids)-1) + `)`
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byID := make(map[string]*trafficv1.Flow, len(ids))
+	for rows.Next() {
+		f, err := scanFlow(rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, f)
+		byID[f.Id] = f
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachAnnotations(ctx, db, flowRecords(byID)); err != nil {
+		return nil, err
+	}
+	if err := s.attachWsCounts(ctx, db, byID); err != nil {
+		return nil, err
+	}
+	if err := s.attachMetadata(ctx, db, byID); err != nil {
+		return nil, err
+	}
+	// IN (...) does not preserve order, so the page is reassembled from the id list the
+	// scan produced — which is already in timeline order.
+	out := make([]*trafficv1.Flow, 0, len(ids))
+	for _, id := range ids {
+		if f := byID[id]; f != nil {
+			out = append(out, f)
+		}
+	}
+	// linkRedirects is deliberately not run here: it correlates a redirect with its target
+	// across the whole session, and a page cannot see outside itself. Redirect chains are
+	// a detail-view concern, and GetFlow still resolves them.
 	return out, nil
 }
 
