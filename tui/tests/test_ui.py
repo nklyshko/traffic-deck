@@ -1772,3 +1772,30 @@ async def test_disabling_follow_stops_the_window_moving():
         assert pane._rendered == rendered, "the window moved while follow was off"
         assert pane._focused_flow_id() == focused, "the cursor was pulled off its row"
         assert pane._matched == matched + 5, "arrivals should still be counted"
+
+
+async def test_a_response_arriving_updates_the_row_in_place():
+    """A live flow is published request-first and updated when its response lands. The
+    window does not change, so the row has to be redrawn explicitly — otherwise the table
+    keeps showing an empty status for a flow that has one."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("l")                       # follow on
+        await settle(pilot)
+
+        pending = _flow("live1", "GET", 0, frame=9800)   # no response yet
+        pane._ingest(pending)
+        pane._flush()
+        await settle(pilot)
+        assert "live1" in pane._rows
+        assert "200" not in str(table.get_row("live1")[3])
+
+        answered = _flow("live1", "GET", 200, frame=9800)  # same flow, now answered
+        pane._ingest(answered)
+        pane._flush()
+        await settle(pilot)
+        assert "200" in str(table.get_row("live1")[3]), (
+            "the row still shows no status after its response arrived"
+        )

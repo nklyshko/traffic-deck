@@ -1114,6 +1114,7 @@ class SessionPane(AnnotatableTable, Vertical):
         self._last_query = ("top", None, None, False)  # to re-issue when the stream is up
         self._capped = False                # ...when the scan cap stopped counting
         self._at_end = True                 # the window includes the end of the list
+        self._changed: set[str] = set()     # rows whose cells changed since the last draw
         self._rows: set[str] = set()        # ids rendered right now (the current page)
         self._rendered: list[str] = []      # the same ids in row order, to skip no-op renders
         self._dirty = False                 # model changed since the last flush
@@ -1392,7 +1393,11 @@ class SessionPane(AnnotatableTable, Vertical):
         keystroke; the arrival is counted and waits to be paged to."""
         self._dirty = True
         if f.id in self.flows:
+            # A flow already on screen, updated in place — a response arriving on a request
+            # that was shown status-less. The window is unchanged, so the row has to be
+            # redrawn explicitly: _render_page skips a window whose flows are the same.
             self.flows[f.id] = f
+            self._changed.add(f.id)
             return False
         self._matched += 1
         if not self._at_end or not self.query_one("#flows", NavDataTable).follow:
@@ -1429,7 +1434,20 @@ class SessionPane(AnnotatableTable, Vertical):
             return
         self._dirty = False
         self._render_page(cursor=self._follow_target())
+        self._redraw_changed()
         self._update_subtitle()
+
+    def _redraw_changed(self) -> None:
+        """Repaint the cells of rows that changed without the window changing."""
+        pending, self._changed = self._changed, set()
+        table = self.query_one("#flows", DataTable)
+        for fid in pending:
+            if fid not in self._rows or fid not in self.flows:
+                continue
+            for col, val in zip(self._ordered_cols(), self._cells(self.flows[fid])):
+                # update_width: a cell can outgrow the width its column was auto-sized to
+                # when the rows were added — a status appearing where there was none.
+                table.update_cell(fid, col, val, update_width=True)
 
     def action_follow(self) -> None:
         """Toggle follow mode: the view tails the newest flows. Following and jumping to
