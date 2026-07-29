@@ -64,14 +64,16 @@ class GatewayClient:
         return flows
 
     async def query_flows(self, session_id: str, filter_expr: str = "", limit: int = 100,
-                          after=None, before=None, last: bool = False):
+                          after=None, before=None, last: bool = False,
+                          since_micros: int = 0, until_micros: int = 0):
         """One page of a session's flows, filtered and paged by the gateway.
 
         Paging is by cursor rather than offset: a live session grows while it is read, so
         an offset shifts rows under the reader. `last` starts at the end of the list.
         """
         req = viewer_pb2.QueryFlowsRequest(
-            session_id=session_id, filter=filter_expr, limit=limit, last=last)
+            session_id=session_id, filter=filter_expr, limit=limit, last=last,
+            since_micros=since_micros or 0, until_micros=until_micros or 0)
         if after is not None:
             req.after.CopyFrom(after)
         if before is not None:

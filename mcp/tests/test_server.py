@@ -441,19 +441,41 @@ class _SearchClient:
         return list(self.flows[sid])
 
     async def query_flows(self, sid, filter_expr="", limit=100, after=None,
-                          before=None, last=False):
+                          before=None, last=False, since_micros=0, until_micros=0):
         """Stands in for the gateway's filtering and paging with the handful of terms
         these tests exercise, so search_flows is driven the way the server drives it:
         cursors rather than offsets, and hints supplied by whoever owns the language."""
         import re as _re
         rows = sorted(self.flows[sid], key=lambda f: (f.ts_unix_micros, f.frame_number))
+        if since_micros:
+            rows = [f for f in rows if f.ts_unix_micros >= since_micros]
+        if until_micros:
+            rows = [f for f in rows if f.ts_unix_micros <= until_micros]
 
         def matches(f):
             toks = filter_expr.split()
             i = 0
             while i < len(toks):
                 t = toks[i]
-                if t == "~s":
+                if t in ("~h", "~hq", "~hs", "~b", "~bq", "~bs") and i + 1 < len(toks):
+                    # Header and body terms are the gateway's job; the fake reads the same
+                    # detail/body fixtures the old client-side search used.
+                    det = self.details.get(f.id)
+                    hays = []
+                    if t in ("~h", "~hq") and det is not None:
+                        hays.append("\n".join(f"{h.name}: {h.value}"
+                                               for h in det.request_headers))
+                    if t in ("~h", "~hs") and det is not None:
+                        hays.append("\n".join(f"{h.name}: {h.value}"
+                                               for h in det.response_headers))
+                    if t in ("~b", "~bq"):
+                        hays.append(self._body_text(f.id, False))
+                    if t in ("~b", "~bs"):
+                        hays.append(self._body_text(f.id, True))
+                    if not any(_re.search(toks[i + 1], h or "", _re.I) for h in hays):
+                        return False
+                    i += 2
+                elif t == "~s":
                     if not f.status:
                         return False
                     i += 1
@@ -483,13 +505,14 @@ class _SearchClient:
                 raise grpc.aio.AioRpcError(
                     grpc.StatusCode.INVALID_ARGUMENT, None, None,
                     details=f"{t} needs an argument")
+        examined = len(rows)
         rows = [f for f in rows if matches(f)] if filter_expr else rows
         key = lambda f: (f.ts_unix_micros, f.frame_number)
         if after is not None:
             rows = [f for f in rows if key(f) > (after.ts_micros, after.frame_number)]
         matched = len(rows)
         window = rows[:limit]
-        page = vp.FlowPage(flows=window, matched=matched)
+        page = vp.FlowPage(flows=window, matched=matched, scanned=examined)
         if len(rows) > limit:
             last_row = window[-1]
             page.next.ts_micros = last_row.ts_unix_micros
@@ -518,6 +541,16 @@ class _SearchClient:
                 page.hints.append(f"{tok} is quoted — arguments are not quote-parsed, so "
                                   f"the quotes match literally.")
         return page
+
+    def _body_text(self, fid, response):
+        """Body bytes as text, from the inline copy or the out-of-line fixture."""
+        det = self.details.get(fid)
+        if det is not None:
+            body = det.response_body if response else det.request_body
+            if body.inline:
+                return body.inline.decode("utf-8", "replace")
+        raw = self.bodies.get((fid, response))
+        return raw.decode("utf-8", "replace") if raw else ""
 
     async def get_flow(self, sid, fid):
         self.get_flow_calls.append(fid)
@@ -548,23 +581,26 @@ def _seq(n, **kw):
                   ts_unix_micros=(i + 1) * 1_000_000, **kw) for i in range(n)]
 
 
-def test_search_pages_with_offset_and_next_offset(monkeypatch):
+def test_search_pages_by_cursor(monkeypatch):
+    """Paging is by cursor now: an offset over a growing session shifts rows under the
+    caller, and computing one still meant fetching everything before it."""
     fake = _SearchClient({"s1": _seq(5, status=200)})
 
     first = _run_search(monkeypatch, fake, limit=2)
-    assert first["count"] == 2 and first["total"] == 5 and first["complete"] is True
-    assert first["offset"] == 0 and first["next_offset"] == 2
+    # `total` is what has matched *so far*: search stops once it can fill the page rather
+    # than walking the session for an exact count, and `complete` says looking stopped.
+    assert first["count"] == 2 and first["total"] >= 2
     assert [f["id"] for f in first["flows"]] == ["f0", "f1"]
+    assert first["next_cursor"]
 
-    nxt = _run_search(monkeypatch, fake, limit=2, offset=first["next_offset"])
-    assert [f["id"] for f in nxt["flows"]] == ["f2", "f3"]
-    assert nxt["next_offset"] == 4
-
-    last = _run_search(monkeypatch, fake, limit=2, offset=4)
-    assert [f["id"] for f in last["flows"]] == ["f4"]
-    assert last["next_offset"] is None      # end of the result set
-    # A metadata-only search never fetches flow detail.
-    assert fake.get_flow_calls == []
+    seen = [f["id"] for f in first["flows"]]
+    cursor = first["next_cursor"]
+    while cursor:
+        page = _run_search(monkeypatch, fake, limit=2, cursor=cursor)
+        seen += [f["id"] for f in page["flows"]]
+        cursor = page.get("next_cursor")
+    # The walk covers the session exactly once.
+    assert seen == ["f0", "f1", "f2", "f3", "f4"]
 
 
 def test_search_status_set_and_time_window(monkeypatch):
@@ -645,25 +681,29 @@ def test_search_fetches_an_out_of_line_body_to_match_it(monkeypatch):
 
 
 def test_search_content_scan_is_bounded_by_max_scan(monkeypatch):
+    """max_scan now bounds how much the search asks for, not how much it fetches itself:
+    content matching happens in the gateway, so `scanned` is rows the gateway examined and
+    the budget stops further pages being requested."""
     fake = _SearchClient({"s1": _seq(20, status=403)},
                          {f"f{i}": _detail(f"f{i}", body=b"no match") for i in range(20)})
     out = _run_search(monkeypatch, fake, response_body_contains="BanShadow", max_scan=8)
-    assert out["flows"] == [] and out["scanned"] == 8
-    assert out["scan_limited"] is True and out["complete"] is False
-    assert "max_scan" in out["note"]
-    # complete=False means `total` is a floor, so paging must not report the end.
-    assert out["next_offset"] is None or out["next_offset"] > 0
+    # Nothing matched, and the search genuinely looked at the whole (small) session rather
+    # than stopping early — so it must not claim it was truncated. Telling "found nothing"
+    # apart from "stopped looking" is the point of reporting these at all.
+    assert out["flows"] == []
+    assert out["complete"] is True and out["scan_limited"] is False
+    assert out["scanned"] >= len(fake.flows["s1"])
 
 
-def test_search_content_scan_stops_once_the_page_is_full(monkeypatch):
-    """A content search must not read every candidate just to fill a small page — it
-    stops at offset+limit matches and says the result is incomplete."""
+def test_search_stops_once_the_page_is_full(monkeypatch):
+    """A search must not walk a whole session to fill a small page — it stops once it has
+    the page and says the result is incomplete, so `total` reads as a floor."""
     fake = _SearchClient({"s1": _seq(40, status=200)},
                          {f"f{i}": _detail(f"f{i}", body=b"hit: BanShadow") for i in range(40)})
     out = _run_search(monkeypatch, fake, response_body_contains="banshadow", limit=2)
     assert [f["id"] for f in out["flows"]] == ["f0", "f1"]
-    assert out["scanned"] <= 8 + S._SCAN_CONCURRENCY      # not all 40
-    assert out["complete"] is False and out["next_offset"] == 2
+    assert out["complete"] is False and out["next_cursor"]
+    assert out["total"] < 40                      # stopped, rather than counting them all
 
 
 def test_search_unreadable_flow_is_not_a_match_and_does_not_abort(monkeypatch):

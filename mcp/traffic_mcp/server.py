@@ -367,7 +367,7 @@ def _matches(f, *, domain: str, method: str, content_type: str, status: int,
     """Predicate for `search` over a flow *summary*: all given criteria ANDed. Substring
     fields are case-insensitive; method/status are exact; `status_set` matches any code in
     it; `since`/`until` bound ts_unix_micros (inclusive); websocket/has_response are
-    tri-state. Content criteria (headers/bodies) need a second fetch — see _deep_match."""
+    tri-state."""
     if domain and domain.lower() not in (f.authority or "").lower():
         return False
     if method and method.upper() != (f.method or "").upper():
@@ -411,53 +411,92 @@ def _header_text(hs) -> str:
     return "\n".join(f"{h.name}: {h.value}" for h in hs)
 
 
-async def _body_text(sid: str, flow_id: str, body, response: bool) -> str:
-    """Up to _SCAN_BYTES of a body as text, for content matching. Uses the bytes GetFlow
-    inlined; falls back to a GetBody fetch for a body stored out of line (unless it is
-    over _SCAN_FETCH_MAX). Undecodable bytes are replaced, not an error — a substring
-    search over a binary body should just not match."""
-    if body is None or not body.size:
-        return ""
-    if body.WhichOneof("content") == "inline":
-        data = body.inline
-    elif body.size > _SCAN_FETCH_MAX:
-        return ""
-    else:
-        try:
-            data, _ = await client().get_body(sid, flow_id, response)
-        except grpc.aio.AioRpcError:
-            return ""
-    return data[:_SCAN_BYTES].decode("utf-8", "replace")
+def _rx(text: str) -> str:
+    """A substring criterion as a regex term argument. Escaped, because these criteria are
+    substrings — a dot in a domain must not match any character — and the DSL is
+    case-insensitive already, so no flag is needed."""
+    return re.escape(text)
 
 
-async def _deep_match(sid: str, flow_id: str, crit: dict) -> dict | None:
-    """Match a candidate flow's headers/bodies against the content criteria in `crit`.
+def _criteria_filter(*, domain="", method="", content_type="", status=0, status_set=None,
+                     path_contains="", url_contains="", has_response=None,
+                     request_header_contains="", response_header_contains="",
+                     request_body_contains="", response_body_contains="") -> str:
+    """Build a DSL expression from the structured criteria the gateway can evaluate.
 
-    Returns the match previews ({field: snippet}) when every content criterion matches,
-    or None when one doesn't — or when the flow can't be read (a bundle the gateway
-    refuses, a flow that vanished): unreadable is treated as no match, never as a fault
-    that aborts the whole search. Headers come free with the flow detail and are checked
-    first, so a body is only fetched once the header criteria have passed.
-    """
+    Everything expressible goes here so the scan narrows in the gateway rather than in
+    this process. What is left over (`websocket`) is applied per page by _matches_post."""
+    terms: list[str] = []
+    if domain:
+        terms += ["~d", _rx(domain)]
+    if method:
+        terms += ["~m", f"^{_rx(method)}$"]          # method is exact, not a substring
+    if content_type:
+        terms += ["~t", _rx(content_type)]
+    if status:
+        terms += ["~c", f"^{status}$"]
+    elif status_set:
+        # A code set becomes one alternation; RE2 handles a few hundred branches without
+        # trouble, and pushing it down means fewer pages walked.
+        terms += ["~c", "^(" + "|".join(str(c) for c in sorted(status_set)) + ")$"]
+    if path_contains:
+        terms += ["~u", _rx(path_contains)]
+    if url_contains:
+        terms += ["~u", _rx(url_contains)]
+    if has_response is True:
+        terms += ["~s"]
+    elif has_response is False:
+        terms += ["~q"]
+    if request_header_contains:
+        terms += ["~hq", _rx(request_header_contains)]
+    if response_header_contains:
+        terms += ["~hs", _rx(response_header_contains)]
+    if request_body_contains:
+        terms += ["~bq", _rx(request_body_contains)]
+    if response_body_contains:
+        terms += ["~bs", _rx(response_body_contains)]
+    return " ".join(terms)
+
+
+def _matches_post(f, *, websocket=None) -> bool:
+    """The criteria with no DSL term, applied to a page the gateway already narrowed."""
+    return websocket is None or bool(f.websocket) == websocket
+
+
+async def _match_previews(sid: str, flow_id: str, req_header: str, resp_header: str,
+                          req_body: str, resp_body: str) -> dict:
+    """Snippets showing where a content criterion matched, for a row already known to
+    match. Fetched per returned row rather than per candidate examined — the match itself
+    happened in the gateway, so this is bounded by the page, not by the scan."""
+    if not (req_header or resp_header or req_body or resp_body):
+        return {}
     try:
         f = await client().get_flow(sid, flow_id)
     except grpc.aio.AioRpcError:
-        return None
-    prev: dict[str, str] = {}
-    for field, hay in (("request_header", _header_text(f.request_headers)),
-                       ("response_header", _header_text(f.response_headers))):
-        if needle := crit[f"{field}_contains"]:
-            if (hit := _snippet(hay, needle)) is None:
-                return None
-            prev[field] = hit
-    for field, body, response in (("request_body", f.request_body, False),
-                                  ("response_body", f.response_body, True)):
-        if needle := crit[f"{field}_contains"]:
-            hit = _snippet(await _body_text(sid, flow_id, body, response), needle)
-            if hit is None:
-                return None
-            prev[field] = hit
-    return prev
+        return {}
+    out = {}
+    for field, needle, hay in (
+        ("request_header", req_header, _header_text(f.request_headers)),
+        ("response_header", resp_header, _header_text(f.response_headers)),
+    ):
+        if needle and (hit := _snippet(hay, needle)):
+            out[field] = hit
+    for field, needle, response in (("request_body", req_body, False),
+                                    ("response_body", resp_body, True)):
+        if not needle:
+            continue
+        # The flow detail already carries small bodies inline; only a body stored out of
+        # line costs a second fetch.
+        body = f.response_body if response else f.request_body
+        data = bytes(body.inline)
+        if not data and body.size:
+            try:
+                data, _ = await client().get_body(sid, flow_id, response)
+            except grpc.aio.AioRpcError:
+                continue
+        if hit := _snippet(data[:_SCAN_BYTES].decode("utf-8", "replace"), needle):
+            out[field] = hit
+    return out
 
 
 def _url_previews(f, crit: dict) -> dict:
@@ -589,7 +628,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
                  request_header_contains: str = "", response_header_contains: str = "",
                  request_body_contains: str = "", response_body_contains: str = "",
                  since: str = "", until: str = "", websocket: bool | None = None,
-                 has_response: bool | None = None, limit: int = 100, offset: int = 0,
+                 has_response: bool | None = None, limit: int = 100, cursor: str = "",
                  max_scan: int = 400) -> dict:
     """Combined structured search over flows — every criterion you pass is ANDed in
     one query, e.g. domain="api.oneme.ru" + status_in="4xx" + response_body_contains="BanShadow".
@@ -628,65 +667,107 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     walks the whole result set.
     """
     limit = max(1, min(limit, _LIMIT_MAX))
-    offset = max(0, offset)
     max_scan = max(1, max_scan)
     tagnames, groupnames = await _name_maps()
-    crit = dict(domain=domain, method=method, content_type=content_type, status=status,
-                status_set=_parse_status_set(status_in),  # raises ValueError on a bad spec
-                path_contains=path_contains, url_contains=url_contains,
-                websocket=websocket, has_response=has_response,
-                since=_parse_time(since), until=_parse_time(until))
-    content = dict(request_header_contains=request_header_contains,
-                   response_header_contains=response_header_contains,
-                   request_body_contains=request_body_contains,
-                   response_body_contains=response_body_contains)
-    deep = any(content.values())
+    status_set = _parse_status_set(status_in)  # raises ValueError on a bad spec
+    since_us, until_us = _parse_time(since), _parse_time(until)
 
-    candidates = (c for c in await _session_flows(session_id) if _matches(c[2], **crit))
+    # Everything the gateway can evaluate goes into one filter expression. These criteria
+    # are substrings, not regexes, so they are escaped — a dot in a domain must not match
+    # any character.
+    expr = _criteria_filter(domain=domain, method=method, content_type=content_type,
+                            status=status, status_set=status_set,
+                            path_contains=path_contains, url_contains=url_contains,
+                            has_response=has_response,
+                            request_header_contains=request_header_contains,
+                            response_header_contains=response_header_contains,
+                            request_body_contains=request_body_contains,
+                            response_body_contains=response_body_contains)
+    # `websocket` has no term, so it is the one criterion still applied to each page here.
+    post = {"websocket": websocket}
 
-    # Collect matches up to the page we need. Without content criteria that is the whole
-    # candidate list (cheap, in memory); with them, fetches run _SCAN_CONCURRENCY at a
-    # time and stop at the page's end or the scan budget, whichever comes first.
-    matched: list[tuple[str, str | None, object, dict]] = []
+    sessions = ([(await _resolve_session(session_id), None)] if session_id
+                else [(s.id, s.label) for s in await client().list_sessions()])
+
+    # A continuation names the session it stopped in as well as the position, since a
+    # cross-session search walks several: resume there and skip what came before.
+    resume_sid, resume_at = "", None
+    if cursor:
+        resume_sid, _, pos = cursor.partition("|")
+        resume_at = _parse_cursor(pos)
+        skip = [i for i, (sid, _) in enumerate(sessions) if sid == resume_sid]
+        sessions = sessions[skip[0]:] if skip else sessions
+
+    matched: list[tuple[str, str | None, object]] = []
     scanned = 0
     complete = True
-    if not deep:
-        matched = [(sid, label, f, {}) for sid, label, f in candidates]
-    else:
-        want = offset + limit
-        while len(matched) < want and scanned < max_scan:
-            batch = list(itertools.islice(candidates, min(_SCAN_CONCURRENCY, max_scan - scanned)))
-            if not batch:
+    for sid, label in sessions:
+        page_at = resume_at if sid == resume_sid else None
+        while True:
+            if len(matched) >= limit or scanned >= max_scan:
+                # Stopped early: whether anything is left is unknown, which the caller is
+                # told rather than left to infer from a short page.
+                complete = False
                 break
-            scanned += len(batch)
-            previews = await asyncio.gather(
-                *(_deep_match(sid, f.id, content) for sid, _, f in batch))
-            matched += [(sid, label, f, p)
-                        for (sid, label, f), p in zip(batch, previews) if p is not None]
-        # Anything left unexamined (page filled early, or the budget ran out).
-        complete = next(candidates, None) is None
+            try:
+                page = await client().query_flows(
+                    sid, expr, min(limit * 2, _LIMIT_MAX), after=page_at,
+                    since_micros=since_us, until_micros=until_us)
+            except grpc.aio.AioRpcError as e:
+                # For an explicit session_id, surface the error (incl. FAILED_PRECONDITION
+                # "re-import this session"). When scanning every session, skip outdated or
+                # missing bundles but still propagate genuine faults.
+                if session_id or e.code() not in (
+                    grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.NOT_FOUND
+                ):
+                    raise
+                break
+            scanned += page.scanned
+            for f in page.flows:
+                if _matches_post(f, **post):
+                    matched.append((sid, label, f))
+            if not page.HasField("next"):
+                break
+            page_at = page.next
+        if len(matched) >= limit or scanned >= max_scan:
+            if sessions[-1] != (sid, label):
+                complete = False
+            break
 
-    page = matched[offset:offset + limit]
     rows = []
-    for sid, label, f, previews in page:
+    # Previews are built only for the rows being returned, not for every candidate: the
+    # match already happened in the gateway, so this is at most `limit` fetches where the
+    # old content search paid one per candidate examined.
+    page_rows = matched[:limit]
+    previews = await asyncio.gather(*(
+        _match_previews(sid, f.id, request_header_contains, response_header_contains,
+                        request_body_contains, response_body_contains)
+        for sid, _, f in page_rows)) if any(
+            (request_header_contains, response_header_contains,
+             request_body_contains, response_body_contains)) else [{}] * len(page_rows)
+
+    crit = dict(path_contains=path_contains, url_contains=url_contains)
+    for (sid, label, f), preview in zip(page_rows, previews):
         row = _flow_summary(f, tagnames, groupnames)
         row["session_id"] = sid
         if label is not None:
             row["session_label"] = label
-        if preview := _url_previews(f, crit) | previews:
-            row["match_preview"] = preview
+        if merged := _url_previews(f, crit) | preview:
+            row["match_preview"] = merged
         rows.append(row)
 
-    more = len(matched) > offset + len(page) or not complete
     out = {"count": len(rows), "total": len(matched), "complete": complete,
-           "offset": offset, "next_offset": offset + len(rows) if more and rows else None,
-           "flows": rows}
-    if deep:
-        out["scanned"] = scanned
-        out["scan_limited"] = scanned >= max_scan and not complete
-        if out["scan_limited"]:
-            out["note"] = (f"stopped after scanning {scanned} candidates — narrow the "
-                           f"metadata criteria or raise max_scan")
+           "flows": rows, "scanned": scanned}
+    if len(matched) > limit or not complete:
+        if page_rows:
+            last_sid, _, last_f = page_rows[-1]
+            out["next_cursor"] = f"{last_sid}|{last_f.ts_unix_micros}:{last_f.frame_number}"
+    # Always reported, not only when true: a caller has to be able to tell "few results"
+    # from "stopped looking", and an absent key reads as the former.
+    out["scan_limited"] = scanned >= max_scan and not complete
+    if out["scan_limited"]:
+        out["note"] = (f"stopped after scanning {scanned} flows — narrow the criteria, "
+                       f"add a since/until window, or raise max_scan")
     return out
 
 
