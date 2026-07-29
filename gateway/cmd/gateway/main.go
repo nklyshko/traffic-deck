@@ -10,6 +10,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -36,6 +38,45 @@ import (
 	// here to compile a decoder into the gateway.
 	_ "gitlab.com/nklyshko/traffic-deck/gateway/decoders/max"
 )
+
+// shutdownTimeout bounds the whole teardown. Quitting the viewer must not be able to hang
+// on something that will not finish; past this, what is left is forced.
+const shutdownTimeout = 3 * time.Minute
+
+// shutdownStep runs one teardown step, narrating it: what is starting, a tick while it is
+// still going, and how long it took. Reports whether it finished before the deadline.
+//
+// The narration is the point as much as the bound. Teardown can legitimately take a while
+// — a capture source closing its session, a batch decode on close — and in silence that is
+// indistinguishable from a hang, which is what it looked like.
+func shutdownStep(name string, deadline time.Time, fn func()) bool {
+	if time.Now().After(deadline) {
+		log.Printf("shutdown: skipping %s — out of time", name)
+		return false
+	}
+	log.Printf("shutdown: %s…", name)
+	start := time.Now()
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	timeout := time.NewTimer(time.Until(deadline))
+	defer timeout.Stop()
+	for {
+		select {
+		case <-done:
+			log.Printf("shutdown: %s done in %s", name, time.Since(start).Round(time.Millisecond))
+			return true
+		case <-tick.C:
+			log.Printf("shutdown: still %s — %s elapsed, %s left before giving up",
+				name, time.Since(start).Round(time.Second), time.Until(deadline).Round(time.Second))
+		case <-timeout.C:
+			log.Printf("shutdown: %s did not finish in time; moving on", name)
+			return false
+		}
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -184,18 +225,28 @@ func runFused() {
 	logging.Setup(cfg) // viewer's gone, the terminal is ours again — teardown errors must show
 
 	// Viewer exited → tear the gateway down (reap capture sources + services, close store).
+	// Narrated and bounded: the terminal is ours again but nothing here used to print, so a
+	// slow teardown looked identical to a hang.
+	deadline := time.Now().Add(shutdownTimeout)
+	log.Printf("shutting down (up to %s)…", shutdownTimeout)
 	if mgr != nil {
-		mgr.Close()
+		shutdownStep("stopping capture sources", deadline, mgr.Close)
 	}
 	if svcs != nil {
-		svcs.Close()
+		shutdownStep("stopping services", deadline, svcs.Close)
 	}
 	if s != nil {
-		s.GracefulStop()
+		// GracefulStop waits for every in-flight RPC, and a follow stream never returns on
+		// its own — so without a bound, one reader that will not let go hangs the exit.
+		if !shutdownStep("closing client connections", deadline, s.GracefulStop) {
+			log.Printf("shutdown: forcing connections closed")
+			s.Stop()
+		}
 	}
 	if stClose != nil {
-		stClose()
+		shutdownStep("closing the store", deadline, stClose)
 	}
+	log.Printf("shutdown complete")
 	if runErr != nil {
 		if ee, ok := runErr.(*exec.ExitError); ok {
 			os.Exit(ee.ExitCode())
@@ -368,4 +419,15 @@ func importSession(args []string) {
 		log.Fatalf("import-session: %v", err)
 	}
 	log.Printf("imported session %s from %s", id, src)
+}
+
+// logOutput/setLogOutput exist so the shutdown narration can be asserted in tests; the
+// standard logger has no getter.
+var currentLogOutput io.Writer = os.Stderr
+
+func logOutput() io.Writer { return currentLogOutput }
+
+func setLogOutput(w io.Writer) {
+	currentLogOutput = w
+	log.SetOutput(w)
 }
