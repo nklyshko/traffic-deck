@@ -1168,13 +1168,16 @@ async def test_flow_list_follow_mode():
         await pilot.pause()
         assert table.cursor_coordinate.row == 0
 
-        # enabling follow jumps to the newest row and tracks arrivals
+        # Enabling follow re-reads the tail from the gateway — flows that arrived while it
+        # was off were counted but deliberately not shown — then tracks arrivals.
         await pilot.press("l")
-        await pilot.pause()
-        assert table.follow and table.cursor_coordinate.row == 3
+        await settle(pilot)
+        assert table.follow and table.cursor_coordinate.row == table.row_count - 1
+        before = table.row_count
         pane._upsert(_flow("f5", "PUT", 200))
         await pilot.pause()
-        assert table.cursor_coordinate.row == 4
+        assert table.row_count == before + 1
+        assert table.cursor_coordinate.row == table.row_count - 1
         # an update to an existing row doesn't count as an arrival
         await pilot.press("home")
         await pilot.pause()
@@ -1444,7 +1447,9 @@ async def test_flags_column_widens_when_a_row_is_annotated():
         pane = pilot.app.screen.query_one(SessionPane)
         flags_col = table.columns[pane._cols[0]]
 
-        f = _flow("f4", "GET", 200)      # listed with an empty flags cell
+        # A row already in the window, with an empty flags cell. Not a newly arrived flow:
+        # with follow off, arrivals are counted but deliberately not added to the window.
+        f = _flow("f1", "GET", 200)
         pane._upsert(f)
         await pilot.pause()
         before = flags_col.content_width
@@ -1737,3 +1742,33 @@ async def test_following_appends_rows_without_rebuilding_the_table():
         # The newest flow is the last row, and the cursor is on it.
         assert pane._order[-1] == "live4"
         assert table.cursor_coordinate.row == table.row_count - 1
+
+
+async def test_disabling_follow_stops_the_window_moving():
+    """Follow is what makes the window move. With it off the window is a fixed place the
+    user is reading, and arrivals must not pull rows out from under the cursor."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("l")                  # follow on
+        await settle(pilot)
+        assert table.follow
+
+        await pilot.press("l")                  # follow off again
+        await settle(pilot)
+        assert not table.follow
+
+        table.move_cursor(row=10)
+        focused = pane._focused_flow_id()
+        rendered = list(pane._rendered)
+        matched = pane._matched
+
+        for i in range(5):
+            pane._ingest(_flow(f"late{i}", "GET", 200, frame=9500 + i))
+        pane._flush()
+        await settle(pilot)
+
+        assert pane._rendered == rendered, "the window moved while follow was off"
+        assert pane._focused_flow_id() == focused, "the cursor was pulled off its row"
+        assert pane._matched == matched + 5, "arrivals should still be counted"

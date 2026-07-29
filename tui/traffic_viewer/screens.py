@@ -1385,14 +1385,18 @@ class SessionPane(AnnotatableTable, Vertical):
 
         The gateway has already decided this flow matches, so there is no predicate here.
         A flow arriving while the window sits mid-list changes the count but not what is on
-        screen; only a window holding the end of the list grows."""
+        screen; only a window holding the end of the list grows — and only while following.
+
+        Following is what makes the window move. With it off the window is a fixed place
+        the user is reading, and sliding it would pull rows out from under the cursor mid-
+        keystroke; the arrival is counted and waits to be paged to."""
         self._dirty = True
         if f.id in self.flows:
             self.flows[f.id] = f
             return False
         self._matched += 1
-        if not self._at_end:
-            return False  # off-window: it will be there when the user pages down
+        if not self._at_end or not self.query_one("#flows", NavDataTable).follow:
+            return False  # off-window, or the user is reading: it waits until they page
         self.flows[f.id] = f
         self._order.append(f.id)
         while len(self._order) > self._window:
@@ -1432,8 +1436,11 @@ class SessionPane(AnnotatableTable, Vertical):
         the end are the same thing — both are the tail of the matching set."""
         table = self.query_one("#flows", NavDataTable)
         table.set_follow(not table.follow)
-        if table.follow and not self._at_end:
-            self.page_last()
+        if table.follow:
+            # Always re-read the tail, not only when the window sits mid-list: flows that
+            # arrived while following was off were counted but deliberately not shown, so
+            # the window is stale even when it was already at the end.
+            self._load_page(cursor="bottom", last=True)
         self._update_subtitle()
 
     def action_filter(self) -> None:
