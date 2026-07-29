@@ -52,17 +52,6 @@ class GatewayClient:
         resp = await self._v().ListSessions(viewer_pb2.ListSessionsRequest(limit=limit))
         return list(resp.sessions)
 
-    async def list_flows(self, session_id: str):
-        """All stored flow summaries for a session (StreamFlows backfill, no follow)."""
-        call = self._v().StreamFlows(
-            viewer_pb2.StreamFlowsRequest(session_id=session_id, follow=False)
-        )
-        flows = []
-        async for ev in call:
-            if ev.WhichOneof("event") == "flow_added":
-                flows.append(ev.flow_added)
-        return flows
-
     async def query_flows(self, session_id: str, filter_expr: str = "", limit: int = 100,
                           after=None, before=None, last: bool = False,
                           since_micros: int = 0, until_micros: int = 0):

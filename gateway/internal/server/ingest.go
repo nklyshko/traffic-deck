@@ -28,12 +28,12 @@ const maxChunkBytes = 1 << 20 // advertised upload chunk size
 // live and/or on close) and the pushed-flow path for already-decoded sources.
 type Ingest struct {
 	trafficv1.UnimplementedIngestServiceServer
-	st         *store.Store
-	obj        objstore.Store
-	tshark     string
-	hub        *liveHub
-	liveDecode bool // when false, streaming uploads are archived and decoded only on close
-	recordLive bool // when true, persist the live-decoded flows on close instead of batch decode
+	st           *store.Store
+	obj          objstore.Store
+	tshark       string
+	hub          *liveHub
+	liveDecode   bool // when false, streaming uploads are archived and decoded only on close
+	recordLive   bool // when true, persist the live-decoded flows on close instead of batch decode
 	tsharkVerify bool // when true, compare live flows vs a tshark decode on close and log differences
 
 	// pushAnalyses gives each pushed (mitmproxy) session a single analysis, shared across

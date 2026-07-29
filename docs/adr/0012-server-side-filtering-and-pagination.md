@@ -91,6 +91,28 @@ that `InlineBlobMax` stays below `_SCAN_FETCH_MAX`, or content search silently s
 matching. Nothing outside the gateway reads `inline` to match a body any more, so the
 hazard stops existing rather than being documented.
 
+**Amended after implementation:** this needed a term the decision did not anticipate.
+MCP's content search matches *headers* as well as bodies, so moving only body matching
+would have left the second path alive for the other half — §2b is what makes the deletion
+possible. Its other criteria are wider still (a time window, a status set, searching every
+session at once) but needed no new terms: the window became request fields (§5a), a status
+set is an alternation `~c` already accepts, and spanning sessions is the caller looping.
+
+**2b. Headers are a term too, at their own cost tier.** `~h` matches either direction,
+`~hq` the request, `~hs` the response. Headers sit between columns and bodies: no index
+serves them, but a row costs a handful of small `flow_headers` rows rather than a blob.
+Evaluation is therefore ordered by cost — columns, then headers, then bodies — so a row
+rejected by `~m` never reads a header, and one rejected by a header never reads a body.
+
+They are read per candidate row, not bulk-loaded like the annotation maps: `flow_headers`
+runs to roughly a dozen rows per flow, so a large session's headers are millions of rows,
+and pre-loading them would recreate the very accumulation this decision removes.
+
+This is also the term the viewer has most obviously lacked.
+[0009](0009-native-live-decode-default.md) says what this system is for — parser and
+anti-bot fingerprinting — and headers are that signal; the language could match
+`content-type` and nothing else.
+
 **3. Regexes are RE2, and incompatible ones are rejected, not silently re-interpreted.**
 The viewers compile with Python's backtracking `re`; the gateway has Go's RE2. Lookarounds
 and backreferences are accepted today and cannot be. They are refused at compile time with
@@ -120,6 +142,15 @@ clients set it and the server has never read it, always backfilling — and with
 becoming `QueryFlows`' job there is nothing left for it to have meant. Removing it is
 part of the same breaking change rather than a field carried forward for compatibility
 with behaviour that never existed.
+
+**5a. A time window is request fields, not a term.** `since_micros`/`until_micros` bound
+the request time, deliberately outside the language. Every DSL argument is a regex, and a
+term whose argument is a timestamp breaks the one rule that makes the grammar predictable
+— exactly the confusion `Hints` exists to catch. More usefully, a time bound is a *range
+on the paging key*, so as a field it narrows the scan through `flows_ts_idx` instead of
+testing every row, which a predicate term could not do. Relative times ("-15m") resolve
+against the caller's clock and travel as absolute microseconds, so a filter means the same
+thing whenever it runs.
 
 **5. Pagination is keyset; totals are capped and honest.** A live session grows while it
 is read, so `OFFSET` shifts rows under the cursor. Paging on `(ts_micros, frame_number)`
@@ -249,8 +280,13 @@ implementations are deleted rather than kept as a compatibility path.
   client that ignores `flow_unmatched` silently shows rows that no longer match — the
   failure is a stale view, not an error, which makes it worth an explicit check in each
   viewer rather than a default case.
-- **The gateway now evaluates a filter per subscriber on every published flow.** With many
-  followers on a busy session that is real work on the publish path, where today the
-  fan-out is a channel send. Predicates are compiled once per subscription, and the same
-  RE2 linear-time guarantee that makes a remote filter safe also bounds this — but the
-  cost sits in the decoder's path, not in a reader's.
+- **The gateway evaluates a filter per subscriber, in that subscriber's own goroutine.**
+  This decision anticipated doing it on the publish path and accepted the cost landing in
+  the decoder's path. Implementation put it in the subscription instead, so the predicate
+  never runs behind the mutex the decoder publishes through — the one place that work must
+  not go. Same behaviour; the cost is borne by the reader that asked for it.
+- **A caller's scan budget is coarser than it was.** MCP's `max_scan` used to bound rows
+  it fetched itself; it now bounds how many pages it requests, because `QueryFlows` has no
+  per-request scan cap to pass it to. Every query is still bounded by the gateway's own
+  cap, so nothing is unbounded — but wiring `max_scan` through as a request field is
+  unfinished work, not a closed decision.

@@ -113,10 +113,12 @@ constants in two languages, and it is recorded here because nothing enforces it:
 `InlineBlobMax` past `_SCAN_FETCH_MAX` would make content search quietly miss matches.
 The cost that does land is a fetch per candidate body where there was none — bounded by
 MCP's existing scan cap and by its header-criteria-first ordering.
-[0012](0012-server-side-filtering-and-pagination.md) §2a retires this: body matching
-becomes a DSL term evaluated in the gateway, `_body_text` is deleted, and nothing outside
-the gateway reads `inline` to match a body — so the constant coupling stops existing
-rather than remaining a documented hazard.
+
+**Since retired.** [0012](0012-server-side-filtering-and-pagination.md) §2a moved body
+matching into the gateway and `_body_text` is deleted, so nothing outside the gateway
+reads `inline` to match a body and the coupling no longer exists. It took more than 0012
+first assumed — MCP matched headers as well as bodies, so the header terms in §2b had to
+exist before the second search path could go.
 
 Because of this, decision 3 clears `inline` only on the **retained hub copy**. Whether
 live flow *events* should stop carrying inline bodies at all is a larger question — it is

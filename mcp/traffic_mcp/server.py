@@ -595,31 +595,6 @@ async def network_timeline(session_id: str, limit: int = 200, cursor: str = "") 
     return out
 
 
-async def _session_flows(session_id: str) -> list[tuple[str, str | None, object]]:
-    """(session_id, session_label, flow) for every flow to search, time-ordered within a
-    session. An empty `session_id` spans every session."""
-    if session_id:
-        sessions = [(await _resolve_session(session_id), None)]
-    else:
-        sessions = [(s.id, s.label) for s in await client().list_sessions()]
-
-    out: list[tuple[str, str | None, object]] = []
-    for sid, label in sessions:
-        try:
-            flows = await client().list_flows(sid)
-        except grpc.aio.AioRpcError as e:
-            # For an explicit session_id, surface the error (incl. FAILED_PRECONDITION
-            # "re-import this session"). When scanning every session, skip outdated or
-            # missing bundles but still propagate genuine faults.
-            if session_id or e.code() not in (
-                grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.NOT_FOUND
-            ):
-                raise
-            continue
-        flows.sort(key=lambda f: f.ts_unix_micros)
-        out += [(sid, label, f) for f in flows]
-    return out
-
 
 @mcp.tool()
 async def search(session_id: str = "", domain: str = "", method: str = "",

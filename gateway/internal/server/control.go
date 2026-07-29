@@ -27,7 +27,7 @@ type Control struct {
 	st       *store.Store
 	obj      objstore.Store // for pcap import (ImportCapture)
 	dataRoot string
-	tshark   string // tshark binary, for a tshark-engine pcap import
+	tshark   string              // tshark binary, for a tshark-engine pcap import
 	mgr      *sourcemgr.Manager  // nil disables capture control
 	svcs     *sourcemgr.Services // nil disables auxiliary services
 }

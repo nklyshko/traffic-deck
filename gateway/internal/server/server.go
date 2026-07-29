@@ -146,25 +146,11 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 		return nil // never shown and still not matching: nothing to say
 	}
 
-	// A following subscription carries liveness only: QueryFlows serves the rows a viewer
-	// displays, so replaying the session here would hand it the whole thing again and undo
-	// the paging (ADR-0012 §4). A non-following reader still gets the replay, since that is
-	// the only thing such a call could mean — and it is the path MCP has yet to migrate off.
+	// StreamFlows is liveness, nothing else: QueryFlows serves the rows a viewer displays,
+	// so replaying a session here would hand a paging client the whole thing back and undo
+	// the paging (ADR-0012 §4). Without follow there is nothing for this call to do.
 	if !req.GetFollow() {
-		flows, err := v.st.ListFlows(srv.Context(), sid)
-		if err != nil {
-			return storeStatus(err, "list flows")
-		}
-		for _, f := range flows {
-			if err := send(&trafficv1.FlowEvent{
-				Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
-				return err
-			}
-		}
-		// A non-following reader would otherwise miss an open session's unflushed tail,
-		// which is not in the bundle yet. Skipping ids the backfill already covered, since
-		// the pushed (mitmproxy) path persists incrementally and so appears in both.
-		return v.sendLiveFlows(srv, sid, shown, send)
+		return nil
 	}
 	ls := v.waitForLive(srv.Context(), sid)
 	if ls == nil {

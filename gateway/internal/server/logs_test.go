@@ -21,13 +21,16 @@ type fakeLogStream struct {
 	data []byte
 }
 
-func (f *fakeLogStream) Send(c *trafficv1.LogChunk) error { f.data = append(f.data, c.GetPayload()...); return nil }
-func (f *fakeLogStream) Context() context.Context         { return f.ctx }
-func (f *fakeLogStream) SetHeader(metadata.MD) error      { return nil }
-func (f *fakeLogStream) SendHeader(metadata.MD) error     { return nil }
-func (f *fakeLogStream) SetTrailer(metadata.MD)           {}
-func (f *fakeLogStream) SendMsg(any) error                { return nil }
-func (f *fakeLogStream) RecvMsg(any) error                { return nil }
+func (f *fakeLogStream) Send(c *trafficv1.LogChunk) error {
+	f.data = append(f.data, c.GetPayload()...)
+	return nil
+}
+func (f *fakeLogStream) Context() context.Context     { return f.ctx }
+func (f *fakeLogStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeLogStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeLogStream) SetTrailer(metadata.MD)       {}
+func (f *fakeLogStream) SendMsg(any) error            { return nil }
+func (f *fakeLogStream) RecvMsg(any) error            { return nil }
 
 // TestListAndGetLog covers the log RPCs end to end: a child writes to its own file, the
 // gateway writes to its own, ListLogs reports both, and GetLog streams a log's tail back.

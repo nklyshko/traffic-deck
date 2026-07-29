@@ -99,28 +99,27 @@ func queryTestStore(t *testing.T) (*store.Store, string) {
 	return st, sid
 }
 
-// TestStreamFlowsFiltersBackfill: a filtered subscription is told only about matching
-// flows, so a viewer that no longer holds the predicate still shows the right set.
-func TestStreamFlowsFiltersBackfill(t *testing.T) {
+// TestStreamFlowsWithoutFollowYieldsNothing: the stream is liveness now, so a
+// non-following call has nothing to do. Reading a session's rows — filtered, paged, and
+// including an open session's unflushed tail — is QueryFlows' job, covered by
+// TestQueryFlowsMergesUnflushedTail and the store's query tests.
+func TestStreamFlowsWithoutFollowYieldsNothing(t *testing.T) {
 	ctx := context.Background()
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
 	if _, err := st.InsertFlows(ctx, sid, "a1", []*decode.Flow{
 		{ID: "f1", Method: "GET", Authority: "api.example.com", Path: "/a", Status: 200, TSUnixMicros: 1},
-		{ID: "f2", Method: "POST", Authority: "api.example.com", Path: "/b", Status: 200, TSUnixMicros: 2},
 	}); err != nil {
 		t.Fatal(err)
 	}
-
 	v := NewViewer(st, newLiveHub(false))
 	s := &collectStream{ctx: ctx}
-	if err := v.StreamFlows(&trafficv1.StreamFlowsRequest{SessionId: sid, Filter: "~m POST"}, s); err != nil {
+	if err := v.StreamFlows(&trafficv1.StreamFlowsRequest{SessionId: sid}, s); err != nil {
 		t.Fatal(err)
 	}
-	got := s.kinds()
-	if len(got) != 1 || got[0] != "added:f2" {
-		t.Fatalf("filtered backfill = %v, want just added:f2", got)
+	if got := s.kinds(); len(got) != 0 {
+		t.Fatalf("a non-following stream replayed %v; backfill is QueryFlows' job", got)
 	}
 }
 

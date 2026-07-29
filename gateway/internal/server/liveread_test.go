@@ -97,64 +97,8 @@ func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
 
 // TestStreamFlowsLiveNoFollow checks that a non-following StreamFlows serves an open
 // session's unpersisted flows (with their annotations) instead of an empty backfill —
-// what the MCP server and other one-shot readers do.
-func TestStreamFlowsLiveNoFollow(t *testing.T) {
-	ctx := context.Background()
-	st, hub, ls, sid := liveFixture(t)
-
-	fid := uuid.NewString()
-	ls.publish(&trafficv1.Flow{Id: fid, Authority: "example.com", Method: "GET"}, true)
-	ls.publish(&trafficv1.Flow{Id: uuid.NewString(), Authority: "cdn.example.com", Method: "GET"}, true)
-	if _, err := st.AddComment(ctx, sid, fid, "suspicious"); err != nil {
-		t.Fatal(err)
-	}
-
-	srv := &fakeFlowStream{ctx: ctx}
-	v := NewViewer(st, hub)
-	if err := v.StreamFlows(&trafficv1.StreamFlowsRequest{
-		SessionId: sid, Follow: false,
-	}, srv); err != nil {
-		t.Fatalf("StreamFlows: %v", err)
-	}
-
-	flows := addedFlows(srv.events)
-	if len(flows) != 2 {
-		t.Fatalf("streamed %d flows, want 2 (the live ones)", len(flows))
-	}
-	if flows[0].GetId() != fid || flows[0].GetAuthority() != "example.com" {
-		t.Errorf("first flow = %+v, want the first published one", flows[0])
-	}
-	if len(flows[0].GetComments()) != 1 || flows[0].GetComments()[0].GetBody() != "suspicious" {
-		t.Errorf("live flow comments = %+v, want one 'suspicious'", flows[0].GetComments())
-	}
-}
 
 // TestStreamFlowsLiveNoDuplicates checks the pushed (mitmproxy) path, where flows are
-// persisted incrementally *and* held in the hub: each flow must be sent once.
-func TestStreamFlowsLiveNoDuplicates(t *testing.T) {
-	ctx := context.Background()
-	st, hub, ls, sid := liveFixture(t)
-
-	fid := uuid.NewString()
-	aid := uuid.NewString()
-	if err := st.CreateAnalysis(ctx, store.NewAnalysis{ID: aid, SessionID: sid, Engine: "mitmproxy"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.InsertFlows(ctx, sid, aid, []*decode.Flow{{ID: fid, Authority: "example.com", Method: "GET"}}); err != nil {
-		t.Fatal(err)
-	}
-	ls.publish(&trafficv1.Flow{Id: fid, Authority: "example.com", Method: "GET"}, true)
-
-	srv := &fakeFlowStream{ctx: ctx}
-	if err := NewViewer(st, hub).StreamFlows(&trafficv1.StreamFlowsRequest{
-		SessionId: sid, Follow: false,
-	}, srv); err != nil {
-		t.Fatalf("StreamFlows: %v", err)
-	}
-	if flows := addedFlows(srv.events); len(flows) != 1 {
-		t.Fatalf("streamed %d flows, want 1 (stored and live are the same flow)", len(flows))
-	}
-}
 
 // TestListMessagesLive checks that an open session's WebSocket timeline — frames that live
 // only in the hub until close — is served by ListMessages, with annotations attached.
