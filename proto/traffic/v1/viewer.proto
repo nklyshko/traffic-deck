@@ -55,6 +55,13 @@ message QueryFlowsRequest {
   FlowCursor after = 4;
   FlowCursor before = 5;
   bool last = 6;
+  // Request-time window, in unix micros; 0 is unbounded. Fields rather than filter terms
+  // deliberately: every DSL argument is a regex, and a time bound is a range on
+  // (ts_micros, frame_number) — the paging key, which the index is already built for, so
+  // it costs the predicate nothing. Relative times ("-15m") resolve against the caller's
+  // clock and are sent absolute, so a filter means the same thing whenever it runs.
+  int64 since_micros = 7;
+  int64 until_micros = 8;
 }
 
 message FlowPage {

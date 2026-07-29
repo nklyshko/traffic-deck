@@ -65,6 +65,9 @@ func (v *Viewer) QueryFlows(ctx context.Context, req *trafficv1.QueryFlowsReques
 		After:  cursorFromProto(req.GetAfter()),
 		Before: cursorFromProto(req.GetBefore()),
 		Last:   req.GetLast(),
+
+		SinceMicros: req.GetSinceMicros(),
+		UntilMicros: req.GetUntilMicros(),
 	})
 	if err != nil {
 		return nil, storeStatus(err, "query flows")

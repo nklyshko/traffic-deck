@@ -181,9 +181,16 @@ type QueryFlowsRequest struct {
 	// Exactly one of after/before, or neither for the first page. `before` walks backwards
 	// from the given position; with no cursor set, `last` starts at the end of the list —
 	// which is how "jump to the end" works without knowing how many rows match.
-	After         *FlowCursor `protobuf:"bytes,4,opt,name=after,proto3" json:"after,omitempty"`
-	Before        *FlowCursor `protobuf:"bytes,5,opt,name=before,proto3" json:"before,omitempty"`
-	Last          bool        `protobuf:"varint,6,opt,name=last,proto3" json:"last,omitempty"`
+	After  *FlowCursor `protobuf:"bytes,4,opt,name=after,proto3" json:"after,omitempty"`
+	Before *FlowCursor `protobuf:"bytes,5,opt,name=before,proto3" json:"before,omitempty"`
+	Last   bool        `protobuf:"varint,6,opt,name=last,proto3" json:"last,omitempty"`
+	// Request-time window, in unix micros; 0 is unbounded. Fields rather than filter terms
+	// deliberately: every DSL argument is a regex, and a time bound is a range on
+	// (ts_micros, frame_number) — the paging key, which the index is already built for, so
+	// it costs the predicate nothing. Relative times ("-15m") resolve against the caller's
+	// clock and are sent absolute, so a filter means the same thing whenever it runs.
+	SinceMicros   int64 `protobuf:"varint,7,opt,name=since_micros,json=sinceMicros,proto3" json:"since_micros,omitempty"`
+	UntilMicros   int64 `protobuf:"varint,8,opt,name=until_micros,json=untilMicros,proto3" json:"until_micros,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -258,6 +265,20 @@ func (x *QueryFlowsRequest) GetLast() bool {
 		return x.Last
 	}
 	return false
+}
+
+func (x *QueryFlowsRequest) GetSinceMicros() int64 {
+	if x != nil {
+		return x.SinceMicros
+	}
+	return 0
+}
+
+func (x *QueryFlowsRequest) GetUntilMicros() int64 {
+	if x != nil {
+		return x.UntilMicros
+	}
+	return 0
 }
 
 type FlowPage struct {
@@ -1140,7 +1161,7 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\n" +
 	"FlowCursor\x12\x1b\n" +
 	"\tts_micros\x18\x01 \x01(\x03R\btsMicros\x12!\n" +
-	"\fframe_number\x18\x02 \x01(\x04R\vframeNumber\"\xd2\x01\n" +
+	"\fframe_number\x18\x02 \x01(\x04R\vframeNumber\"\x98\x02\n" +
 	"\x11QueryFlowsRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
@@ -1148,7 +1169,9 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\x05limit\x18\x03 \x01(\rR\x05limit\x12,\n" +
 	"\x05after\x18\x04 \x01(\v2\x16.traffic.v1.FlowCursorR\x05after\x12.\n" +
 	"\x06before\x18\x05 \x01(\v2\x16.traffic.v1.FlowCursorR\x06before\x12\x12\n" +
-	"\x04last\x18\x06 \x01(\bR\x04last\"\xf7\x01\n" +
+	"\x04last\x18\x06 \x01(\bR\x04last\x12!\n" +
+	"\fsince_micros\x18\a \x01(\x03R\vsinceMicros\x12!\n" +
+	"\funtil_micros\x18\b \x01(\x03R\vuntilMicros\"\xf7\x01\n" +
 	"\bFlowPage\x12&\n" +
 	"\x05flows\x18\x01 \x03(\v2\x10.traffic.v1.FlowR\x05flows\x12*\n" +
 	"\x04next\x18\x02 \x01(\v2\x16.traffic.v1.FlowCursorR\x04next\x12*\n" +

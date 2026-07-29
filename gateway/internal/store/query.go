@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/filter"
@@ -42,6 +43,11 @@ type FlowQuery struct {
 	Before  *Cursor
 	Last    bool
 	ScanCap int
+	// Request-time bounds in unix micros; 0 is unbounded. Applied in SQL rather than by
+	// the predicate: this is a range on the paging key, which flows_ts_idx already covers,
+	// so bounding a window costs the scan nothing instead of a test per row.
+	SinceMicros int64
+	UntilMicros int64
 }
 
 // FlowPage is one page plus what a viewer needs to navigate and describe it.
@@ -92,7 +98,7 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 	// order and the page is reversed before returning, so the caller always sees timeline
 	// order regardless of which way it was gathered.
 	backwards := q.Before != nil || q.Last
-	where, args := cursorClause(q, backwards)
+	where, args := whereClause(q)
 	order := "ASC"
 	if backwards {
 		order = "DESC"
@@ -119,6 +125,9 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 		page.Scanned++
 		ann.apply(r.id, &r.f)
 		r.f.Metadata = meta[r.id]
+		if q.Filter.ReadsHeaders() {
+			r.f.Headers = headerLoader(ctx, db, r.id)
+		}
 		if q.Filter.ReadsBodies() {
 			r.f.Body = s.bodyLoader(ctx, db, r.reqBodyRef, r.respRef)
 		}
@@ -138,9 +147,9 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 		return nil, err
 	}
 
-	// With no filter every row matches, so the total is a cheap COUNT rather than a scan
-	// the cap might have truncated — the common case gets an exact number.
-	if q.Filter == nil {
+	// With no filter and no window every row matches, so the total is a cheap COUNT rather
+	// than a scan the cap might have truncated — the common case gets an exact number.
+	if q.Filter == nil && q.SinceMicros == 0 && q.UntilMicros == 0 {
 		n, err := s.CountFlows(ctx, sessionID)
 		if err != nil {
 			return nil, err
@@ -176,20 +185,32 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 	return page, nil
 }
 
-// cursorClause builds the keyset predicate. Row-value comparison gives the "strictly
-// after this (ts, frame)" ordering directly, so paging never revisits or skips a row even
-// when several share a timestamp.
-func cursorClause(q FlowQuery, backwards bool) (string, []any) {
+// whereClause builds the keyset predicate and the time window. Row-value comparison gives
+// the "strictly after this (ts, frame)" ordering directly, so paging never revisits or
+// skips a row even when several share a timestamp.
+func whereClause(q FlowQuery) (string, []any) {
+	var conds []string
+	var args []any
 	switch {
 	case q.After != nil:
-		return `WHERE (ts_micros, frame_number) > (?, ?)`,
-			[]any{q.After.TSMicros, int64(q.After.FrameNumber)}
+		conds = append(conds, `(ts_micros, frame_number) > (?, ?)`)
+		args = append(args, q.After.TSMicros, int64(q.After.FrameNumber))
 	case q.Before != nil:
-		return `WHERE (ts_micros, frame_number) < (?, ?)`,
-			[]any{q.Before.TSMicros, int64(q.Before.FrameNumber)}
-	default:
+		conds = append(conds, `(ts_micros, frame_number) < (?, ?)`)
+		args = append(args, q.Before.TSMicros, int64(q.Before.FrameNumber))
+	}
+	if q.SinceMicros > 0 {
+		conds = append(conds, `ts_micros >= ?`)
+		args = append(args, q.SinceMicros)
+	}
+	if q.UntilMicros > 0 {
+		conds = append(conds, `ts_micros <= ?`)
+		args = append(args, q.UntilMicros)
+	}
+	if len(conds) == 0 {
 		return "", nil // first page, or (with backwards) the last
 	}
+	return "WHERE " + strings.Join(conds, " AND "), args
 }
 
 func scanQueryRow(rows *sql.Rows) (*scanRow, error) {
@@ -225,6 +246,44 @@ func (s *Store) bodyLoader(ctx context.Context, db *sql.DB, reqRef, respRef stri
 			return string(b)
 		}
 		return ""
+	}
+}
+
+// headerLoader returns a lazy reader for one row's headers, as the "name: value" lines a
+// header term matches against. Read per row rather than bulk-loaded like the annotation
+// maps: flow_headers runs to roughly a dozen rows per flow, so a large session's headers
+// are millions of rows — pre-loading them would recreate the memory problem this design
+// exists to remove. flow_headers_flow_idx makes the per-row read cheap.
+func headerLoader(ctx context.Context, db *sql.DB, flowID string) func(filter.Direction) string {
+	var cache [2]*string
+	return func(d filter.Direction) string {
+		if cache[d] != nil {
+			return *cache[d]
+		}
+		dir := 0
+		if d == filter.Response {
+			dir = 1
+		}
+		var b strings.Builder
+		rows, err := db.QueryContext(ctx,
+			`SELECT name, value FROM flow_headers WHERE flow_id=? AND direction=? ORDER BY ord`,
+			flowID, dir)
+		if err == nil {
+			for rows.Next() {
+				var name, value string
+				if err := rows.Scan(&name, &value); err != nil {
+					break
+				}
+				b.WriteString(name)
+				b.WriteString(": ")
+				b.WriteString(value)
+				b.WriteByte('\n')
+			}
+			rows.Close()
+		}
+		out := b.String()
+		cache[d] = &out
+		return out
 	}
 }
 

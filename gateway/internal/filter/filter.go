@@ -50,6 +50,11 @@ type Flow struct {
 	// Body returns the decoded body for a direction, or "" if there is none. Nil means
 	// bodies are unavailable, in which case body terms simply do not match.
 	Body func(Direction) string
+	// Headers returns a direction's headers as "name: value" lines. Like Body it is a
+	// func, because headers live in a side table: loading them for every row of a session
+	// would recreate the memory problem this design exists to avoid, so they are read only
+	// for a row that reached a header term.
+	Headers func(Direction) string
 }
 
 // URL is the haystack for `~u` and for a bare regex, composed the way the viewers
@@ -73,14 +78,30 @@ func (f *Flow) body(d Direction) string {
 	return f.Body(d)
 }
 
+func (f *Flow) headers(d Direction) string {
+	if f.Headers == nil {
+		return ""
+	}
+	return f.Headers(d)
+}
+
 // Predicate is a compiled filter.
 type Predicate struct{ terms []term }
 
 type term struct {
-	neg  bool
-	body bool // reads a body; sorted last so only survivors pay for it
+	neg bool
+	// cost orders evaluation: columns (0) are free, headers (1) read a side table, bodies
+	// (2) read a blob. Sorting by it means each tier only pays for what survived the one
+	// before, which is what keeps a body term affordable at all.
+	cost int
 	eval func(*Flow) bool
 }
+
+const (
+	costColumn = iota
+	costHeader
+	costBody
+)
 
 // Match reports whether f satisfies every term. A nil Predicate matches everything, so
 // an empty filter needs no special case at the call site.
@@ -100,14 +121,19 @@ func (p *Predicate) Match(f *Flow) bool {
 	return true
 }
 
-// ReadsBodies reports whether any term needs a body, so a caller can skip loading them
-// for the common filter that does not.
-func (p *Predicate) ReadsBodies() bool {
+// ReadsBodies reports whether any term needs a body, so a caller can skip wiring the
+// loader for the common filter that does not.
+func (p *Predicate) ReadsBodies() bool { return p.readsAtLeast(costBody) }
+
+// ReadsHeaders reports the same for headers.
+func (p *Predicate) ReadsHeaders() bool { return p.readsAtLeast(costHeader) }
+
+func (p *Predicate) readsAtLeast(cost int) bool {
 	if p == nil {
 		return false
 	}
 	for _, t := range p.terms {
-		if t.body {
+		if t.cost == cost {
 			return true
 		}
 	}
@@ -119,6 +145,7 @@ var argTerms = map[string]bool{
 	"~m": true, "~d": true, "~u": true, "~c": true, "~t": true,
 	"~conn": true, "~stream": true,
 	"~mark": true, "~tag": true, "~group": true, "~comment": true, "~meta": true,
+	"~h": true, "~hq": true, "~hs": true,
 	"~b": true, "~bq": true, "~bs": true,
 }
 
@@ -225,12 +252,28 @@ func Compile(expr string, tagNames, groupNames map[string]string) (*Predicate, e
 				return nil, err
 			}
 			trm.eval = func(f *Flow) bool { return rx.MatchString(f.Metadata[key]) }
+		case "~h", "~hq", "~hs":
+			rx, err := compileRx(t.arg)
+			if err != nil {
+				return nil, err
+			}
+			trm.cost = costHeader
+			switch t.term {
+			case "~hq":
+				trm.eval = func(f *Flow) bool { return rx.MatchString(f.headers(Request)) }
+			case "~hs":
+				trm.eval = func(f *Flow) bool { return rx.MatchString(f.headers(Response)) }
+			default:
+				trm.eval = func(f *Flow) bool {
+					return rx.MatchString(f.headers(Request)) || rx.MatchString(f.headers(Response))
+				}
+			}
 		case "~b", "~bq", "~bs":
 			rx, err := compileRx(t.arg)
 			if err != nil {
 				return nil, err
 			}
-			trm.body = true
+			trm.cost = costBody
 			switch t.term {
 			case "~bq":
 				trm.eval = func(f *Flow) bool { return rx.MatchString(f.body(Request)) }
@@ -252,8 +295,9 @@ func Compile(expr string, tagNames, groupNames map[string]string) (*Predicate, e
 		p.terms = append(p.terms, trm)
 	}
 
-	// Body terms last: a body is read only for a row that already passed everything else.
-	sort.SliceStable(p.terms, func(i, j int) bool { return !p.terms[i].body && p.terms[j].body })
+	// Cheapest first, so a row is rejected by a column before it costs a header read, and
+	// by a header before it costs a blob.
+	sort.SliceStable(p.terms, func(i, j int) bool { return p.terms[i].cost < p.terms[j].cost })
 	return p, nil
 }
 

@@ -215,3 +215,70 @@ func TestHints(t *testing.T) {
 		t.Errorf("a clean expression should produce no hints, got %v", h)
 	}
 }
+
+func TestHeaderTerms(t *testing.T) {
+	f := testFlow()
+	f.Headers = func(d Direction) string {
+		if d == Request {
+			return "user-agent: probe\nx-api-key: secret\n"
+		}
+		return "server: nginx\nset-cookie: sid=abc\n"
+	}
+	for _, c := range []struct {
+		expr string
+		want bool
+	}{
+		{"~h x-api-key", true},  // either direction
+		{"~h set-cookie", true}, // ditto, response side
+		{"~hq x-api-key", true}, // request only
+		{"~hq set-cookie", false},
+		{"~hs set-cookie", true}, // response only
+		{"~hs x-api-key", false},
+		{"~h nothere", false},
+		{"~hq 'user-agent: probe'", false}, // quotes match literally, as everywhere
+	} {
+		p, err := Compile(c.expr, names, groups)
+		if err != nil {
+			t.Fatalf("compile %q: %v", c.expr, err)
+		}
+		if got := p.Match(f); got != c.want {
+			t.Errorf("%q = %v, want %v", c.expr, got, c.want)
+		}
+	}
+}
+
+// TestTermsAreOrderedByCost: a header is read only for a row the columns accepted, and a
+// body only for one the headers accepted too.
+func TestTermsAreOrderedByCost(t *testing.T) {
+	f := testFlow()
+	var headerReads, bodyReads int
+	f.Headers = func(Direction) string { headerReads++; return "x: y" }
+	f.Body = func(Direction) string { bodyReads++; return "irrelevant" }
+
+	// Written most-expensive first; the column term still decides it.
+	p, err := Compile("~b anything ~h x ~m POST", names, groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Match(f) {
+		t.Fatal("should not match: the method is GET")
+	}
+	if headerReads != 0 || bodyReads != 0 {
+		t.Fatalf("read %d headers and %d bodies for a row rejected by ~m", headerReads, bodyReads)
+	}
+
+	// A row the columns accept pays for headers, but not for the body the headers reject.
+	p2, _ := Compile("~b anything ~h nomatch ~m GET", names, groups)
+	if p2.Match(f) {
+		t.Fatal("should not match: no header matches")
+	}
+	if headerReads == 0 {
+		t.Fatal("the header term should have been evaluated")
+	}
+	if bodyReads != 0 {
+		t.Fatalf("body read %d times for a row rejected by a header term", bodyReads)
+	}
+	if !p2.ReadsHeaders() || !p2.ReadsBodies() {
+		t.Fatal("ReadsHeaders/ReadsBodies should both report true")
+	}
+}

@@ -30,20 +30,24 @@ class FlowCursor(_message.Message):
     def __init__(self, ts_micros: _Optional[int] = ..., frame_number: _Optional[int] = ...) -> None: ...
 
 class QueryFlowsRequest(_message.Message):
-    __slots__ = ("session_id", "filter", "limit", "after", "before", "last")
+    __slots__ = ("session_id", "filter", "limit", "after", "before", "last", "since_micros", "until_micros")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FILTER_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
     AFTER_FIELD_NUMBER: _ClassVar[int]
     BEFORE_FIELD_NUMBER: _ClassVar[int]
     LAST_FIELD_NUMBER: _ClassVar[int]
+    SINCE_MICROS_FIELD_NUMBER: _ClassVar[int]
+    UNTIL_MICROS_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     filter: str
     limit: int
     after: FlowCursor
     before: FlowCursor
     last: bool
-    def __init__(self, session_id: _Optional[str] = ..., filter: _Optional[str] = ..., limit: _Optional[int] = ..., after: _Optional[_Union[FlowCursor, _Mapping]] = ..., before: _Optional[_Union[FlowCursor, _Mapping]] = ..., last: bool = ...) -> None: ...
+    since_micros: int
+    until_micros: int
+    def __init__(self, session_id: _Optional[str] = ..., filter: _Optional[str] = ..., limit: _Optional[int] = ..., after: _Optional[_Union[FlowCursor, _Mapping]] = ..., before: _Optional[_Union[FlowCursor, _Mapping]] = ..., last: bool = ..., since_micros: _Optional[int] = ..., until_micros: _Optional[int] = ...) -> None: ...
 
 class FlowPage(_message.Message):
     __slots__ = ("flows", "next", "prev", "matched", "count_capped", "scanned", "hints")

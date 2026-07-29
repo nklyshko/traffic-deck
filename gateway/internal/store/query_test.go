@@ -231,3 +231,52 @@ func TestQueryFlowsAnnotationTerms(t *testing.T) {
 		t.Fatalf("~mark matched %v, want just f-003", ids(page))
 	}
 }
+
+func TestQueryFlowsHeaderTerm(t *testing.T) {
+	ctx := context.Background()
+	st, sid := seedQuerySession(t, 20)
+	defer st.Close()
+
+	// Give one flow a distinguishing header.
+	if _, err := st.InsertFlows(ctx, sid, "a1", []*decode.Flow{{
+		ID: "f-007", FrameNumber: 7, TSUnixMicros: 7000, Method: "GET",
+		Authority: "api.example.com", Path: "/r/7", Status: 200,
+		RequestHeaders: []decode.Header{{Name: "x-api-key", Value: "s3cret"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := st.QueryFlows(ctx, sid, FlowQuery{Filter: compile(t, "~hq x-api-key"), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Flows) != 1 || page.Flows[0].GetId() != "f-007" {
+		t.Fatalf("header filter matched %v, want just f-007", ids(page))
+	}
+}
+
+// TestQueryFlowsTimeWindow: a window bounds the scan in SQL, against the same index
+// paging uses — so it narrows what is examined rather than testing every row.
+func TestQueryFlowsTimeWindow(t *testing.T) {
+	ctx := context.Background()
+	st, sid := seedQuerySession(t, 50) // ts = i*1000
+	defer st.Close()
+
+	page, err := st.QueryFlows(ctx, sid, FlowQuery{
+		Limit: 100, SinceMicros: 10_000, UntilMicros: 19_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Flows) != 10 {
+		t.Fatalf("window returned %d flows, want 10 (f-010..f-019)", len(page.Flows))
+	}
+	if got := ids(page); got[0] != "f-010" || got[9] != "f-019" {
+		t.Fatalf("window bounds wrong: %v", got)
+	}
+	if page.Matched != 10 {
+		t.Fatalf("matched = %d, want the windowed count, not the session's", page.Matched)
+	}
+	if page.Scanned > 10 {
+		t.Fatalf("scanned %d rows: the window should narrow the scan, not filter it", page.Scanned)
+	}
+}
