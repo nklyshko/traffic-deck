@@ -18,8 +18,8 @@ from datetime import datetime
 import grpc
 from mcp.server.fastmcp import FastMCP
 
-from traffic_mcp.client import GatewayClient
-from traffic_mcp.filter import FILTER_SYNTAX, compile_filter, filter_hints, flow_url
+from traffic_mcp.client import GatewayClient, viewer_pb2
+from traffic_mcp.filter import FILTER_SYNTAX, flow_url
 
 mcp = FastMCP("trafficdeck-mcp", host=os.environ.get("MCP_HOST", "127.0.0.1"),
               port=int(os.environ.get("MCP_PORT", "8765")))
@@ -190,6 +190,25 @@ def _body_ref(body) -> dict | None:
 _PARTIAL = {"partial": True,
             "note": "live preview — only the start of the body was kept while capturing; "
                     "the whole body is readable once the session closes"}
+
+
+def _cursor_str(c) -> str:
+    """A page cursor as an opaque token for the caller to hand back. It is a position in
+    the session's timeline, not an offset — a live session grows while it is read, so an
+    offset would shift rows under a paging caller."""
+    return f"{c.ts_micros}:{c.frame_number}"
+
+
+def _parse_cursor(token: str):
+    """Turn a cursor token back into a FlowCursor, or None if absent/unparseable."""
+    if not token:
+        return None
+    try:
+        ts, _, frame = token.partition(":")
+        return viewer_pb2.FlowCursor(ts_micros=int(ts), frame_number=int(frame))
+    except (TypeError, ValueError):
+        raise ValueError(f"bad cursor {token!r} — pass back the `next_cursor` from a "
+                         f"previous page, or omit it to start at the beginning") from None
 
 
 def _body_meta(body) -> dict | None:
@@ -512,20 +531,29 @@ async def rename_session(session_id: str, label: str) -> dict:
 
 
 @mcp.tool()
-async def network_timeline(session_id: str, limit: int = 200, offset: int = 0) -> dict:
+async def network_timeline(session_id: str, limit: int = 200, cursor: str = "") -> dict:
     """The request sequence for a session, like the Chrome DevTools Network tab.
 
     One compact row per flow ordered by time: relative start (t_ms = ms from the first
     request), method, status, domain, path, type (content-type), request bytes, protocol
     and websocket flags. Use `search`/`search_flows` to narrow and `get_flow` for full
-    detail. `total` is the session's flow count; page with `offset`/`limit`.
+    detail.
+
+    Paged by cursor, not offset: pass the returned `next_cursor` back to continue, or omit
+    it to start at the beginning. `total` is the session's flow count. (t_ms is relative to
+    the first request *on the current page*, since earlier pages are not fetched.)
     """
     sid = await _resolve_session(session_id)
-    flows = sorted(await client().list_flows(sid), key=lambda f: f.ts_unix_micros)
+    limit = max(1, min(limit, _LIMIT_MAX))
+    page = await client().query_flows(sid, "", limit, after=_parse_cursor(cursor))
+    flows = list(page.flows)
     stamped = [f.ts_unix_micros for f in flows if f.ts_unix_micros > 0]
     t0 = min(stamped) if stamped else 0
-    rows = [_timeline_row(i, f, t0) for i, f in enumerate(flows[offset:offset + limit], start=offset)]
-    return {"session_id": sid, "total": len(flows), "count": len(rows), "flows": rows}
+    rows = [_timeline_row(i, f, t0) for i, f in enumerate(flows)]
+    out = {"session_id": sid, "total": page.matched, "count": len(rows), "flows": rows}
+    if page.HasField("next"):
+        out["next_cursor"] = _cursor_str(page.next)
+    return out
 
 
 async def _session_flows(session_id: str) -> list[tuple[str, str | None, object]]:
@@ -664,7 +692,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
 @mcp.tool()
 async def search_flows(session_id: str, filter: str = "", limit: int = 100,
-                       offset: int = 0) -> dict:
+                       cursor: str = "") -> dict:
     """Search a session's flows with a mitmproxy-style filter expression.
 
     SYNTAX: terms are separated by SPACES and ANDed automatically. There are NO boolean
@@ -675,52 +703,65 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
 
     Terms taking a <regex>: ~m method, ~d domain (the host alone, no scheme/path),
     ~u full URL (scheme://domain/path?query), ~c status code, ~t content-type,
-    ~mark <color>, ~tag <name>, ~group <name>, ~comment <text>.
+    ~conn connection, ~stream HTTP/2 stream, ~mark <color>, ~tag <name>, ~group <name>,
+    ~comment <text>, ~meta <key>=<regex>, and the body terms ~b (either direction),
+    ~bq (request body), ~bs (response body).
     Terms taking NO argument: ~s has a response, ~q has no response, ~fav favorited.
     A bare regex with no ~term matches the URL — so a lone `200` matches URLs containing
     "200" and does NOT filter by status; `~c 200` does.
+
+    Regexes are RE2: lookarounds and backreferences are refused rather than reinterpreted.
 
     Correct:   ~d vseinstrumenti\\.ru ~u /product/ ~c 200
     Incorrect: ~u vseinstrumenti.ru & ~s 200   (`&` is not an operator; `~s` takes no
                argument, so `200` became a URL regex — use `~c 200`)
 
-    Empty filter returns all flows. Returns {total, count, offset, next_offset, flows:[…]}
-    — flow summaries, no headers/bodies (use get_flow for those). `total` is the number of
-    flows matching the filter; page with `offset`/`limit` (default 100, max 500). A filter
-    that matches nothing comes back with `filter_syntax` (the full reference) and
-    `session_flow_count`, and anything suspicious in the expression is reported in `hints`
-    whether or not it matched. For status sets, time windows and header/body content
-    search prefer the structured `search` tool.
+    Paged by cursor, not offset: pass the returned `next_cursor` back to continue.
+    Returns {total, count, next_cursor, flows:[…]} — flow summaries, no headers/bodies
+    (use get_flow for those). `total` is how many flows match, and is a lower bound when
+    `count_capped` is set, because counting stops at the scan budget. A filter that
+    matches nothing comes back with `filter_syntax` and `session_flow_count`, and anything
+    suspicious in the expression is reported in `hints` whether or not it matched.
+    For status sets, time windows and header content prefer the structured `search` tool.
     """
     limit = max(1, min(limit, _LIMIT_MAX))
-    offset = max(0, offset)
-    all_flows = await client().list_flows(await _resolve_session(session_id))
+    sid = await _resolve_session(session_id)
     tagnames, groupnames = await _name_maps()
     try:
-        pred = compile_filter(filter, tagnames, groupnames)
-    except ValueError as e:
-        # A rejected filter is the one moment the caller is certain to re-read: hand back
-        # the whole reference with the error rather than just the offending token.
-        raise ValueError(f"{e}\n\n{FILTER_SYNTAX}") from None
-    flows = [f for f in all_flows if pred(f)] if pred is not None else all_flows
-    page = flows[offset:offset + limit]
-    out = {"total": len(flows), "count": len(page), "offset": offset,
-           "next_offset": offset + len(page) if offset + len(page) < len(flows) else None,
-           "flows": [_flow_summary(f, tagnames, groupnames) for f in page]}
+        page = await client().query_flows(sid, filter, limit, after=_parse_cursor(cursor))
+    except grpc.aio.AioRpcError as e:
+        if e.code() is grpc.StatusCode.INVALID_ARGUMENT:
+            # A rejected filter is the one moment the caller is certain to re-read: hand
+            # back the whole reference with the error rather than just the bad token.
+            raise ValueError(f"{e.details()}\n\n{FILTER_SYNTAX}") from None
+        raise
+
+    out = {"session_id": sid, "total": page.matched, "count": len(page.flows),
+           "flows": [_flow_summary(f, tagnames, groupnames) for f in page.flows]}
+    if page.count_capped:
+        # The count stopped at the scan budget, so `total` is a floor, not the answer.
+        out["count_capped"] = True
+        out["scanned"] = page.scanned
+    if page.HasField("next"):
+        out["next_cursor"] = _cursor_str(page.next)
     # Terms the grammar accepts but that plainly mean something else (`&`, a bare status
-    # code, quoted arguments) still match *something*, so report them even on a hit.
-    if hints := filter_hints(filter):
-        out["hints"] = hints
-    if not flows and pred is not None:
+    # code, quoted arguments) still match *something*, so report them even on a hit. The
+    # hints come from the gateway, which owns the language.
+    if page.hints:
+        out["hints"] = list(page.hints)
+    if not page.flows and filter:
         # Nothing matched: say whether the session was empty to begin with, and include
         # the syntax so a caller that guessed the dialect wrong can fix it in one step.
-        out["session_flow_count"] = len(all_flows)
+        empty = await client().query_flows(sid, "", 1)
+        out["session_flow_count"] = empty.matched
         out["filter_syntax"] = FILTER_SYNTAX
-        if not hints:
+        if not empty.matched:
+            # An empty session is the answer, not a filter problem — say so first, ahead
+            # of any advice about the expression.
+            out.setdefault("hints", []).insert(0, "the session has no flows at all")
+        elif not out.get("hints"):
             out.setdefault("hints", []).append(
-                "the filter parsed but matched nothing — check it against the syntax "
-                "below, then drop one term at a time to find which excludes everything"
-                if all_flows else "this session has no flows at all")
+                "nothing matched — try one term at a time, or widen the regex")
     return out
 
 

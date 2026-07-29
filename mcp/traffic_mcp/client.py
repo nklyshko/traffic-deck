@@ -63,6 +63,21 @@ class GatewayClient:
                 flows.append(ev.flow_added)
         return flows
 
+    async def query_flows(self, session_id: str, filter_expr: str = "", limit: int = 100,
+                          after=None, before=None, last: bool = False):
+        """One page of a session's flows, filtered and paged by the gateway.
+
+        Paging is by cursor rather than offset: a live session grows while it is read, so
+        an offset shifts rows under the reader. `last` starts at the end of the list.
+        """
+        req = viewer_pb2.QueryFlowsRequest(
+            session_id=session_id, filter=filter_expr, limit=limit, last=last)
+        if after is not None:
+            req.after.CopyFrom(after)
+        if before is not None:
+            req.before.CopyFrom(before)
+        return await self._v().QueryFlows(req)
+
     async def get_flow(self, session_id: str, flow_id: str):
         return await self._v().GetFlow(
             viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)

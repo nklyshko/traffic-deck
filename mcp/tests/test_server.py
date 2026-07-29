@@ -6,8 +6,10 @@ from __future__ import annotations
 
 # Importing the server wires the generated `gen/` tree onto sys.path (via client.py),
 # so `traffic.v1.*` resolves afterwards.
+import grpc
 import traffic_mcp.server as S
 from traffic.v1 import common_pb2 as cp
+from traffic.v1 import viewer_pb2 as vp
 
 
 def _flow(**kw):
@@ -438,6 +440,85 @@ class _SearchClient:
     async def list_flows(self, sid):
         return list(self.flows[sid])
 
+    async def query_flows(self, sid, filter_expr="", limit=100, after=None,
+                          before=None, last=False):
+        """Stands in for the gateway's filtering and paging with the handful of terms
+        these tests exercise, so search_flows is driven the way the server drives it:
+        cursors rather than offsets, and hints supplied by whoever owns the language."""
+        import re as _re
+        rows = sorted(self.flows[sid], key=lambda f: (f.ts_unix_micros, f.frame_number))
+
+        def matches(f):
+            toks = filter_expr.split()
+            i = 0
+            while i < len(toks):
+                t = toks[i]
+                if t == "~s":
+                    if not f.status:
+                        return False
+                    i += 1
+                elif t == "~q":
+                    if f.status:
+                        return False
+                    i += 1
+                elif t in ("~m", "~d", "~c", "~u") and i + 1 < len(toks):
+                    hay = {"~m": f.method, "~d": f.authority,
+                           "~c": str(f.status or ""),
+                           "~u": f"https://{f.authority}{f.path}"
+                                 + (f"?{f.query}" if f.query else "")}[t]
+                    if not _re.search(toks[i + 1], hay or "", _re.I):
+                        return False
+                    i += 2
+                else:
+                    url = (f"https://{f.authority}{f.path}"
+                           + (f"?{f.query}" if f.query else ""))
+                    if not _re.search(t, url, _re.I):
+                        return False
+                    i += 1
+            return True
+
+        toks = filter_expr.split()
+        for i, t in enumerate(toks):
+            if t in ("~m", "~d", "~c", "~u", "~t") and i + 1 >= len(toks):
+                raise grpc.aio.AioRpcError(
+                    grpc.StatusCode.INVALID_ARGUMENT, None, None,
+                    details=f"{t} needs an argument")
+        rows = [f for f in rows if matches(f)] if filter_expr else rows
+        key = lambda f: (f.ts_unix_micros, f.frame_number)
+        if after is not None:
+            rows = [f for f in rows if key(f) > (after.ts_micros, after.frame_number)]
+        matched = len(rows)
+        window = rows[:limit]
+        page = vp.FlowPage(flows=window, matched=matched)
+        if len(rows) > limit:
+            last_row = window[-1]
+            page.next.ts_micros = last_row.ts_unix_micros
+            page.next.frame_number = last_row.frame_number
+        # The gateway computes these; the shapes the tests assert on are what matter.
+        # Only *bare* tokens draw hints — the argument of `~c 200` is not a stray status.
+        bare, toks2, k = [], filter_expr.split(), 0
+        while k < len(toks2):
+            t2 = toks2[k].lstrip("!")
+            if t2 in ("~m", "~d", "~c", "~u", "~t"):
+                k += 2
+            elif t2 in ("~s", "~q", "~fav"):
+                k += 1
+            else:
+                bare.append(t2)
+                k += 1
+        for tok in bare:
+            if _re.fullmatch(r"\d{3}", tok):
+                page.hints.append(f"a bare `{tok}` matches the URL, not the status — "
+                                  f"use `~c {tok}`. (~s/~q take no argument.)")
+        if "&" in bare:
+            page.hints.append("`&` is not an operator — terms are ANDed automatically, "
+                              "so it was matched as a regex against the URL. Just drop it.")
+        for tok in filter_expr.split():
+            if len(tok) > 1 and tok[0] == tok[-1] and tok[0] in "\'\"":
+                page.hints.append(f"{tok} is quoted — arguments are not quote-parsed, so "
+                                  f"the quotes match literally.")
+        return page
+
     async def get_flow(self, sid, fid):
         self.get_flow_calls.append(fid)
         return self.details.get(fid, _flow(id=fid))
@@ -633,10 +714,15 @@ def test_search_flows_pages_and_reports_total(monkeypatch):
     monkeypatch.setattr(S, "_resolve_session", _resolve)
 
     out = asyncio.run(S.search_flows("s1", "~c 200", limit=2))
-    assert out["total"] == 5 and out["count"] == 2 and out["next_offset"] == 2
+    assert out["total"] == 5 and out["count"] == 2 and out["next_cursor"]
     assert [f["id"] for f in out["flows"]] == ["f0", "f1"]
-    tail = asyncio.run(S.search_flows("s1", "~c 200", limit=2, offset=4))
-    assert tail["count"] == 1 and tail["next_offset"] is None
+    # Walk to the end by cursor rather than jumping to an offset — a live session grows
+    # while it is read, so an offset would shift rows under the caller.
+    page, cursor = out, out["next_cursor"]
+    while cursor:
+        page = asyncio.run(S.search_flows("s1", "~c 200", limit=2, cursor=cursor))
+        cursor = page.get("next_cursor")
+    assert page["count"] == 1 and "next_cursor" not in page
     # A filter that matched carries no recovery payload.
     assert "filter_syntax" not in out and "hints" not in out
 
