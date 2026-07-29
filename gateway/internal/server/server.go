@@ -172,6 +172,16 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	}
 	_, ch, cancel := ls.subscribe()
 	defer cancel()
+	// Tell the viewer its subscription is live. Without a marker it cannot know when the
+	// gap closes: a flow published between its QueryFlows and this subscribe is in neither
+	// result, and the only fix available to it — query again — has to happen *after* this
+	// point to be worth anything. The status doubles as what a session event always meant.
+	if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
+		SessionEvent: &trafficv1.SessionEvent{
+			SessionId: sid, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN},
+	}}); err != nil {
+		return err
+	}
 	// The subscription snapshot is skipped for the same reason as the backfill above: it
 	// is the hub's whole session, and replaying it would hand a paging viewer everything.
 	// A flow arriving between the viewer's QueryFlows and this subscribe is therefore not

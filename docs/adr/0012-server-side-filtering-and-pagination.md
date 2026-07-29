@@ -163,6 +163,20 @@ Pushing the change over the follow stream was rejected as insufficient rather th
 stream-based mechanism could never be the whole answer. Annotation edits are user-paced, so
 a round trip is affordable.
 
+**7a. The gap between a page query and its subscription is closed by the viewer, for
+now.** Paging and liveness being separate calls means a flow published between them is in
+neither: too late for the query, too early for the stream. A following subscription
+therefore announces itself with a session event, and the viewer re-issues its query on
+seeing it — anything missed is picked up, and anything delivered twice is deduped by id,
+which viewers already do.
+
+That is a narrowing rather than a proof: it is correct for the ordering that actually
+occurs, not by construction. The durable fix is a cursor on `StreamFlows` — "replay
+anything after this position, then go live" — which closes it in the gateway for every
+client. It is deliberately not built here because it belongs with §8: that work reworks
+the follow path anyway, and the replay is natural to build when the hub knows what it
+still holds. Doing it now would touch the follow path twice.
+
 **8. An open session is served as stored page + unflushed tail.** The gateway queries the
 bundle, applies the predicate to the tail the flusher has not yet written, and merges in
 timeline order. [0011](0011-incremental-flow-persistence.md) is what makes the tail small
@@ -218,6 +232,10 @@ implementations are deleted rather than kept as a compatibility path.
   behaviour this decision exists to remove.
 - Annotation names (`~tag`, `~group`) resolve locally: tags and groups are mirrored into
   each bundle so it stays self-contained, so no cross-database join is required.
+- **Paging keys off `(ts_micros, frame_number)`, which must identify a flow.** Nothing
+  enforces it, and a bundle with duplicate keys would page incorrectly — the walk would
+  stall or skip. It holds on the wire, where a frame number identifies a packet, and the
+  test fixtures had to be corrected to respect it once paging depended on it.
 - The viewer keeps only the flows of the current page, so actions that assumed a
   whole-session model in memory — select-all, cross-page compare — need explicit page or
   server semantics rather than inheriting them.

@@ -36,6 +36,9 @@ func (c *collectStream) count() int {
 	return len(c.events)
 }
 
+// flowCount counts only flow events, skipping the marker a live subscription opens with.
+func (c *collectStream) flowCount() int { return len(c.kinds()) }
+
 func (c *collectStream) kinds() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -145,13 +148,13 @@ func TestStreamFlowsRetractsOnUpdate(t *testing.T) {
 	// A request with no response yet: matches ~q.
 	pending := &trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com", Path: "/a"}
 	ls.publish(pending, true)
-	waitFor(t, func() bool { return s.count() >= 1 })
+	waitFor(t, func() bool { return s.flowCount() >= 1 })
 
 	// The response lands: the flow no longer has "no response".
 	answered := &trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com",
 		Path: "/a", Status: 200}
 	ls.publish(answered, false)
-	waitFor(t, func() bool { return s.count() >= 2 })
+	waitFor(t, func() bool { return s.flowCount() >= 2 })
 
 	cancel()
 	<-done
@@ -186,7 +189,7 @@ func TestStreamFlowsAddsWhenAnUpdateBringsAFlowIn(t *testing.T) {
 	// Published without a status: it does not match, so the subscription hears nothing.
 	ls.publish(&trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com"}, true)
 	ls.publish(&trafficv1.Flow{Id: "f1", Method: "GET", Authority: "api.example.com", Status: 200}, false)
-	waitFor(t, func() bool { return s.count() >= 1 })
+	waitFor(t, func() bool { return s.flowCount() >= 1 })
 	cancel()
 	<-done
 
@@ -262,5 +265,41 @@ func TestQueryFlowsFiltersTheTailToo(t *testing.T) {
 	if len(page.GetFlows()) != 1 || page.GetFlows()[0].GetId() != "b" {
 		t.Fatalf("the unflushed tail must be filtered like the bundle, got %d flows",
 			len(page.GetFlows()))
+	}
+}
+
+// TestStreamFlowsMarksSubscriptionLive: a following stream announces itself, which is
+// what lets a viewer close the gap between its QueryFlows and this subscribe — a flow
+// published in between is in neither result, and re-querying only helps once the stream
+// is guaranteed to carry what comes next.
+func TestStreamFlowsMarksSubscriptionLive(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st, sid := queryTestStore(t)
+	defer st.Close()
+
+	hub := newLiveHub(true)
+	ls := hub.startPassive(sid)
+	v := NewViewer(st, hub)
+
+	s := &collectStream{ctx: ctx}
+	done := make(chan error, 1)
+	go func() {
+		done <- v.StreamFlows(&trafficv1.StreamFlowsRequest{
+			SessionId: sid, Follow: true}, s)
+	}()
+	waitForSubscriber(t, ls)
+	waitFor(t, func() bool { return s.count() >= 1 })
+	cancel()
+	<-done
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ev, ok := s.events[0].GetEvent().(*trafficv1.FlowEvent_SessionEvent)
+	if !ok {
+		t.Fatalf("first event = %T, want a session event marking the stream live", s.events[0].GetEvent())
+	}
+	if got := ev.SessionEvent.GetStatus(); got != trafficv1.SessionStatus_SESSION_STATUS_OPEN {
+		t.Fatalf("marker status = %v, want OPEN — a closed status means something else entirely", got)
 	}
 }

@@ -280,6 +280,10 @@ class FakeClient:
             for f in _BY_SESSION.get(session_id, _FLOWS):
                 if self._matches(f, filter_expr):
                     yield vp.FlowEvent(flow_added=f)
+        if follow:
+            # The gateway marks a live subscription as established, which is the viewer's
+            # cue to re-issue its query and close the gap between the two calls.
+            yield vp.FlowEvent(session_event=vp.SessionEvent(session_id=session_id, status=1))
         if self.hold_flows:
             # Stand in for a session still capturing: the real stream stays open until the
             # session closes, so the pane keeps its live state instead of finalizing.

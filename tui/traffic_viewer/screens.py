@@ -1111,6 +1111,7 @@ class SessionPane(AnnotatableTable, Vertical):
         self._next = None                   # cursor past the window's last row
         self._prev = None                   # cursor before its first
         self._matched = 0                   # rows matching, possibly a lower bound
+        self._last_query = ("top", None, None, False)  # to re-issue when the stream is up
         self._capped = False                # ...when the scan cap stopped counting
         self._at_end = True                 # the window includes the end of the list
         self._rows: set[str] = set()        # ids rendered right now (the current page)
@@ -1307,6 +1308,7 @@ class SessionPane(AnnotatableTable, Vertical):
     @work(exclusive=True, group="page")
     async def _load_page(self, cursor: str = "top", after=None, before=None,
                          last: bool = False) -> None:
+        self._last_query = (cursor, after, before, last)
         try:
             page = await self.app.client.query_flows(
                 self.session_id, self._filter, self._window,
@@ -1474,8 +1476,14 @@ class SessionPane(AnnotatableTable, Vertical):
                 elif kind == "flow_unmatched":
                     self._drop(ev.flow_unmatched)
                 elif kind == "session_event":
-                    self.notify("session closed — live capture ended")
-                    self._finalize_live()
+                    if ev.session_event.status == _STATUS_OPEN:
+                        # The subscription is live. Anything published between the page
+                        # query and this point is in neither result, so re-issue the query
+                        # now that new flows are guaranteed to arrive on the stream.
+                        self._load_page(*self._last_query)
+                    else:
+                        self.notify("session closed — live capture ended")
+                        self._finalize_live()
                 # A big backfill arrives in bursts that can starve the flush timer, leaving
                 # the pane blank until it is all in. Flush on our own clock too.
                 if (now := time.monotonic()) >= next_flush:
