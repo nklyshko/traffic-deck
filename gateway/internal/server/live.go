@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/protobuf/proto"
 
@@ -15,6 +16,31 @@ import (
 )
 
 const liveEventBuffer = 256
+
+// flowSub is one viewer's subscription: its event channel, and whether anything meant for
+// it had to be thrown away because the channel was full.
+//
+// Dropping is still what a slow subscriber gets — publish runs on the decode path, under
+// the mutex the whole session shares, and blocking it there would stall the capture to
+// serve a viewer. What a drop must not be is silent: the viewer's rows come from
+// QueryFlows and only its *updates* come from here (ADR-0012 §4), so an event dropped in
+// the middle of a live session leaves a row missing or stale with nothing to correct it —
+// until the user reopens the session, which is how this was found. `missed` is the
+// gateway remembering it owes this subscriber a resync; StreamFlows pays it with the
+// same "subscription live, query again" event the stream opens with.
+type flowSub struct {
+	ch     chan *trafficv1.FlowEvent
+	missed atomic.Bool
+}
+
+// send queues an event, recording a drop instead of blocking when the channel is full.
+func (s *flowSub) send(ev *trafficv1.FlowEvent) {
+	select {
+	case s.ch <- ev:
+	default:
+		s.missed.Store(true)
+	}
+}
 
 // liveHub tracks in-progress streaming sessions and fans decoded flows out to
 // viewer subscribers. In record-live mode (the default) the live decode is
@@ -54,7 +80,7 @@ type liveSession struct {
 	flows  map[string]*trafficv1.Flow
 	dflows map[string]*decode.Flow // full-body decode flows, kept only in record-live mode
 	order  []string
-	subs   map[int]chan *trafficv1.FlowEvent
+	subs   map[int]*flowSub
 	nextID int
 	closed bool
 
@@ -114,7 +140,7 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		recordLive: h.recordLive,
 		flows:      map[string]*trafficv1.Flow{},
 		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]chan *trafficv1.FlowEvent{},
+		subs:       map[int]*flowSub{},
 		msgSubs:    map[int]chan *trafficv1.WsMessage{},
 		sessionID:  sessionID,
 		dirty:      map[string]struct{}{},
@@ -161,7 +187,7 @@ func (h *liveHub) startPassive(sessionID string) *liveSession {
 	}
 	ls := &liveSession{
 		flows:   map[string]*trafficv1.Flow{},
-		subs:    map[int]chan *trafficv1.FlowEvent{},
+		subs:    map[int]*flowSub{},
 		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 	h.sessions[sessionID] = ls
@@ -198,12 +224,9 @@ func (h *liveHub) stop(sessionID string) *liveSession {
 	closedEv := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
 		SessionEvent: &trafficv1.SessionEvent{SessionId: sessionID, Status: trafficv1.SessionStatus_SESSION_STATUS_CLOSED},
 	}}
-	for _, ch := range ls.subs {
-		select {
-		case ch <- closedEv:
-		default:
-		}
-		close(ch)
+	for _, sub := range ls.subs {
+		sub.send(closedEv)
+		close(sub.ch)
 	}
 	for _, ch := range ls.msgSubs {
 		close(ch) // closing the channel signals end-of-stream to message followers
@@ -409,11 +432,8 @@ func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
 		f.WsMessageCount++
 		ls.markDirtyLocked(pm.GetFlowId())
 		ev := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: f}}
-		for _, ch := range ls.subs {
-			select {
-			case ch <- ev:
-			default:
-			}
+		for _, sub := range ls.subs {
+			sub.send(ev)
 		}
 	}
 }
@@ -465,17 +485,14 @@ func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
 	} else {
 		ev = &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: pf}}
 	}
-	for _, ch := range ls.subs {
-		select {
-		case ch <- ev:
-		default: // slow subscriber: drop (it can re-backfill after close)
-		}
+	for _, sub := range ls.subs {
+		sub.send(ev)
 	}
 }
 
-// subscribe returns a snapshot of current flows (as flow_added events), a channel
-// of subsequent events, and a cancel func. ch is nil if the session already closed.
-func (ls *liveSession) subscribe() (snapshot []*trafficv1.FlowEvent, ch chan *trafficv1.FlowEvent, cancel func()) {
+// subscribe returns a snapshot of current flows (as flow_added events), the subscription
+// carrying subsequent events, and a cancel func. sub is nil if the session already closed.
+func (ls *liveSession) subscribe() (snapshot []*trafficv1.FlowEvent, sub *flowSub, cancel func()) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if ls.closed {
@@ -484,19 +501,19 @@ func (ls *liveSession) subscribe() (snapshot []*trafficv1.FlowEvent, ch chan *tr
 	for _, id := range ls.order {
 		snapshot = append(snapshot, &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: ls.flows[id]}})
 	}
-	ch = make(chan *trafficv1.FlowEvent, liveEventBuffer)
+	sub = &flowSub{ch: make(chan *trafficv1.FlowEvent, liveEventBuffer)}
 	id := ls.nextID
 	ls.nextID++
-	ls.subs[id] = ch
+	ls.subs[id] = sub
 	cancel = func() {
 		ls.mu.Lock()
 		defer ls.mu.Unlock()
-		if c, ok := ls.subs[id]; ok {
+		if s, ok := ls.subs[id]; ok {
 			delete(ls.subs, id)
-			close(c)
+			close(s.ch)
 		}
 	}
-	return snapshot, ch, cancel
+	return snapshot, sub, cancel
 }
 
 // flowToProto converts a decoded flow to the proto type for live events, inlining

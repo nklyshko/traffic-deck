@@ -35,7 +35,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 		recordLive: true,
 		flows:      map[string]*trafficv1.Flow{},
 		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]chan *trafficv1.FlowEvent{},
+		subs:       map[int]*flowSub{},
 		msgSubs:    map[int]chan *trafficv1.WsMessage{},
 	}
 

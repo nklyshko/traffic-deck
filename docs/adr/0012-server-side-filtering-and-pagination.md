@@ -208,6 +208,22 @@ client. It is deliberately not built here because it belongs with §8: that work
 the follow path anyway, and the replay is natural to build when the hub knows what it
 still holds. Doing it now would touch the follow path twice.
 
+**7b. That same event is how the gateway asks for a resync, and how a stream says why it
+ended.** Two gaps found in use, both from the split this ADR makes — the viewer's rows
+come from `QueryFlows` and only its *updates* from the stream, so anything the stream
+fails to deliver has nothing to correct it:
+
+- The hub drops events for a subscriber whose channel is full (publish runs on the decode
+  path, under the session's mutex, so it must not block there). Silently, a dropped
+  `flow_added` left a row missing until the session was reopened. The subscription now
+  remembers it owes a resync and repeats the "subscription live" event, which already
+  means *query again* — the viewer needs no new vocabulary for it.
+- A subscription ending meant both "the capture is over" and "this stream broke", and a
+  viewer that reconnects has to tell them apart. The stream now always ends with a session
+  event carrying the session's status, and waiting for a live session is bounded by the
+  session staying open rather than by a timeout — a viewer that asked to follow before the
+  source registered used to be hung up on, and read it as a capture with no traffic.
+
 **8. An open session is served as stored page + unflushed tail.** The gateway queries the
 bundle, applies the predicate to the tail the flusher has not yet written, and merges in
 timeline order. [0011](0011-incremental-flow-persistence.md) is what makes the tail small

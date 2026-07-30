@@ -36,7 +36,7 @@ func TestGetLiveRecordAnnotations(t *testing.T) {
 	ls := &liveSession{
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},
-		subs:    map[int]chan *trafficv1.FlowEvent{},
+		subs:    map[int]*flowSub{},
 		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 	hub.sessions[sid] = ls

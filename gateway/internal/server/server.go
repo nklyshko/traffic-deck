@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"google.golang.org/grpc"
@@ -152,20 +153,37 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	if !req.GetFollow() {
 		return nil
 	}
+	// A session event says why the stream is ending, so a viewer can tell "this capture is
+	// over" from "this subscription broke" — it reconnects on the second and must not on
+	// the first. Silence used to mean both.
+	endedEvent := func(st trafficv1.SessionStatus) *trafficv1.FlowEvent {
+		if st == trafficv1.SessionStatus_SESSION_STATUS_OPEN || st == trafficv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+			st = trafficv1.SessionStatus_SESSION_STATUS_CLOSED
+		}
+		return &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
+			SessionEvent: &trafficv1.SessionEvent{SessionId: sid, Status: st}}}
+	}
 	ls := v.waitForLive(srv.Context(), sid)
 	if ls == nil {
-		return nil // not a live session; backfill is all there is
+		// Not live, and it will not become live: waitForLive only gives up once the
+		// session has stopped being open. Backfill is all there was.
+		s, err := v.st.GetSession(srv.Context(), sid)
+		if err != nil {
+			return nil // the session is gone; the stream ending is all we can say
+		}
+		return srv.Send(endedEvent(s.GetStatus()))
 	}
-	_, ch, cancel := ls.subscribe()
+	_, sub, cancel := ls.subscribe()
 	defer cancel()
 	// Tell the viewer its subscription is live. Without a marker it cannot know when the
 	// gap closes: a flow published between its QueryFlows and this subscribe is in neither
 	// result, and the only fix available to it — query again — has to happen *after* this
 	// point to be worth anything. The status doubles as what a session event always meant.
-	if err := srv.Send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
+	openEvent := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_SessionEvent{
 		SessionEvent: &trafficv1.SessionEvent{
 			SessionId: sid, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN},
-	}}); err != nil {
+	}}
+	if err := srv.Send(openEvent); err != nil {
 		return err
 	}
 	// The subscription snapshot is skipped for the same reason as the backfill above: it
@@ -173,16 +191,33 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	// A flow arriving between the viewer's QueryFlows and this subscribe is therefore not
 	// reported until it next queries — the gap ADR-0012 §8 flags, whose buffer-then-replay
 	// fix belongs with bounding the hub's own row map rather than here.
+	//
+	// A resync is owed when publish had to drop events for this subscriber (see flowSub):
+	// repeating the "subscription live" event says query again, which is the only way the
+	// viewer can find out what it missed. Rate-limited, since a burst that overruns the
+	// buffer once tends to do it repeatedly and each marker costs the viewer a query.
+	var lastResync time.Time
+	const resyncEvery = 500 * time.Millisecond
 	for {
 		select {
 		case <-srv.Context().Done():
 			return nil
-		case ev, ok := <-ch:
+		case ev, ok := <-sub.ch:
 			if !ok {
-				return nil // session closed
+				// The hub closed the live session: the capture has ended, and saying so
+				// is what stops the viewer resubscribing to a session that is over.
+				return srv.Send(endedEvent(trafficv1.SessionStatus_SESSION_STATUS_CLOSED))
 			}
 			if err := send(ev); err != nil {
 				return err
+			}
+			if sub.missed.Load() && time.Since(lastResync) >= resyncEvery {
+				sub.missed.Store(false)
+				lastResync = time.Now()
+				log.Printf("session %s: viewer fell behind; asking it to resync", sid)
+				if err := srv.Send(openEvent); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -213,15 +248,22 @@ func (v *Viewer) sendLiveFlows(srv grpc.ServerStreamingServer[trafficv1.FlowEven
 	return nil
 }
 
-// waitForLive returns the live-hub session for sessionID, briefly waiting out the race
-// between OpenSession (the session row is created) and the first UploadBegin (which
-// registers the hub session and starts live decode). Without this, a viewer that
-// subscribes in that window sees hub.get==nil and gets only backfill — no live flows —
-// even though the session is live. Returns nil if the session is already closed, gone,
-// or stays open without ever registering a live decode (e.g. live decode disabled).
+// waitForLive returns the live-hub session for sessionID, waiting out the race between
+// OpenSession (the session row is created) and the first UploadBegin (which registers the
+// hub session and starts live decode). Without this, a viewer that subscribes in that
+// window sees hub.get==nil and gets only backfill — no live flows — even though the
+// session is live. Returns nil once the session is no longer open, or gone.
+//
+// The wait is bounded by the session staying open, not by a clock: how long the race
+// lasts is the source's business (a device capture registers on its first upload, which
+// waits on adb, on the interface coming up, on traffic existing at all), and a deadline
+// short enough to be a deadline was short enough to lose it. Hanging up mid-capture is
+// the expensive mistake — the viewer cannot tell that from a quiet session.
 func (v *Viewer) waitForLive(ctx context.Context, sessionID string) *liveSession {
-	const poll = 50 * time.Millisecond
-	deadline := time.Now().Add(5 * time.Second)
+	// Poll tightly at first, since the usual wait is the width of one upload round trip,
+	// then back off: a session that stays open without a live decode (live decode off, an
+	// upload-on-close capture) holds one of these per follower until it closes.
+	poll, maxPoll := 50*time.Millisecond, time.Second
 	for {
 		if ls := v.hub.get(sessionID); ls != nil {
 			return ls
@@ -231,13 +273,13 @@ func (v *Viewer) waitForLive(ctx context.Context, sessionID string) *liveSession
 		if err != nil || s.GetStatus() != trafficv1.SessionStatus_SESSION_STATUS_OPEN {
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return nil
-		}
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(poll):
+		}
+		if poll < maxPoll {
+			poll = min(2*poll, maxPoll)
 		}
 	}
 }
