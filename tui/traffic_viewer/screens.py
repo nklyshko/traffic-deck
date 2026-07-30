@@ -15,6 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.content import Content
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button, DataTable, Footer, Header, Input, Label, OptionList,
@@ -23,7 +24,7 @@ from textual.widgets import (
 
 # Importing the client puts the generated stubs' gen/ tree on sys.path, so this resolves
 # regardless of import order.
-from traffic_viewer.client import control_pb2 as cpb
+from traffic_viewer.client import control_pb2 as cpb, viewer_pb2
 from textual.widgets.option_list import Option
 from rich.text import Text
 
@@ -747,6 +748,12 @@ def _env_columns() -> list[str]:
 
 _PAGE_SIZE = 250
 _FLUSH_INTERVAL = 0.2
+# How long a pane waits before resubscribing to a live session whose flow stream ended,
+# doubling from the first to the second while it stays unreachable. The first wait is
+# short because the common case is a race, not an outage: the viewer asked to follow a
+# capture whose source had not registered its live session yet.
+_RECONNECT_MIN = 0.5
+_RECONNECT_MAX = 5.0
 
 
 def _page_size() -> int:
@@ -1118,7 +1125,12 @@ class SessionPane(AnnotatableTable, Vertical):
         self._rows: set[str] = set()        # ids rendered right now (the current page)
         self._rendered: list[str] = []      # the same ids in row order, to skip no-op renders
         self._dirty = False                 # model changed since the last flush
-        self._loading = True                # backfill still streaming in
+        self._loading = True                # the first window has not landed yet
+        # Not _closed: that is Textual's own MessagePump flag, and assigning it shuts the
+        # widget's message pump down — the pane silently unmounts itself.
+        self._session_closed = False        # the gateway reported the session closed
+        self._reconnecting = False          # subscription lost; waiting to resubscribe
+        self._subscribed = False            # the current subscription was established
         self._flush_timer = None
         self._cols: list = []                   # base (fixed) column keys
         # Extra (optional) columns, in display order, as column ids: "meta:<key>" for a
@@ -1252,6 +1264,10 @@ class SessionPane(AnnotatableTable, Vertical):
         base = f"{total} matching" if self._filter else f"{total} flows"
         if self._loading:
             base += " · loading…"
+        if self._reconnecting:
+            # A live pane that says nothing while its stream is down looks like a capture
+            # with no traffic — the one thing the user cannot tell it apart from.
+            base += " · reconnecting…"
         if self._selected:
             base += f" · {len(self._selected)} selected"
         if self._order and (self._next is not None or self._prev is not None):
@@ -1325,12 +1341,21 @@ class SessionPane(AnnotatableTable, Vertical):
 
     def _apply_page(self, page, cursor: str) -> None:
         """Adopt a FlowPage from the gateway as the window."""
+        # Rows come from this query, not from the stream, so the window landing is what
+        # "loaded" means now — the stream stays open for the pane's whole life on a live
+        # session, and waiting for it to end left the status line saying loading… forever.
+        self._loading = False
         self.flows = {f.id: f for f in page.flows}
         self._order = [f.id for f in page.flows]
         self._next = page.next if page.HasField("next") else None
         self._prev = page.prev if page.HasField("prev") else None
         self._matched, self._capped = page.matched, page.count_capped
         self._at_end = self._next is None
+        if not self._at_end:
+            # The window no longer holds the end of the list, so nothing can be tailed:
+            # paging away is how you stop following. Leaving the flag set would keep the
+            # ⇣ badge on a view that silently takes no arrivals (_ingest needs both).
+            self.query_one("#flows", NavDataTable).set_follow(False)
         self._rendered = []
         self._render_page(force=True, cursor=cursor)
         self._update_subtitle()
@@ -1344,6 +1369,8 @@ class SessionPane(AnnotatableTable, Vertical):
                 self.session_id, self._filter, self._window,
                 after=after, before=before, last=last)
         except Exception as exc:  # noqa: BLE001
+            self._loading = False  # ...it is not still coming; the query failed
+            self._update_subtitle()
             self.notify(f"filter: {exc}", severity="error")
             return
         self._apply_page(page, cursor)
@@ -1386,11 +1413,17 @@ class SessionPane(AnnotatableTable, Vertical):
 
         The gateway has already decided this flow matches, so there is no predicate here.
         A flow arriving while the window sits mid-list changes the count but not what is on
-        screen; only a window holding the end of the list grows — and only while following.
+        screen; only a window holding the end of the list grows.
 
-        Following is what makes the window move. With it off the window is a fixed place
-        the user is reading, and sliding it would pull rows out from under the cursor mid-
-        keystroke; the arrival is counted and waits to be paged to."""
+        A window with room left grows whatever follow says: appending below the last row
+        takes nothing away from the reader, and refusing to would strand the flows of a
+        session opened while it was still empty — the first ones to arrive would sit in
+        the count, invisible, until the pane was reopened.
+
+        Sliding is what follow buys. Once the window is full, taking another flow drops
+        one off the front, which would pull rows out from under the cursor mid-keystroke;
+        with follow off the arrival is counted, and the window stops holding the end of
+        the list so paging can reach it."""
         self._dirty = True
         if f.id in self.flows:
             # A flow already on screen, updated in place — a response arriving on a request
@@ -1400,8 +1433,17 @@ class SessionPane(AnnotatableTable, Vertical):
             self._changed.add(f.id)
             return False
         self._matched += 1
-        if not self._at_end or not self.query_one("#flows", NavDataTable).follow:
-            return False  # off-window, or the user is reading: it waits until they page
+        if not self._at_end:
+            return False  # off-window: it waits until the user pages to the end
+        if len(self._order) >= self._window and not self.query_one("#flows", NavDataTable).follow:
+            # The user is reading a full window: leave it exactly where it is. The end of
+            # the list has moved past it, so hand paging the cursor it would have got from
+            # a query issued now — the sort key of the row the window ends on.
+            last = self.flows[self._order[-1]]
+            self._at_end = False
+            self._next = viewer_pb2.FlowCursor(
+                ts_micros=last.ts_unix_micros, frame_number=last.frame_number)
+            return False
         self.flows[f.id] = f
         self._order.append(f.id)
         while len(self._order) > self._window:
@@ -1468,7 +1510,14 @@ class SessionPane(AnnotatableTable, Vertical):
         """Apply a filter. It goes to the gateway as typed — parse errors and advisory
         hints come back from there, since that is where the language lives now."""
         self._filter = event.value.strip()
-        self._load_page(cursor="top")
+        # Following is a position in the list, not a position in the *old* list: a filter
+        # applied while tailing has to land on the tail of what it matches. Loading the
+        # head instead would leave the window off the end, which now turns following off
+        # — and the stream's re-query (below, on session_event) would pin it there again.
+        if self.query_one("#flows", NavDataTable).follow:
+            self._load_page(cursor="bottom", last=True)
+        else:
+            self._load_page(cursor="top")
         self.restart_stream()
         self.query_one("#flows", DataTable).focus()
 
@@ -1516,8 +1565,36 @@ class SessionPane(AnnotatableTable, Vertical):
 
     @work(exclusive=True, group="stream")
     async def restart_stream(self) -> None:
-        """(Re)subscribe with the current filter. Restarted when the filter changes, since
-        a subscription's filter is fixed for its lifetime."""
+        """(Re)subscribe with the current filter, and keep the subscription up for as long
+        as the session is capturing. Restarted when the filter changes, since a
+        subscription's filter is fixed for its lifetime.
+
+        A subscription can end without the session having closed: the gateway hangs up on
+        a viewer that asked to follow before the capture's source registered its live
+        session, and a gateway restart or a dropped connection ends it too. Ending the
+        pane there — which is what a single pass did — left it silently deaf: rows still
+        loaded on demand, so paging and reopening worked while the live view never updated
+        again. Only a close reported by the gateway stops us reconnecting."""
+        delay = _RECONNECT_MIN
+        while True:
+            self._subscribed = False
+            # A session the catalog already called closed subscribes once, for whatever
+            # the gateway has to say; a live one that lost its stream tries again.
+            if not await self._follow_once():
+                break
+            self._reconnecting = True
+            self._update_subtitle()
+            await asyncio.sleep(delay)
+            # A subscription that was established and then dropped starts over at the
+            # short wait; only attempts that never got through back off.
+            delay = _RECONNECT_MIN if self._subscribed else min(delay * 2, _RECONNECT_MAX)
+        self._loading = False
+        self._dirty = True  # draw whatever the last tick didn't
+        self._finalize_live()
+
+    async def _follow_once(self) -> bool:
+        """One subscription, consumed until it ends. Returns whether to resubscribe —
+        false once the session is closed, since nothing more will ever arrive."""
         next_flush = 0.0
         try:
             async for ev in self.app.client.stream_flows(
@@ -1533,10 +1610,21 @@ class SessionPane(AnnotatableTable, Vertical):
                     if ev.session_event.status == _STATUS_OPEN:
                         # The subscription is live. Anything published between the page
                         # query and this point is in neither result, so re-issue the query
-                        # now that new flows are guaranteed to arrive on the stream.
+                        # now that new flows are guaranteed to arrive on the stream. The
+                        # same event repeated mid-stream says the gateway had to drop
+                        # events for us, and means exactly the same thing: query again.
+                        self._subscribed = True
+                        if self._reconnecting:
+                            self._reconnecting = False
+                            self._update_subtitle()
                         self._load_page(*self._last_query)
                     else:
-                        self.notify("session closed — live capture ended")
+                        # The capture is over — not just this subscription — so stop
+                        # reconnecting. Worth telling the user only if they were watching
+                        # it live; opening a session that closed long ago is not news.
+                        self._session_closed = True
+                        if self._live:
+                            self.notify("session closed — live capture ended")
                         self._finalize_live()
                 # A big backfill arrives in bursts that can starve the flush timer, leaving
                 # the pane blank until it is all in. Flush on our own clock too.
@@ -1544,13 +1632,10 @@ class SessionPane(AnnotatableTable, Vertical):
                     next_flush = now + _FLUSH_INTERVAL
                     self._flush()
         except Exception as exc:  # noqa: BLE001
-            self.notify(f"stream_flows failed: {exc}", severity="error")
-        finally:
-            # The stream ended: either the session closed, or it was already closed when
-            # we opened it. Either way nothing is in flight — stop ticking.
-            self._loading = False
-            self._dirty = True  # draw whatever the last tick didn't
-            self._finalize_live()
+            # Reconnecting is the answer to a broken stream, so this is a status, not an
+            # error to interrupt the user with — it is reported in the pane's status line.
+            self.log(f"stream_flows failed, reconnecting: {exc}")
+        return self._live and not self._session_closed
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         fid = str(event.row_key.value)
@@ -1682,8 +1767,16 @@ class WorkspaceScreen(Screen):
         self.call_after_refresh(self._focus_active)
 
     def _active_pane(self) -> "SessionPane | None":
+        # A tab exists before its content is mounted, and both callers run on their own
+        # clock (call_after_refresh, a tab-activated message), so "no pane yet" is a state
+        # to return, not to raise from.
         pane = self.query_one(TabbedContent).active_pane
-        return pane.query_one(SessionPane) if pane else None
+        if pane is None:
+            return None
+        try:
+            return pane.query_one(SessionPane)
+        except NoMatches:
+            return None
 
     def _focus_active(self) -> None:
         pane = self._active_pane()

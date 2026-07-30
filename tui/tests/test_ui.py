@@ -117,6 +117,9 @@ class FakeClient:
         self.mcp_running = False
         self.android_provision_calls = 0
         self.hold_flows = False   # keep stream_flows open, as a live session's would be
+        self.stream_attempts = 0  # StreamFlows subscriptions made (a viewer reconnects)
+        self.drop_streams = 0     # ...end this many of them at once, as a gateway hang-up
+        self.close_session = False  # ...or end them by reporting the session closed
         self.partial_bodies = False  # serve bodies as live previews (capped mid-capture)
         self.artifacts = {}       # GetSessionArtifacts reply fields (pcap/keylog paths)
 
@@ -283,7 +286,15 @@ class FakeClient:
         if follow:
             # The gateway marks a live subscription as established, which is the viewer's
             # cue to re-issue its query and close the gap between the two calls.
+            self.stream_attempts += 1
             yield vp.FlowEvent(session_event=vp.SessionEvent(session_id=session_id, status=1))
+            if self.close_session:
+                # The capture ended: the viewer is told so, and must not resubscribe.
+                yield vp.FlowEvent(session_event=vp.SessionEvent(session_id=session_id, status=3))
+                return
+            if self.drop_streams > 0:
+                self.drop_streams -= 1
+                return  # a subscription that ended without the session closing
         if self.hold_flows:
             # Stand in for a session still capturing: the real stream stays open until the
             # session closes, so the pane keeps its live state instead of finalizing.
@@ -1799,3 +1810,221 @@ async def test_a_response_arriving_updates_the_row_in_place():
         assert "200" in str(table.get_row("live1")[3]), (
             "the row still shows no status after its response arrived"
         )
+
+
+# A capture opened before it has recorded anything — the normal way a live session is
+# watched: start the capture, open it, wait for traffic.
+EMPTY_SESSION_ID = "sess-empty"
+_BY_SESSION[EMPTY_SESSION_ID] = []
+
+# A session with exactly the smallest page size worth of flows, so it can be opened both
+# as a window with room left (a bigger page) and as a full one (a page its own size).
+FULL_SESSION_ID = "sess-full"
+_PAGE_MIN = 50
+_BY_SESSION[FULL_SESSION_ID] = [_flow(f"p{i:03d}", "GET", 200, frame=i + 1)
+                                for i in range(_PAGE_MIN)]
+
+
+async def _open_live(pilot, session_id, page_size=100):
+    """Open a still-capturing session in a workspace tab, with a small page size."""
+    pilot.app.client.hold_flows = True   # the stream stays open, as a live session's does
+    os.environ["TRAFFICDECK_PAGE_SIZE"] = str(page_size)
+    try:
+        pilot.app.push_screen(WorkspaceScreen(session_id, "live", live=True))
+        await settle(pilot)
+    finally:
+        del os.environ["TRAFFICDECK_PAGE_SIZE"]
+    pane = pilot.app.screen.query_one(SessionPane)
+    await focus(pilot, "#flows")
+    return pane, pane.query_one("#flows", DataTable)
+
+
+async def test_flows_arriving_into_an_empty_window_are_shown():
+    """A session opened while it still has nothing in it must start filling as flows
+    arrive. Follow is off by default and only the follow path moved the window, so the
+    first flows of a live capture were counted and never drawn — the pane sat empty until
+    it was closed and reopened."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_live(pilot, EMPTY_SESSION_ID)
+        assert table.row_count == 0 and not table.follow
+
+        for i in range(3):
+            pane._ingest(_flow(f"new{i}", "GET", 200, frame=100 + i))
+        pane._flush()
+        await settle(pilot)
+
+        assert pane._rendered == ["new0", "new1", "new2"], "arrivals never reached the table"
+        assert table.row_count == 3
+        assert "3 flows" in _status(pane)
+
+
+async def test_a_partly_filled_window_keeps_growing_without_follow():
+    """Appending below the last row takes nothing away from the reader, so a window with
+    room grows whether or not follow is on — and the cursor stays where it was put."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_live(pilot, FULL_SESSION_ID, page_size=100)
+        assert table.row_count == _PAGE_MIN and len(pane._order) < pane._window
+        table.move_cursor(row=5)
+        focused = pane._focused_flow_id()
+
+        pane._ingest(_flow("late1", "GET", 200, frame=900))
+        pane._flush()
+        await settle(pilot)
+
+        assert pane._rendered[-1] == "late1"
+        assert pane._focused_flow_id() == focused, "the cursor moved on an arrival"
+        assert not table.follow
+
+
+async def test_arrivals_past_a_full_window_stay_reachable():
+    """Once the window is full, an arrival would push a row off the front — so with follow
+    off it is only counted. The window then no longer holds the end of the list, and End
+    must be able to jump to the new tail; it used to report the window as the end already
+    and leave the flow unreachable."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_live(pilot, FULL_SESSION_ID, page_size=_PAGE_MIN)
+        assert table.row_count == _PAGE_MIN and pane._at_end
+        rendered = list(pane._rendered)
+
+        arrival = _flow("tail1", "GET", 200, frame=900)
+        _BY_SESSION[FULL_SESSION_ID].append(arrival)  # ...as the gateway now has it
+        try:
+            pane._ingest(arrival)
+            pane._flush()
+            await settle(pilot)
+            assert pane._rendered == rendered, "a full window moved under the reader"
+            assert not pane._at_end and pane._next is not None
+
+            await pilot.press("end")   # jump to the end of the list
+            await settle(pilot)
+            assert "tail1" in pane._rows, "the new tail could not be paged to"
+            assert table.cursor_coordinate.row == table.row_count - 1
+        finally:
+            _BY_SESSION[FULL_SESSION_ID].remove(arrival)
+
+
+async def until(cond, timeout=3.0):
+    """Wait for a condition the pane reaches on its own clock (a reconnect backoff, a
+    worker's turn), rather than on a fixed number of pilot pauses."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if cond():
+            return True
+        await asyncio.sleep(0.01)
+    return False
+
+
+async def test_paging_away_from_the_end_turns_follow_off():
+    """Follow needs both the flag and a window on the end of the list, so paging away from
+    the tail stops arrivals reaching the view. Leaving the flag set left the ⇣ badge on a
+    pane that silently ignored every new flow — which read as a dead capture."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("l")                  # follow on -> pinned to the tail
+        await settle(pilot)
+        assert table.follow and pane._at_end
+
+        await pilot.press("home")               # ...and away to the first page
+        await settle(pilot)
+        assert not pane._at_end
+        assert not table.follow, "follow survived a jump off the end of the list"
+        assert "follow" not in _status(pane), "the badge outlived the following"
+
+
+async def test_filtering_while_following_lands_on_the_new_tail():
+    """A filter applied while tailing has to tail what it matches. Loading the head of the
+    new list instead left follow pinned there — and the stream's own re-query pinned it
+    again on every reconnect, so the pane never moved with the capture."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("l")
+        await settle(pilot)
+        assert table.follow
+
+        await focus(pilot, "#filter")
+        pane.query_one("#filter", Input).value = "~m GET"
+        await pilot.press("enter")
+        await settle(pilot)
+
+        assert table.follow, "following did not survive the filter"
+        assert pane._at_end, "the filtered window is not on the end of the list"
+        assert pane._last_query[3] is True, "the stream would re-query the head on reconnect"
+        # ...and it is still following: a matching arrival lands on screen.
+        pane._ingest(_flow("newest", "GET", 200, frame=9999))
+        pane._flush()
+        await settle(pilot)
+        assert pane._rendered[-1] == "newest"
+
+
+async def test_a_dropped_subscription_is_reconnected():
+    """A subscription can end without the capture ending — the gateway hangs up on a viewer
+    that asked to follow before the source registered, and a restart or a dropped
+    connection does the same. The pane used to treat that as the session closing: rows
+    still loaded on demand, so paging and reopening worked while the live view was deaf
+    for good. It reconnects now, and the re-query on reconnect brings in what it missed."""
+    app = make_app()
+    app.client.drop_streams = 50         # every subscription ends on its own, for now
+    old_min, old_max = screens._RECONNECT_MIN, screens._RECONNECT_MAX
+    screens._RECONNECT_MIN = screens._RECONNECT_MAX = 0.05
+    try:
+        async with app.run_test() as pilot:
+            pane, table = await _open_live(pilot, EMPTY_SESSION_ID)
+            assert await until(lambda: app.client.stream_attempts >= 2), "the pane never resubscribed"
+
+            # A flow the gateway learned about while the pane was between subscriptions:
+            # the re-query that follows a reconnect is what finds it.
+            late = _flow("late1", "GET", 200, frame=500)
+            _BY_SESSION[EMPTY_SESSION_ID].append(late)
+            try:
+                assert await until(lambda: "late1" in pane._rows), "the reconnect did not re-query"
+            finally:
+                _BY_SESSION[EMPTY_SESSION_ID].remove(late)
+
+            app.client.drop_streams = 0   # ...and one of them finally sticks
+            assert await until(lambda: not pane._reconnecting), "the pane never settled"
+            assert pane._live and not pane._session_closed
+            assert "reconnecting" not in _status(pane)
+    finally:
+        screens._RECONNECT_MIN, screens._RECONNECT_MAX = old_min, old_max
+
+
+async def test_a_closed_session_stops_the_reconnecting():
+    """The other half of reconnecting: a capture the gateway reports as over must not be
+    resubscribed to, or the pane would poll a dead session for as long as it is open."""
+    app = make_app()
+    app.client.close_session = True
+    old_min, old_max = screens._RECONNECT_MIN, screens._RECONNECT_MAX
+    screens._RECONNECT_MIN = screens._RECONNECT_MAX = 0.01
+    try:
+        async with app.run_test() as pilot:
+            pane, _ = await _open_live(pilot, EMPTY_SESSION_ID)
+            assert await until(lambda: pane._session_closed)
+            assert not pane._live, "the pane kept a stopwatch running on a closed capture"
+            await asyncio.sleep(0.1)   # ...long enough for several reconnects
+            assert app.client.stream_attempts == 1, "it resubscribed to a closed session"
+    finally:
+        screens._RECONNECT_MIN, screens._RECONNECT_MAX = old_min, old_max
+
+
+async def test_a_pane_with_no_live_stream_says_so():
+    """While it is between subscriptions the pane has no live view, and a live pane that
+    says nothing about that looks exactly like a capture with no traffic — the one thing
+    the user cannot tell it apart from."""
+    app = make_app()
+    app.client.drop_streams = 1
+    old_min, old_max = screens._RECONNECT_MIN, screens._RECONNECT_MAX
+    screens._RECONNECT_MIN = screens._RECONNECT_MAX = 30   # long enough to look at
+    try:
+        async with app.run_test() as pilot:
+            pane, _ = await _open_live(pilot, EMPTY_SESSION_ID)
+            assert await until(lambda: pane._reconnecting)
+            assert "reconnecting" in _status(pane)
+    finally:
+        screens._RECONNECT_MIN, screens._RECONNECT_MAX = old_min, old_max

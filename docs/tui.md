@@ -54,6 +54,28 @@ Follow mode pins the window to the tail of the **matching** set — a filter and
 compose, and the gateway sends stream events only for flows matching the subscription's
 filter. A flow that stops matching after an edit is retracted from the view explicitly.
 
+A window that has not filled up yet grows on its own, follow or not: arriving flows are
+appended below the last row, which takes nothing away from what is on screen, so a session
+opened before it captured anything starts listing flows as they arrive. Once the window is
+full, moving it would drop rows off the front — there follow is what keeps it on the tail,
+and with follow off the arrivals are counted and reached with `End`.
+
+Paging away from the end turns follow off, since a window that is not on the tail cannot
+be tailing: `Home`, `PageUp` and `↑` off the top all stop it, and the `⇣` badge goes with
+them. Applying a filter while following keeps it — the view lands on the tail of what the
+new filter matches.
+
+```
+1499 matching · reconnecting…
+```
+
+A live pane holds a subscription to the gateway for as long as the capture runs, and
+reconnects if it is lost — a gateway restart, a dropped connection, or asking to follow a
+capture whose source has not started pushing yet. `reconnecting…` says the pane has no
+live stream at that moment; it clears itself, and each reconnect re-reads the current
+window so nothing that arrived meanwhile is missed. Only the gateway reporting the session
+closed stops it, which is also when the `⏱` stopwatches stop.
+
 ## HTTP/2 connections and streams
 
 HTTP/2 multiplexes many requests over one connection, so a flow carries both the
