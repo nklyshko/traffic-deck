@@ -17,9 +17,45 @@ from datetime import datetime
 
 import grpc
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.utilities import func_metadata as _func_metadata
+from pydantic import ConfigDict, model_validator
 
 from traffic_mcp.client import GatewayClient, viewer_pb2
 from traffic_mcp.filter import FILTER_SYNTAX, flow_url
+
+
+class _StrictArgModel(_func_metadata.ArgModelBase):
+    """A tool-argument model that rejects unknown parameters instead of dropping them.
+
+    FastMCP builds each tool's argument model on pydantic's default `extra="ignore"`, so a
+    caller that invents a plausible parameter name — `status_code=403` where `search` takes
+    `status`/`status_in` — has it silently discarded and gets back a page of *unfiltered*
+    flows that looks like a real answer. Wrong results are worse than an error, especially
+    for an agent that has no way to notice. Forbidding extras also stamps
+    `additionalProperties: false` on the published tool schemas, so a strict client can
+    catch the mistake before the call is made.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unknown_args(cls, data):
+        # Runs ahead of the extra="forbid" check purely to name the parameters that *are*
+        # accepted: "extra inputs are not permitted" alone doesn't tell a caller what to
+        # use instead, and the whole point is that they get it right on the retry.
+        if isinstance(data, dict):
+            unknown = [k for k in data if k not in cls.model_fields]
+            if unknown:
+                raise ValueError(
+                    f"unknown parameter(s) {', '.join(sorted(unknown))} — this tool takes: "
+                    f"{', '.join(cls.model_fields)}")
+        return data
+
+
+# func_metadata() reads this name at call time, so the swap has to land before the tools
+# below are declared.
+_func_metadata.ArgModelBase = _StrictArgModel
 
 mcp = FastMCP("trafficdeck-mcp", host=os.environ.get("MCP_HOST", "127.0.0.1"),
               port=int(os.environ.get("MCP_PORT", "8765")))

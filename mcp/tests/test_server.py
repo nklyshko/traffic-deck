@@ -7,6 +7,7 @@ from __future__ import annotations
 # Importing the server wires the generated `gen/` tree onto sys.path (via client.py),
 # so `traffic.v1.*` resolves afterwards.
 import grpc
+import pytest
 import traffic_mcp.server as S
 from traffic.v1 import common_pb2 as cp
 from traffic.v1 import viewer_pb2 as vp
@@ -40,6 +41,25 @@ def test_write_tools_hidden_in_readonly_mode():
     assert "list_sessions" in names and "get_flow" in names
     assert "rename_session" not in names
     assert "set_session_group" not in names
+
+
+# --- argument validation --------------------------------------------------
+
+def test_unknown_tool_argument_is_rejected_not_ignored():
+    # An invented parameter must not be dropped: `status_code=403` used to sail through as
+    # an *unfiltered* search, so the caller got 200s back while believing they had asked
+    # for 403s. It has to fail, and the failure has to name the real parameters.
+    import asyncio
+
+    with pytest.raises(Exception) as e:
+        asyncio.run(S.mcp.call_tool("search", {"session_id": "abc", "status_code": 403}))
+    msg = str(e.value)
+    assert "status_code" in msg and "status_in" in msg
+
+    # Every tool's published schema closes the door too, so a strict client catches it
+    # before the call.
+    tools = asyncio.run(S.mcp.list_tools())
+    assert all(t.inputSchema.get("additionalProperties") is False for t in tools)
 
 
 # --- search matching ------------------------------------------------------
