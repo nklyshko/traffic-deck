@@ -62,6 +62,24 @@ def test_unknown_tool_argument_is_rejected_not_ignored():
     assert all(t.inputSchema.get("additionalProperties") is False for t in tools)
 
 
+# --- shutdown -------------------------------------------------------------
+
+def test_ctrl_c_exits_quietly(monkeypatch):
+    # uvicorn re-raises the signal it handled once it has shut down gracefully, which
+    # arrives here as a KeyboardInterrupt out of mcp.run(). A stop is not a crash: main()
+    # returns normally (exit 0) instead of letting it reach the interpreter's traceback.
+    def boom(**kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(S.mcp, "run", boom)
+    S.main()
+
+    # Anything else still propagates — only the interrupt is expected.
+    monkeypatch.setattr(S.mcp, "run", lambda **kw: (_ for _ in ()).throw(RuntimeError("bind failed")))
+    with pytest.raises(RuntimeError):
+        S.main()
+
+
 # --- search matching ------------------------------------------------------
 
 CRIT0 = dict(domain="", method="", content_type="", status=0, path_contains="",

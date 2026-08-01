@@ -1080,7 +1080,15 @@ def main() -> None:
     # MCP_READONLY (default on): expose only read tools; set MCP_READONLY=0 to also allow
     # the mutating rename_session / set_session_group tools.
     transport = os.environ.get("MCP_TRANSPORT", "streamable-http")
-    mcp.run(transport=transport)
+    try:
+        mcp.run(transport=transport)
+    except KeyboardInterrupt:
+        # Ctrl+C is how a server is stopped, not a crash. The shutdown itself is already
+        # graceful — uvicorn handles the signal, drains connections and runs the ASGI
+        # lifespan shutdown — and only then re-raises the signal it swallowed, so that
+        # whoever embedded it sees the interrupt they asked for. Nothing was catching it
+        # here, so a clean stop ended in a traceback and a nonzero exit.
+        pass
 
 
 if __name__ == "__main__":
