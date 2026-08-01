@@ -1174,8 +1174,13 @@ async def test_flow_list_follow_mode():
         pane = pilot.app.screen.query_one(SessionPane)
         assert table.cursor_coordinate.row == 0
 
+        # Arrivals come off the stream: _ingest folds them in, the flush draws them.
+        def arrive(f):
+            pane._ingest(f, added=True)
+            pane._flush()
+
         # follow off (default): a new flow doesn't move the cursor
-        pane._upsert(_flow("f4", "GET", 200))
+        arrive(_flow("f4", "GET", 200))
         await pilot.pause()
         assert table.cursor_coordinate.row == 0
 
@@ -1185,7 +1190,7 @@ async def test_flow_list_follow_mode():
         await settle(pilot)
         assert table.follow and table.cursor_coordinate.row == table.row_count - 1
         before = table.row_count
-        pane._upsert(_flow("f5", "PUT", 200))
+        arrive(_flow("f5", "PUT", 200))
         await pilot.pause()
         assert table.row_count == before + 1
         assert table.cursor_coordinate.row == table.row_count - 1
@@ -1198,7 +1203,7 @@ async def test_flow_list_follow_mode():
 
         # toggling off stops the tracking
         await pilot.press("l")
-        pane._upsert(_flow("f6", "GET", 200))
+        arrive(_flow("f6", "GET", 200))
         await pilot.pause()
         assert not table.follow and table.cursor_coordinate.row == 0
 
@@ -1396,7 +1401,8 @@ async def test_follow_mode_tails_the_end_of_the_list():
         assert pane._next is None              # jumped to the end
         assert table.cursor_coordinate.row == table.row_count - 1
 
-        pane._upsert(_flow("b9999", "GET", 200))
+        pane._ingest(_flow("b9999", "GET", 200), added=True)
+        pane._flush()
         await settle(pilot)
         assert pane._focused_flow_id() == "b9999"
 
@@ -1783,6 +1789,59 @@ async def test_disabling_follow_stops_the_window_moving():
         assert pane._rendered == rendered, "the window moved while follow was off"
         assert pane._focused_flow_id() == focused, "the cursor was pulled off its row"
         assert pane._matched == matched + 5, "arrivals should still be counted"
+
+
+async def test_updates_to_flows_off_the_window_are_not_counted_as_arrivals():
+    """The count follows arrivals, and the pane holds only the window — so a flow that
+    slid off it is absent from pane.flows while still being in the count. Reading that
+    absence as "new" counted every later update to an off-window flow again, and a live
+    WebSocket flow republishes once per frame: the total on top of the table ran away
+    from the real one until the pane was closed and reopened."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)
+        await focus(pilot, "#flows")
+        await pilot.press("l")                       # follow on -> tail the list
+        await settle(pilot)
+
+        for i in range(5):
+            pane._ingest(_flow(f"ws{i}", "GET", 200, frame=9000 + i), added=True)
+        pane._flush()
+        await settle(pilot)
+        matched, rendered = pane._matched, list(pane._rendered)
+        assert matched == 425
+
+        gone = _BIG_FLOWS[0].id            # dropped off the front of the window long ago
+        assert gone not in pane.flows
+        for _ in range(20):                # both keep publishing: frames, a late response
+            pane._ingest(_flow(gone, "GET", 200, frame=1), added=False)
+            pane._ingest(_flow("ws0", "GET", 200, websocket=True, frame=9000), added=False)
+        pane._flush()
+        await settle(pilot)
+
+        assert pane._matched == matched, "updates were counted as new flows"
+        assert pane._rendered == rendered, "an off-window update was put in the window"
+        assert _status(pane).startswith("425 flows")
+
+
+async def test_an_arrival_behind_the_window_is_counted_exactly_once():
+    """The same flow seen as an arrival and then updated, while the window sits somewhere
+    else in the list: one flow, one increment, however many times it republishes."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        pane, table = await _open_big(pilot)   # window at the start of a 420-flow list
+        assert not pane._at_end
+        matched, rendered = pane._matched, list(pane._rendered)
+
+        pane._ingest(_flow("new1", "GET", 0, frame=9000), added=True)   # request published
+        for _ in range(3):                     # the response lands, then WebSocket frames
+            pane._ingest(_flow("new1", "GET", 200, websocket=True, frame=9000), added=False)
+        pane._flush()
+        await settle(pilot)
+
+        assert pane._matched == matched + 1
+        assert "new1" not in pane.flows        # off-window: it waits to be paged to
+        assert pane._rendered == rendered
 
 
 async def test_a_response_arriving_updates_the_row_in_place():

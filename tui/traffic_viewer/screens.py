@@ -1408,8 +1408,16 @@ class SessionPane(AnnotatableTable, Vertical):
         self._load_page(cursor=cursor, last=True)
         return True
 
-    def _ingest(self, f) -> bool:
+    def _ingest(self, f, *, added: bool = True) -> bool:
         """Fold one live flow into the window. Returns whether the table needs redrawing.
+
+        `added` says whether the stream called this a *first* sighting (flow_added) rather
+        than an update to a flow it has already sent us. Only the gateway can tell the two
+        apart, and the count depends on it: the window holds at most _window flows, so a
+        flow that never entered it — or slid off its front — is absent from self.flows
+        while still being one the count already includes. Deciding "new" by that absence
+        counted every later update to an off-window flow again, and a live WebSocket flow
+        republishes on every frame, so the total ran away while the real one crawled.
 
         The gateway has already decided this flow matches, so there is no predicate here.
         A flow arriving while the window sits mid-list changes the count but not what is on
@@ -1431,6 +1439,12 @@ class SessionPane(AnnotatableTable, Vertical):
             # redrawn explicitly: _render_page skips a window whose flows are the same.
             self.flows[f.id] = f
             self._changed.add(f.id)
+            return False
+        if not added:
+            # An update to a flow the window does not hold: it sits behind the window, or
+            # dropped off its front as the window slid. It is already in the count and has
+            # no row on screen, so there is nothing here to change — and appending it would
+            # put an older flow after the newest one.
             return False
         self._matched += 1
         if not self._at_end:
@@ -1543,8 +1557,11 @@ class SessionPane(AnnotatableTable, Vertical):
     def _upsert(self, f) -> None:
         """Fold in one flow and show the change now — an annotation that just landed, a
         row the user is looking at. Flows arriving from the stream go through `_ingest`
-        instead and are drawn by the next flush."""
-        view_changed = self._ingest(f)
+        instead and are drawn by the next flush.
+
+        Never an arrival: the flow is one already in this session, re-read after being
+        annotated, so it is in the count wherever it sits."""
+        view_changed = self._ingest(f, added=False)
         if view_changed:
             self._render_page(force=True, cursor=self._follow_target())
         elif f.id in self._rows:
@@ -1601,9 +1618,9 @@ class SessionPane(AnnotatableTable, Vertical):
                     self.session_id, follow=True, filter_expr=self._filter):
                 kind = ev.WhichOneof("event")
                 if kind == "flow_added":
-                    self._ingest(ev.flow_added)
+                    self._ingest(ev.flow_added, added=True)
                 elif kind == "flow_updated":
-                    self._ingest(ev.flow_updated)
+                    self._ingest(ev.flow_updated, added=False)
                 elif kind == "flow_unmatched":
                     self._drop(ev.flow_unmatched)
                 elif kind == "session_event":
