@@ -308,8 +308,17 @@ def test_list_ws_messages_includes_annotations(monkeypatch):
     m.payload.CopyFrom(cp.Body(size=2, inline=b"hi"))
 
     class FakeClient:
-        async def list_messages(self, sid, fid):
-            return [m]
+        def __init__(self):
+            self.filters = []
+
+        async def list_messages(self, sid, fid, filter_expr=""):
+            self.filters.append(filter_expr)
+            # The gateway owns the language; stand in for it with the one term the test
+            # needs, and report a stray operator the way it does.
+            msgs = [m] if filter_expr in ("", "~op text") else []
+            return msgs, (["`&` is not an operator"] if "&" in filter_expr else [])
+
+    fake = FakeClient()
 
     async def _resolve(sid):
         return sid
@@ -317,7 +326,7 @@ def test_list_ws_messages_includes_annotations(monkeypatch):
     async def _names():
         return {"t1": "auth"}, {}
 
-    monkeypatch.setattr(S, "client", lambda: FakeClient())
+    monkeypatch.setattr(S, "client", lambda: fake)
     monkeypatch.setattr(S, "_resolve_session", _resolve)
     monkeypatch.setattr(S, "_name_maps", _names)
 
@@ -326,6 +335,17 @@ def test_list_ws_messages_includes_annotations(monkeypatch):
     assert item["mark_color"] == "red"
     assert item["tags"] == ["auth"]
     assert item["comments"] == ["note"]
+
+    # The filter reaches the gateway as typed, and narrows what comes back.
+    out = asyncio.run(S.list_ws_messages("s", "f", filter="~op text"))
+    assert fake.filters[-1] == "~op text" and out["total"] == 1
+
+    # A filter that matches nothing says whether the flow had frames at all, and hands
+    # back the message dialect — the flow one would send the caller further astray.
+    out = asyncio.run(S.list_ws_messages("s", "f", filter="~op binary"))
+    assert out["total"] == 0
+    assert out["flow_message_count"] == 1
+    assert "~op <re>" in out["filter_syntax"]
 
 
 # --- ClientHello export ---------------------------------------------------

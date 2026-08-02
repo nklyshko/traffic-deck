@@ -135,23 +135,41 @@ message BodyChunk {
 message ListMessagesRequest {
   string session_id = 1;
   string flow_id = 2; // the Upgrade flow whose frames to list
+  // Message filter expression, evaluated by the gateway. Empty matches all. A different
+  // term set from the flow filter — a frame has a payload, an opcode and a direction, not
+  // a method or a status — so an expression written for flows is refused rather than
+  // quietly matching the payload (see docs/filters.md).
+  string filter = 3;
 }
 
 message MessageList {
   repeated WsMessage messages = 1;
+  // Advisory diagnostics for the request's filter, like FlowPage.hints.
+  repeated string hints = 2;
 }
 
 message StreamMessagesRequest {
   string session_id = 1;
   string flow_id = 2; // the Upgrade flow whose frames to stream
   bool follow = 3;    // keep streaming live frames until the session closes
+  // Same DSL as ListMessages: backfill and live frames are both filtered, so a filtered
+  // timeline stays filtered as it grows.
+  string filter = 4;
 }
 
 message MessageEvent {
   oneof event {
     WsMessage message_added = 1;
     SessionEvent session_event = 2; // session closed — live stream ended
+    // Advisory diagnostics for this subscription's filter, sent once before any frame.
+    // A stream has no page to carry them on, and they are part of the language rather
+    // than of any one client, so every viewer gets them (ADR-0012 §9).
+    FilterHints filter_hints = 3;
   }
+}
+
+message FilterHints {
+  repeated string hints = 1;
 }
 
 message GetMessageRequest {

@@ -14,6 +14,7 @@ import (
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"gitlab.com/nklyshko/traffic-deck/gateway/internal/filter"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
@@ -304,6 +305,10 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 }
 
 func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRequest) (*trafficv1.MessageList, error) {
+	pred, err := v.compileMessageFilter(ctx, req.GetSessionId(), req.GetFilter())
+	if err != nil {
+		return nil, err
+	}
 	msgs, err := v.st.ListMessages(ctx, req.GetSessionId(), req.GetFlowId())
 	if err != nil {
 		return nil, storeStatus(err, "list messages")
@@ -317,7 +322,19 @@ func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRe
 			_ = v.st.AttachMessageAnnotations(ctx, req.GetSessionId(), msgs...)
 		}
 	}
-	return &trafficv1.MessageList{Messages: msgs}, nil
+	// Filtered after both sources are gathered, not inside either, so the stored frames and
+	// the live tail are answered by the one predicate.
+	match := v.messageMatcher(ctx, req.GetSessionId(), pred)
+	kept := msgs[:0]
+	for _, m := range msgs {
+		if match(m) {
+			kept = append(kept, m)
+		}
+	}
+	return &trafficv1.MessageList{
+		Messages: kept,
+		Hints:    filter.MessageHints(req.GetFilter()),
+	}, nil
 }
 
 func (v *Viewer) GetMessage(ctx context.Context, req *trafficv1.GetMessageRequest) (*trafficv1.WsMessage, error) {
@@ -356,8 +373,24 @@ func (v *Viewer) liveMessage(ctx context.Context, sessionID, messageID string) *
 // the session is live — streams newly decoded frames until the session closes or the
 // client disconnects (the live WebSocket timeline, mirroring StreamFlows;).
 func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.ServerStreamingServer[trafficv1.MessageEvent]) error {
+	pred, err := v.compileMessageFilter(srv.Context(), req.GetSessionId(), req.GetFilter())
+	if err != nil {
+		return err
+	}
+	match := v.messageMatcher(srv.Context(), req.GetSessionId(), pred)
 	send := func(m *trafficv1.WsMessage) error {
+		if !match(m) {
+			return nil
+		}
 		return srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_MessageAdded{MessageAdded: m}})
+	}
+	// Hints first, before any frame: they describe the subscription, and a viewer that
+	// renders them beside the results wants them as it starts drawing, not at the end.
+	if h := filter.MessageHints(req.GetFilter()); len(h) > 0 {
+		if err := srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_FilterHints{
+			FilterHints: &trafficv1.FilterHints{Hints: h}}}); err != nil {
+			return err
+		}
 	}
 
 	// Subscribe *before* reading the store, so a frame the flusher moves from the hub to

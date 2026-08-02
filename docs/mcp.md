@@ -28,7 +28,8 @@ status/… in one query), `search_flows` (the [filter DSL](filters.md)), `get_fl
 `get_body` (text/base64/`as_hex`), `compare_flows` (diff two requests, across sessions),
 `export_request` (request+response headers, no bodies), `export_client_hellos` (a flow's
 raw TLS ClientHello bytes), `list_ws_messages` + `get_ws_message_body` (WebSocket frames;
-`as_hex` for byte inspection). Session args accept an id prefix.
+`filter` takes the [message dialect](filters.md#filtering-a-message-timeline), `as_hex`
+for byte inspection). Session args accept an id prefix.
 
 It runs **read-only by default**: only the inspection tools above are exposed. Set
 `MCP_READONLY=0` to additionally expose the mutating tools `rename_session` and

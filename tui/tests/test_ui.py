@@ -96,9 +96,27 @@ _BY_SESSION = {SESSION_ID: _FLOWS, SESSION_ID2: _FLOWS2}
 
 def _ws_messages():
     return [
-        cp.WsMessage(id="m1", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=2),
-        cp.WsMessage(id="m2", flow_id="f3", from_client=False, opcode="binary", ts_unix_micros=3),
+        cp.WsMessage(id="m1", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=2,
+                     payload=cp.Body(size=9, inline=b"subscribe")),
+        cp.WsMessage(id="m2", flow_id="f3", from_client=False, opcode="binary", ts_unix_micros=3,
+                     payload=cp.Body(size=2, inline=b"\x01\x02")),
     ]
+
+
+class _RefusedFilter(Exception):
+    """Stands in for the gateway refusing an expression: an AioRpcError carrying
+    InvalidArgument and the parser's message, which is what the screens read."""
+
+    def __init__(self, details: str) -> None:
+        super().__init__(details)
+        self._details = details
+
+    def code(self):
+        import grpc
+        return grpc.StatusCode.INVALID_ARGUMENT
+
+    def details(self) -> str:
+        return self._details
 
 
 class FakeClient:
@@ -118,6 +136,7 @@ class FakeClient:
         self.android_provision_calls = 0
         self.hold_flows = False   # keep stream_flows open, as a live session's would be
         self.stream_attempts = 0  # StreamFlows subscriptions made (a viewer reconnects)
+        self.msg_streams = 0      # StreamMessages subscriptions made
         self.drop_streams = 0     # ...end this many of them at once, as a gateway hang-up
         self.close_session = False  # ...or end them by reporting the session closed
         self.partial_bodies = False  # serve bodies as live previews (capped mid-capture)
@@ -310,9 +329,46 @@ class FakeClient:
         # (bytes, partial) — partial marks a body the live decode only kept the start of.
         return b'{"k":1}', self.partial_bodies
 
-    async def stream_messages(self, session_id, flow_id, follow=True):
+    # The message filter is its own dialect (payload/opcode/direction), evaluated by the
+    # gateway; this stands in for it with the terms the UI tests exercise — including the
+    # refusal of a flow term, which is what keeps `~m GET` from reading as an empty
+    # timeline.
+    _MSG_TERMS = {"~b", "~op", "~from", "~mark", "~tag", "~group", "~comment", "~fav"}
+
+    @classmethod
+    def _msg_matches(cls, m, expr: str) -> bool:
+        import re as _re
+        toks = expr.split()
+        i = 0
+        while i < len(toks):
+            t = toks[i]
+            if t.startswith("~") and t not in cls._MSG_TERMS:
+                raise _RefusedFilter(f"unknown message filter term {t!r}")
+            if t == "~op" and i + 1 < len(toks):
+                if not _re.search(toks[i + 1], m.opcode or "", _re.I):
+                    return False
+                i += 2
+            elif t == "~from" and i + 1 < len(toks):
+                if not _re.search(toks[i + 1], "client" if m.from_client else "server", _re.I):
+                    return False
+                i += 2
+            else:  # ~b <re>, or a bare regex — both match the payload
+                pat = toks[i + 1] if (t == "~b" and i + 1 < len(toks)) else t
+                if not _re.search(pat, (m.payload.inline or b"").decode("utf-8", "replace"), _re.I):
+                    return False
+                i += 2 if t == "~b" else 1
+        return True
+
+    async def stream_messages(self, session_id, flow_id, follow=True, filter_expr=""):
+        self.msg_streams += 1
+        if "&" in filter_expr:
+            # The grammar has no operators, so a stray one is a payload regex — advisory,
+            # not an error, and the gateway says so before sending any frame.
+            yield vp.MessageEvent(filter_hints=vp.FilterHints(
+                hints=["`&` is not an operator — terms are ANDed automatically."]))
         for m in _ws_messages():
-            yield vp.MessageEvent(message_added=m)
+            if self._msg_matches(m, filter_expr):
+                yield vp.MessageEvent(message_added=m)
 
     async def get_message(self, session_id, message_id):
         for m in _ws_messages():
@@ -1036,6 +1092,98 @@ async def test_ws_message_comment():
         await pilot.press("enter")
         await settle(pilot)
         assert app.client.comments == [("m1", "look here")]
+
+
+async def test_ws_messages_filter_by_opcode_and_payload():
+    """A chatty connection is tens of thousands of frames, so the timeline filters like
+    the flow table does — by opcode, by payload, and by direction."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        screen = app.screen
+        assert isinstance(screen, WsMessagesScreen)
+        table = screen.query_one("#msgs", DataTable)
+        assert table.row_count == 2
+
+        for expr, want in [("~op text", 1), ("~b subscribe", 1), ("subscribe", 1),
+                           ("~from server", 1), ("~op text ~from server", 0), ("", 2)]:
+            await focus(pilot, "#filter")
+            screen.query_one("#filter", Input).value = expr
+            await pilot.press("enter")
+            await settle(pilot)
+            assert table.row_count == want, f"{expr!r} kept {table.row_count} frames"
+            # The status line counts what matched, not what the flow has.
+            assert f"{want} matching" in screen.sub_title if expr else \
+                f"{want} frames" in screen.sub_title
+
+
+async def test_ws_messages_filter_help_shown_only_while_focused():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        help_ = app.screen.query_one("#filter-help", Static)
+        assert help_.display is False
+        await pilot.press("f")             # focus the filter input
+        await settle(pilot)
+        assert help_.display is True
+        # Escape leaves the filter for the table — it does not leave the screen.
+        await pilot.press("escape")
+        await settle(pilot)
+        assert isinstance(app.screen, WsMessagesScreen)
+        assert help_.display is False
+
+
+async def test_ws_messages_filter_error_is_reported():
+    """A flow term is not a message term. The gateway refuses it, and the timeline says so
+    rather than showing an empty table that reads as "no frames"."""
+    app = make_app()
+    notes = []
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        screen = app.screen
+        screen.notify = lambda msg, **kw: notes.append((str(msg), kw.get("severity")))
+        await focus(pilot, "#filter")
+        screen.query_one("#filter", Input).value = "~m GET"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert any("~m" in m and sev == "error" for m, sev in notes), notes
+
+
+async def test_ws_messages_filter_hints_are_surfaced():
+    """`&` parses as a payload regex rather than failing, so the gateway's advisory hint is
+    the only thing that says the filter does not mean what it looks like."""
+    app = make_app()
+    notes = []
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        screen = app.screen
+        screen.notify = lambda msg, **kw: notes.append((str(msg), kw.get("severity")))
+        await focus(pilot, "#filter")
+        screen.query_one("#filter", Input).value = "~op text & subscribe"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert any("not an operator" in m and sev == "warning" for m, sev in notes), notes
+
+
+async def test_ws_messages_annotating_under_a_filter_requeries():
+    """The viewer no longer holds the predicate, so an annotation that could move a frame
+    out of a filtered view is answered by re-running the query (ADR-0012 §7)."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        screen = app.screen
+        await focus(pilot, "#filter")
+        screen.query_one("#filter", Input).value = "~op text"
+        await pilot.press("enter")
+        await settle(pilot)
+        before = app.client.msg_streams
+
+        await focus(pilot, "#msgs")
+        await pilot.press("m")        # mark → color prompt
+        await settle(pilot)
+        await pilot.press("enter")
+        await settle(pilot)
+        assert app.client.msg_streams > before, "the filtered timeline was not re-queried"
 
 
 async def test_quit_asks_for_confirmation():

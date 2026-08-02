@@ -28,7 +28,7 @@ from traffic_viewer.client import control_pb2 as cpb, viewer_pb2
 from textual.widgets.option_list import Option
 from rich.text import Text
 
-from .filters import FILTER_HELP
+from .filters import FILTER_HELP, MSG_FILTER_HELP
 from .render import (
     MARK_COLORS,
     SESSION_STATUS,
@@ -53,6 +53,30 @@ from .wireshark import (
     find_wireshark,
     wireshark_command,
 )
+
+
+def rpc_message(exc: Exception) -> str:
+    """The human half of a gRPC error. A filter the gateway refuses comes back as
+    InvalidArgument carrying the parser's message, and str(AioRpcError) buries it under the
+    status, the peer and a debug string — none of which a user asked about."""
+    details = getattr(exc, "details", None)
+    if callable(details):
+        try:
+            return details() or str(exc)
+        except Exception:  # noqa: BLE001 — not an RPC error after all
+            pass
+    return str(exc)
+
+
+def invalid_argument(exc: Exception) -> bool:
+    """Whether a gRPC error is the server refusing what was asked — a filter it could not
+    compile — rather than a call that failed on its way there. The two want different
+    words: one is the user's expression, the other is the connection."""
+    code = getattr(exc, "code", None)
+    try:
+        return callable(code) and getattr(code(), "name", "") == "INVALID_ARGUMENT"
+    except Exception:  # noqa: BLE001 — not an RPC error after all
+        return False
 
 
 class NavDataTable(DataTable):
@@ -1371,7 +1395,7 @@ class SessionPane(AnnotatableTable, Vertical):
         except Exception as exc:  # noqa: BLE001
             self._loading = False  # ...it is not still coming; the query failed
             self._update_subtitle()
-            self.notify(f"filter: {exc}", severity="error")
+            self.notify(f"filter: {rpc_message(exc)}", severity="error")
             return
         self._apply_page(page, cursor)
         # A term the grammar accepts but that means something else (`&`, a bare status
@@ -2369,10 +2393,17 @@ class BodyScreen(_PayloadView):
 class WsMessagesScreen(AnnotatableTable, Screen):
     """WebSocket / TCP-parsed message timeline for a flow — directional frames in time
     order, distinct from the request/response view. Messages are annotatable records: the
-    same mark/comment/tag/favorite/group actions as the flow table (via AnnotatableTable)."""
+    same mark/comment/tag/favorite/group actions as the flow table (via AnnotatableTable).
+
+    Filtering works like the flow table's: the expression goes to the gateway as typed and
+    the stream comes back carrying only what matches (ADR-0012). The term set is the
+    message dialect — payload, opcode, direction, annotations — because a frame has no URL,
+    method or status to match. A chatty connection runs to tens of thousands of frames, and
+    without this the only way to find one is to scroll."""
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Back", show=False),
+        Binding("f", "filter", "Filter"),
         Binding("space", "select", "Select"),
         Binding("D", "clear_selection", "Deselect"),
         Binding("m", "mark", "Mark"),
@@ -2391,6 +2422,7 @@ class WsMessagesScreen(AnnotatableTable, Screen):
         self._msgs: dict[str, object] = {}
         self._rows: set[str] = set()
         self._cols: list = []
+        self._filter = ""                      # expression as typed; the gateway compiles it
         self._selected: set[str] = set()       # multi-selection for bulk annotation
         self._tags: list = []
         self._groups: list = []
@@ -2399,9 +2431,13 @@ class WsMessagesScreen(AnnotatableTable, Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Input(id="filter", placeholder="filter: ~b subscribe  ~op text  ~from client  (f focus, Enter apply)")
         table = NavDataTable(id="msgs", cursor_type="row", zebra_stripes=True)
         self._cols = table.add_columns("", "Time", "Dir", "Opcode", "Len", "Preview")
         yield table
+        # Cheat sheet for the message dialect, docked at the bottom while the filter is
+        # focused — the flow table's, one term set over.
+        yield Static(MSG_FILTER_HELP, id="filter-help")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -2411,8 +2447,35 @@ class WsMessagesScreen(AnnotatableTable, Screen):
         self.load_defs()
         self.load()
 
+    def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        if event.widget.id == "filter":
+            self.query_one("#filter-help", Static).display = True
+
+    def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        if event.widget.id == "filter":
+            self.query_one("#filter-help", Static).display = False
+
+    def action_filter(self) -> None:
+        self.query_one("#filter", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Apply a filter. It goes to the gateway as typed — parse errors and advisory
+        hints come back from there, since that is where the language lives."""
+        self._filter = event.value.strip()
+        self.load()  # exclusive: re-subscribing cancels the stream this replaces
+        self.query_one("#msgs", DataTable).focus()
+
+    def on_key(self, event) -> None:
+        # Escape while editing the filter returns to the table rather than leaving the
+        # screen, which is what the screen-level escape binding would otherwise do.
+        if event.key == "escape" and self.query_one("#filter", Input).has_focus:
+            self.query_one("#msgs", DataTable).focus()
+            event.stop()
+
     def _update_subtitle(self) -> None:
-        base = f"websocket · {self.flow_id[:8]}"
+        n = len(self._msgs)
+        base = f"websocket · {self.flow_id[:8]} · "
+        base += f"{n} matching" if self._filter else f"{n} frames"
         if self._selected:
             base += f" · {len(self._selected)} selected"
         if self.query_one("#msgs", NavDataTable).follow:
@@ -2451,22 +2514,45 @@ class WsMessagesScreen(AnnotatableTable, Screen):
             self._rows.add(m.id)
             self._update_subtitle()
 
+    def _reset_rows(self) -> None:
+        """Empty the model and the table, for a subscription that replaces another. A
+        filter is fixed for a subscription's lifetime, so applying one starts over rather
+        than sifting what is already on screen — the gateway decides what matches."""
+        self._msgs.clear()
+        self._rows.clear()
+        self.query_one("#msgs", DataTable).clear()
+        self._update_subtitle()
+
     @work(exclusive=True)
     async def load(self) -> None:
         # Stream frames: backfill of stored frames, then (for a live session) new
-        # frames as they're decoded — so a live WebSocket timeline updates in place.
+        # frames as they're decoded — so a live WebSocket timeline updates in place. Both
+        # sides are filtered by the gateway, so a filtered timeline stays filtered as it
+        # grows rather than holding only until the next frame.
+        self._reset_rows()
         try:
-            async for ev in self.app.client.stream_messages(self.session_id, self.flow_id, follow=True):
+            async for ev in self.app.client.stream_messages(
+                    self.session_id, self.flow_id, follow=True, filter_expr=self._filter):
                 kind = ev.WhichOneof("event")
                 if kind == "message_added":
                     self._upsert_msg(ev.message_added)
+                elif kind == "filter_hints":
+                    # A term the grammar accepts but that means something else — a stray
+                    # `&`, a quoted argument — filters on the wrong thing instead of
+                    # failing, so it is warned about even though rows came back.
+                    for hint in ev.filter_hints.hints:
+                        self.notify(hint, title="filter", severity="warning")
                 elif kind == "session_event":
                     self.notify("session closed — live capture ended")
         except Exception as exc:  # noqa: BLE001
-            self.notify(f"stream_messages failed: {exc}", severity="error")
+            # A refused filter is the expected error here — the message dialect rejects a
+            # flow term by name — so it is reported as one. Anything else is the stream.
+            self.notify(f"filter: {rpc_message(exc)}" if invalid_argument(exc)
+                        else f"stream_messages failed: {exc}", severity="error")
             return
         if not self._msgs:
-            self.notify("no websocket frames recorded for this flow")
+            self.notify("no frames match this filter" if self._filter
+                        else "no websocket frames recorded for this flow")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         mid = str(event.row_key.value)
@@ -2488,6 +2574,15 @@ class WsMessagesScreen(AnnotatableTable, Screen):
 
     async def _fetch_record(self, rid):
         return await self.app.client.get_message(self.session_id, rid)
+
+    async def _refresh(self, ids: list[str]) -> None:
+        """Re-read annotated frames, and — when the filter reads annotations — re-run the
+        whole subscription. Marking a frame under `~mark red` changes the matching set, and
+        only the gateway knows how: the viewer no longer holds the predicate (ADR-0012 §7).
+        A message stream carries no "stopped matching" event, so the query is re-issued."""
+        await super()._refresh(ids)
+        if self._filter:
+            self.load()
 
 
 class WsPayloadScreen(_PayloadView):

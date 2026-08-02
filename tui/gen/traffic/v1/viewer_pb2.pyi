@@ -126,36 +126,50 @@ class BodyChunk(_message.Message):
     def __init__(self, payload: _Optional[bytes] = ..., truncated: bool = ...) -> None: ...
 
 class ListMessagesRequest(_message.Message):
-    __slots__ = ("session_id", "flow_id")
+    __slots__ = ("session_id", "flow_id", "filter")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
+    FILTER_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     flow_id: str
-    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ...) -> None: ...
+    filter: str
+    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., filter: _Optional[str] = ...) -> None: ...
 
 class MessageList(_message.Message):
-    __slots__ = ("messages",)
+    __slots__ = ("messages", "hints")
     MESSAGES_FIELD_NUMBER: _ClassVar[int]
+    HINTS_FIELD_NUMBER: _ClassVar[int]
     messages: _containers.RepeatedCompositeFieldContainer[_common_pb2.WsMessage]
-    def __init__(self, messages: _Optional[_Iterable[_Union[_common_pb2.WsMessage, _Mapping]]] = ...) -> None: ...
+    hints: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, messages: _Optional[_Iterable[_Union[_common_pb2.WsMessage, _Mapping]]] = ..., hints: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class StreamMessagesRequest(_message.Message):
-    __slots__ = ("session_id", "flow_id", "follow")
+    __slots__ = ("session_id", "flow_id", "follow", "filter")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
     FOLLOW_FIELD_NUMBER: _ClassVar[int]
+    FILTER_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     flow_id: str
     follow: bool
-    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., follow: bool = ...) -> None: ...
+    filter: str
+    def __init__(self, session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., follow: bool = ..., filter: _Optional[str] = ...) -> None: ...
 
 class MessageEvent(_message.Message):
-    __slots__ = ("message_added", "session_event")
+    __slots__ = ("message_added", "session_event", "filter_hints")
     MESSAGE_ADDED_FIELD_NUMBER: _ClassVar[int]
     SESSION_EVENT_FIELD_NUMBER: _ClassVar[int]
+    FILTER_HINTS_FIELD_NUMBER: _ClassVar[int]
     message_added: _common_pb2.WsMessage
     session_event: SessionEvent
-    def __init__(self, message_added: _Optional[_Union[_common_pb2.WsMessage, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ...) -> None: ...
+    filter_hints: FilterHints
+    def __init__(self, message_added: _Optional[_Union[_common_pb2.WsMessage, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ..., filter_hints: _Optional[_Union[FilterHints, _Mapping]] = ...) -> None: ...
+
+class FilterHints(_message.Message):
+    __slots__ = ("hints",)
+    HINTS_FIELD_NUMBER: _ClassVar[int]
+    hints: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, hints: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class GetMessageRequest(_message.Message):
     __slots__ = ("session_id", "message_id")

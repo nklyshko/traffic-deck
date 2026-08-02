@@ -22,3 +22,17 @@ FILTER_HELP = (
     "  no lookarounds or backreferences · headers match as \"name: value\" lines\n"
     "                                               Enter apply · Esc cancel"
 )
+
+# The message timeline's own dialect. A frame has a payload, an opcode and a direction and
+# no URL, so the term set is different — and a flow term (~m, ~c, ~h) is refused by name
+# rather than quietly matched against the payload.
+MSG_FILTER_HELP = (
+    "Message terms are space-separated and ANDed; prefix ! to negate a term.\n"
+    "  ~b <re> payload    ~op <re> opcode     ~from <re> client|server\n"
+    "  ~mark <re> color   ~tag <re> name      ~group <re> name\n"
+    "  ~comment <re>      ~fav favorited\n"
+    "  <re>  a bare regex matches the payload — there is no URL on a frame\n"
+    "  args are unquoted RE2 regexes: escape dots, quotes match literally\n"
+    "  flow terms (~m ~c ~d ~h …) are not message terms and are rejected\n"
+    "                                               Enter apply · Esc cancel"
+)

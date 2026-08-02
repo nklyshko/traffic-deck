@@ -70,6 +70,39 @@ rows); when it is reached the reported count is a lower bound, which the TUI ren
 `N+ matching`. Navigation never depends on that number — see
 [the TUI guide](tui.md#the-flow-table-is-a-window-not-a-page).
 
+## Filtering a message timeline
+
+The WebSocket / parsed-message timeline (the TUI's `M` screen, MCP's `list_ws_messages`)
+takes a filter too, in the **same grammar over a different record**. A frame has a payload,
+an opcode and a direction — no method, status, URL or headers — so it has its own terms:
+
+| Term | Matches |
+|---|---|
+| `~b <re>` | payload text |
+| `~op <re>` | opcode (`text`, `binary`, `ping`, `pong`, `close`, `continuation`) |
+| `~from <re>` | direction, matched against `client` or `server` |
+| `~mark <re>` / `~tag <re>` / `~group <re>` / `~comment <re>` | annotations, as for flows |
+| `~fav` | favorited (no argument) |
+
+A **bare regex matches the payload**, not a URL — a frame has none. The payload is the one
+expensive term, so it is evaluated after opcode, direction and annotations, exactly as
+`~b` sorts after the columns on the flow side.
+
+A flow term used here — `~m`, `~c`, `~d`, `~h`, `~u` — is **refused by name**, not matched
+against the payload. That is the one deliberate difference from the flow dialect, which
+lets an unknown `~term` fall through to a bare regex and cannot stop doing so without
+changing what existing expressions mean. Here the terms a reader is most likely to bring
+over are precisely the ones that would match nothing and read as an empty timeline.
+
+```
+~op text ~b subscribe        the subscribe frames
+~from client ~b heartbeat    what the client sends as keepalive
+!~op ping !~op pong          the timeline minus the keepalives
+```
+
+Backfill and live arrivals go through the one predicate, so a filtered timeline stays
+filtered as it grows rather than holding only until the next frame.
+
 ## Regexes are RE2
 
 The gateway uses Go's RE2, so **lookarounds and backreferences are not supported** and are

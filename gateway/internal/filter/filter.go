@@ -140,16 +140,40 @@ func (p *Predicate) readsAtLeast(cost int) bool {
 	return false
 }
 
-// argTerms take a regex argument; flagTerms take none.
-var argTerms = map[string]bool{
-	"~m": true, "~d": true, "~u": true, "~c": true, "~t": true,
-	"~conn": true, "~stream": true,
-	"~mark": true, "~tag": true, "~group": true, "~comment": true, "~meta": true,
-	"~h": true, "~hq": true, "~hs": true,
-	"~b": true, "~bq": true, "~bs": true,
+// grammar is one dialect's term table: which terms take a regex argument, which take
+// none, and whether an unrecognised `~term` is an error. The flow language and the
+// message language (message.go) share the tokenizer and differ only here.
+type grammar struct {
+	args  map[string]bool
+	flags map[string]bool
+	// strictTerms rejects a `~`-prefixed token the dialect does not define, instead of
+	// letting it fall through to a bare regex. The flow language cannot do this without
+	// changing what existing expressions mean; the message language, being new, can — and
+	// wants to, because the terms a user is most likely to type there (`~m`, `~c`, `~h`)
+	// are flow terms that would otherwise silently match the payload.
+	strictTerms bool
+	// what names the dialect in an error, e.g. "unknown message filter term".
+	what string
+	// hint listing the valid terms, appended to an unknown-term error.
+	terms string
+	// bareWhat is what a bare regex matches in this dialect, for the hint that explains
+	// where a stray `&` ended up.
+	bareWhat string
 }
 
-var flagTerms = map[string]bool{"~s": true, "~q": true, "~fav": true}
+// flowGrammar is the flow filter dialect. Terms taking a regex argument, then flags.
+var flowGrammar = grammar{
+	args: map[string]bool{
+		"~m": true, "~d": true, "~u": true, "~c": true, "~t": true,
+		"~conn": true, "~stream": true,
+		"~mark": true, "~tag": true, "~group": true, "~comment": true, "~meta": true,
+		"~h": true, "~hq": true, "~hs": true,
+		"~b": true, "~bq": true, "~bs": true,
+	},
+	flags:    map[string]bool{"~s": true, "~q": true, "~fav": true},
+	what:     "flow filter",
+	bareWhat: "the URL",
+}
 
 type parsed struct {
 	term string // "" for a bare URL regex
@@ -159,7 +183,7 @@ type parsed struct {
 
 // parse tokenizes into (term, arg, negated) triples. Shared by Compile and Hints so the
 // hints always describe the same parse the predicate was built from.
-func parse(expr string) ([]parsed, error) {
+func parse(expr string, g grammar) ([]parsed, error) {
 	toks := strings.Fields(expr)
 	var out []parsed
 	for i := 0; i < len(toks); i++ {
@@ -176,9 +200,9 @@ func parse(expr string) ([]parsed, error) {
 		}
 
 		switch {
-		case flagTerms[t]:
+		case g.flags[t]:
 			out = append(out, parsed{term: t, neg: neg})
-		case argTerms[t]:
+		case g.args[t]:
 			i++
 			if i >= len(toks) {
 				if t == "~meta" {
@@ -187,6 +211,8 @@ func parse(expr string) ([]parsed, error) {
 				return nil, fmt.Errorf("%s needs an argument", t)
 			}
 			out = append(out, parsed{term: t, arg: toks[i], neg: neg})
+		case g.strictTerms && strings.HasPrefix(t, "~"):
+			return nil, fmt.Errorf("unknown %s term %q — %s", g.what, t, g.terms)
 		default:
 			out = append(out, parsed{arg: t, neg: neg})
 		}
@@ -225,7 +251,7 @@ func Compile(expr string, tagNames, groupNames map[string]string) (*Predicate, e
 	if expr == "" {
 		return nil, nil
 	}
-	terms, err := parse(expr)
+	terms, err := parse(expr, flowGrammar)
 	if err != nil {
 		return nil, err
 	}

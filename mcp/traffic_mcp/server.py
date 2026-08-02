@@ -21,7 +21,7 @@ from mcp.server.fastmcp.utilities import func_metadata as _func_metadata
 from pydantic import ConfigDict, model_validator
 
 from traffic_mcp.client import GatewayClient, viewer_pb2
-from traffic_mcp.filter import FILTER_SYNTAX, flow_url
+from traffic_mcp.filter import FILTER_SYNTAX, MSG_FILTER_SYNTAX, flow_url
 
 
 class _StrictArgModel(_func_metadata.ArgModelBase):
@@ -961,11 +961,20 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
 
 @mcp.tool()
 async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
-                           offset: int = 0) -> dict:
+                           offset: int = 0, filter: str = "") -> dict:
     """WebSocket message timeline for an Upgrade flow: directional frames in order
     (direction, opcode, size, text/hex preview). Paginated — `total` is the frame count;
     page with `offset`/`limit` (default 100) to avoid huge responses. Large payloads
     carry a note; fetch them in full with get_ws_message_body using the message `id`.
+
+    `filter` narrows the timeline server-side, which is how to work with a chatty
+    connection instead of paging through it. It is the MESSAGE dialect, not the flow one:
+
+      ~b <re> payload · ~op <re> opcode · ~from <re> client|server ·
+      ~mark/~tag/~group/~comment <re> · ~fav · a bare regex matches the payload
+
+    Flow terms (~m, ~c, ~d, ~h, ~u …) do not exist here and are rejected by name — the
+    full reference comes back with that error. `total` is how many frames match.
 
     Each frame carries its annotations (favorite, mark_color, tags, groups, comments) —
     messages are annotatable records just like flows.
@@ -975,7 +984,14 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
     get_ws_message_body(message_id, raw=True)."""
     sid = await _resolve_session(session_id)
     tagnames, groupnames = await _name_maps()
-    msgs = await client().list_messages(sid, flow_id)
+    try:
+        msgs, hints = await client().list_messages(sid, flow_id, filter)
+    except grpc.aio.AioRpcError as e:
+        if e.code() is grpc.StatusCode.INVALID_ARGUMENT:
+            # A rejected filter is the one moment the caller is certain to re-read: hand
+            # back the whole reference with the error rather than just the bad token.
+            raise ValueError(f"{e.details()}\n\n{MSG_FILTER_SYNTAX}") from None
+        raise
     total = len(msgs)
     out = []
     for m in msgs[offset:offset + limit]:
@@ -1000,8 +1016,17 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
         elif size:
             item["note"] = "large payload — fetch with get_ws_message_body"
         out.append(item)
-    return {"session_id": sid, "flow_id": flow_id, "total": total,
+    resp = {"session_id": sid, "flow_id": flow_id, "total": total,
             "count": len(out), "messages": out}
+    if hints:
+        resp["hints"] = hints
+    if not msgs and filter:
+        # Nothing matched: say whether the flow had frames to begin with, and include the
+        # syntax so a caller that guessed the dialect wrong can fix it in one step.
+        all_msgs, _ = await client().list_messages(sid, flow_id)
+        resp["flow_message_count"] = len(all_msgs)
+        resp["filter_syntax"] = MSG_FILTER_SYNTAX
+    return resp
 
 
 @mcp.tool()

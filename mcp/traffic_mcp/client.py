@@ -87,11 +87,13 @@ class GatewayClient:
             truncated = truncated or c.truncated
         return b"".join(chunks), truncated
 
-    async def list_messages(self, session_id: str, flow_id: str):
+    async def list_messages(self, session_id: str, flow_id: str, filter_expr: str = ""):
+        """A flow's frames, filtered by the gateway. Returns (messages, hints)."""
         resp = await self._v().ListMessages(
-            viewer_pb2.ListMessagesRequest(session_id=session_id, flow_id=flow_id)
+            viewer_pb2.ListMessagesRequest(
+                session_id=session_id, flow_id=flow_id, filter=filter_expr)
         )
-        return list(resp.messages)
+        return list(resp.messages), list(resp.hints)
 
     async def get_message_body(self, session_id: str, message_id: str, raw: bool = False) -> bytes:
         call = self._v().GetMessageBody(

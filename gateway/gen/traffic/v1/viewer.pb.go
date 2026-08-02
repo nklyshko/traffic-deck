@@ -798,9 +798,14 @@ func (x *BodyChunk) GetTruncated() bool {
 }
 
 type ListMessagesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	FlowId        string                 `protobuf:"bytes,2,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // the Upgrade flow whose frames to list
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	FlowId    string                 `protobuf:"bytes,2,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // the Upgrade flow whose frames to list
+	// Message filter expression, evaluated by the gateway. Empty matches all. A different
+	// term set from the flow filter — a frame has a payload, an opcode and a direction, not
+	// a method or a status — so an expression written for flows is refused rather than
+	// quietly matching the payload (see docs/filters.md).
+	Filter        string `protobuf:"bytes,3,opt,name=filter,proto3" json:"filter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -849,9 +854,18 @@ func (x *ListMessagesRequest) GetFlowId() string {
 	return ""
 }
 
+func (x *ListMessagesRequest) GetFilter() string {
+	if x != nil {
+		return x.Filter
+	}
+	return ""
+}
+
 type MessageList struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Messages      []*WsMessage           `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Messages []*WsMessage           `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	// Advisory diagnostics for the request's filter, like FlowPage.hints.
+	Hints         []string `protobuf:"bytes,2,rep,name=hints,proto3" json:"hints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -893,11 +907,21 @@ func (x *MessageList) GetMessages() []*WsMessage {
 	return nil
 }
 
+func (x *MessageList) GetHints() []string {
+	if x != nil {
+		return x.Hints
+	}
+	return nil
+}
+
 type StreamMessagesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	FlowId        string                 `protobuf:"bytes,2,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // the Upgrade flow whose frames to stream
-	Follow        bool                   `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`              // keep streaming live frames until the session closes
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	FlowId    string                 `protobuf:"bytes,2,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // the Upgrade flow whose frames to stream
+	Follow    bool                   `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`              // keep streaming live frames until the session closes
+	// Same DSL as ListMessages: backfill and live frames are both filtered, so a filtered
+	// timeline stays filtered as it grows.
+	Filter        string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -953,12 +977,20 @@ func (x *StreamMessagesRequest) GetFollow() bool {
 	return false
 }
 
+func (x *StreamMessagesRequest) GetFilter() string {
+	if x != nil {
+		return x.Filter
+	}
+	return ""
+}
+
 type MessageEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
 	//
 	//	*MessageEvent_MessageAdded
 	//	*MessageEvent_SessionEvent
+	//	*MessageEvent_FilterHints
 	Event         isMessageEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1019,6 +1051,15 @@ func (x *MessageEvent) GetSessionEvent() *SessionEvent {
 	return nil
 }
 
+func (x *MessageEvent) GetFilterHints() *FilterHints {
+	if x != nil {
+		if x, ok := x.Event.(*MessageEvent_FilterHints); ok {
+			return x.FilterHints
+		}
+	}
+	return nil
+}
+
 type isMessageEvent_Event interface {
 	isMessageEvent_Event()
 }
@@ -1031,9 +1072,62 @@ type MessageEvent_SessionEvent struct {
 	SessionEvent *SessionEvent `protobuf:"bytes,2,opt,name=session_event,json=sessionEvent,proto3,oneof"` // session closed — live stream ended
 }
 
+type MessageEvent_FilterHints struct {
+	// Advisory diagnostics for this subscription's filter, sent once before any frame.
+	// A stream has no page to carry them on, and they are part of the language rather
+	// than of any one client, so every viewer gets them (ADR-0012 §9).
+	FilterHints *FilterHints `protobuf:"bytes,3,opt,name=filter_hints,json=filterHints,proto3,oneof"`
+}
+
 func (*MessageEvent_MessageAdded) isMessageEvent_Event() {}
 
 func (*MessageEvent_SessionEvent) isMessageEvent_Event() {}
+
+func (*MessageEvent_FilterHints) isMessageEvent_Event() {}
+
+type FilterHints struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Hints         []string               `protobuf:"bytes,1,rep,name=hints,proto3" json:"hints,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FilterHints) Reset() {
+	*x = FilterHints{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FilterHints) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FilterHints) ProtoMessage() {}
+
+func (x *FilterHints) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FilterHints.ProtoReflect.Descriptor instead.
+func (*FilterHints) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *FilterHints) GetHints() []string {
+	if x != nil {
+		return x.Hints
+	}
+	return nil
+}
 
 type GetMessageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1045,7 +1139,7 @@ type GetMessageRequest struct {
 
 func (x *GetMessageRequest) Reset() {
 	*x = GetMessageRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[15]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1057,7 +1151,7 @@ func (x *GetMessageRequest) String() string {
 func (*GetMessageRequest) ProtoMessage() {}
 
 func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[15]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1070,7 +1164,7 @@ func (x *GetMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageRequest.ProtoReflect.Descriptor instead.
 func (*GetMessageRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{15}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetMessageRequest) GetSessionId() string {
@@ -1098,7 +1192,7 @@ type GetMessageBodyRequest struct {
 
 func (x *GetMessageBodyRequest) Reset() {
 	*x = GetMessageBodyRequest{}
-	mi := &file_traffic_v1_viewer_proto_msgTypes[16]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1110,7 +1204,7 @@ func (x *GetMessageBodyRequest) String() string {
 func (*GetMessageBodyRequest) ProtoMessage() {}
 
 func (x *GetMessageBodyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_traffic_v1_viewer_proto_msgTypes[16]
+	mi := &file_traffic_v1_viewer_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1123,7 +1217,7 @@ func (x *GetMessageBodyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMessageBodyRequest.ProtoReflect.Descriptor instead.
 func (*GetMessageBodyRequest) Descriptor() ([]byte, []int) {
-	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{16}
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetMessageBodyRequest) GetSessionId() string {
@@ -1208,22 +1302,28 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\bresponse\x18\x03 \x01(\bR\bresponse\"C\n" +
 	"\tBodyChunk\x12\x18\n" +
 	"\apayload\x18\x01 \x01(\fR\apayload\x12\x1c\n" +
-	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"M\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"e\n" +
 	"\x13ListMessagesRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\aflow_id\x18\x02 \x01(\tR\x06flowId\"@\n" +
+	"\aflow_id\x18\x02 \x01(\tR\x06flowId\x12\x16\n" +
+	"\x06filter\x18\x03 \x01(\tR\x06filter\"V\n" +
 	"\vMessageList\x121\n" +
-	"\bmessages\x18\x01 \x03(\v2\x15.traffic.v1.WsMessageR\bmessages\"g\n" +
+	"\bmessages\x18\x01 \x03(\v2\x15.traffic.v1.WsMessageR\bmessages\x12\x14\n" +
+	"\x05hints\x18\x02 \x03(\tR\x05hints\"\x7f\n" +
 	"\x15StreamMessagesRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
 	"\aflow_id\x18\x02 \x01(\tR\x06flowId\x12\x16\n" +
-	"\x06follow\x18\x03 \x01(\bR\x06follow\"\x96\x01\n" +
+	"\x06follow\x18\x03 \x01(\bR\x06follow\x12\x16\n" +
+	"\x06filter\x18\x04 \x01(\tR\x06filter\"\xd4\x01\n" +
 	"\fMessageEvent\x12<\n" +
 	"\rmessage_added\x18\x01 \x01(\v2\x15.traffic.v1.WsMessageH\x00R\fmessageAdded\x12?\n" +
-	"\rsession_event\x18\x02 \x01(\v2\x18.traffic.v1.SessionEventH\x00R\fsessionEventB\a\n" +
-	"\x05event\"Q\n" +
+	"\rsession_event\x18\x02 \x01(\v2\x18.traffic.v1.SessionEventH\x00R\fsessionEvent\x12<\n" +
+	"\ffilter_hints\x18\x03 \x01(\v2\x17.traffic.v1.FilterHintsH\x00R\vfilterHintsB\a\n" +
+	"\x05event\"#\n" +
+	"\vFilterHints\x12\x14\n" +
+	"\x05hints\x18\x01 \x03(\tR\x05hints\"Q\n" +
 	"\x11GetMessageRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
@@ -1263,7 +1363,7 @@ func file_traffic_v1_viewer_proto_rawDescGZIP() []byte {
 	return file_traffic_v1_viewer_proto_rawDescData
 }
 
-var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*ListSessionsRequest)(nil),   // 0: traffic.v1.ListSessionsRequest
 	(*SessionList)(nil),           // 1: traffic.v1.SessionList
@@ -1280,52 +1380,54 @@ var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*MessageList)(nil),           // 12: traffic.v1.MessageList
 	(*StreamMessagesRequest)(nil), // 13: traffic.v1.StreamMessagesRequest
 	(*MessageEvent)(nil),          // 14: traffic.v1.MessageEvent
-	(*GetMessageRequest)(nil),     // 15: traffic.v1.GetMessageRequest
-	(*GetMessageBodyRequest)(nil), // 16: traffic.v1.GetMessageBodyRequest
-	(*Session)(nil),               // 17: traffic.v1.Session
-	(*Flow)(nil),                  // 18: traffic.v1.Flow
-	(SessionStatus)(0),            // 19: traffic.v1.SessionStatus
-	(*DecodeProgress)(nil),        // 20: traffic.v1.DecodeProgress
-	(*WsMessage)(nil),             // 21: traffic.v1.WsMessage
+	(*FilterHints)(nil),           // 15: traffic.v1.FilterHints
+	(*GetMessageRequest)(nil),     // 16: traffic.v1.GetMessageRequest
+	(*GetMessageBodyRequest)(nil), // 17: traffic.v1.GetMessageBodyRequest
+	(*Session)(nil),               // 18: traffic.v1.Session
+	(*Flow)(nil),                  // 19: traffic.v1.Flow
+	(SessionStatus)(0),            // 20: traffic.v1.SessionStatus
+	(*DecodeProgress)(nil),        // 21: traffic.v1.DecodeProgress
+	(*WsMessage)(nil),             // 22: traffic.v1.WsMessage
 }
 var file_traffic_v1_viewer_proto_depIdxs = []int32{
-	17, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
+	18, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
 	2,  // 1: traffic.v1.QueryFlowsRequest.after:type_name -> traffic.v1.FlowCursor
 	2,  // 2: traffic.v1.QueryFlowsRequest.before:type_name -> traffic.v1.FlowCursor
-	18, // 3: traffic.v1.FlowPage.flows:type_name -> traffic.v1.Flow
+	19, // 3: traffic.v1.FlowPage.flows:type_name -> traffic.v1.Flow
 	2,  // 4: traffic.v1.FlowPage.next:type_name -> traffic.v1.FlowCursor
 	2,  // 5: traffic.v1.FlowPage.prev:type_name -> traffic.v1.FlowCursor
-	19, // 6: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
-	18, // 7: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
-	18, // 8: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
+	20, // 6: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
+	19, // 7: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
+	19, // 8: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
 	6,  // 9: traffic.v1.FlowEvent.session_event:type_name -> traffic.v1.SessionEvent
-	20, // 10: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
-	21, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
-	21, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
+	21, // 10: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
+	22, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
+	22, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
 	6,  // 13: traffic.v1.MessageEvent.session_event:type_name -> traffic.v1.SessionEvent
-	0,  // 14: traffic.v1.ViewerService.ListSessions:input_type -> traffic.v1.ListSessionsRequest
-	3,  // 15: traffic.v1.ViewerService.QueryFlows:input_type -> traffic.v1.QueryFlowsRequest
-	5,  // 16: traffic.v1.ViewerService.StreamFlows:input_type -> traffic.v1.StreamFlowsRequest
-	8,  // 17: traffic.v1.ViewerService.GetFlow:input_type -> traffic.v1.GetFlowRequest
-	9,  // 18: traffic.v1.ViewerService.GetBody:input_type -> traffic.v1.GetBodyRequest
-	11, // 19: traffic.v1.ViewerService.ListMessages:input_type -> traffic.v1.ListMessagesRequest
-	15, // 20: traffic.v1.ViewerService.GetMessage:input_type -> traffic.v1.GetMessageRequest
-	13, // 21: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
-	16, // 22: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
-	1,  // 23: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
-	4,  // 24: traffic.v1.ViewerService.QueryFlows:output_type -> traffic.v1.FlowPage
-	7,  // 25: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
-	18, // 26: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
-	10, // 27: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
-	12, // 28: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
-	21, // 29: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
-	14, // 30: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
-	10, // 31: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
-	23, // [23:32] is the sub-list for method output_type
-	14, // [14:23] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	15, // 14: traffic.v1.MessageEvent.filter_hints:type_name -> traffic.v1.FilterHints
+	0,  // 15: traffic.v1.ViewerService.ListSessions:input_type -> traffic.v1.ListSessionsRequest
+	3,  // 16: traffic.v1.ViewerService.QueryFlows:input_type -> traffic.v1.QueryFlowsRequest
+	5,  // 17: traffic.v1.ViewerService.StreamFlows:input_type -> traffic.v1.StreamFlowsRequest
+	8,  // 18: traffic.v1.ViewerService.GetFlow:input_type -> traffic.v1.GetFlowRequest
+	9,  // 19: traffic.v1.ViewerService.GetBody:input_type -> traffic.v1.GetBodyRequest
+	11, // 20: traffic.v1.ViewerService.ListMessages:input_type -> traffic.v1.ListMessagesRequest
+	16, // 21: traffic.v1.ViewerService.GetMessage:input_type -> traffic.v1.GetMessageRequest
+	13, // 22: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
+	17, // 23: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
+	1,  // 24: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
+	4,  // 25: traffic.v1.ViewerService.QueryFlows:output_type -> traffic.v1.FlowPage
+	7,  // 26: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
+	19, // 27: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
+	10, // 28: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
+	12, // 29: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
+	22, // 30: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
+	14, // 31: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
+	10, // 32: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
+	24, // [24:33] is the sub-list for method output_type
+	15, // [15:24] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_viewer_proto_init() }
@@ -1344,6 +1446,7 @@ func file_traffic_v1_viewer_proto_init() {
 	file_traffic_v1_viewer_proto_msgTypes[14].OneofWrappers = []any{
 		(*MessageEvent_MessageAdded)(nil),
 		(*MessageEvent_SessionEvent)(nil),
+		(*MessageEvent_FilterHints)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1351,7 +1454,7 @@ func file_traffic_v1_viewer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_viewer_proto_rawDesc), len(file_traffic_v1_viewer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

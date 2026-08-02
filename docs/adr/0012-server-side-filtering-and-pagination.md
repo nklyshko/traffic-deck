@@ -229,6 +229,29 @@ bundle, applies the predicate to the tail the flusher has not yet written, and m
 timeline order. [0011](0011-incremental-flow-persistence.md) is what makes the tail small
 enough for this to be uninteresting; without it the "tail" is the whole session.
 
+**8a. The message timeline gets the same treatment, in its own dialect.** *(Amended after
+implementation.)* This decision covered flows and left the WebSocket/parsed-message
+timeline as the one list a viewer still reads whole and cannot narrow — a chatty
+connection is tens of thousands of frames, and scrolling was the only way through it.
+`ListMessages` and `StreamMessages` therefore take a filter, evaluated in the gateway, and
+the stream filters backfill and live arrivals through the one predicate so a filtered
+timeline stays filtered as it grows.
+
+The term set is **not** the flow one: a frame has a payload, an opcode and a direction, and
+none of a method, a status, a URL or headers. So `~b` (payload), `~op`, `~from` and the
+annotation terms, with a bare regex matching the payload — the payload being the message's
+answer to "what does a bare regex mean", exactly as the URL is the flow's.
+
+One deliberate divergence from §3's spirit, in its direction: a `~`-prefixed token this
+dialect does not define is an **error**, where the flow dialect lets it fall through to a
+bare regex. The flow language cannot change that without changing what existing
+expressions mean; the message language is new, and the terms a reader is most likely to
+carry over (`~m`, `~c`, `~h`) are precisely the ones that would match no payload and read
+as an empty timeline — the quietly-wrong result the rest of this decision works to avoid.
+
+Hints travel as their own `MessageEvent` variant rather than on a page, since a stream has
+no page to carry them; the unary `ListMessages` returns them on the reply.
+
 **9. The DSL's definition moves to the gateway; viewers stop implementing it.** Viewers
 send the expression as typed and render what comes back, including the parse errors and
 the advisory hints (`filter_hints`) — which are part of the language and belong with it.

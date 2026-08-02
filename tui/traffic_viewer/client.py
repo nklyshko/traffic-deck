@@ -120,12 +120,16 @@ class GatewayClient:
             truncated = truncated or c.truncated
         return b"".join(chunks), truncated
 
-    async def list_messages(self, session_id: str, flow_id: str):
-        """WebSocket frames for an Upgrade flow, in timeline order."""
+    async def list_messages(self, session_id: str, flow_id: str, filter_expr: str = ""):
+        """WebSocket frames for an Upgrade flow, in timeline order, filtered by the
+        gateway. Returns (messages, hints) — the message filter is its own dialect of the
+        DSL (payload/opcode/direction/annotations), so a flow term comes back as an error
+        rather than matching the payload."""
         resp = await self._ensure().ListMessages(
-            viewer_pb2.ListMessagesRequest(session_id=session_id, flow_id=flow_id)
+            viewer_pb2.ListMessagesRequest(
+                session_id=session_id, flow_id=flow_id, filter=filter_expr)
         )
-        return list(resp.messages)
+        return list(resp.messages), list(resp.hints)
 
     async def get_message(self, session_id: str, message_id: str):
         """One message with its annotations attached (for refreshing a row)."""
@@ -133,12 +137,17 @@ class GatewayClient:
             viewer_pb2.GetMessageRequest(session_id=session_id, message_id=message_id)
         )
 
-    async def stream_messages(self, session_id: str, flow_id: str, follow: bool = True):
+    async def stream_messages(self, session_id: str, flow_id: str, follow: bool = True,
+                              filter_expr: str = ""):
         """Yield MessageEvents for an Upgrade flow: backfill of stored frames, then
-        (if follow and the session is live) new frames until the session closes."""
+        (if follow and the session is live) new frames until the session closes.
+
+        The filter applies to both, so a filtered timeline stays filtered as it grows. Any
+        advisory hints for the expression arrive as a filter_hints event before the frames.
+        """
         call = self._ensure().StreamMessages(
             viewer_pb2.StreamMessagesRequest(
-                session_id=session_id, flow_id=flow_id, follow=follow
+                session_id=session_id, flow_id=flow_id, follow=follow, filter=filter_expr
             )
         )
         async for event in call:

@@ -68,3 +68,30 @@ Examples:
   ~d api\\.example\\.com ~c 5.. ~bs BanShadow     narrow first, then match the body
   ~hs set-cookie                                  responses that set a cookie
 """
+
+MSG_FILTER_SYNTAX = """\
+Message filter syntax (list_ws_messages `filter`)
+
+The same grammar — space-separated terms, ANDed, `!` to negate, unquoted RE2 regexes —
+over a different record. A WebSocket/parsed frame has a payload, an opcode and a
+direction, so the flow terms do not exist here and are REFUSED by name rather than
+matched against the payload.
+
+  ~b <re>        payload text
+  ~op <re>       opcode: text | binary | ping | pong | close | continuation
+  ~from <re>     direction, matched against "client" or "server"
+  ~mark <re>     color mark      ~tag <re>      tag name
+  ~group <re>    group name      ~comment <re>  comment body
+  ~fav           favorited (takes no argument)
+
+A bare regex with no ~term matches the PAYLOAD — a frame has no URL. The payload is the
+one expensive term, so it is evaluated after opcode/direction/annotations.
+
+Arguments are not quote-parsed here either: `~b "subscribe"` looks for the quote
+characters too. Write `~b subscribe`.
+
+Examples:
+  ~op text ~b subscribe                           the subscribe frames
+  ~from client ~b heartbeat                       what the client sends as keepalive
+  !~op ping !~op pong                             the timeline minus the keepalives
+"""
