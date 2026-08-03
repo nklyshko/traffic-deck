@@ -90,10 +90,10 @@ func TestDecodePlainAndCompressed(t *testing.T) {
 }
 
 func TestFramingMultipleInOneTurn(t *testing.T) {
-	a := frame(t, 1, 0x1, false, mp(t, "a"))
-	b := frame(t, 2, 0x2, false, mp(t, "b"))
+	a := frame(t, 1, 0xf001, false, mp(t, "a"))
+	b := frame(t, 2, 0xf002, false, mp(t, "b"))
 	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: append(a, b...)}})
-	if len(msgs) != 2 || msgs[0].Opcode != "op0x1" || msgs[1].Opcode != "op0x2" {
+	if len(msgs) != 2 || msgs[0].Opcode != "op0xf001" || msgs[1].Opcode != "op0xf002" {
 		t.Fatalf("framing: %+v", msgs)
 	}
 	if msgs[0].Fields["max.cmd"] != "Response(1)" || msgs[1].Fields["max.cmd"] != "Push(2)" {
@@ -215,8 +215,8 @@ func TestDecodeBoxedIDExtAsMapKey(t *testing.T) {
 // direction is interleaved. The session must emit each frame exactly once, only when
 // it's complete — the core of incremental-framing mode.
 func TestSessionIncrementalFeed(t *testing.T) {
-	c := frame(t, 1, 0x1, false, mp(t, map[string]int{"x": 1}))
-	s := frame(t, 2, 0x2, false, mp(t, "srv"))
+	c := frame(t, 1, 0xf001, false, mp(t, map[string]int{"x": 1}))
+	s := frame(t, 2, 0xf002, false, mp(t, "srv"))
 	sess := decoder{}.NewSession()
 
 	var got []decoders.Message
@@ -238,10 +238,47 @@ func TestSessionIncrementalFeed(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 frames, got %d: %+v", len(got), got)
 	}
-	if !got[0].FromClient || got[0].Opcode != "op0x1" {
+	if !got[0].FromClient || got[0].Opcode != "op0xf001" {
 		t.Fatalf("client frame wrong: %+v", got[0])
 	}
-	if got[1].FromClient || got[1].Opcode != "op0x2" {
+	if got[1].FromClient || got[1].Opcode != "op0xf002" {
 		t.Fatalf("server frame wrong: %+v", got[1])
+	}
+}
+
+// A known opcode reads as its name, an unknown one as its number — and the number is kept
+// beside the name in the field, because most of the table is read off captured traffic
+// rather than taken from the protocol, and a name alone would hide that.
+func TestOpcodeNaming(t *testing.T) {
+	for _, c := range []struct {
+		op          uint16
+		label, feld string
+	}{
+		{19, "Auth", "Auth(19)"},                 // from the protocol's own constants
+		{49, "GetMessages", "GetMessages(49)"},   //
+		{48, "GetChats", "GetChats(48)"},         // read off captured traffic
+		{302, "BannersSync", "BannersSync(302)"}, //
+		{0xf001, "op0xf001", "op0xf001"},         // no name: the number, unadorned
+	} {
+		msgs := decode(t, []decoders.Turn{
+			{FromClient: true, Data: frame(t, 0, c.op, false, mp(t, "x"))}})
+		if len(msgs) != 1 {
+			t.Fatalf("op %d: got %d messages", c.op, len(msgs))
+		}
+		if msgs[0].Opcode != c.label {
+			t.Errorf("op %d: label = %q, want %q", c.op, msgs[0].Opcode, c.label)
+		}
+		if got := msgs[0].Fields["max.opcode"]; got != c.feld {
+			t.Errorf("op %d: max.opcode = %q, want %q", c.op, got, c.feld)
+		}
+	}
+	// The command byte is named the same way, from the protocol's four kinds.
+	for cmd, want := range map[byte]string{0: "Request(0)", 1: "Response(1)",
+		2: "Push(2)", 3: "Error(3)", 9: "cmd9"} {
+		msgs := decode(t, []decoders.Turn{
+			{FromClient: true, Data: frame(t, cmd, 0xf001, false, mp(t, "x"))}})
+		if got := msgs[0].Fields["max.cmd"]; got != want {
+			t.Errorf("cmd %d: max.cmd = %q, want %q", cmd, got, want)
+		}
 	}
 }

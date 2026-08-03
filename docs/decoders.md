@@ -44,6 +44,12 @@ Fields: map[string]string{
 }
 ```
 
+MAX's opcode names come from two places, and the number is always shown beside the name
+because of it: seven are the protocol's own constants, and the rest were read off captured
+sessions by pairing each request shape with its response — `{chatIds[]}` answered by
+`{chats[]}` is `GetChats`. An opcode with no entry renders as `op0x1f4`, never as a
+plausible-looking guess.
+
 They travel to the viewer verbatim, are stored in the bundle beside the frame, become
 columns in the message timeline, and are filterable with `~meta max.cmd=Response`. Nothing
 outside the decoder interprets them, which is the point: a map rather than named fields,

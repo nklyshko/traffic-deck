@@ -184,9 +184,15 @@ var cmdNames = map[byte]string{
 	3: "Error",
 }
 
-// opcodeNames are the frame opcodes with a confirmed meaning. Deliberately partial: an
-// opcode that is not in here renders as its number, which is honest, rather than as a
-// guess that would read like knowledge.
+// opcodeNames are the frame opcodes with a known meaning. Deliberately partial: an opcode
+// that is not in here renders as its number, which is honest, rather than as a guess that
+// would read like knowledge.
+//
+// The first group is from the protocol itself. The rest were read off two captured
+// sessions (an Android ru.oneme capture and a web.max.ru one) by pairing each request
+// shape with its response — `{chatIds[]}` answered by `{chats[]}` is GetChats — and are
+// therefore descriptions of observed behaviour rather than the protocol's own names. The
+// number is always shown beside the name for exactly that reason.
 var opcodeNames = map[uint16]string{
 	3:   "Reset",
 	6:   "Init",
@@ -195,6 +201,31 @@ var opcodeNames = map[uint16]string{
 	83:  "VideoContent",
 	89:  "LinkResolution",
 	288: "QrCode",
+
+	1:   "Ping",                  // {interactive} -> "", small and recurring
+	5:   "LogEvents",             // {events[]} -> ""
+	8:   "SyncConfigContacts",    // {configHash, contactsSync, needProfile} -> {config, contacts[], profile}
+	22:  "PushToken",             // {pushToken, pushOptions} -> ""
+	26:  "StickerSets",           // {count, from, sectionId} -> {marker, stickerSets[]}
+	27:  "StickersSync",          // {sync, type} -> {sections[], stickersOrder, sync}
+	28:  "AnimojisByIds",         // {ids[], type} -> {animojis[]}
+	32:  "GetContacts",           // {contactIds[]} -> {contacts[]}
+	35:  "GetPresence",           // {contactIds[]} -> {presence{id:…}, time}
+	48:  "GetChats",              // {chatIds[]} -> {chats[]}
+	50:  "MarkRead",              // {chatId, messageId, mark, type} -> {mark, unread}
+	53:  "ChatList",              // {marker} -> {chats[], marker}; paged, unlike GetChats
+	74:  "MessageStats",          // {chatId, messageIds[]} -> {stats{messageId:…}}
+	75:  "ChatSubscribe",         // {chatId, subscribe} -> ""
+	91:  "CommentsInfo",          // {chatId, postIds[]} -> {commentsInfoUpdates[]}
+	162: "ComplaintsSync",        // {complainSync} -> {complainSync, complains[]}
+	163: "CallHistorySync",       // {callHistorySync} -> {callHistoryItems[], reset}
+	180: "MessageReactions",      // {chatId, messageIds[]} -> {messagesReactions{…}}
+	208: "StoriesFeed",           // {count, cursor} -> {storiesPreviews[]}
+	209: "StoriesByOwner",        // {owners[]} -> {storiesPreviews[]}
+	258: "ChatReactionsSettings", // {chatIds[]} -> {chatReactionsSettings[]}
+	272: "FoldersSync",           // {folderSync} -> {folders[], foldersOrder}
+	300: "FolderChats",           // {folderId, userChatIds[]} -> {chats[]}
+	302: "BannersSync",           // {bannersSync} -> {banners[], showTime}
 }
 
 // cmdLabel renders the command as "Response(1)", or "cmd7" when it is not one of the four.
