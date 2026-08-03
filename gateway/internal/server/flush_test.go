@@ -341,3 +341,53 @@ func TestFlusherConcurrentWithPublish(t *testing.T) {
 		}
 	}
 }
+
+// A live capture's frames reach the bundle through a proto round trip — decode type to
+// proto for the event stream, back to the decode type for the flusher's write — and the
+// decoder's header fields have to survive it. They did not: a live MAX capture landed with
+// named opcodes and not one max.cmd/max.seq/max.opcode beside them, while the batch path,
+// which writes the decode type straight through, was fine. That asymmetry is the whole
+// reason this test exists.
+func TestFlushKeepsDecoderFields(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ls := newFlushSession(t, st, "s1")
+
+	ls.onFlow(&decode.Flow{ID: "f1", Protocol: "MAX", Authority: "api.oneme.ru"}, true)
+	ls.onMessage(&decode.WsMessage{
+		ID: "m1", FlowID: "f1", TSUnixMicros: 1, FromClient: true,
+		Opcode: "Auth", Payload: []byte(`{"token":"x"}`),
+		Metadata: map[string]string{
+			"max.cmd": "Request(0)", "max.seq": "17", "max.opcode": "Auth(19)"},
+	})
+	// The live event carries them — that side was already right, and must stay so. Checked
+	// before the flush, which trims what it has written out of the hub.
+	if live := ls.messagesForFlow("f1"); len(live) != 1 ||
+		live[0].GetMetadata()["max.seq"] != "17" {
+		t.Errorf("live event metadata = %v", live)
+	}
+
+	if err := ls.flush(ctx, true); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	msgs, err := st.ListMessages(ctx, "s1", "f1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("stored %d frames, want 1", len(msgs))
+	}
+	want := map[string]string{"max.cmd": "Request(0)", "max.seq": "17", "max.opcode": "Auth(19)"}
+	got := msgs[0].GetMetadata()
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("stored metadata[%q] = %q, want %q (all: %v)", k, got[k], v, got)
+		}
+	}
+
+}

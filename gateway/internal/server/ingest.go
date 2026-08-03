@@ -526,5 +526,11 @@ func protoToDecodeWsMessage(pm *trafficv1.WsMessage) *decode.WsMessage {
 		Opcode:       pm.GetOpcode(),
 		Payload:      pm.GetPayload().GetInline(),
 		Raw:          pm.GetRaw().GetInline(),
+		// The decoder's header fields, which every live frame reaches the bundle through:
+		// the flusher converts back to the decode type to write, so a field dropped here is
+		// a field the session never gets. The batch path writes decode.WsMessage directly
+		// and so never showed it — a live capture came out with named opcodes and no
+		// columns at all.
+		Metadata: pm.GetMetadata(),
 	}
 }
