@@ -17,7 +17,7 @@ tui/run.sh                                 # GATEWAY_ADDR overridable
 | Workspace (tabs) | `o` open another session in a tab · `[` / `]` prev/next tab · `w` close tab |
 | Flow list | `f` filter (see [filters.md](filters.md)) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow · `W` open the request in Wireshark |
 | Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages · `W` open in Wireshark |
-| WS messages | `f` filter by payload/opcode/direction (the message dialect — see [filters.md](filters.md#filtering-a-message-timeline)) · `space` select / `D` deselect · `t` `F` `m` `n` `g` annotate · `l` follow new |
+| WS messages | `f` filter by payload/opcode/direction (the message dialect — see [filters.md](filters.md#filtering-a-message-timeline)) · `C` toggle decoder-field columns · `space` select / `D` deselect · `t` `F` `m` `n` `g` annotate · `l` follow new |
 | Compare A/B | `s` switch A/B · `h` copy header order · `p` copy pseudo-header order · `k` copy cookie order |
 
 Annotation keys act on the selection if there is one, else on the focused row. Bodies
@@ -75,6 +75,30 @@ capture whose source has not started pushing yet. `reconnecting…` says the pan
 live stream at that moment; it clears itself, and each reconnect re-reads the current
 window so nothing that arrived meanwhile is missed. Only the gateway reporting the session
 closed stops it, which is also when the `⏱` stopwatches stop.
+
+## Decoder fields are columns
+
+A custom protocol decoder ([decoders.md](decoders.md)) reads its own frame header —
+MAX's command, sequence number and opcode — and hands those out as opaque key/value
+pairs. The message timeline turns each key into a column:
+
+```
+      Time          Dir  Opcode       Len   Preview          max.cmd      max.opcode       max.seq
+ ●    14:22:07.114  C→S  Auth         793   {"token":"…      Request(0)   Auth(19)         17
+      14:22:07.152  S→C  Auth         36885 {"chats":[…      Response(1)  Auth(19)         17
+      14:22:07.230  C→S  GetMessages  147   {"chatId":…      Request(0)   GetMessages(49)  18
+```
+
+Nothing in the viewer or the gateway knows what `max.cmd` means: the columns are
+discovered from the frames themselves, so a new decoder — or a new field on an existing
+one — shows up with no viewer change at all. A well-known code renders as `Name(code)`
+and an unknown one as its number, which is the decoder's own business.
+
+They are shown by default, unlike the flow table's metadata columns: a decoder emits a
+handful of fields and they are the reason to read the frame. `C` toggles one off (and it
+stays off as new frames arrive), and `TRAFFICDECK_MSG_COLUMNS` pins an explicit set.
+Filter on them with `~meta <key>=<re>` — see
+[filters.md](filters.md#filtering-a-message-timeline).
 
 ## HTTP/2 connections and streams
 

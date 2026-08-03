@@ -34,6 +34,10 @@ type Message struct {
 	TagNames   []string
 	GroupNames []string
 	Comments   []string
+	// Metadata is whatever the decoder pulled out of the frame header (a command code, a
+	// sequence number), matched by `~meta <key>=<re>` exactly as a flow's source metadata
+	// is. Opaque here: the language knows there are keys, not what any of them mean.
+	Metadata map[string]string
 
 	// Payload returns the frame's decoded payload as text, or "" if there is none. Nil
 	// means payloads are unavailable, in which case payload terms simply do not match.
@@ -99,13 +103,13 @@ func (p *MessagePredicate) ReadsPayloads() bool {
 
 var messageGrammar = grammar{
 	args: map[string]bool{
-		"~b": true, "~op": true, "~from": true,
+		"~b": true, "~op": true, "~from": true, "~meta": true,
 		"~mark": true, "~tag": true, "~group": true, "~comment": true,
 	},
 	flags:       map[string]bool{"~fav": true},
 	strictTerms: true,
 	what:        "message filter",
-	terms: "message terms are ~b ~op ~from ~mark ~tag ~group ~comment ~fav " +
+	terms: "message terms are ~b ~op ~from ~meta ~mark ~tag ~group ~comment ~fav " +
 		"(a bare regex matches the payload)",
 	bareWhat: "the payload",
 }
@@ -126,11 +130,28 @@ func CompileMessage(expr string, tagNames, groupNames map[string]string) (*Messa
 	p := &MessagePredicate{}
 	for _, t := range terms {
 		trm := msgTerm{neg: t.neg}
-		if t.term == "~fav" {
+		// The two terms whose argument is not a plain regex, handled before the compile.
+		switch t.term {
+		case "~fav":
 			trm.eval = func(m *Message) bool { return m.Favorite }
 			p.terms = append(p.terms, trm)
 			continue
+		case "~meta":
+			key, pat, hasPat := strings.Cut(t.arg, "=")
+			if !hasPat || pat == "" {
+				// `~meta key` with no `=` matches frames carrying the key at all.
+				trm.eval = func(m *Message) bool { _, ok := m.Metadata[key]; return ok }
+			} else {
+				mrx, err := compileRx(pat)
+				if err != nil {
+					return nil, err
+				}
+				trm.eval = func(m *Message) bool { return mrx.MatchString(m.Metadata[key]) }
+			}
+			p.terms = append(p.terms, trm)
+			continue
 		}
+
 		rx, err := compileRx(t.arg)
 		if err != nil {
 			return nil, err

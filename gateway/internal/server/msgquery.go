@@ -48,6 +48,7 @@ func (v *Viewer) messageMatcher(ctx context.Context, sessionID string, pred *fil
 			Opcode: m.GetOpcode(), FromClient: m.GetFromClient(),
 			MarkColor: m.GetMarkColor(), Favorite: m.GetFavorite(),
 			TagNames: m.GetTagIds(), GroupNames: m.GetGroupIds(),
+			Metadata: m.GetMetadata(),
 		}
 		for _, c := range m.GetComments() {
 			fm.Comments = append(fm.Comments, c.GetBody())

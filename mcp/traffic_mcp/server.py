@@ -971,7 +971,8 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
     connection instead of paging through it. It is the MESSAGE dialect, not the flow one:
 
       ~b <re> payload · ~op <re> opcode · ~from <re> client|server ·
-      ~mark/~tag/~group/~comment <re> · ~fav · a bare regex matches the payload
+      ~meta <key>=<re> decoder header field · ~mark/~tag/~group/~comment <re> · ~fav ·
+      a bare regex matches the payload
 
     Flow terms (~m, ~c, ~d, ~h, ~u …) do not exist here and are rejected by name — the
     full reference comes back with that error. `total` is how many frames match.
@@ -981,7 +982,9 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
 
     When a custom decoder handled the connection, a message's payload is the decoded form
     and `has_raw` is true — fetch the original undecoded bytes with
-    get_ws_message_body(message_id, raw=True)."""
+    get_ws_message_body(message_id, raw=True). Such a frame also carries `fields`: what the
+    decoder read out of its header (e.g. MAX's `max.cmd`, `max.seq`, `max.opcode`), which
+    ~meta filters on."""
     sid = await _resolve_session(session_id)
     tagnames, groupnames = await _name_maps()
     try:
@@ -1005,6 +1008,11 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
             # Messages are annotatable records, like flows.
             **_annotations(m, tagnames, groupnames),
         }
+        if m.metadata:
+            # Whatever the custom decoder pulled out of this frame's header — a command
+            # code, a sequence number, a protocol opcode. Opaque key/value pairs, like a
+            # flow's source metadata: filter them with ~meta <key>=<regex>.
+            item["fields"] = dict(m.metadata)
         if m.raw and m.raw.size:
             item["has_raw"] = True  # original undecoded bytes; fetch with get_ws_message_body(raw=True)
         if m.payload and m.payload.WhichOneof("content") == "inline":

@@ -275,6 +275,7 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 					Opcode:       fr.Opcode,
 					Payload:      fr.Payload,
 					Raw:          payload,
+					Metadata:     fr.Fields,
 				})
 			}
 			return // a partial frame buffered with no output is fine — a later frame completes it

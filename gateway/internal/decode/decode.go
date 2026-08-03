@@ -133,6 +133,10 @@ type WsMessage struct {
 	Opcode       string // text|binary|close|ping|pong|continuation
 	Payload      []byte
 	Raw          []byte // original undecoded bytes, when a custom decoder produced this message
+	// Header fields a custom decoder pulled out of the frame (decoders.Message.Fields):
+	// opaque key/value pairs shown as optional viewer columns. Empty for a plain
+	// WebSocket frame, which has no header beyond its opcode.
+	Metadata map[string]string
 }
 
 // Dataset is the result of decoding one capture.

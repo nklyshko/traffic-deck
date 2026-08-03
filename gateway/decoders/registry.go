@@ -26,11 +26,21 @@ type Turn struct {
 // Message is one decoded protocol frame.
 type Message struct {
 	FromClient   bool
-	Opcode       string // short label, e.g. "cmd5/op0x12"
-	Summary      string // optional one-line summary
+	Opcode       string // short label, e.g. "Auth" or "op0x12"
 	Payload      []byte // decoded payload (e.g. JSON)
 	ContentType  string // payload content type, e.g. "application/json"
 	TSUnixMicros int64
+
+	// Fields are whatever this protocol's frame header carries that is worth showing
+	// beside the payload — a command code, a sequence number, a stream id. They are
+	// opaque to everything downstream: the gateway stores them verbatim and viewers show
+	// them as optional columns, the same treatment a capture source's flow metadata gets.
+	//
+	// This is deliberately a map rather than named fields. MAX is one decoder of many and
+	// its header is its own; a protocol's framing must not become part of the record every
+	// other protocol is carried in. Namespace keys with the decoder's name ("max.cmd") so
+	// two decoders in one session cannot collide.
+	Fields map[string]string
 }
 
 // Decoder decodes one custom TCP protocol. It is a factory for stateful Sessions so

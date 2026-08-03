@@ -96,12 +96,24 @@ CREATE TABLE IF NOT EXISTS ws_messages (
     raw_ref      TEXT                  -- original undecoded bytes -> blobs.sha256 (NULL unless a decoder produced this)
 );
 
+-- Header fields a custom decoder pulled out of a frame (command code, sequence number,
+-- protocol opcode). Opaque key/value pairs, the message-side twin of flow_metadata — and a
+-- side table for the same reason: a bundle written before this feature still reads
+-- cleanly, the table is simply empty.
+CREATE TABLE IF NOT EXISTS ws_message_metadata (
+    message_id TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    PRIMARY KEY (message_id, key)
+);
+
 CREATE INDEX IF NOT EXISTS flows_ts_idx          ON flows (ts_micros, frame_number);
 CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
 CREATE INDEX IF NOT EXISTS flow_client_hellos_flow_idx ON flow_client_hellos (flow_id);
 CREATE INDEX IF NOT EXISTS flow_metadata_flow_idx ON flow_metadata (flow_id);
 CREATE INDEX IF NOT EXISTS ws_messages_flow_idx  ON ws_messages (flow_id, ts_micros, frame_number);
+CREATE INDEX IF NOT EXISTS ws_message_metadata_msg_idx ON ws_message_metadata (message_id);
 
 -- Annotations (plan §12). A "record" is a flow today (a WebSocket message later).
 -- tags/groups here mirror the catalog defs so the bundle stays self-contained;

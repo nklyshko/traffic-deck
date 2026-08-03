@@ -1122,11 +1122,18 @@ type WsMessage struct {
 	Raw          *Body                  `protobuf:"bytes,9,opt,name=raw,proto3" json:"raw,omitempty"`                                  // original undecoded frame bytes, set when a custom decoder
 	// Annotations, mirroring Flow — a WebSocket/TCP-parsed message is an annotatable record
 	// too (the annotation store is keyed on record_id, which is this message's id).
-	MarkColor     string     `protobuf:"bytes,10,opt,name=mark_color,json=markColor,proto3" json:"mark_color,omitempty"`
-	Favorite      bool       `protobuf:"varint,11,opt,name=favorite,proto3" json:"favorite,omitempty"`
-	TagIds        []string   `protobuf:"bytes,12,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`
-	GroupIds      []string   `protobuf:"bytes,13,rep,name=group_ids,json=groupIds,proto3" json:"group_ids,omitempty"`
-	Comments      []*Comment `protobuf:"bytes,14,rep,name=comments,proto3" json:"comments,omitempty"`
+	MarkColor string     `protobuf:"bytes,10,opt,name=mark_color,json=markColor,proto3" json:"mark_color,omitempty"`
+	Favorite  bool       `protobuf:"varint,11,opt,name=favorite,proto3" json:"favorite,omitempty"`
+	TagIds    []string   `protobuf:"bytes,12,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`
+	GroupIds  []string   `protobuf:"bytes,13,rep,name=group_ids,json=groupIds,proto3" json:"group_ids,omitempty"`
+	Comments  []*Comment `protobuf:"bytes,14,rep,name=comments,proto3" json:"comments,omitempty"`
+	// Fields the decoder pulled out of this frame's own header — a command code, a
+	// sequence number, a protocol opcode. Opaque key/value pairs, exactly like
+	// Flow.metadata: the gateway stores and serves them verbatim, and viewers show them as
+	// optional columns. Deliberately not typed fields on this message, because every custom
+	// decoder frames its protocol differently and one protocol's header must not become
+	// part of the record every other protocol is carried in.
+	Metadata      map[string]string `protobuf:"bytes,15,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1255,6 +1262,13 @@ func (x *WsMessage) GetGroupIds() []string {
 func (x *WsMessage) GetComments() []*Comment {
 	if x != nil {
 		return x.Comments
+	}
+	return nil
+}
+
+func (x *WsMessage) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
 	}
 	return nil
 }
@@ -1667,7 +1681,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
 	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xc7\x03\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xc5\x04\n" +
 	"\tWsMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1686,7 +1700,11 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\bfavorite\x18\v \x01(\bR\bfavorite\x12\x17\n" +
 	"\atag_ids\x18\f \x03(\tR\x06tagIds\x12\x1b\n" +
 	"\tgroup_ids\x18\r \x03(\tR\bgroupIds\x12/\n" +
-	"\bcomments\x18\x0e \x03(\v2\x13.traffic.v1.CommentR\bcomments\"\x8d\x01\n" +
+	"\bcomments\x18\x0e \x03(\v2\x13.traffic.v1.CommentR\bcomments\x12?\n" +
+	"\bmetadata\x18\x0f \x03(\v2#.traffic.v1.WsMessage.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
 	"\x03Tag\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -1747,7 +1765,7 @@ func file_traffic_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_traffic_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_traffic_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_traffic_v1_common_proto_goTypes = []any{
 	(SourceKind)(0),        // 0: traffic.v1.SourceKind
 	(FileKind)(0),          // 1: traffic.v1.FileKind
@@ -1765,6 +1783,7 @@ var file_traffic_v1_common_proto_goTypes = []any{
 	(*DecodeProgress)(nil), // 13: traffic.v1.DecodeProgress
 	nil,                    // 14: traffic.v1.Session.MetadataEntry
 	nil,                    // 15: traffic.v1.Flow.MetadataEntry
+	nil,                    // 16: traffic.v1.WsMessage.MetadataEntry
 }
 var file_traffic_v1_common_proto_depIdxs = []int32{
 	0,  // 0: traffic.v1.Session.source_kind:type_name -> traffic.v1.SourceKind
@@ -1782,11 +1801,12 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	6,  // 12: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
 	6,  // 13: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
 	11, // 14: traffic.v1.WsMessage.comments:type_name -> traffic.v1.Comment
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	16, // 15: traffic.v1.WsMessage.metadata:type_name -> traffic.v1.WsMessage.MetadataEntry
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_traffic_v1_common_proto_init() }
@@ -1804,7 +1824,7 @@ func file_traffic_v1_common_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_common_proto_rawDesc), len(file_traffic_v1_common_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -578,6 +578,7 @@ func wsMsgToProto(m *decode.WsMessage) *trafficv1.WsMessage {
 		TsUnixMicros: m.TSUnixMicros,
 		FromClient:   m.FromClient,
 		Opcode:       m.Opcode,
+		Metadata:     m.Metadata,
 	}
 	if len(m.Payload) > 0 {
 		pm.Payload = &trafficv1.Body{

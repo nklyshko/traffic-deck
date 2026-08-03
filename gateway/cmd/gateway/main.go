@@ -317,11 +317,15 @@ func importCapture(args []string) {
 // stored pcap + key.log and inserts the decoded protocol flows (e.g. MAX).
 func redecode(args []string) {
 	fs := flag.NewFlagSet("redecode", flag.ExitOnError)
-	_ = fs.Parse(args)
-	if fs.NArg() < 1 {
-		log.Fatal("usage: gateway redecode <session-id>")
+	engine := fs.String("engine", decode.EngineNative,
+		"decode engine: native (in-process Go, as the live capture path) | tshark")
+	sid, ok := parsePositionalFlags(fs, args)
+	if !ok {
+		log.Fatal("usage: gateway redecode <session-id> [-engine native|tshark]")
 	}
-	sid := fs.Arg(0)
+	if *engine != decode.EngineTshark && *engine != decode.EngineNative {
+		log.Fatalf("redecode: -engine must be %q or %q", decode.EngineNative, decode.EngineTshark)
+	}
 
 	ctx := context.Background()
 	cfg := config.Load()
@@ -339,7 +343,7 @@ func redecode(args []string) {
 		}
 	}
 
-	n, err := importer.RedecodeCustom(ctx, st, cfg.TsharkPath, sid, pcapLocal, keylogLocal)
+	n, err := importer.RedecodeCustom(ctx, st, *engine, cfg.TsharkPath, sid, pcapLocal, keylogLocal)
 	if err != nil {
 		log.Fatalf("redecode: %v", err)
 	}

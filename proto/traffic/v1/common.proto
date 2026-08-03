@@ -218,6 +218,14 @@ message WsMessage {
   repeated string tag_ids = 12;
   repeated string group_ids = 13;
   repeated Comment comments = 14;
+
+  // Fields the decoder pulled out of this frame's own header — a command code, a
+  // sequence number, a protocol opcode. Opaque key/value pairs, exactly like
+  // Flow.metadata: the gateway stores and serves them verbatim, and viewers show them as
+  // optional columns. Deliberately not typed fields on this message, because every custom
+  // decoder frames its protocol differently and one protocol's header must not become
+  // part of the record every other protocol is carried in.
+  map<string, string> metadata = 15;
 }
 
 // A named, colored label. Definitions are global (catalog) and mirrored

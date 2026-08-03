@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
@@ -45,6 +46,13 @@ func (s *Store) InsertWsMessages(ctx context.Context, sessionID string, msgs []*
 				boolToInt(m.FromClient), m.Opcode, int64(len(m.Payload)),
 				nullIfEmpty(ref), nullIfEmpty(rawRef)); err != nil {
 				return err
+			}
+			for k, v := range m.Metadata {
+				if err := stmts.exec(
+					`INSERT OR REPLACE INTO ws_message_metadata (message_id, key, value)
+					 VALUES (?,?,?)`, m.ID, k, v); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -107,7 +115,39 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 	if err := s.attachAnnotations(ctx, db, msgRecords(byID)); err != nil {
 		return nil, err
 	}
+	if err := attachMessageMetadata(ctx, db, byID); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// attachMessageMetadata fills each message's Metadata map from the ws_message_metadata
+// side table — the decoder's own header fields. One whole-table read rather than a join
+// per row, the pattern attachMetadata already uses for flows.
+func attachMessageMetadata(ctx context.Context, db *sql.DB, msgs map[string]*trafficv1.WsMessage) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	rows, err := db.QueryContext(ctx, `SELECT message_id, key, value FROM ws_message_metadata`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mid, k, v string
+		if err := rows.Scan(&mid, &k, &v); err != nil {
+			return err
+		}
+		m := msgs[mid]
+		if m == nil {
+			continue
+		}
+		if m.Metadata == nil {
+			m.Metadata = map[string]string{}
+		}
+		m.Metadata[k] = v
+	}
+	return rows.Err()
 }
 
 // GetMessage returns a single WebSocket/parsed message with its annotations attached — the
@@ -148,6 +188,9 @@ func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*t
 		m.Raw = s.loadBody(ctx, db, rawRef.String)
 	}
 	if err := s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.WsMessage{m.Id: m})); err != nil {
+		return nil, err
+	}
+	if err := attachMessageMetadata(ctx, db, map[string]*trafficv1.WsMessage{m.Id: m}); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -214,4 +257,75 @@ func (s *Store) attachWsCounts(ctx context.Context, db *sql.DB, flows map[string
 		}
 	}
 	return rows.Err()
+}
+
+// DeleteCustomProtocolFlows removes a session's synthetic custom-protocol flows — those
+// whose protocol is a registered decoder's name — along with their messages, header fields
+// and annotable side rows. HTTP flows are untouched.
+//
+// This is what makes `redecode` re-decoding rather than decoding again: the command used
+// to append a second copy of every custom flow each time it ran, so a decoder fixed twice
+// left three MAX connections in a session that had one. Blobs are left alone; they are
+// content-addressed, so an orphan costs space and nothing else.
+func (s *Store) DeleteCustomProtocolFlows(ctx context.Context, sessionID string, protocols []string) (int, error) {
+	if len(protocols) == 0 {
+		return 0, nil
+	}
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	placeholders := "?" + strings.Repeat(",?", len(protocols)-1)
+	args := make([]any, len(protocols))
+	for i, p := range protocols {
+		args[i] = p
+	}
+
+	var ids []string
+	rows, err := db.QueryContext(ctx,
+		`SELECT id FROM flows WHERE UPPER(protocol) IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	err = inTx(ctx, db, func(tx *sql.Tx) error {
+		for _, fid := range ids {
+			if _, err := tx.ExecContext(ctx,
+				`DELETE FROM ws_message_metadata WHERE message_id IN
+				   (SELECT id FROM ws_messages WHERE flow_id=?)`, fid); err != nil {
+				return err
+			}
+			for _, q := range []string{
+				`DELETE FROM ws_messages WHERE flow_id=?`,
+				`DELETE FROM flow_headers WHERE flow_id=?`,
+				`DELETE FROM flow_metadata WHERE flow_id=?`,
+				`DELETE FROM flow_client_hellos WHERE flow_id=?`,
+				`DELETE FROM flows WHERE id=?`,
+			} {
+				if _, err := tx.ExecContext(ctx, q, fid); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return len(ids), nil
 }

@@ -81,8 +81,14 @@ an opcode and a direction — no method, status, URL or headers — so it has it
 | `~b <re>` | payload text |
 | `~op <re>` | opcode (`text`, `binary`, `ping`, `pong`, `close`, `continuation`) |
 | `~from <re>` | direction, matched against `client` or `server` |
+| `~meta <key>=<re>` | a header field the decoder read off the frame (`~meta <key>` alone matches presence) |
 | `~mark <re>` / `~tag <re>` / `~group <re>` / `~comment <re>` | annotations, as for flows |
 | `~fav` | favorited (no argument) |
+
+`~meta` reaches what a custom decoder pulled out of the frame's own header — MAX emits
+`max.cmd`, `max.seq`, `max.opcode`. The keys are the decoder's, not the gateway's, so
+`~meta max.cmd=Response` filters a protocol the language has never heard of. The TUI shows
+the same fields as columns (see [the TUI guide](tui.md#decoder-fields-are-columns)).
 
 A **bare regex matches the payload**, not a URL — a frame has none. The payload is the one
 expensive term, so it is evaluated after opcode, direction and annotations, exactly as
@@ -95,9 +101,11 @@ changing what existing expressions mean. Here the terms a reader is most likely 
 over are precisely the ones that would match nothing and read as an empty timeline.
 
 ```
-~op text ~b subscribe        the subscribe frames
-~from client ~b heartbeat    what the client sends as keepalive
-!~op ping !~op pong          the timeline minus the keepalives
+~op text ~b subscribe            the subscribe frames
+~from client ~b heartbeat        what the client sends as keepalive
+!~op ping !~op pong              the timeline minus the keepalives
+~meta max.cmd=Response           MAX responses, by the decoder's own header field
+~meta max.seq=^17$ ~from client  the request half of one MAX exchange
 ```
 
 Backfill and live arrivals go through the one predicate, so a filtered timeline stays

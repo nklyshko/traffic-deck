@@ -656,6 +656,7 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 			FromClient:   msg.FromClient,
 			Opcode:       msg.Opcode,
 			Payload:      msg.Payload,
+			Metadata:     msg.Fields,
 		})
 		s.lt.onFlow(s.flow, false) // refresh the row's ⇅ count
 	}

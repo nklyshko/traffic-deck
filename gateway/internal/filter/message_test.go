@@ -135,3 +135,35 @@ func TestMessageHintsWarnAboutStrayOperators(t *testing.T) {
 		t.Errorf("a bare number is an ordinary payload regex for messages, got hints %v", h)
 	}
 }
+
+// A decoder's own header fields are matched by ~meta, the same term a flow's source
+// metadata uses — the language knows there are keys, not what any of them mean.
+func TestMessageMetadataTerm(t *testing.T) {
+	m := testMessage()
+	m.Metadata = map[string]string{"max.cmd": "Response(1)", "max.seq": "17"}
+	for _, c := range []struct {
+		expr string
+		want bool
+	}{
+		{"~meta max.cmd=Response", true},
+		{"~meta max.cmd=Request", false},
+		{`~meta max.cmd=\(1\)`, true},
+		{"~meta max.seq=^17$", true},
+		{"~meta max.cmd", true}, // presence, no `=`
+		{"~meta max.absent", false},
+		{"!~meta max.cmd=Request", true},
+	} {
+		p, err := CompileMessage(c.expr, names, groups)
+		if err != nil {
+			t.Fatalf("compile %q: %v", c.expr, err)
+		}
+		if got := p.Match(m); got != c.want {
+			t.Errorf("%q: got %v, want %v", c.expr, got, c.want)
+		}
+	}
+	// A metadata term is a column read, so it must not cost a payload fetch.
+	p, _ := CompileMessage("~meta max.cmd=Response", names, groups)
+	if p.ReadsPayloads() {
+		t.Error("~meta should not need the payload")
+	}
+}

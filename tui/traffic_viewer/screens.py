@@ -762,6 +762,17 @@ class SessionsScreen(Screen):
         self.load_sessions()
 
 
+def _msg_column_env() -> "set[str] | None":
+    """Decoder-field columns to show in the message timeline, from
+    TRAFFICDECK_MSG_COLUMNS (comma-separated). Unset means show every field the frames
+    carry — a decoder emits a handful and they are why the frame is worth reading, unlike
+    a flow's source metadata, which is set per capture and mostly not worth a column."""
+    raw = os.environ.get("TRAFFICDECK_MSG_COLUMNS", "").strip()
+    if not raw:
+        return None
+    return {k.strip() for k in raw.split(",") if k.strip()}
+
+
 def _env_columns() -> list[str]:
     """Column names to show in the flow table by default, from TRAFFICDECK_META_COLUMNS
     (comma-separated). A source may also declare defaults per session (viewer.columns);
@@ -2411,6 +2422,7 @@ class WsMessagesScreen(AnnotatableTable, Screen):
         Binding("F", "favorite", "Favorite"),
         Binding("n", "comment", "Comment"),
         Binding("g", "group", "Group"),
+        Binding("C", "columns", "Columns"),
         Binding("l", "follow", "Follow new"),
         Binding("q", "quit", "Quit"),
     ]
@@ -2428,6 +2440,14 @@ class WsMessagesScreen(AnnotatableTable, Screen):
         self._groups: list = []
         self._tagnames: dict[str, str] = {}
         self._groupnames: dict[str, str] = {}
+        # Decoder-supplied header fields, shown as extra columns. Unlike the flow table's
+        # metadata columns these are on by default: a custom decoder emits a handful of
+        # fields and they are the reason to look at the frame at all (MAX's command,
+        # sequence and opcode). _keys is what is displayed, in display order.
+        self._msg_col_keys: list[str] = []
+        self._msg_col_ids: dict[str, object] = {}   # key -> DataTable ColumnKey
+        self._hidden_keys: set[str] = set()         # toggled off with C; stays off
+        self._pinned_keys = _msg_column_env()       # explicit set, or None for "show all"
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -2497,17 +2517,80 @@ class WsMessagesScreen(AnnotatableTable, Screen):
             flags_cell(m, m.id in self._selected),
             fmt_time(m.ts_unix_micros), arrow, m.opcode, str(size),
             Text.from_markup(preview),
+            *(str(m.metadata.get(k, ""))[:_EXTRA_CELL_MAX] for k in self._msg_col_keys),
         )
+
+    # --- decoder field columns ------------------------------------------------
+    #
+    # A custom decoder hands each frame whatever its own header carries (see
+    # decoders.Message.Fields) as opaque key/value pairs. Nothing here knows what a key
+    # means: the columns are discovered from the frames themselves, so a new decoder — or
+    # a new field on an existing one — shows up without a line of viewer code.
+
+    def _sync_columns(self, m) -> None:
+        """Add a column for any decoder field this frame carries that isn't shown yet."""
+        keys = getattr(m, "metadata", None)
+        if not keys:
+            return
+        new = sorted(k for k in keys
+                     if k not in self._msg_col_ids and k not in self._hidden_keys
+                     and (self._pinned_keys is None or k in self._pinned_keys))
+        for k in new:
+            self._add_msg_column(k)
+
+    def _add_msg_column(self, key: str) -> None:
+        if key in self._msg_col_ids:
+            return
+        table = self.query_one("#msgs", DataTable)
+        self._msg_col_keys.append(key)
+        self._msg_col_ids[key] = table.add_column(key, default="", key=key)
+        self._hidden_keys.discard(key)
+        for mid in self._rows:  # backfill the new cell for rows already on screen
+            msg = self._msgs.get(mid)
+            if msg is not None:
+                table.update_cell(mid, self._msg_col_ids[key],
+                                  str(msg.metadata.get(key, ""))[:_EXTRA_CELL_MAX],
+                                  update_width=True)
+
+    def _remove_msg_column(self, key: str) -> None:
+        if key not in self._msg_col_ids:
+            return
+        self.query_one("#msgs", DataTable).remove_column(self._msg_col_ids.pop(key))
+        self._msg_col_keys.remove(key)
+        # Remembered, so the next arriving frame doesn't put it straight back.
+        self._hidden_keys.add(key)
+
+    def _ordered_msg_cols(self) -> list:
+        return [*self._cols, *(self._msg_col_ids[k] for k in self._msg_col_keys)]
+
+    @work(exclusive=True, group="columns")
+    async def action_columns(self) -> None:
+        """Toggle a decoder field column. The keys are whatever the loaded frames carry —
+        `max.cmd`, `max.seq` — with ✓ marking those currently shown."""
+        keys = sorted({k for m in self._msgs.values() for k in m.metadata.keys()}
+                      | set(self._msg_col_keys))
+        if not keys:
+            self.notify("no decoder fields on these frames — nothing to show")
+            return
+        opts = [(k, Text(("✓ " if k in self._msg_col_ids else "  ") + k)) for k in keys]
+        choice = await self.app.push_screen_wait(SelectPrompt("Toggle column", opts))
+        if choice is None:
+            return
+        if choice in self._msg_col_ids:
+            self._remove_msg_column(choice)
+        else:
+            self._add_msg_column(choice)
 
     def _upsert_msg(self, m) -> None:
         """Add a new frame row or update an existing one in place (annotation refresh)."""
         self._msgs[m.id] = m
+        self._sync_columns(m)
         table = self.query_one("#msgs", DataTable)
         cells = self._msg_cells(m)
         if m.id in self._rows:
             # update_width so the flags column (empty header, empty cells until the first
             # annotation) actually widens to show the mark — see SessionPane._upsert.
-            for col, val in zip(self._cols, cells):
+            for col, val in zip(self._ordered_msg_cols(), cells):
                 table.update_cell(m.id, col, val, update_width=True)
         else:
             table.add_row(*cells, key=m.id)

@@ -261,7 +261,7 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 		wsSess = m[0].NewSession()
 	}
 
-	emitMsg := func(opcode string, fromClient bool, payload, raw []byte) {
+	emitMsg := func(opcode string, fromClient bool, payload, raw []byte, fields map[string]string) {
 		f.WsMessageCount++
 		h.onMsg(&WsMessage{
 			ID:           uuid.NewString(),
@@ -271,6 +271,7 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 			Opcode:       opcode,
 			Payload:      payload,
 			Raw:          raw,
+			Metadata:     fields,
 		})
 	}
 	emit := func(opcode string, fromClient bool, payload []byte) {
@@ -280,10 +281,10 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 			// Reframe the binary payload through the custom decoder (buffering partials),
 			// carrying the raw frame bytes so the original remains queryable.
 			for _, fr := range wsSess.Feed(fromClient, payload) {
-				emitMsg(fr.Opcode, fr.FromClient, fr.Payload, payload)
+				emitMsg(fr.Opcode, fr.FromClient, fr.Payload, payload, fr.Fields)
 			}
 		} else {
-			emitMsg(opcode, fromClient, payload, nil)
+			emitMsg(opcode, fromClient, payload, nil, nil)
 		}
 		h.onFlow(f, false) // refresh the row's ⇅ count
 	}

@@ -75,6 +75,7 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 				FromClient:   m.FromClient,
 				Opcode:       m.Opcode,
 				Payload:      m.Payload,
+				Metadata:     m.Fields,
 			})
 		}
 	}

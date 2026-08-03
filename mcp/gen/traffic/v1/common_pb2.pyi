@@ -237,7 +237,14 @@ class Proxy(_message.Message):
     def __init__(self, addr: _Optional[str] = ..., type: _Optional[str] = ..., username: _Optional[str] = ..., password: _Optional[str] = ...) -> None: ...
 
 class WsMessage(_message.Message):
-    __slots__ = ("id", "session_id", "flow_id", "frame_number", "ts_unix_micros", "from_client", "opcode", "payload", "raw", "mark_color", "favorite", "tag_ids", "group_ids", "comments")
+    __slots__ = ("id", "session_id", "flow_id", "frame_number", "ts_unix_micros", "from_client", "opcode", "payload", "raw", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "metadata")
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ID_FIELD_NUMBER: _ClassVar[int]
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FLOW_ID_FIELD_NUMBER: _ClassVar[int]
@@ -252,6 +259,7 @@ class WsMessage(_message.Message):
     TAG_IDS_FIELD_NUMBER: _ClassVar[int]
     GROUP_IDS_FIELD_NUMBER: _ClassVar[int]
     COMMENTS_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     id: str
     session_id: str
     flow_id: str
@@ -266,7 +274,8 @@ class WsMessage(_message.Message):
     tag_ids: _containers.RepeatedScalarFieldContainer[str]
     group_ids: _containers.RepeatedScalarFieldContainer[str]
     comments: _containers.RepeatedCompositeFieldContainer[Comment]
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., from_client: bool = ..., opcode: _Optional[str] = ..., payload: _Optional[_Union[Body, _Mapping]] = ..., raw: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., flow_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., from_client: bool = ..., opcode: _Optional[str] = ..., payload: _Optional[_Union[Body, _Mapping]] = ..., raw: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class Tag(_message.Message):
     __slots__ = ("id", "name", "color", "is_favorite", "created_at_unix_ms")

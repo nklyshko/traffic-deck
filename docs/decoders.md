@@ -30,6 +30,27 @@ that buffers a partial frame until the rest arrives, so it works fed all-at-once
 (batch) or incrementally (live). See `decoders/max` (MAX framing → LZ4 → MessagePack →
 JSON). Add one = add a package + a blank import + rebuild.
 
+### Header fields
+
+A `Message` carries `Fields map[string]string` — whatever this protocol's frame header
+holds that is worth showing beside the payload. MAX fills in its command, sequence number
+and opcode:
+
+```go
+Fields: map[string]string{
+    "max.cmd":    "Response(1)",   // Name(code) for a known code, the bare number otherwise
+    "max.seq":    "17",
+    "max.opcode": "Auth(19)",
+}
+```
+
+They travel to the viewer verbatim, are stored in the bundle beside the frame, become
+columns in the message timeline, and are filterable with `~meta max.cmd=Response`. Nothing
+outside the decoder interprets them, which is the point: a map rather than named fields,
+so one protocol's framing never becomes part of the record every other protocol is carried
+in. Namespace the keys with the decoder's name so two decoders in one session can't
+collide.
+
 ```sh
 # re-run custom decoders over an already-captured session (e.g. after adding a decoder)
 mise exec -- go -C gateway run ./cmd/gateway redecode <session-id>

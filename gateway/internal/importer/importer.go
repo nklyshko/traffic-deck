@@ -6,6 +6,7 @@ package importer
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"strings"
@@ -112,18 +113,28 @@ func Finalize(ctx context.Context, st *store.Store, engine, tsharkPath, sessionI
 }
 
 // RedecodeCustom re-runs decode over a stored capture and inserts ONLY the custom
-// (non-HTTP) decoder output — synthetic protocol flows + their messages — as a new
-// analysis. Lets an already-captured session be decoded by a newly added decoder
-// without re-importing (and without duplicating the HTTP flows). Re-running appends
-// again, so it's a one-shot per added decoder.
-func RedecodeCustom(ctx context.Context, st *store.Store, tsharkPath, sessionID, pcapPath, keylogPath string) (int, error) {
-	ds, err := decode.Decode(ctx, tsharkPath, pcapPath, keylogPath)
+// (non-HTTP) decoder output — synthetic protocol flows + their messages. Lets an
+// already-captured session be re-read by a decoder that has since been added or fixed,
+// without re-importing (and without touching the HTTP flows).
+//
+// It *replaces*: the session's existing custom-protocol flows are deleted first. Appending
+// was the old behaviour and it made the command unusable more than once — each run left
+// another copy of every MAX connection beside the last.
+//
+// engine selects the decode pipeline ("native" or "tshark"). Native matters here: it is
+// what the live capture path uses, so a session decoded live — an Android capture, whose
+// NFLOG frames tshark's follow,tls,raw does not reassemble the same way — is reproduced
+// rather than coming back empty.
+func RedecodeCustom(ctx context.Context, st *store.Store, engine, tsharkPath, sessionID, pcapPath, keylogPath string) (int, error) {
+	ds, err := decodeBatch(ctx, engine, tsharkPath, pcapPath, keylogPath)
 	if err != nil {
 		return 0, fmt.Errorf("decode: %w", err)
 	}
 	custom := map[string]bool{}
+	protocols := make([]string, 0, len(decoders.All()))
 	for _, d := range decoders.All() {
 		custom[strings.ToUpper(d.Name())] = true
+		protocols = append(protocols, strings.ToUpper(d.Name()))
 	}
 	var flows []*decode.Flow
 	keep := map[string]bool{}
@@ -141,6 +152,11 @@ func RedecodeCustom(ctx context.Context, st *store.Store, tsharkPath, sessionID,
 	}
 	if len(flows) == 0 {
 		return 0, nil
+	}
+	if n, err := st.DeleteCustomProtocolFlows(ctx, sessionID, protocols); err != nil {
+		return 0, fmt.Errorf("replace previous custom flows: %w", err)
+	} else if n > 0 {
+		log.Printf("redecode: replacing %d previously decoded custom-protocol flow(s)", n)
 	}
 	analysisID := uuid.NewString()
 	if err := st.CreateAnalysis(ctx, store.NewAnalysis{ID: analysisID, SessionID: sessionID, Engine: "decoders"}); err != nil {

@@ -14,8 +14,10 @@ import (
 )
 
 // frame builds a MAX frame with the given cmd/opcode over a (msgpack) payload,
-// optionally LZ4-compressed.
-func frame(t *testing.T, cmd, opcode uint16, compress bool, payload []byte) []byte {
+// optionally LZ4-compressed. cmd is one byte and seq the two after it — the layout real
+// traffic shows (every response used to read as "cmd256", the sequence number's high byte
+// caught in a cmd field that was never 16 bits wide).
+func frame(t *testing.T, cmd byte, opcode uint16, compress bool, payload []byte) []byte {
 	t.Helper()
 	body := payload
 	var flag uint32
@@ -30,8 +32,8 @@ func frame(t *testing.T, cmd, opcode uint16, compress bool, payload []byte) []by
 	}
 	h := make([]byte, headerLen)
 	h[0] = 1
-	binary.BigEndian.PutUint16(h[1:3], cmd)
-	h[3] = 7
+	h[1] = cmd
+	binary.BigEndian.PutUint16(h[2:4], 7) // seq
 	binary.BigEndian.PutUint16(h[4:6], opcode)
 	binary.BigEndian.PutUint32(h[6:10], (flag<<24)|uint32(len(body)))
 	return append(h, body...)
@@ -73,8 +75,13 @@ func TestDecodePlainAndCompressed(t *testing.T) {
 			t.Fatalf("comp=%v: want 1 message, got %d", comp, len(msgs))
 		}
 		m := msgs[0]
-		if m.Opcode != "cmd5/op0x12" || !m.FromClient {
+		if m.Opcode != "op0x12" || !m.FromClient {
 			t.Fatalf("comp=%v: bad msg %+v", comp, m)
+		}
+		// The header's own fields travel beside the payload, for the viewer's columns.
+		if m.Fields["max.cmd"] != "cmd5" || m.Fields["max.seq"] != "7" ||
+			m.Fields["max.opcode"] != "op0x12" {
+			t.Fatalf("comp=%v: fields = %v", comp, m.Fields)
 		}
 		if !strings.Contains(string(m.Payload), `"hello":"world"`) {
 			t.Fatalf("comp=%v: payload = %s", comp, m.Payload)
@@ -86,8 +93,11 @@ func TestFramingMultipleInOneTurn(t *testing.T) {
 	a := frame(t, 1, 0x1, false, mp(t, "a"))
 	b := frame(t, 2, 0x2, false, mp(t, "b"))
 	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: append(a, b...)}})
-	if len(msgs) != 2 || msgs[0].Opcode != "cmd1/op0x1" || msgs[1].Opcode != "cmd2/op0x2" {
+	if len(msgs) != 2 || msgs[0].Opcode != "op0x1" || msgs[1].Opcode != "op0x2" {
 		t.Fatalf("framing: %+v", msgs)
+	}
+	if msgs[0].Fields["max.cmd"] != "Response(1)" || msgs[1].Fields["max.cmd"] != "Push(2)" {
+		t.Fatalf("cmd fields: %v / %v", msgs[0].Fields, msgs[1].Fields)
 	}
 }
 
@@ -228,10 +238,10 @@ func TestSessionIncrementalFeed(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 frames, got %d: %+v", len(got), got)
 	}
-	if !got[0].FromClient || got[0].Opcode != "cmd1/op0x1" {
+	if !got[0].FromClient || got[0].Opcode != "op0x1" {
 		t.Fatalf("client frame wrong: %+v", got[0])
 	}
-	if got[1].FromClient || got[1].Opcode != "cmd2/op0x2" {
+	if got[1].FromClient || got[1].Opcode != "op0x2" {
 		t.Fatalf("server frame wrong: %+v", got[1])
 	}
 }

@@ -80,6 +80,8 @@ matched against the payload.
   ~b <re>        payload text
   ~op <re>       opcode: text | binary | ping | pong | close | continuation
   ~from <re>     direction, matched against "client" or "server"
+  ~meta <key>=<re>   a header field the decoder read off the frame, e.g.
+                     ~meta max.cmd=Response — `~meta <key>` alone matches presence
   ~mark <re>     color mark      ~tag <re>      tag name
   ~group <re>    group name      ~comment <re>  comment body
   ~fav           favorited (takes no argument)

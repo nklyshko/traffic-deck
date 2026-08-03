@@ -95,11 +95,17 @@ _BY_SESSION = {SESSION_ID: _FLOWS, SESSION_ID2: _FLOWS2}
 
 
 def _ws_messages():
+    # metadata is whatever the custom decoder pulled out of the frame header — opaque
+    # key/value pairs the viewer shows as columns without knowing what they mean.
     return [
         cp.WsMessage(id="m1", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=2,
-                     payload=cp.Body(size=9, inline=b"subscribe")),
+                     payload=cp.Body(size=9, inline=b"subscribe"),
+                     metadata={"max.cmd": "Request(0)", "max.seq": "7",
+                               "max.opcode": "Auth(19)"}),
         cp.WsMessage(id="m2", flow_id="f3", from_client=False, opcode="binary", ts_unix_micros=3,
-                     payload=cp.Body(size=2, inline=b"\x01\x02")),
+                     payload=cp.Body(size=2, inline=b"\x01\x02"),
+                     metadata={"max.cmd": "Response(1)", "max.seq": "7",
+                               "max.opcode": "Auth(19)"}),
     ]
 
 
@@ -333,7 +339,8 @@ class FakeClient:
     # gateway; this stands in for it with the terms the UI tests exercise — including the
     # refusal of a flow term, which is what keeps `~m GET` from reading as an empty
     # timeline.
-    _MSG_TERMS = {"~b", "~op", "~from", "~mark", "~tag", "~group", "~comment", "~fav"}
+    _MSG_TERMS = {"~b", "~op", "~from", "~meta", "~mark", "~tag", "~group", "~comment",
+                  "~fav"}
 
     @classmethod
     def _msg_matches(cls, m, expr: str) -> bool:
@@ -344,7 +351,13 @@ class FakeClient:
             t = toks[i]
             if t.startswith("~") and t not in cls._MSG_TERMS:
                 raise _RefusedFilter(f"unknown message filter term {t!r}")
-            if t == "~op" and i + 1 < len(toks):
+            if t == "~meta" and i + 1 < len(toks):
+                key, _, pat = toks[i + 1].partition("=")
+                if not _re.search(pat or ".", m.metadata.get(key, "") if key in m.metadata
+                                  else "\x00"):
+                    return False
+                i += 2
+            elif t == "~op" and i + 1 < len(toks):
                 if not _re.search(toks[i + 1], m.opcode or "", _re.I):
                     return False
                 i += 2
@@ -1184,6 +1197,74 @@ async def test_ws_messages_annotating_under_a_filter_requeries():
         await pilot.press("enter")
         await settle(pilot)
         assert app.client.msg_streams > before, "the filtered timeline was not re-queried"
+
+
+def _column_labels(table):
+    return [str(table.columns[k].label) for k in table.columns]
+
+
+async def test_ws_messages_show_decoder_fields_as_columns():
+    """A custom decoder hands each frame its own header fields (MAX's command, sequence
+    and opcode). They arrive as opaque key/value pairs and become columns without the
+    viewer knowing what any of them mean."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        table = app.screen.query_one("#msgs", DataTable)
+        labels = _column_labels(table)
+        assert labels[:6] == ["", "Time", "Dir", "Opcode", "Len", "Preview"]
+        # Discovered from the frames, in key order — nothing declares them anywhere.
+        assert labels[6:] == ["max.cmd", "max.opcode", "max.seq"]
+        assert "Request(0)" in [str(c) for c in table.get_row_at(0)]
+
+
+async def test_ws_message_column_toggles_off_and_stays_off():
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        screen = app.screen
+        table = screen.query_one("#msgs", DataTable)
+        assert "max.seq" in _column_labels(table)
+
+        await focus(pilot, "#msgs")
+        await pilot.press("C")            # column picker
+        await settle(pilot)
+        opts = app.screen.query_one(OptionList)
+        opts.highlighted = ["max.cmd", "max.opcode", "max.seq"].index("max.seq")
+        await pilot.press("enter")
+        await settle(pilot)
+        assert "max.seq" not in _column_labels(table)
+
+        # A frame arriving after the toggle must not put the column back.
+        screen._upsert_msg(_ws_messages()[0])
+        await pilot.pause()
+        assert "max.seq" not in _column_labels(table)
+
+
+async def test_ws_message_columns_can_be_pinned_by_env(monkeypatch):
+    """TRAFFICDECK_MSG_COLUMNS narrows the timeline to the fields worth watching, for a
+    decoder that emits more than fit on screen."""
+    monkeypatch.setenv("TRAFFICDECK_MSG_COLUMNS", "max.seq")
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        assert _column_labels(app.screen.query_one("#msgs", DataTable))[6:] == ["max.seq"]
+
+
+async def test_ws_messages_filter_on_a_decoder_field():
+    """The fields are filterable with ~meta, the same term a flow's source metadata uses —
+    so "every response frame" is a filter, not a scroll."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        screen = app.screen
+        table = screen.query_one("#msgs", DataTable)
+        await focus(pilot, "#filter")
+        screen.query_one("#filter", Input).value = "~meta max.cmd=Response"
+        await pilot.press("enter")
+        await settle(pilot)
+        assert table.row_count == 1
+        assert "Response(1)" in [str(c) for c in table.get_row_at(0)]
 
 
 async def test_quit_asks_for_confirmation():

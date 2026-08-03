@@ -13,7 +13,7 @@ import (
 )
 
 // maxFrame builds a plain (uncompressed) MAX frame over a msgpack body.
-func maxFrame(t *testing.T, cmd, opcode uint16, body interface{}) []byte {
+func maxFrame(t *testing.T, cmd byte, opcode uint16, body interface{}) []byte {
 	t.Helper()
 	payload, err := msgpack.Marshal(body)
 	if err != nil {
@@ -21,8 +21,8 @@ func maxFrame(t *testing.T, cmd, opcode uint16, body interface{}) []byte {
 	}
 	h := make([]byte, 10)
 	h[0] = 1
-	binary.BigEndian.PutUint16(h[1:3], cmd)
-	h[3] = 1
+	h[1] = cmd
+	binary.BigEndian.PutUint16(h[2:4], 1) // seq
 	binary.BigEndian.PutUint16(h[4:6], opcode)
 	binary.BigEndian.PutUint32(h[6:10], uint32(len(payload))) // comp flag 0
 	return append(h, payload...)
@@ -122,7 +122,7 @@ func TestParsedTurnsDecodeMAX(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("decode: n=%d", len(msgs))
 	}
-	if msgs[0].Opcode != "cmd5/op0x10" || !strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
+	if msgs[0].Opcode != "op0x10" || !strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
 		t.Fatalf("msg = %+v", msgs[0])
 	}
 }

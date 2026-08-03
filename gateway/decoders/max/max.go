@@ -1,7 +1,7 @@
 // Package max decodes the MAX messenger (ru.oneme / web.max.ru) protocol, over either
 // a raw TLS/TCP stream (mobile app) or WebSocket binary messages (web client).
 //
-// Frame: 10-byte big-endian header [ver(1) cmd(2) seq(1) opcode(2) len(4)]. The top
+// Frame: 10-byte big-endian header [ver(1) cmd(1) seq(2) opcode(2) len(4)]. The top
 // byte of the length field (header[6]) is a compression flag — 0 = none, 0xFF = zstd,
 // any other value = LZ4 block — and the low 24 bits are the payload length. The body is
 // decompressed accordingly, then MessagePack-decoded to JSON. Two MAX-isms (see the
@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -129,18 +130,23 @@ func nextFrame(buf []byte) (frame, rest []byte, ok bool) {
 
 func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, bool) {
 	ver := frame[0]
-	cmd := binary.BigEndian.Uint16(frame[1:3])
-	seq := frame[3]
+	cmd := frame[1]
+	seq := binary.BigEndian.Uint16(frame[2:4])
 	opcode := binary.BigEndian.Uint16(frame[4:6])
 	comp := frame[6] // compression flag (top byte of len)
 	plen := int(binary.BigEndian.Uint32(frame[6:10]) & 0xFFFFFF)
 
 	msg := decoders.Message{
 		FromClient:   fromClient,
-		Opcode:       fmt.Sprintf("cmd%d/op0x%x", cmd, opcode),
-		Summary:      fmt.Sprintf("ver=%d seq=%d", ver, seq),
+		Opcode:       opcodeLabel(opcode),
 		ContentType:  "application/json",
 		TSUnixMicros: ts,
+		Fields: map[string]string{
+			"max.cmd":    cmdLabel(cmd),
+			"max.seq":    strconv.FormatUint(uint64(seq), 10),
+			"max.opcode": opcodeField(opcode),
+			"max.ver":    strconv.FormatUint(uint64(ver), 10),
+		},
 	}
 	if plen == 0 {
 		msg.Payload = []byte(`"[empty / ack]"`)
@@ -165,6 +171,57 @@ func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, boo
 	}
 	msg.Payload = js
 	return msg, true
+}
+
+// cmdNames are the four frame kinds MAX sends. The command is one byte: a request from
+// the client, the response that echoes its sequence number, an unsolicited push, or an
+// error. (This used to be read as a 16-bit field spanning the sequence number's high
+// byte, which made every response read as "cmd256".)
+var cmdNames = map[byte]string{
+	0: "Request",
+	1: "Response",
+	2: "Push",
+	3: "Error",
+}
+
+// opcodeNames are the frame opcodes with a confirmed meaning. Deliberately partial: an
+// opcode that is not in here renders as its number, which is honest, rather than as a
+// guess that would read like knowledge.
+var opcodeNames = map[uint16]string{
+	3:   "Reset",
+	6:   "Init",
+	19:  "Auth",
+	49:  "GetMessages",
+	83:  "VideoContent",
+	89:  "LinkResolution",
+	288: "QrCode",
+}
+
+// cmdLabel renders the command as "Response(1)", or "cmd7" when it is not one of the four.
+func cmdLabel(cmd byte) string {
+	if n := cmdNames[cmd]; n != "" {
+		return fmt.Sprintf("%s(%d)", n, cmd)
+	}
+	return fmt.Sprintf("cmd%d", cmd)
+}
+
+// opcodeLabel is the frame's short label — the name alone ("Auth"), since the number is
+// carried in its own field beside it. An unnamed opcode keeps the hex form the decoder
+// has always used.
+func opcodeLabel(op uint16) string {
+	if n := opcodeNames[op]; n != "" {
+		return n
+	}
+	return fmt.Sprintf("op0x%x", op)
+}
+
+// opcodeField renders the opcode column as "Auth(19)": the name for reading, the number
+// for looking up against a protocol reference.
+func opcodeField(op uint16) string {
+	if n := opcodeNames[op]; n != "" {
+		return fmt.Sprintf("%s(%d)", n, op)
+	}
+	return fmt.Sprintf("op0x%x", op)
 }
 
 // decompressBody decompresses a frame body per the header[6] flag: 0 = none,

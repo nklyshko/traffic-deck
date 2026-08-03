@@ -282,3 +282,41 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// A decoder's header fields survive the round trip through the bundle and are filterable
+// by ~meta — the message-side twin of a flow's source metadata.
+func TestMessageMetadataRoundTripsAndFilters(t *testing.T) {
+	ctx := context.Background()
+	st, sid, fid := msgFixture(t)
+	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+		{ID: "d1", FlowID: fid, FrameNumber: 5, TSUnixMicros: 5, FromClient: true,
+			Opcode: "Auth", Payload: []byte("{}"),
+			Metadata: map[string]string{"max.cmd": "Request(0)", "max.seq": "17"}},
+		{ID: "d2", FlowID: fid, FrameNumber: 6, TSUnixMicros: 6, Opcode: "Auth",
+			Payload:  []byte("{}"),
+			Metadata: map[string]string{"max.cmd": "Response(1)", "max.seq": "17"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v := NewViewer(st, newLiveHub(false))
+
+	resp, err := v.ListMessages(ctx, &trafficv1.ListMessagesRequest{
+		SessionId: sid, FlowId: fid, Filter: "~meta max.seq=^17$"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.GetMessages()) != 2 {
+		t.Fatalf("~meta max.seq=^17$ matched %d frames, want 2", len(resp.GetMessages()))
+	}
+	if got := resp.GetMessages()[0].GetMetadata()["max.cmd"]; got != "Request(0)" {
+		t.Errorf("metadata did not round-trip through the bundle: %v",
+			resp.GetMessages()[0].GetMetadata())
+	}
+	if got := listIDs(t, v, sid, fid, "~meta max.cmd=Response"); !equalStrings(got, []string{"d2"}) {
+		t.Errorf("~meta max.cmd=Response = %v, want [d2]", got)
+	}
+	// The fixture's own frames carry no fields at all, and must not match a key term.
+	if got := listIDs(t, v, sid, fid, "~meta max.cmd"); !equalStrings(got, []string{"d1", "d2"}) {
+		t.Errorf("~meta max.cmd (presence) = %v, want only the decoded frames", got)
+	}
+}
