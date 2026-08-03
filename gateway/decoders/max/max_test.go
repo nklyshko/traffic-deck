@@ -75,7 +75,7 @@ func TestDecodePlainAndCompressed(t *testing.T) {
 			t.Fatalf("comp=%v: want 1 message, got %d", comp, len(msgs))
 		}
 		m := msgs[0]
-		if m.Opcode != "op0x12" || !m.FromClient {
+		if !m.FromClient {
 			t.Fatalf("comp=%v: bad msg %+v", comp, m)
 		}
 		// The header's own fields travel beside the payload, for the viewer's columns.
@@ -93,7 +93,8 @@ func TestFramingMultipleInOneTurn(t *testing.T) {
 	a := frame(t, 1, 0xf001, false, mp(t, "a"))
 	b := frame(t, 2, 0xf002, false, mp(t, "b"))
 	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: append(a, b...)}})
-	if len(msgs) != 2 || msgs[0].Opcode != "op0xf001" || msgs[1].Opcode != "op0xf002" {
+	if len(msgs) != 2 || msgs[0].Fields["max.opcode"] != "op0xf001" ||
+		msgs[1].Fields["max.opcode"] != "op0xf002" {
 		t.Fatalf("framing: %+v", msgs)
 	}
 	if msgs[0].Fields["max.cmd"] != "Response(1)" || msgs[1].Fields["max.cmd"] != "Push(2)" {
@@ -238,10 +239,10 @@ func TestSessionIncrementalFeed(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 frames, got %d: %+v", len(got), got)
 	}
-	if !got[0].FromClient || got[0].Opcode != "op0xf001" {
+	if !got[0].FromClient || got[0].Fields["max.opcode"] != "op0xf001" {
 		t.Fatalf("client frame wrong: %+v", got[0])
 	}
-	if got[1].FromClient || got[1].Opcode != "op0xf002" {
+	if got[1].FromClient || got[1].Fields["max.opcode"] != "op0xf002" {
 		t.Fatalf("server frame wrong: %+v", got[1])
 	}
 }
@@ -251,22 +252,19 @@ func TestSessionIncrementalFeed(t *testing.T) {
 // rather than taken from the protocol, and a name alone would hide that.
 func TestOpcodeNaming(t *testing.T) {
 	for _, c := range []struct {
-		op          uint16
-		label, feld string
+		op   uint16
+		feld string
 	}{
-		{19, "Auth", "Auth(19)"},                 // from the protocol's own constants
-		{49, "GetMessages", "GetMessages(49)"},   //
-		{48, "GetChats", "GetChats(48)"},         // read off captured traffic
-		{302, "BannersSync", "BannersSync(302)"}, //
-		{0xf001, "op0xf001", "op0xf001"},         // no name: the number, unadorned
+		{19, "Auth(19)"},          // from the protocol's own constants
+		{49, "GetMessages(49)"},   //
+		{48, "GetChats(48)"},      // read off captured traffic
+		{302, "BannersSync(302)"}, //
+		{0xf001, "op0xf001"},      // no name: the number, unadorned
 	} {
 		msgs := decode(t, []decoders.Turn{
 			{FromClient: true, Data: frame(t, 0, c.op, false, mp(t, "x"))}})
 		if len(msgs) != 1 {
 			t.Fatalf("op %d: got %d messages", c.op, len(msgs))
-		}
-		if msgs[0].Opcode != c.label {
-			t.Errorf("op %d: label = %q, want %q", c.op, msgs[0].Opcode, c.label)
 		}
 		if got := msgs[0].Fields["max.opcode"]; got != c.feld {
 			t.Errorf("op %d: max.opcode = %q, want %q", c.op, got, c.feld)
@@ -280,5 +278,20 @@ func TestOpcodeNaming(t *testing.T) {
 		if got := msgs[0].Fields["max.cmd"]; got != want {
 			t.Errorf("cmd %d: max.cmd = %q, want %q", cmd, got, want)
 		}
+	}
+}
+
+// The protocol version is in every frame header, so it travels as a per-frame field like
+// the rest of the header. It has been the same value on every frame of every session
+// captured so far — but that is an observation about this traffic, not something the
+// protocol promises, so it is reported per frame, where it is actually read.
+func TestVersionIsAFrameField(t *testing.T) {
+	msgs := decode(t, []decoders.Turn{
+		{FromClient: true, Data: frame(t, 0, 19, false, mp(t, map[string]string{"token": "x"}))}})
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages", len(msgs))
+	}
+	if got := msgs[0].Fields["max.ver"]; got != "1" {
+		t.Errorf("max.ver = %q, want %q (the test frame's version byte)", got, "1")
 	}
 }

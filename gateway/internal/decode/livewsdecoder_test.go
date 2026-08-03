@@ -20,7 +20,8 @@ func (fakeWSDecoder) NewSession() decoders.Session     { return fakeWSSession{} 
 type fakeWSSession struct{}
 
 func (fakeWSSession) Feed(fromClient bool, data []byte) []decoders.Message {
-	return []decoders.Message{{FromClient: fromClient, Opcode: "custom", Payload: append([]byte("D:"), data...)}}
+	return []decoders.Message{{FromClient: fromClient, Payload: append([]byte("D:"), data...),
+		Fields: map[string]string{"fake.op": "custom"}}}
 }
 
 // TestLiveWebSocketCustomDecoder checks that a registered WSDecoder reframes binary frames
@@ -72,8 +73,13 @@ func TestLiveWebSocketCustomDecoder(t *testing.T) {
 			text = m
 		}
 	}
-	if decoded == nil || decoded.Opcode != "custom" || string(decoded.Payload) != "D:hello" {
+	// Reframed, but still labelled by the WebSocket frame it arrived in: the decoder's own
+	// label is a field, so `~op ping` can only ever mean the control frame.
+	if decoded == nil || decoded.Opcode != "binary" || string(decoded.Payload) != "D:hello" {
 		t.Errorf("binary frame not reframed by the decoder: %+v", decoded)
+	}
+	if decoded != nil && decoded.Metadata["fake.op"] != "custom" {
+		t.Errorf("decoder fields missing from the reframed message: %+v", decoded)
 	}
 	if decoded == nil || string(decoded.Raw) != "hello" {
 		t.Errorf("decoded message should carry the original bytes in Raw: %+v", decoded)

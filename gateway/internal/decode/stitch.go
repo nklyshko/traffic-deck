@@ -272,10 +272,13 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 					FrameNumber:  frameNum,
 					TSUnixMicros: ts,
 					FromClient:   fr.FromClient,
-					Opcode:       fr.Opcode,
-					Payload:      fr.Payload,
-					Raw:          payload,
-					Metadata:     fr.Fields,
+					// The WebSocket opcode this protocol frame arrived in, not the
+					// protocol's own — that is in Metadata, where it cannot be confused
+					// with a control frame of the same name.
+					Opcode:   opName,
+					Payload:  fr.Payload,
+					Raw:      payload,
+					Metadata: fr.Fields,
 				})
 			}
 			return // a partial frame buffered with no output is fine — a later frame completes it

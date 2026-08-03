@@ -138,7 +138,6 @@ func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, boo
 
 	msg := decoders.Message{
 		FromClient:   fromClient,
-		Opcode:       opcodeLabel(opcode),
 		ContentType:  "application/json",
 		TSUnixMicros: ts,
 		Fields: map[string]string{

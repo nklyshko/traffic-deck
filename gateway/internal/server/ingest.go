@@ -308,8 +308,12 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 					for _, fr := range frames {
 						dm := &decode.WsMessage{
 							ID: uuid.NewString(), FlowID: pm.GetFlowId(),
-							FromClient: fr.FromClient, Opcode: fr.Opcode,
+							// The WebSocket opcode the protocol frame arrived in ("binary"),
+							// not the protocol's own — that is in Metadata, which this path
+							// was dropping outright.
+							FromClient: fr.FromClient, Opcode: pm.GetOpcode(),
 							TSUnixMicros: pm.GetTsUnixMicros(), Payload: fr.Payload, Raw: payload,
+							Metadata: fr.Fields,
 						}
 						store = append(store, dm)
 						pub = append(pub, wsMsgToProto(dm))

@@ -24,7 +24,8 @@ func (pushWSDecoder) NewSession() decoders.Session     { return pushWSSession{} 
 type pushWSSession struct{}
 
 func (pushWSSession) Feed(fromClient bool, data []byte) []decoders.Message {
-	return []decoders.Message{{FromClient: fromClient, Opcode: "decoded", Payload: append([]byte("D:"), data...)}}
+	return []decoders.Message{{FromClient: fromClient, Payload: append([]byte("D:"), data...),
+		Fields: map[string]string{"pushws.op": "decoded"}}}
 }
 
 // fakePushStream is a minimal grpc.ClientStreamingServer[FlowBatch, PushAck] that replays
@@ -152,8 +153,11 @@ func TestPushFlowsCustomWSDecode(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("got %d messages, want 1 (decoded): %+v", len(msgs), msgs)
 	}
-	if msgs[0].GetOpcode() != "decoded" || string(msgs[0].GetPayload().GetInline()) != "D:hello" {
+	if msgs[0].GetOpcode() != "binary" || string(msgs[0].GetPayload().GetInline()) != "D:hello" {
 		t.Errorf("decoded message = %+v", msgs[0])
+	}
+	if got := msgs[0].GetMetadata()["pushws.op"]; got != "decoded" {
+		t.Errorf("decoder field on a pushed frame = %q, want %q", got, "decoded")
 	}
 	if string(msgs[0].GetRaw().GetInline()) != "hello" {
 		t.Errorf("raw original bytes = %q, want hello", msgs[0].GetRaw().GetInline())

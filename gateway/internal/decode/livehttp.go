@@ -281,7 +281,9 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 			// Reframe the binary payload through the custom decoder (buffering partials),
 			// carrying the raw frame bytes so the original remains queryable.
 			for _, fr := range wsSess.Feed(fromClient, payload) {
-				emitMsg(fr.Opcode, fr.FromClient, fr.Payload, payload, fr.Fields)
+				// opcode, not the decoder's label: the row keeps the WebSocket frame it
+				// came in, and the protocol's own opcode stays in its fields.
+				emitMsg(opcode, fr.FromClient, fr.Payload, payload, fr.Fields)
 			}
 		} else {
 			emitMsg(opcode, fromClient, payload, nil, nil)

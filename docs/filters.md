@@ -90,6 +90,11 @@ an opcode and a direction — no method, status, URL or headers — so it has it
 `~meta max.cmd=Response` filters a protocol the language has never heard of. The TUI shows
 the same fields as columns (see [the TUI guide](tui.md#decoder-fields-are-columns)).
 
+`~op` stays the **transport's** opcode — `binary`/`text`/`ping`/`pong` for a WebSocket, the
+decoder's name for a raw TCP stream. A protocol that carries its own opcode puts it in
+`~meta`, so `~op ping` means the RFC 6455 control frame and only that, even on a connection
+whose payloads carry an application-level ping of their own.
+
 A **bare regex matches the payload**, not a URL — a frame has none. The payload is the one
 expensive term, so it is evaluated after opcode, direction and annotations, exactly as
 `~b` sorts after the columns on the flow side.

@@ -24,9 +24,14 @@ type Turn struct {
 }
 
 // Message is one decoded protocol frame.
+//
+// Deliberately no Opcode: that column belongs to the transport, and says what kind of
+// frame carried this row — "binary" for a WebSocket message, the decoder's name for a raw
+// TCP stream that has no frame types of its own. A protocol's own opcode is one of its
+// Fields. Keeping the two apart is what lets `~op ping` mean the RFC 6455 control frame
+// and nothing else, on a connection whose payloads also carry an application-level ping.
 type Message struct {
 	FromClient   bool
-	Opcode       string // short label, e.g. "Auth" or "op0x12"
 	Payload      []byte // decoded payload (e.g. JSON)
 	ContentType  string // payload content type, e.g. "application/json"
 	TSUnixMicros int64

@@ -73,7 +73,7 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 				FlowID:       f.ID,
 				TSUnixMicros: m.TSUnixMicros,
 				FromClient:   m.FromClient,
-				Opcode:       m.Opcode,
+				Opcode:       matched[0].Name(),
 				Payload:      m.Payload,
 				Metadata:     m.Fields,
 			})

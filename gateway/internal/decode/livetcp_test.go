@@ -41,7 +41,9 @@ func (s *echoSession) Feed(fromClient bool, data []byte) []decoders.Message {
 		if len(buf) < 2+l {
 			break
 		}
-		out = append(out, decoders.Message{FromClient: fromClient, Opcode: "echo", Payload: append([]byte(nil), buf[2:2+l]...)})
+		out = append(out, decoders.Message{FromClient: fromClient,
+			Fields:  map[string]string{"echo.op": "echo"},
+			Payload: append([]byte(nil), buf[2:2+l]...)})
 		buf = buf[2+l:]
 	}
 	s.bufs[fromClient] = buf

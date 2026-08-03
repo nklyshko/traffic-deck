@@ -122,7 +122,8 @@ func TestParsedTurnsDecodeMAX(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("decode: n=%d", len(msgs))
 	}
-	if msgs[0].Opcode != "op0x10" || !strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
+	if msgs[0].Fields["max.opcode"] != "op0x10" ||
+		!strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
 		t.Fatalf("msg = %+v", msgs[0])
 	}
 }

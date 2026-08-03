@@ -83,16 +83,22 @@ MAX's command, sequence number and opcode — and hands those out as opaque key/
 pairs. The message timeline turns each key into a column:
 
 ```
-      Time          Dir  Opcode       Len   Preview          max.cmd      max.opcode       max.seq
- ●    14:22:07.114  C→S  Auth         793   {"token":"…      Request(0)   Auth(19)         17
-      14:22:07.152  S→C  Auth         36885 {"chats":[…      Response(1)  Auth(19)         17
-      14:22:07.230  C→S  GetMessages  147   {"chatId":…      Request(0)   GetMessages(49)  18
+      Time          Dir  Opcode  Len   Preview          max.cmd      max.opcode       max.seq
+ ●    14:22:07.114  C→S  binary  793   {"token":"…      Request(0)   Auth(19)         17
+      14:22:07.152  S→C  binary  36885 {"chats":[…      Response(1)  Auth(19)         17
+      14:22:07.230  C→S  binary  147   {"chatId":…      Request(0)   GetMessages(49)  18
 ```
 
 Nothing in the viewer or the gateway knows what `max.cmd` means: the columns are
 discovered from the frames themselves, so a new decoder — or a new field on an existing
 one — shows up with no viewer change at all. A well-known code renders as `Name(code)`
 and an unknown one as its number, which is the decoder's own business.
+
+The `Opcode` column stays the **transport's**: `binary` for these, because that is the
+WebSocket frame the protocol message arrived in (a raw TCP stream shows the decoder's name
+instead, having no frame types of its own). The protocol's own opcode is `max.opcode`
+beside it. That separation is what keeps `~op ping` meaning the WebSocket control frame on
+a connection whose payloads also carry an application-level ping.
 
 They are shown by default, unlike the flow table's metadata columns: a decoder emits a
 handful of fields and they are the reason to read the frame. `C` toggles one off (and it

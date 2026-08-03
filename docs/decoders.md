@@ -41,6 +41,7 @@ Fields: map[string]string{
     "max.cmd":    "Response(1)",   // Name(code) for a known code, the bare number otherwise
     "max.seq":    "17",
     "max.opcode": "Auth(19)",
+    "max.ver":    "10",
 }
 ```
 
@@ -56,6 +57,13 @@ outside the decoder interprets them, which is the point: a map rather than named
 so one protocol's framing never becomes part of the record every other protocol is carried
 in. Namespace the keys with the decoder's name so two decoders in one session can't
 collide.
+
+A `Message` has **no opcode**. That column belongs to the transport and says what carried
+the row — `binary` for a WebSocket message, the decoder's name for a raw TCP stream, which
+has no frame types of its own. The protocol's own opcode is a field like any other. The two
+must stay apart: MAX carries an application-level ping inside binary frames, and if that
+were written into the opcode column, `~op ping` could no longer mean the RFC 6455 control
+frame — filters are case-insensitive, so `Ping` and `ping` would be indistinguishable.
 
 ```sh
 # re-run custom decoders over an already-captured session (e.g. after adding a decoder)

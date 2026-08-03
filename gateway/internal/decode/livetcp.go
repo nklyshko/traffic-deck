@@ -279,10 +279,12 @@ type tcpStream struct {
 	dropped     bool
 	flowEmitted bool
 	sess        decoders.Session
-	flow        *Flow
-	httpSess    *httpStream
-	h2Sess      *h2Stream
-	preBuf      []appChunk // decrypted bytes buffered until classification (needs client bytes)
+	decName     string // the decoder framing this stream; the row's Opcode, there being no
+	//                    transport frame type on a raw TCP stream
+	flow     *Flow
+	httpSess *httpStream
+	h2Sess   *h2Stream
+	preBuf   []appChunk // decrypted bytes buffered until classification (needs client bytes)
 
 	// HTTP CONNECT proxy tunnel: while inConnect, bytes are the plaintext handshake to the
 	// proxy (buffered here until complete); after a 2xx the connection restarts decoding the
@@ -567,7 +569,7 @@ func (s *tcpStream) classify(firstClient []byte) {
 	if m := decoders.Match(decoders.StreamMeta{
 		ServerHost: s.serverHost, ServerPort: s.serverPort, SNI: s.conn.SNI(),
 	}); len(m) > 0 {
-		s.sess = m[0].NewSession()
+		s.sess, s.decName = m[0].NewSession(), m[0].Name()
 		s.flow = customFlowMeta(s.conn.SNI(), s.serverHost, s.serverPort, s.clientAddr, m[0].Name())
 		s.flow.Proxy = s.proxy // a custom protocol tunnelled through a CONNECT proxy
 		// Time the connection from the packet that opened it, falling back to wall-clock
@@ -646,7 +648,7 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 		if !s.flowEmitted {
 			s.lt.onFlow(s.flow, true)
 			s.flowEmitted = true
-			log.Printf("live decode: %s first frame on %s: %s (%d bytes)", s.flow.Protocol, s.conn.SNI(), msg.Opcode, len(msg.Payload))
+			log.Printf("live decode: %s first frame on %s (%d bytes)", s.flow.Protocol, s.conn.SNI(), len(msg.Payload))
 		}
 		s.flow.WsMessageCount++
 		s.lt.onMsg(&WsMessage{
@@ -654,7 +656,7 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 			FlowID:       s.flow.ID,
 			TSUnixMicros: tsMicros(s.curTS),
 			FromClient:   msg.FromClient,
-			Opcode:       msg.Opcode,
+			Opcode:       s.decName,
 			Payload:      msg.Payload,
 			Metadata:     msg.Fields,
 		})
