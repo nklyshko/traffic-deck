@@ -19,6 +19,10 @@ import uuid
 import grpc
 from mitmproxy import ctx, http, tcp
 
+from mitmproxy.proxy import layer as proxy_layer
+
+from capture_mitmproxy.socks_upstream import looks_like_socks5, SocksUpstreamLayer
+
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
@@ -26,7 +30,6 @@ from capture_sdk.proto import ingest_pb2_grpc as ig
 # Bound each push so a slow/unreachable gateway can't wedge a hook — and, importantly,
 # can't block mitmproxy's shutdown on the first Ctrl+C.
 PUSH_TIMEOUT = 5.0
-
 
 def _s(v) -> str:
     return v.decode("utf-8", "replace") if isinstance(v, (bytes, bytearray)) else str(v)
@@ -55,6 +58,26 @@ def _content(msg) -> bytes:
 def _is_ws_upgrade(resp) -> bool:
     return bool(resp and resp.status_code == 101 and
                 resp.headers.get("upgrade", "").lower() == "websocket")
+
+
+def _socks_proxy(flow: http.HTTPFlow) -> cp.Proxy | None:
+    """Extract SOCKS5 proxy metadata stashed by SocksUpstreamLayer, if present."""
+    # SocksUpstreamLayer stashes the same dict on both the server and the client
+    # connection. The server is the natural place, but mitmproxy's HTTP connection pool
+    # can hand the inner request a *different* Server than the one the layer stamped
+    # (it re-keys connections and may build a fresh Server for the stream), which drops
+    # the attribute. The client connection is the stable anchor — the pool never swaps
+    # it — so fall back to it. flow.client_conn is the SocksUpstreamLayer's context.client.
+    info = (getattr(flow.server_conn, "_socks_proxy", None)
+            or getattr(flow.client_conn, "_socks_proxy", None))
+    if not info:
+        return None
+    return cp.Proxy(
+        addr=info.get("addr", ""),
+        type=info.get("type", "socks"),
+        username=info.get("username", ""),
+        password=info.get("password", ""),
+    )
 
 
 def build_flow(flow: http.HTTPFlow) -> cp.Flow:
@@ -101,6 +124,12 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     # flow.metadata; we pass it through verbatim for the viewer to display.
     for k, v in (flow.metadata or {}).items():
         pf.metadata[_s(k)] = _s(v)
+
+    # Attach proxy metadata when the flow rode a SOCKS5 tunnel intercepted by
+    # SocksUpstreamLayer (set on the flow's server connection context).
+    proxy = _socks_proxy(flow)
+    if proxy:
+        pf.proxy.CopyFrom(proxy)
 
     # Record why a request failed (connection reset, timeout, TLS/upstream error, …) so
     # the viewer can explain a flow with no response — mitmproxy sets flow.error on the
@@ -164,6 +193,8 @@ class GatewayPusher:
         self._channel: grpc.aio.Channel | None = None
         self._stub: ig.IngestServiceStub | None = None
         self.session_id: str | None = None
+        # Track TCP flow start timestamps so tcp_end can compute duration.
+        self._tcp_started: dict[str, float] = {}
 
     async def running(self) -> None:
         if self.session_id is not None:
@@ -210,6 +241,7 @@ class GatewayPusher:
     async def tcp_start(self, flow: tcp.TCPFlow) -> None:
         # Raw (non-HTTP) TCP connection: push the synthetic connection flow up front so its
         # byte-stream messages have a parent.
+        self._tcp_started[flow.id] = flow.timestamp_start or 0
         await self._send(flows=[build_tcp_flow(flow)])
 
     async def tcp_message(self, flow: tcp.TCPFlow) -> None:
@@ -217,6 +249,62 @@ class GatewayPusher:
             return
         m = flow.messages[-1]
         await self._send(messages=[_message(flow.id, m.from_client, "binary", m.content, m.timestamp)])
+
+    async def tcp_end(self, flow: tcp.TCPFlow) -> None:
+        # The connection closed — re-push the flow with a duration so the viewer stops
+        # the live stopwatch and marks it as done.
+        await self._close_tcp_flow(flow)
+
+    async def tcp_error(self, flow: tcp.TCPFlow) -> None:
+        if flow.error and flow.error.msg:
+            ctx.log.info(f"tcp error on {flow.id}: {flow.error.msg}")
+        await self._close_tcp_flow(flow)
+
+    async def websocket_end(self, flow: http.HTTPFlow) -> None:
+        # WebSocket closed — re-push the parent flow so the viewer reflects the final state.
+        if flow.websocket:
+            await self._send(flows=[build_flow(flow)])
+
+    async def _close_tcp_flow(self, flow: tcp.TCPFlow) -> None:
+        start = self._tcp_started.pop(flow.id, None)
+        pf = build_tcp_flow(flow)
+        if start:
+            import time
+            pf.duration_micros = max(int((time.time() - start) * 1_000_000), 0)
+        if flow.error and flow.error.msg:
+            pf.error = _s(flow.error.msg)
+        await self._send(flows=[pf])
+
+    def tls_clienthello(self, data) -> None:
+        # For a SOCKS-intercepted connection the upstream socket is an already-open tunnel
+        # (SocksUpstreamLayer created a ServerTLSLayer → ClientTLSLayer stack over it).
+        # Force mitmproxy to establish server TLS *first*, over that tunnel, before
+        # replying to the client handshake.  Otherwise — with the default connection
+        # strategy — the client side is decrypted but the request is forwarded upstream in
+        # cleartext, and the HTTPS server answers "Client sent an HTTP request to an HTTPS
+        # server".  This runs after the core tlsconfig hook (user scripts load last), so it
+        # overrides tlsconfig's connection_strategy-derived default.
+        if any(isinstance(layer, SocksUpstreamLayer) for layer in data.context.layers):
+            data.establish_server_tls_first = True
+
+    def next_layer(self, nextlayer: proxy_layer.NextLayer) -> None:
+        # Detect a SOCKS5 greeting in the first client bytes after a CONNECT tunnel is
+        # established (proxy-chain mode: social-parser → mitmproxy → SOCKS5 proxy → target).
+        # Without this, mitmproxy treats the SOCKS5 + inner TLS as opaque TCP and never
+        # intercepts the inner connection.  By inserting SocksUpstreamLayer, the SOCKS5
+        # handshake is relayed transparently, the real target is extracted, and mitmproxy's
+        # own TLS layers intercept the inner connection — so the addon sees normal decoded
+        # HTTP/WebSocket flows with the real authority (e.g. ws-api.oneme.ru).
+        #
+        # The built-in NextLayer addon runs before user scripts (core addons register
+        # first), so it has already picked TCPLayer for the SOCKS5 greeting (rawtcp=True +
+        # non-HTTP first bytes).  We override that fallback — but only TCPLayer, never a
+        # TLS/HTTP layer that a legitimate protocol sniff correctly identified.
+        from mitmproxy.proxy.layers import tcp as tcp_layer
+        if nextlayer.layer and not isinstance(nextlayer.layer, tcp_layer.TCPLayer):
+            return  # a non-TCP layer was already chosen — don't clobber it
+        if looks_like_socks5(nextlayer.data_client()):
+            nextlayer.layer = SocksUpstreamLayer(nextlayer.context)
 
     async def _send(self, flows=None, messages=None) -> None:
         if self._stub is None or self.session_id is None:

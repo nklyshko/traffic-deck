@@ -30,6 +30,7 @@ from capture_sdk.state import Store
 # --mode still accepts any mitmproxy mode (transparent, local, ...) for power users.
 _MODE_CHOICES = [
     ("Regular — set the device/app HTTP(S) proxy to this host", "regular"),
+    ("SOCKS5 — clients connect via SOCKS5 (e.g. proxy-chain front proxy)", "socks5"),
     ("WireGuard — device connects as a WireGuard peer (no proxy config)", "wireguard"),
 ]
 
