@@ -369,6 +369,17 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 		JA4:              pf.GetJa4(),
 		TLSClientHello:   pf.GetTlsClientHello(),
 	}
+	// Proxy metadata a source stamped (e.g. mitmproxy's SocksUpstreamLayer): carry it
+	// across so the viewer can show which proxy a tunnelled flow rode. Unlike Websocket,
+	// nothing on the store side re-derives this, so a drop here loses it for good.
+	if p := pf.GetProxy(); p != nil {
+		df.Proxy = &decode.FlowProxy{
+			Addr:     p.GetAddr(),
+			Type:     p.GetType(),
+			Username: p.GetUsername(),
+			Password: p.GetPassword(),
+		}
+	}
 	for _, h := range pf.GetRequestHeaders() {
 		df.RequestHeaders = append(df.RequestHeaders, decode.Header{Name: h.GetName(), Value: h.GetValue()})
 	}

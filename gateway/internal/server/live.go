@@ -476,6 +476,18 @@ func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
 		return
 	}
 	_, existed := ls.flows[pf.Id]
+	if old := ls.flows[pf.Id]; old != nil {
+		// A pushed flow is re-sent whole as it progresses (mitmproxy re-pushes on
+		// response and again on websocket_end), and build_flow carries no
+		// WsMessageCount — the pushed path accumulates it here from frames (see
+		// publishMessage). Without this, the websocket_end re-push resets the live ⇅
+		// count to zero. Carry the accumulated count/flag forward on any re-publish;
+		// for the native decode path the count only grows, so max() is a no-op there.
+		if old.WsMessageCount > pf.WsMessageCount {
+			pf.WsMessageCount = old.WsMessageCount
+		}
+		pf.Websocket = pf.Websocket || old.Websocket
+	}
 	ls.flows[pf.Id] = pf
 	ls.markDirtyLocked(pf.Id)
 	var ev *trafficv1.FlowEvent
