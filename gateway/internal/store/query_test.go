@@ -159,6 +159,42 @@ func TestQueryFlowsLastIsEndOfList(t *testing.T) {
 	}
 }
 
+// TestQueryFlowsExactlyFullPageHasNoPhantomNext: a page that ends exactly on the last row
+// of the list must not offer a Next. The scan already runs past the limit to count matches,
+// so it knows there is nothing more — leaving a cursor there steps the viewer onto an empty
+// "phantom" page, which is what ↓ on the last row used to do.
+func TestQueryFlowsExactlyFullPageHasNoPhantomNext(t *testing.T) {
+	ctx := context.Background()
+	st, sid := seedQuerySession(t, 10) // ids f-000..f-009
+	defer st.Close()
+
+	// First page holds five: five remain after it, so a Next is owed.
+	first, err := st.QueryFlows(ctx, sid, FlowQuery{Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(first); len(got) != 5 || got[4] != "f-004" {
+		t.Fatalf("first page = %v, want f-000..f-004", got)
+	}
+	if first.Next == nil {
+		t.Fatal("first of two full pages must offer a Next")
+	}
+
+	// Second page holds the last five exactly. There is nothing beyond it, so despite being
+	// full it must offer no Next.
+	second, err := st.QueryFlows(ctx, sid, FlowQuery{Limit: 5, After: first.Next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(second); len(got) != 5 || got[4] != "f-009" {
+		t.Fatalf("second page = %v, want f-005..f-009", got)
+	}
+	if second.Next != nil {
+		t.Fatalf("Next = %v, want nil — an exactly-full page at the end has no next page",
+			second.Next)
+	}
+}
+
 func TestQueryFlowsBodyTerm(t *testing.T) {
 	ctx := context.Background()
 	st, sid := seedQuerySession(t, 30)

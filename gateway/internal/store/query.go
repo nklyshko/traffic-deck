@@ -113,6 +113,11 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 
 	page := &FlowPage{}
 	var ids []string
+	// Whether the scan saw a matching row past this page, in the direction it walked. It is
+	// the only thing that justifies a cursor that way: a page filled exactly to the limit
+	// with nothing after it is still the end of the list, and a cursor there would step a
+	// caller onto an empty page (the "phantom last page" a viewer scrolls into).
+	overflow := false
 	for rows.Next() {
 		if page.Scanned >= uint64(q.ScanCap) {
 			page.CountCapped = true
@@ -141,6 +146,10 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 			if len(ids) == 1 {
 				page.Prev = &Cursor{TSMicros: r.ts, FrameNumber: r.frame}
 			}
+		} else {
+			// A match beyond the page: the cursor on the last kept row leads somewhere. The
+			// scan keeps going anyway — a filtered query still has to count every match.
+			overflow = true
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -164,9 +173,11 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 	if page.Flows, err = s.hydrateFlows(ctx, sessionID, ids); err != nil {
 		return nil, err
 	}
-	if len(ids) < q.Limit {
-		// The page ran out in the direction it was walking, so there is nothing further
-		// that way; leaving a cursor would offer a step into an empty page.
+	if len(ids) < q.Limit || (!overflow && !page.CountCapped) {
+		// Nothing further in the walk direction: the page either ran out before the limit,
+		// or filled exactly to it with no matching row seen beyond. Either way a cursor that
+		// way would offer a step into an empty page. (When the scan cap cut the walk short at
+		// a full page we cannot rule out more, so the cursor stays rather than strand rows.)
 		if backwards {
 			page.Prev = nil
 		} else {
