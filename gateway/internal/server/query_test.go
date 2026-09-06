@@ -243,6 +243,56 @@ func TestQueryFlowsMergesUnflushedTail(t *testing.T) {
 	if page.GetMatched() != 2 {
 		t.Fatalf("matched = %d, want 2", page.GetMatched())
 	}
+	// The whole session fits this page, so there is nothing after it: a Next cursor here
+	// tells the viewer it is off the end of the list, and it then drops every live arrival
+	// on the floor until reopened. This is the live-view-doesn't-update bug.
+	if page.Next != nil {
+		t.Fatalf("Next = %v, want nil — the merged tail reaches the end of the list", page.Next)
+	}
+	if page.Prev != nil {
+		t.Fatalf("Prev = %v, want nil — this is the first page", page.Prev)
+	}
+}
+
+// TestQueryFlowsTailNextCursorOnlyWhenTruncated: a Next cursor is owed only when newer
+// flows were dropped to fit the page. When the merged tail fits, the page holds the end of
+// the list and must offer no Next — the viewer keys "am I at the end?" off exactly that, and
+// following live arrivals depends on it.
+func TestQueryFlowsTailNextCursorOnlyWhenTruncated(t *testing.T) {
+	ctx := context.Background()
+	st, sid := queryTestStore(t)
+	defer st.Close()
+
+	hub := newLiveHub(true)
+	ls := hub.startPassive(sid)
+	for i := 0; i < 5; i++ {
+		ls.publish(&trafficv1.Flow{
+			Id: string(rune('a' + i)), Method: "GET", Authority: "api.example.com",
+			Status: 200, TsUnixMicros: int64(i + 1), FrameNumber: uint64(i + 1),
+		}, true)
+	}
+	v := NewViewer(st, hub)
+
+	// The page holds all five: no Next.
+	page, err := v.QueryFlows(ctx, &trafficv1.QueryFlowsRequest{SessionId: sid, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.GetFlows()) != 5 || page.Next != nil || page.Prev != nil {
+		t.Fatalf("full-fit page: got %d flows, next=%v prev=%v; want 5, nil, nil",
+			len(page.GetFlows()), page.Next, page.Prev)
+	}
+
+	// A short window truncates: now there are newer flows after it, so a Next is owed and
+	// no Prev (this is still the first page).
+	page, err = v.QueryFlows(ctx, &trafficv1.QueryFlowsRequest{SessionId: sid, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.GetFlows()) != 2 || page.Next == nil || page.Prev != nil {
+		t.Fatalf("truncated first page: got %d flows, next=%v prev=%v; want 2, non-nil, nil",
+			len(page.GetFlows()), page.Next, page.Prev)
+	}
 }
 
 func TestQueryFlowsFiltersTheTailToo(t *testing.T) {
@@ -264,6 +314,59 @@ func TestQueryFlowsFiltersTheTailToo(t *testing.T) {
 	if len(page.GetFlows()) != 1 || page.GetFlows()[0].GetId() != "b" {
 		t.Fatalf("the unflushed tail must be filtered like the bundle, got %d flows",
 			len(page.GetFlows()))
+	}
+	// The filtered result fits the page, so there is nothing after it under this filter:
+	// a Next here would freeze the *filtered* live view exactly as the unfiltered one, since
+	// changing the filter re-issues this query and the pane recomputes "am I at the end?"
+	// from the cursor it returns.
+	if page.Next != nil {
+		t.Fatalf("Next = %v, want nil — the filtered page reaches the end of its matches", page.Next)
+	}
+}
+
+// TestQueryFlowsTailNextCursorHonoursFilter: the end-of-list decision is made on the
+// filtered, merged set — a full-fit filtered page offers no Next, a truncated one does —
+// so a live view with a filter folds in matching arrivals just like an unfiltered one.
+func TestQueryFlowsTailNextCursorHonoursFilter(t *testing.T) {
+	ctx := context.Background()
+	st, sid := queryTestStore(t)
+	defer st.Close()
+
+	hub := newLiveHub(true)
+	ls := hub.startPassive(sid)
+	// Ten flows alternating GET/POST: five match "~m GET".
+	for i := 0; i < 10; i++ {
+		m := "GET"
+		if i%2 == 1 {
+			m = "POST"
+		}
+		ls.publish(&trafficv1.Flow{
+			Id: string(rune('a' + i)), Method: m, Authority: "api.example.com",
+			Status: 200, TsUnixMicros: int64(i + 1), FrameNumber: uint64(i + 1),
+		}, true)
+	}
+	v := NewViewer(st, hub)
+
+	// All five matches fit: no Next, so the pane stays at the end and tails live GETs.
+	page, err := v.QueryFlows(ctx, &trafficv1.QueryFlowsRequest{
+		SessionId: sid, Filter: "~m GET", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.GetFlows()) != 5 || page.Next != nil || page.Prev != nil {
+		t.Fatalf("full-fit filtered page: got %d flows, next=%v prev=%v; want 5, nil, nil",
+			len(page.GetFlows()), page.Next, page.Prev)
+	}
+
+	// A window smaller than the match count truncates: a Next is owed toward the rest.
+	page, err = v.QueryFlows(ctx, &trafficv1.QueryFlowsRequest{
+		SessionId: sid, Filter: "~m GET", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.GetFlows()) != 2 || page.Next == nil || page.Prev != nil {
+		t.Fatalf("truncated filtered page: got %d flows, next=%v prev=%v; want 2, non-nil, nil",
+			len(page.GetFlows()), page.Next, page.Prev)
 	}
 }
 

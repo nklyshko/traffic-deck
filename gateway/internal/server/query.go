@@ -136,23 +136,39 @@ func (v *Viewer) mergeUnflushed(ctx context.Context, sid string, pred *filter.Pr
 	if limit <= 0 {
 		limit = 100
 	}
+	// Which end of the merged set had to be dropped to fit the window decides which cursor
+	// is owed: dropping from the back leaves newer flows after it (a Next), from the front
+	// leaves older flows before it (a Prev). A window that reaches an end of the list drops
+	// nothing there and must offer no cursor past it — otherwise the viewer reads "there is
+	// more that way", marks itself off-end, and quietly stops folding in live arrivals until
+	// it is reopened (ADR-0012 §5). Setting Next unconditionally here was that bug: a live
+	// session whose flows all fit one page still came back with a Next, freezing the table.
+	droppedFront, droppedBack := false, false
 	if len(all) > limit {
 		// A page taken from the end keeps its tail, everything else its head — the tail
 		// is where the newest flows are, and it is what "jump to the end" asked for.
 		if req.GetLast() || req.GetBefore() != nil {
 			all = all[len(all)-limit:]
+			droppedFront = true
 		} else {
 			all = all[:limit]
+			droppedBack = true
 		}
 	}
 	page.Flows = all
+	page.Next, page.Prev = nil, nil
 	if n := len(all); n > 0 {
-		page.Next = &trafficv1.FlowCursor{
-			TsMicros: all[n-1].GetTsUnixMicros(), FrameNumber: all[n-1].GetFrameNumber()}
-		page.Prev = &trafficv1.FlowCursor{
-			TsMicros: all[0].GetTsUnixMicros(), FrameNumber: all[0].GetFrameNumber()}
-		if req.GetAfter() == nil && req.GetBefore() == nil && !req.GetLast() {
-			page.Prev = nil
+		// Next (newer flows exist after this window): because some were dropped to fit, or
+		// because a backward page started from a later point.
+		if droppedBack || req.GetBefore() != nil {
+			page.Next = &trafficv1.FlowCursor{
+				TsMicros: all[n-1].GetTsUnixMicros(), FrameNumber: all[n-1].GetFrameNumber()}
+		}
+		// Prev (older flows exist before this window): because some were dropped to fit, or
+		// because a forward page started from an earlier point.
+		if droppedFront || req.GetAfter() != nil {
+			page.Prev = &trafficv1.FlowCursor{
+				TsMicros: all[0].GetTsUnixMicros(), FrameNumber: all[0].GetFrameNumber()}
 		}
 	}
 }
