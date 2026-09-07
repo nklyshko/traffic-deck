@@ -21,6 +21,21 @@ func h2encode(fields ...hpack.HeaderField) []byte {
 	return b.Bytes()
 }
 
+// h2encodeTableSizeUpdate encodes header fields preceded by an HPACK dynamic table size
+// update to size (RFC 7541 §6.3). The go hpack encoder only emits an update above the
+// 4096 default once its limit is raised past it, so size must exceed 4096 to be a
+// meaningful "large table" block.
+func h2encodeTableSizeUpdate(size uint32, fields ...hpack.HeaderField) []byte {
+	var b bytes.Buffer
+	enc := hpack.NewEncoder(&b)
+	enc.SetMaxDynamicTableSizeLimit(size)
+	enc.SetMaxDynamicTableSize(size)
+	for _, f := range fields {
+		_ = enc.WriteField(f)
+	}
+	return b.Bytes()
+}
+
 // feedH2 drives one h2Stream with client/server byte streams and returns the final
 // state of each emitted flow (keyed by id, last write wins), waiting for the last flow's
 // response.
@@ -282,6 +297,61 @@ func TestLiveHTTP2MultiplexedStreamsShareConnID(t *testing.T) {
 	}
 	if a, b := flows[0].H2StreamID, flows[1].H2StreamID; a != "1" || b != "3" {
 		t.Errorf("h2 stream ids = %q,%q; want 1,3", a, b)
+	}
+}
+
+// TestLiveHTTP2LargeHeaderTableSizeUpdate is the regression for browser-client responses
+// being silently dropped. A browser advertises SETTINGS_HEADER_TABLE_SIZE=65536, so the
+// server may grow its HPACK dynamic table past the 4096 default and open the response
+// header block with a dynamic table size update above 4096. A decoder pinned at the 4096
+// default rejects that update as a COMPRESSION_ERROR and the whole response direction dies
+// — the flow keeps its request but never gets a status, headers or body. The decoder must
+// accept a size update up to what the client advertised.
+func TestLiveHTTP2LargeHeaderTableSizeUpdate(t *testing.T) {
+	var cbuf bytes.Buffer
+	cbuf.WriteString(http2.ClientPreface)
+	cf := http2.NewFramer(&cbuf, nil)
+	if err := cf.WriteSettings(http2.Setting{ID: http2.SettingHeaderTableSize, Val: 65536}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cf.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1,
+		BlockFragment: h2encode(
+			hpack.HeaderField{Name: ":method", Value: "GET"},
+			hpack.HeaderField{Name: ":scheme", Value: "https"},
+			hpack.HeaderField{Name: ":authority", Value: "example.com"},
+			hpack.HeaderField{Name: ":path", Value: "/big-table"},
+		),
+		EndStream: true, EndHeaders: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var sbuf bytes.Buffer
+	sf := http2.NewFramer(&sbuf, nil)
+	if err := sf.WriteSettings(); err != nil {
+		t.Fatal(err)
+	}
+	// The response header block opens with a dynamic table size update to 8192 (> the 4096
+	// default), which a server encoding for a 64KB-table client legitimately may send.
+	if err := sf.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1,
+		BlockFragment: h2encodeTableSizeUpdate(8192,
+			hpack.HeaderField{Name: ":status", Value: "200"},
+			hpack.HeaderField{Name: "content-type", Value: "text/html"},
+		),
+		EndStream: true, EndHeaders: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	flows := feedH2(t, cbuf.Bytes(), sbuf.Bytes())
+	if len(flows) != 1 {
+		t.Fatalf("got %d flows, want 1", len(flows))
+	}
+	if flows[0].Status != 200 || flows[0].ContentType != "text/html" {
+		t.Errorf("resp: status=%d ct=%q — response direction dropped (HPACK size update > 4096 rejected)?",
+			flows[0].Status, flows[0].ContentType)
 	}
 }
 

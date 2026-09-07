@@ -22,6 +22,15 @@ import (
 
 const h2HeaderTableSize = 4096
 
+// maxHPACKDynamicTableSize is the largest dynamic table size update we accept while
+// decoding a direction's HPACK, above the 4096 default. A decoder must allow updates up
+// to the SETTINGS_HEADER_TABLE_SIZE the header *receiver* advertised; mainstream clients
+// (Chrome/Firefox/Safari) advertise 65536, so a smaller ceiling makes those responses
+// fail to decode. The actual table is still bounded by what the real endpoints
+// negotiated (the encoder only grows it via a size update the receiver permitted), so
+// this ceiling caps memory without desyncing the table.
+const maxHPACKDynamicTableSize = 65536
+
 // h2flow tracks one HTTP/2 stream's Flow plus the decode state the wire spreads across
 // frames (added-yet, response gzip, accumulated bodies).
 type h2flow struct {
@@ -100,6 +109,17 @@ func (h *h2Stream) read(src *byteStream, fromClient bool) {
 	}
 	fr := http2.NewFramer(io.Discard, src)
 	fr.ReadMetaHeaders = hpack.NewDecoder(h2HeaderTableSize, nil)
+	// The HPACK dynamic table starts at the 4096-byte protocol default, but the peer
+	// encoding these headers may grow it — via an HPACK dynamic table size update — up to
+	// the SETTINGS_HEADER_TABLE_SIZE the *receiver* advertised. Browsers advertise 65536,
+	// so a server encoding a response for a browser client emits a size update above 4096.
+	// hpack.NewDecoder pins the allowed max to its 4096 argument and rejects any larger
+	// size update as a COMPRESSION_ERROR, which kills the whole direction's decode (no
+	// status/headers/body). Raise only the *allowed* ceiling (not the current size, which
+	// stays at the 4096 default and tracks the encoder's size updates) so a legitimate
+	// browser-sized table is accepted while the table still can't grow past what the real
+	// endpoints negotiated.
+	fr.ReadMetaHeaders.SetAllowedMaxDynamicTableSize(maxHPACKDynamicTableSize)
 	fr.MaxHeaderListSize = 1 << 20
 	fr.SetMaxReadFrameSize(1 << 20)
 	for {
