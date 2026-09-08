@@ -1,18 +1,18 @@
-"""Cross-platform (Linux + macOS) discovery of Chrome, the capture interface,
-and dumpcap. Each can be overridden by an env var.
+"""Cross-platform (Linux + macOS) discovery of the Chrome binaries on this host and the
+profiles each of them stores. The generic parts — browser discovery mechanics, snap
+confinement, dumpcap and the capture interface — live in `capture_sdk`.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
-import subprocess
 import sys
 
+from capture_sdk import browser, snap
+
 # macOS browsers are .app bundles, not on PATH — each entry is the executable path
-# inside the bundle, searched under every dir in _MAC_APP_DIRS.
+# inside the bundle, searched under every dir in browser.APP_DIRS.
 _MAC_CHROME_BUNDLES = [
     "Google Chrome.app/Contents/MacOS/Google Chrome",
     "Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
@@ -24,9 +24,6 @@ _MAC_CHROME_BUNDLES = [
     "Vivaldi.app/Contents/MacOS/Vivaldi",
     "Arc.app/Contents/MacOS/Arc",
 ]
-_MAC_APP_DIRS = ["/Applications", os.path.expanduser("~/Applications")]
-_MAC_DUMPCAP = [d + "/Wireshark.app/Contents/MacOS/dumpcap" for d in _MAC_APP_DIRS]
-_LINUX_DUMPCAP = ["/usr/bin/dumpcap", "/usr/sbin/dumpcap", "/usr/local/bin/dumpcap", "/sbin/dumpcap"]
 _CHROME_NAMES = (
     "google-chrome", "google-chrome-stable", "google-chrome-beta", "google-chrome-canary",
     "chromium", "chromium-browser", "chrome", "brave-browser", "microsoft-edge",
@@ -40,68 +37,14 @@ def chrome_binaries() -> list[str]:
     On macOS this scans the common .app bundles (Chrome + channels, Chromium, Brave,
     Edge, Vivaldi, Arc) under /Applications and ~/Applications; elsewhere it looks up
     the known binary names on PATH."""
-    found: list[str] = []
-
-    def add(p: str | None) -> None:
-        if p and p not in found and os.path.exists(p):
-            found.append(p)
-
-    add(os.environ.get("CHROME_BIN"))
-    if sys.platform == "darwin":
-        for base in _MAC_APP_DIRS:
-            for rel in _MAC_CHROME_BUNDLES:
-                add(os.path.join(base, rel))
-    else:
-        for name in _CHROME_NAMES:
-            add(shutil.which(name))
-    return found
+    return browser.discover(env_var="CHROME_BIN", mac_bundles=_MAC_CHROME_BUNDLES,
+                            unix_names=_CHROME_NAMES)
 
 
 def chrome_binary() -> str:
     if bins := chrome_binaries():
         return bins[0]
     raise RuntimeError("Chrome/Chromium not found; set CHROME_BIN")
-
-
-def snap_name(binary: str) -> str | None:
-    """The snap name if `binary` is a snap-published browser, else None.
-
-    Snap confinement gives the browser a private /tmp mount namespace and blocks writes
-    outside a small allowed set — so an SSLKEYLOGFILE placed in the host's /tmp is either
-    denied or written to the snap's *private* /tmp, invisible to us, and the capture
-    decodes nothing. Callers must instead place the keylog and any tool-managed profile
-    under [snap_user_common][capture_chrome.platform.snap_user_common].
-
-    Detected two ways: the ``/snap/bin/<name>`` launcher (a symlink to ``/usr/bin/snap``),
-    and Ubuntu's transitional ``/usr/bin/chromium-browser`` shim (a shell script ending in
-    ``exec /snap/bin/<name>``). Always None on macOS (no snaps)."""
-    if sys.platform == "darwin":
-        return None
-    real = os.path.realpath(binary)
-    if real == "/usr/bin/snap":
-        # /snap/bin/<name> is a symlink to the snap launcher; the launcher name is the snap.
-        return os.path.basename(binary)
-    if real.startswith("/snap/"):
-        # A path inside a mounted snap, e.g. /snap/<name>/current/… — the 2nd part names it.
-        parts = real.split("/")
-        return parts[2] if len(parts) > 2 else os.path.basename(binary)
-    try:
-        with open(binary, encoding="utf-8", errors="replace") as f:
-            head = f.read(8192)
-    except OSError:
-        return None
-    m = re.search(r"/snap/bin/(\S+)", head)
-    return m.group(1) if m else None
-
-
-def snap_user_common(name: str) -> str:
-    """A snap's writable, non-namespaced ``$SNAP_USER_COMMON`` dir (``~/snap/<name>/common``).
-
-    Unlike /tmp (which confinement replaces with a private mount) this is the same real
-    path both inside the sandbox and on the host, so a keylog written here by the confined
-    browser is visible to the capture tool. It also survives snap refreshes (``common`` is
-    not tied to a revision, unlike ``current``)."""
-    return os.path.expanduser(os.path.join("~", "snap", name, "common"))
 
 
 # A Chrome binary keeps all its profiles under one user-data-dir, named by channel.
@@ -135,8 +78,8 @@ def chrome_user_data_dir(binary: str) -> str | None:
     isn't a known channel or the directory doesn't exist."""
     # A snap browser ignores ~/.config and keeps its profiles under its own writable
     # $SNAP_USER_COMMON (e.g. ~/snap/chromium/common/chromium), so look there instead.
-    if snap := snap_name(binary):
-        path = os.path.join(snap_user_common(snap), snap)
+    if snap_name := snap.name(binary):
+        path = os.path.join(snap.user_common(snap_name), snap_name)
         return path if os.path.isdir(path) else None
     name = os.path.basename(binary)
     if sys.platform == "darwin":
@@ -185,40 +128,3 @@ def chrome_profiles(binary: str) -> list[tuple[str, str, str]]:
     except (OSError, ValueError):
         return []
     return [(udd, dirn, label) for dirn, label in parse_chrome_profiles(state)]
-
-
-def dumpcap_binary() -> str:
-    if env := os.environ.get("DUMPCAP_BIN"):
-        return env
-    if p := shutil.which("dumpcap"):
-        return p
-    # shutil.which() only returns paths the caller can execute; dumpcap is commonly
-    # root:wireshark mode 0750, so it's skipped when the `wireshark` group isn't active
-    # in this process. Fall back to known install paths by existence — the launcher
-    # re-execs under `sg wireshark` so the binary is runnable by the time it spawns.
-    paths = _MAC_DUMPCAP if sys.platform == "darwin" else _LINUX_DUMPCAP
-    for p in paths:
-        if os.path.exists(p):
-            return p
-    raise RuntimeError("dumpcap not found (install Wireshark); set DUMPCAP_BIN")
-
-
-def default_interface() -> str:
-    if env := os.environ.get("CAPTURE_IFACE"):
-        return env
-    if sys.platform == "darwin":
-        out = subprocess.run(
-            ["route", "-n", "get", "default"], capture_output=True, text=True
-        ).stdout
-        for line in out.splitlines():
-            line = line.strip()
-            if line.startswith("interface:"):
-                return line.split(":", 1)[1].strip()
-    else:
-        out = subprocess.run(
-            ["ip", "route", "show", "default"], capture_output=True, text=True
-        ).stdout
-        parts = out.split()
-        if "dev" in parts:
-            return parts[parts.index("dev") + 1]
-    raise RuntimeError("could not detect default interface; set CAPTURE_IFACE")

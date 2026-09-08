@@ -12,14 +12,10 @@ precondition ADR-0010 calls out.
 from __future__ import annotations
 
 import os
-import tempfile
 
 from capture_chrome import platform
-from capture_sdk import paths
-
-# Returned to mean "launch with no --user-data-dir", so the chosen browser uses its own
-# built-in default profile (each binary has its own path).
-BUILTIN_PROFILE = object()
+from capture_sdk import browser, paths
+from capture_sdk.browser import BUILTIN_PROFILE  # noqa: F401 — re-exported for this tool
 
 # Named persistent custom profiles live here so a capture's logins/state survive across
 # runs; the user picks an existing one or creates a new named one.
@@ -28,23 +24,10 @@ _PROFILES_DIR = str(paths.home() / "chrome-profiles")
 _LEGACY_PROFILES_DIR = os.path.expanduser("~/.capture-chrome/profiles")
 
 
-def snap_writable_base(chrome: str) -> str | None:
-    """The snap-writable dir tool-managed files (keylog, throwaway/persistent profiles)
-    must live in for a snap-confined browser — snap's private /tmp and hidden-file rules
-    otherwise swallow them so nothing decodes. None for an unconfined browser. Created on
-    demand."""
-    snap = platform.snap_name(chrome)
-    if not snap:
-        return None
-    base = platform.snap_user_common(snap)
-    os.makedirs(base, exist_ok=True)
-    return base
-
-
 def temp_profile(chrome: str) -> str:
     """A fresh throwaway --user-data-dir: under the snap's writable area for a snap browser
     (confinement blocks /tmp), an ordinary tempdir otherwise."""
-    return tempfile.mkdtemp(prefix="chrome-capture-", dir=snap_writable_base(chrome))
+    return browser.temp_profile(chrome, "chrome-capture-")
 
 
 def profiles_dir(chrome: str) -> str:
@@ -52,31 +35,26 @@ def profiles_dir(chrome: str) -> str:
     ~/.capture-chrome/profiles) into it on first use. For a snap browser this lives under
     the snap's own writable area instead of the hidden ~/.traffic-deck (which confinement
     blocks), so persistent profiles are separate per snap and not migrated."""
-    if base := snap_writable_base(chrome):
-        path = os.path.join(base, "td-chrome-profiles")
-        os.makedirs(path, exist_ok=True)
+    path = browser.profiles_root(chrome, unconfined=_PROFILES_DIR, snap_dir="td-chrome-profiles")
+    if path != _PROFILES_DIR:  # a snap's own area — nothing to migrate into it
         return path
-    os.makedirs(_PROFILES_DIR, exist_ok=True)
     if os.path.isdir(_LEGACY_PROFILES_DIR):
         for name in os.listdir(_LEGACY_PROFILES_DIR):
             src = os.path.join(_LEGACY_PROFILES_DIR, name)
             dst = os.path.join(_PROFILES_DIR, name)
             if not os.path.exists(dst):
                 os.rename(src, dst)
-    return _PROFILES_DIR
+    return path
 
 
 def saved_profiles(chrome: str) -> list[str]:
     """Names of the saved persistent profiles for a binary (subdirs of profiles_dir)."""
-    d = profiles_dir(chrome)
-    return sorted(n for n in os.listdir(d) if os.path.isdir(os.path.join(d, n)))
+    return browser.saved_profiles(profiles_dir(chrome))
 
 
 def persistent_path(chrome: str, name: str) -> str:
     """The --user-data-dir for a saved persistent profile `name`, created on demand."""
-    path = os.path.join(profiles_dir(chrome), name or "default")
-    os.makedirs(path, exist_ok=True)
-    return path
+    return browser.persistent_path(profiles_dir(chrome), name)
 
 
 def resolve_existing(chrome: str, dir_name: str) -> tuple[str, str]:

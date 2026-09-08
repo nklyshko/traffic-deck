@@ -33,7 +33,7 @@ import sys
 from capture_chrome import platform, profiles
 from capture_chrome.capture import ChromeCapture, profile_desc
 from capture_chrome.profiles import BUILTIN_PROFILE
-from capture_sdk import prompt, terminal
+from capture_sdk import dumpcap, prompt, snap, terminal
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.state import Store
 
@@ -182,14 +182,13 @@ def _capture(argv) -> None:
     else:
         profile = profiles.temp_profile(chrome)
 
-    iface = args.iface or platform.default_interface()
+    iface = args.iface or dumpcap.default_interface()
     # A snap-confined browser has a private /tmp and can't write outside its own writable
     # area, so the keylog (and any tool-managed profile) must go under ~/snap/<name>/common
     # or the TLS keys never reach us and nothing decodes.
-    snap = platform.snap_name(chrome)
-    if snap:
-        print(f"note: {os.path.basename(chrome)} is the '{snap}' snap — keeping keylog/profile "
-              f"under ~/snap/{snap}/common so confinement doesn't swallow the TLS keys",
+    if snap_name := snap.name(chrome):
+        print(f"note: {os.path.basename(chrome)} is the '{snap_name}' snap — keeping keylog/profile "
+              f"under ~/snap/{snap_name}/common so confinement doesn't swallow the TLS keys",
               flush=True)
 
     cap = ChromeCapture(

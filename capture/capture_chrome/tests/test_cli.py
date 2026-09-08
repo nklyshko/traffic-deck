@@ -3,7 +3,16 @@ capture_chrome.profiles, shared by the interactive picker and serve-mode Describ
 
 from __future__ import annotations
 
+import tempfile
+
 from capture_chrome import profiles
+
+
+def snap_as(monkeypatch, name, common=None):
+    """Make every binary look like (or not like) a snap, as capture_sdk.snap sees it."""
+    monkeypatch.setattr(profiles.browser.snap, "name", lambda _b: name)
+    if common is not None:
+        monkeypatch.setattr(profiles.browser.snap, "user_common", lambda _n: common)
 
 
 def test_profiles_dir_migrates_legacy(monkeypatch, tmp_path):
@@ -42,8 +51,7 @@ def test_profiles_dir_snap_uses_snap_common(monkeypatch, tmp_path):
     legacy = tmp_path / "legacy"
     (legacy / "work").mkdir(parents=True)
     monkeypatch.setattr(profiles, "_LEGACY_PROFILES_DIR", str(legacy))
-    monkeypatch.setattr(profiles.platform, "snap_name", lambda _b: "chromium")
-    monkeypatch.setattr(profiles.platform, "snap_user_common", lambda _n: str(tmp_path / "common"))
+    snap_as(monkeypatch, "chromium", str(tmp_path / "common"))
 
     got = profiles.profiles_dir("/snap/bin/chromium")
     assert got == str(tmp_path / "common" / "td-chrome-profiles")
@@ -52,16 +60,15 @@ def test_profiles_dir_snap_uses_snap_common(monkeypatch, tmp_path):
 
 
 def test_temp_profile_snap_under_common(monkeypatch, tmp_path):
-    monkeypatch.setattr(profiles.platform, "snap_name", lambda _b: "chromium")
-    monkeypatch.setattr(profiles.platform, "snap_user_common", lambda _n: str(tmp_path / "common"))
+    snap_as(monkeypatch, "chromium", str(tmp_path / "common"))
     prof = profiles.temp_profile("/snap/bin/chromium")
     assert prof.startswith(str(tmp_path / "common"))
 
 
 def test_temp_profile_unconfined_uses_tmp(monkeypatch):
-    monkeypatch.setattr(profiles.platform, "snap_name", lambda _b: None)
+    snap_as(monkeypatch, None)
     prof = profiles.temp_profile("/usr/bin/google-chrome")
-    assert prof.startswith(profiles.tempfile.gettempdir())
+    assert prof.startswith(tempfile.gettempdir())
 
 
 def test_saved_profiles_lists_subdirs(monkeypatch, tmp_path):

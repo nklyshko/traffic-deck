@@ -41,40 +41,11 @@ def test_chrome_user_data_dir_unknown_binary():
     assert platform.chrome_user_data_dir("/usr/bin/not-a-browser") is None
 
 
-def test_snap_name_shim_script(tmp_path, monkeypatch):
-    # Ubuntu's transitional /usr/bin/chromium-browser shim: a shell script that execs the
-    # snap launcher. Detected by the /snap/bin/<name> reference regardless of the filename.
-    monkeypatch.setattr(platform.sys, "platform", "linux")
-    shim = tmp_path / "chromium-browser"
-    shim.write_text("#!/bin/sh\n# ...\nexec /snap/bin/chromium \"$@\"\n")
-    assert platform.snap_name(str(shim)) == "chromium"
-
-
-def test_snap_name_non_snap_binary(tmp_path, monkeypatch):
-    # A plain (unconfined) executable has no snap reference → None (uses /tmp as usual).
-    monkeypatch.setattr(platform.sys, "platform", "linux")
-    exe = tmp_path / "google-chrome"
-    exe.write_bytes(b"\x7fELF not a snap")
-    assert platform.snap_name(str(exe)) is None
-    # A missing binary is simply not a snap, not an error.
-    assert platform.snap_name(str(tmp_path / "nope")) is None
-
-
-def test_snap_name_darwin_never_snap(tmp_path, monkeypatch):
-    monkeypatch.setattr(platform.sys, "platform", "darwin")
-    shim = tmp_path / "chromium-browser"
-    shim.write_text("exec /snap/bin/chromium\n")
-    assert platform.snap_name(str(shim)) is None
-
-
-def test_snap_user_common():
-    assert platform.snap_user_common("chromium").endswith("/snap/chromium/common")
-
-
 def test_chrome_user_data_dir_snap(tmp_path, monkeypatch):
     # A snap browser keeps its profiles under $SNAP_USER_COMMON/<name>, not ~/.config.
-    monkeypatch.setattr(platform, "snap_name", lambda _b: "chromium")
-    monkeypatch.setattr(platform, "snap_user_common", lambda _n: str(tmp_path))
+    # (Snap *detection* itself is capture_sdk's — see capture_sdk/tests/test_snap.py.)
+    monkeypatch.setattr(platform.snap, "name", lambda _b: "chromium")
+    monkeypatch.setattr(platform.snap, "user_common", lambda _n: str(tmp_path))
     assert platform.chrome_user_data_dir("/snap/bin/chromium") is None  # dir absent yet
     (tmp_path / "chromium").mkdir()
     assert platform.chrome_user_data_dir("/snap/bin/chromium") == str(tmp_path / "chromium")
