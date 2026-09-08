@@ -33,7 +33,16 @@ takes effect on the next flow without a restart.
 > **On versions:** JA4 is deliberately stable across browser releases — one JA4 spans many
 > versions (Chrome 120–131 all share `…_02713d6af862`), and FoxIO's ja4db doesn't version
 > Chrome at all. So builtin rows carry a version *range*, and the `ja4_b` family rows
-> recognize **any** version — including ones with no exact row, like Chrome 139/144 — as
-> `Chrome`. To pin a version you care about, capture it once and add its exact `ja4` as a
-> user row. The seed set is real (computed by this repo's parser over uTLS ClientHellos +
-> FoxIO ja4db + local captures); grow it from <https://ja4db.com>.
+> recognize **any** version — including ones with no exact row, like Chrome 139/144. To pin
+> a version you care about, capture it once and add its exact `ja4` as a user row. The seed
+> set is real (computed by this repo's parser over uTLS ClientHellos + FoxIO ja4db + local
+> captures); grow it from <https://ja4db.com>.
+
+> **A cipher list no longer names an engine:** Firefox 155 presents Chromium's TLS-1.3
+> cipher list (`8daaf6152771`) and Chromium's QUIC one (`55b375c5d22e`), and it shares the
+> whole `a_b` prefix with Chrome 150 — only the trailing extension hash differs. So those
+> two `ja4_b` rows are named `Chrome/Chromium or Firefox`, because that is all a
+> cipher-list match can honestly say, and telling the two engines apart needs an exact
+> `ja4` row — a `ja4_pre` cannot do it. Worth remembering when you add rows of your own:
+> a `ja4_b` row claims every client that shares a cipher list, which may be more than the
+> one you captured.

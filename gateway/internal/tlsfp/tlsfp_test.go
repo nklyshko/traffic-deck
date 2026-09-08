@@ -3,6 +3,7 @@ package tlsfp
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,22 @@ const (
 	firefoxPre       = "t13d1715h2_5b57614c22b0_999999999999" // Firefox a_b, novel c
 	unknownJA4       = "t13d9999h2_ffffffffffff_ffffffffffff"
 )
+
+// Firefox 155, from a local verified capture: Gecko User-Agent, Mozilla-owned host, and
+// decrypted with Firefox's own SSLKEYLOGFILE, so the client is not in question. Note
+// ff155H2 shares ja4_a AND ja4_b with chrome150Overlap — the whole a_b prefix — which is
+// why only an exact row can separate the two engines.
+const (
+	ff155H2          = "t13d1517h2_8daaf6152771_3cbfd9057e0d" // TLS 1.3 + HTTP/2
+	ff155H1          = "t13d1516h1_8daaf6152771_e6d2851837fd" // TLS 1.3, h1 ALPN
+	ff155TLS12       = "t12d1211h2_d34a8e72043a_810e2f290f6f" // TLS 1.2 fallback
+	ff155QUIC        = "q13d0315h3_55b375c5d22e_dc5437974b47" // QUIC + HTTP/3
+	chrome150Overlap = "t13d1517h2_8daaf6152771_a87ad97598a9" // Chrome 150, same a_b as ff155H2
+)
+
+// The name the cipher-family rows carry. Modern Firefox adopted Chromium's cipher lists, so
+// a bare cipher-hash match can no longer name one engine and the row says so.
+const chromiumFamilyName = "Chrome/Chromium or Firefox"
 
 // Chrome 133, YaBrowser Android and the Yamarket WebView all present this one JA4 and are
 // only distinguishable by JA3 — the case combined ja4+ja3 rows exist for. Verified captures.
@@ -45,7 +62,7 @@ func TestBuiltinClassify(t *testing.T) {
 		{"chrome 150 exact", Fingerprint{JA4: chromeExact}, "Chrome 150", true},
 		{"chrome 120-131 exact", Fingerprint{JA4: chrome120}, "Chrome 120-131", true},
 		{"chrome 133 exact", Fingerprint{JA4: sharedJA4}, "Chrome 133", true},
-		{"chrome future/family", Fingerprint{JA4: chromeFamilyOnly}, "Chrome/Chromium", true},
+		{"future/family: names both engines", Fingerprint{JA4: chromeFamilyOnly}, "Chrome/Chromium or Firefox", true},
 		{"okhttp exact", Fingerprint{JA4: okhttpJA4}, "OkHttp (Android)", true},
 		{"firefox prefix", Fingerprint{JA4: firefoxPre}, "Firefox", true},
 		{"unknown", Fingerprint{JA4: unknownJA4}, "", false},
@@ -53,7 +70,7 @@ func TestBuiltinClassify(t *testing.T) {
 		// A JA3 on the fingerprint must not disturb a single-key ja4 row: the row simply
 		// doesn't constrain JA3, so it still matches and still wins.
 		{"exact ja4 with a ja3 present", Fingerprint{JA4: chromeExact, JA3: yamarketJA3}, "Chrome 150", true},
-		{"family ja4 with a ja3 present", Fingerprint{JA4: chromeFamilyOnly, JA3: yamarketJA3}, "Chrome/Chromium", true},
+		{"family ja4 with a ja3 present", Fingerprint{JA4: chromeFamilyOnly, JA3: yamarketJA3}, "Chrome/Chromium or Firefox", true},
 		// No builtin row carries a ja3 key, so a JA3-only fingerprint matches nothing.
 		{"ja3 only", Fingerprint{JA3: chrome133JA3}, "", false},
 	}
@@ -93,7 +110,7 @@ func TestSpecificityOrdering(t *testing.T) {
 	// Each of these also matches the ja4_b Chromium family row; the exact row must win.
 	for _, ja4 := range []string{chromeExact, chrome120, sharedJA4} {
 		m, _ := reg.Classify(Fingerprint{JA4: ja4})
-		if m.Name == "Chrome/Chromium" {
+		if m.Name == chromiumFamilyName {
 			t.Fatalf("%s: family row beat the exact row (got %q)", ja4, m.String())
 		}
 		if m.Version == "" {
@@ -163,7 +180,7 @@ func TestUserDirOverrides(t *testing.T) {
 	}
 	// Same fingerprint, different SNI → falls back to the builtin family row.
 	fp.SNI = "other.test"
-	if m, _ := reg.Classify(fp); m.Name != "Chrome/Chromium" {
+	if m, _ := reg.Classify(fp); m.Name != chromiumFamilyName {
 		t.Fatalf("sni fallback failed: got %q", m.Name)
 	}
 }
@@ -258,5 +275,83 @@ func TestBareArray(t *testing.T) {
 	}
 	if m, _ := reg.Classify(Fingerprint{JA4: unknownJA4}); m.Name != "Bare" {
 		t.Fatalf("bare array not parsed: %q", m.Name)
+	}
+}
+
+// Modern Firefox adopted Chromium's cipher lists, which broke the assumption the two
+// cipher-family rows were built on: a bare 'ja4_b' match used to mean Chromium and now
+// does not. Firefox 155's flows were being reported as "Chrome/Chromium" — on traffic to
+// Mozilla's own hosts, decrypted with Firefox's own key-log.
+//
+// The fix is in two parts, and both are asserted here: exact rows for the fingerprints we
+// have actually captured (so a known Firefox is named as Firefox), and family rows that
+// name both engines (so an unknown client sharing the cipher list is not misattributed to
+// one of them).
+func TestFirefox155NotReportedAsChrome(t *testing.T) {
+	reg, errs := LoadRegistry("")
+	if len(errs) != 0 {
+		t.Fatalf("builtin load errors: %v", errs)
+	}
+	for _, tc := range []struct{ name, ja4, want string }{
+		{"TLS 1.3 + HTTP/2", ff155H2, "Firefox 155"},
+		{"TLS 1.3, h1 ALPN", ff155H1, "Firefox 155"},
+		{"TLS 1.2 fallback", ff155TLS12, "Firefox 155"},
+		{"QUIC + HTTP/3", ff155QUIC, "Firefox (QUIC) 155"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, ok := reg.Classify(Fingerprint{JA4: tc.ja4})
+			if !ok {
+				t.Fatalf("not classified at all")
+			}
+			if got := m.String(); got != tc.want {
+				t.Fatalf("classified as %q, want %q", got, tc.want)
+			}
+			if strings.HasPrefix(m.Name, "Chrome") {
+				t.Errorf("Firefox reported as a Chrome name: %q", m.Name)
+			}
+		})
+	}
+}
+
+// Chrome must not have been sacrificed to fix Firefox: the engines share ja4_a and ja4_b,
+// so both exact rows have to coexist and each win for its own extension hash. If a future
+// edit ever replaces these with a ja4_pre row, one of these two assertions fails.
+func TestChromeAndFirefoxShareAPrefixAndStayDistinct(t *testing.T) {
+	reg, _ := LoadRegistry("")
+
+	pre := func(ja4 string) string { return ja4[:strings.LastIndex(ja4, "_")] }
+	if pre(ff155H2) != pre(chrome150Overlap) {
+		t.Fatalf("premise broken: %q and %q no longer share an a_b prefix",
+			pre(ff155H2), pre(chrome150Overlap))
+	}
+
+	if m, _ := reg.Classify(Fingerprint{JA4: ff155H2}); m.Name != "Firefox" {
+		t.Errorf("shared prefix, Firefox extension hash: got %q, want Firefox", m.String())
+	}
+	if m, _ := reg.Classify(Fingerprint{JA4: chrome150Overlap}); m.Name != "Chrome" {
+		t.Errorf("shared prefix, Chrome extension hash: got %q, want Chrome", m.String())
+	}
+}
+
+// A cipher list we can't pin to an engine must not be attributed to one. Both family rows
+// name both engines — that is the honest answer for a bare cipher-hash match, and it is
+// what stops the next Firefox release from being labelled Chrome.
+func TestCipherFamilyRowsNameBothEngines(t *testing.T) {
+	reg, _ := LoadRegistry("")
+	for _, tc := range []struct{ name, ja4 string }{
+		// Chromium's TLS cipher list, extension hash belonging to no row we ship.
+		{"TLS family", "t13d1599h2_8daaf6152771_deadbeef0000"},
+		// Chromium's QUIC cipher list, likewise unknown era.
+		{"QUIC family", "q13d0399h3_55b375c5d22e_deadbeef0000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, ok := reg.Classify(Fingerprint{JA4: tc.ja4})
+			if !ok {
+				t.Fatalf("cipher-family row did not match")
+			}
+			if !strings.Contains(m.Name, "Chrome") || !strings.Contains(m.Name, "Firefox") {
+				t.Errorf("name %q claims one engine; a cipher-list match cannot tell them apart", m.Name)
+			}
+		})
 	}
 }

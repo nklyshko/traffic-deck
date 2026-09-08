@@ -26,7 +26,13 @@
     "family rows (ja4_b) recognize any past/future version — including Chrome 139/144 — as",
     "'Chrome' even when the exact era hash isn't listed. To pin a specific version you",
     "haven't captured, capture it once and add its exact JA4 as a user row. Grow this file",
-    "from https://ja4db.com."
+    "from https://ja4db.com.",
+    "",
+    "NOTE ON FAMILY ROWS: a 'ja4_b' row names whatever shares a cipher list, and that is no",
+    "longer one engine. Firefox 155 presents Chromium's TLS-1.3 cipher list (8daaf6152771)",
+    "and Chromium's QUIC one (55b375c5d22e), and it shares the whole a_b prefix with Chrome",
+    "150 — only the extension hash 'c' differs. So those two family rows name both engines,",
+    "and telling Chrome from Firefox needs an exact 'ja4' row; a 'ja4_pre' cannot do it."
   ],
   "fingerprints": [
     {
@@ -88,14 +94,14 @@
       "note": "Chrome 150 over QUIC/HTTP-3, extension variant. Verified capture."
     },
     {
-      "name": "Chrome/Chromium",
+      "name": "Chrome/Chromium or Firefox",
       "ja4_b": "8daaf6152771",
-      "note": "Any Chromium-based client over TLS/TCP (Chrome/Edge/Brave/Opera/Electron), any version incl. 139/144/future. Cipher-list family match; unique to Chromium in FoxIO ja4db."
+      "note": "Any Chromium-based client (Chrome/Edge/Brave/Opera/Electron) or modern Firefox over TLS/TCP, any version. Cipher-list family match. NOT unique to Chromium any more: modern Firefox (verified: 155) presents this same cipher list, so a bare cipher-hash match cannot name the engine. Only the extension hash 'c' separates them — see the exact Firefox rows — so this row deliberately names both."
     },
     {
-      "name": "Chrome/Chromium (QUIC)",
+      "name": "Chrome/Chromium or Firefox (QUIC)",
       "ja4_b": "55b375c5d22e",
-      "note": "Any Chromium-based client over QUIC/HTTP-3. Cipher-list family match."
+      "note": "Any Chromium-based client or modern Firefox over QUIC/HTTP-3. Cipher-list family match. NOT unique to Chromium any more: modern Firefox (verified: 155) presents this same cipher list, so a bare cipher-hash match cannot name the engine. Only the extension hash 'c' separates them — see the exact Firefox rows — so this row deliberately names both."
     },
     {
       "name": "Firefox",
@@ -118,6 +124,30 @@
       "name": "Firefox",
       "ja4_pre": "t13i1714h2_5b57614c22b0",
       "note": "Desktop Firefox without SNI (direct-IP). Prefix match. From FoxIO ja4db."
+    },
+    {
+      "name": "Firefox",
+      "version": "155",
+      "ja4": "t13d1517h2_8daaf6152771_3cbfd9057e0d",
+      "note": "Desktop Firefox 155, TLS 1.3 + HTTP-2, SNI. Shares ja4_a AND ja4_b with Chrome 150 (t13d1517h2_8daaf6152771_a87ad97598a9) — only the extension hash tells them apart, so this must be an exact row, never a ja4_pre. Verified capture."
+    },
+    {
+      "name": "Firefox",
+      "version": "155",
+      "ja4": "t13d1516h1_8daaf6152771_e6d2851837fd",
+      "note": "Desktop Firefox 155 negotiating HTTP/1.1 (h1 ALPN), TLS 1.3. Verified capture."
+    },
+    {
+      "name": "Firefox",
+      "version": "155",
+      "ja4": "t12d1211h2_d34a8e72043a_810e2f290f6f",
+      "note": "Desktop Firefox 155 falling back to TLS 1.2 + HTTP-2. Its own cipher list (d34a8e72043a), unrelated to the 1.3 one. Verified capture."
+    },
+    {
+      "name": "Firefox (QUIC)",
+      "version": "155",
+      "ja4": "q13d0315h3_55b375c5d22e_dc5437974b47",
+      "note": "Desktop Firefox 155 over QUIC/HTTP-3. Shares cipher hash 55b375c5d22e with Chromium's QUIC stack. Verified capture."
     },
     {
       "name": "Safari",
