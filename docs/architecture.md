@@ -10,7 +10,7 @@ binary protocols), and browse the decoded flows in a TUI or via an LLM/agent (MC
 |--------|----------|------|
 | `proto/` | protobuf | gRPC contract (source of truth), generated for Go + Python via `buf` |
 | `gateway/` | Go | ingest, decode, store, serve |
-| `capture/` | Python | capture apps (`capture_chrome`, `capture_mitmproxy`, `capture_android`) over a shared `capture_sdk` |
+| `capture/` | Python | capture apps (`capture_chrome`, `capture_firefox`, `capture_mitmproxy`, `capture_android`) over a shared `capture_sdk` |
 | `tui/` | Python (Textual) | terminal UI over the gateway's read API |
 | `mcp/` | Python (FastMCP) | Model Context Protocol server over the same read API |
 

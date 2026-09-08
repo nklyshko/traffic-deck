@@ -27,10 +27,10 @@ traffic unless you want one.
   Akamai **HTTP/2 fingerprint** (client SETTINGS, WINDOW_UPDATE, PRIORITY, pseudo-header
   order). Compare A/B diffs two requests' header/pseudo-header/cookie order across
   sessions.
-- **Capture sources** — [live Chrome](docs/capture-sources.md#b-live-capture-chrome)
-  (`dumpcap` + `SSLKEYLOGFILE`),
-  [mitmproxy](docs/capture-sources.md#c-mitmproxy-any-device-incl-wireguard) (any device,
-  incl. WireGuard), [per-app Android](docs/capture-sources.md#d-android-rooted-emulatordevice-per-app)
+- **Capture sources** — [live Chrome](docs/capture-sources.md#b-live-capture-chrome) and
+  [Firefox](docs/capture-sources.md#c-live-capture-firefox) (`dumpcap` + `SSLKEYLOGFILE`),
+  [mitmproxy](docs/capture-sources.md#d-mitmproxy-any-device-incl-wireguard) (any device,
+  incl. WireGuard), [per-app Android](docs/capture-sources.md#e-android-rooted-emulatordevice-per-app)
   from a rooted device/emulator (Frida `libssl` key-log + UID→NFLOG `tcpdump`), and
   [pcap import](docs/capture-sources.md#a-import-a-pre-captured-pcap--keylog).
 - **Live decode** — a streaming capture decodes as it arrives, no tshark, and the flows

@@ -79,6 +79,7 @@ var builtinSources = []struct {
 	keepWarm bool
 }{
 	{name: "chrome", label: "Chrome", keepWarm: false},
+	{name: "firefox", label: "Firefox", keepWarm: false},
 	{name: "android", label: "Android", keepWarm: true},
 	{name: "mitmproxy", label: "mitmproxy", keepWarm: false},
 }

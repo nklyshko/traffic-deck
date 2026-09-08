@@ -1,6 +1,6 @@
 # Getting traffic in
 
-Four ways to feed the gateway. The first is offline; the other three capture live and
+Five ways to feed the gateway. The first is offline; the others capture live and
 stream flows into the TUI as they happen. All of them can be started from the TUI's
 sessions screen (`a`), which is usually easier than the command lines below — the gateway
 supervises the capture tool for you. The CLIs are here for scripting and for running a
@@ -8,8 +8,9 @@ capture against a remote gateway.
 
 - [A) Import a pre-captured pcap + key.log](#a-import-a-pre-captured-pcap--keylog)
 - [B) Live-capture Chrome](#b-live-capture-chrome)
-- [C) mitmproxy (any device, incl. WireGuard)](#c-mitmproxy-any-device-incl-wireguard)
-- [D) Android (rooted emulator/device, per-app)](#d-android-rooted-emulatordevice-per-app)
+- [C) Live-capture Firefox](#c-live-capture-firefox)
+- [D) mitmproxy (any device, incl. WireGuard)](#d-mitmproxy-any-device-incl-wireguard)
+- [E) Android (rooted emulator/device, per-app)](#e-android-rooted-emulatordevice-per-app)
 
 See also [`capture/README.md`](../capture/README.md) for how the capture apps are
 structured, and [ADR-0008](adr/0008-independent-capture-apps.md) for why each is its own
@@ -88,7 +89,71 @@ Useful flags / env:
 > `wireshark` group. If your shell is already in that group, you can drop the `sg`
 > wrapper. The keylog is written to a temp dir, never into your real profile.
 
-## C) mitmproxy (any device, incl. WireGuard)
+## C) Live-capture Firefox
+
+The same shape as the Chrome path — `dumpcap` plus a dedicated key-log, streamed live —
+for Firefox and its relatives (Firefox and its channels, LibreWolf, Waterfox, Zen). Only
+Firefox's TLS sessions have keys, so the **decoded view is effectively Firefox-only**.
+
+Two things differ from Chrome, both handled for you:
+
+- Firefox has no key-log *flag*. NSS reads `SSLKEYLOGFILE` from the environment, so the
+  tool sets it on the launched process.
+- Profiles are registered by name in `profiles.ini` rather than laid out per channel, and
+  every channel of one fork shares that registry. The picker lists what's registered and
+  launches it with `-P <name>`; tool-managed profiles use `--profile <dir>` instead.
+
+Interactive (recommended) — the launcher activates the `wireshark` group itself (via
+`sg`), then lets you pick the Firefox binary and the profile: one of the **browser's own
+registered profiles**, the browser's own default (launched with no profile flag), a fresh
+temp profile, or a named persistent profile under `~/.traffic-deck/firefox-profiles`.
+The pickers default to your previous run's choices (remembered under
+`~/.traffic-deck/state`):
+
+```sh
+capture/capture-firefox.sh
+```
+
+Scripted / explicit — flags override each picker; `--no-prompt` skips them:
+
+```sh
+sg wireshark -c 'uv run --project capture/capture_firefox trafficdeck-capture-firefox \
+    --no-prompt --label "live demo" --url https://example.com'
+```
+
+Against one of Firefox's **own registered profiles** — keeps your logins, extensions,
+history. Quit any Firefox already running on that profile first; Firefox refuses to start
+a second instance on a profile that's already open:
+
+```sh
+sg wireshark -c 'uv run --project capture/capture_firefox trafficdeck-capture-firefox \
+    --no-prompt --label "manual test" --profile-name default-release'
+```
+
+Browse, then close Firefox (or use `--duration N` to auto-stop after N seconds) to
+finalize the session.
+
+Useful flags / env:
+
+| | |
+|---|---|
+| `--profile-name NAME` | one of the browser's own profiles, by its `profiles.ini` name (`-P`) |
+| `--profile-dir DIR` | launch a profile directory directly (`--profile`) |
+| `--default-profile` | the browser's own default (no profile flag) |
+| `--url URL` | open a URL on launch |
+| `--duration N` | auto-stop after N seconds |
+| `--iface IFACE` | capture interface (default: auto-detected) |
+| `--filter BPF` | dumpcap capture filter (default empty = capture everything) |
+| `--gateway ADDR` | gateway address (default `127.0.0.1:7331`) |
+| `FIREFOX_BIN` | Firefox binary (e.g. a LibreWolf or Nightly path) |
+| `DUMPCAP_BIN` / `CAPTURE_IFACE` | override dumpcap / interface |
+
+> A tool-managed profile (temp or persistent) is seeded with a `user.js` that turns off
+> the first-run tour and the default-browser prompt — Firefox's equivalent of Chrome's
+> `--no-first-run` / `--no-default-browser-check` flags. It's written only when absent,
+> so your own edits to a persistent capture profile survive.
+
+## D) mitmproxy (any device, incl. WireGuard)
 
 Runs `mitmdump` with an addon that streams **already-decoded** flows to the gateway
 (`PushFlows`) — no pcap/keylog, since mitmproxy terminates TLS. Unlike the Chrome path
@@ -113,7 +178,7 @@ Because mitmproxy terminates the connection there is no pcap for these sessions,
 `W` (open in Wireshark) has nothing to open and the `Conn`/`Stream` columns stay empty —
 see [the TUI guide](tui.md#http2-connections-and-streams).
 
-## D) Android (rooted emulator/device, per-app)
+## E) Android (rooted emulator/device, per-app)
 
 Captures **one app's** traffic from a rooted emulator/device: Frida hooks the system
 `libssl.so` to dump TLS secrets (NSS `key.log`, no proxy/CA), and the app's packets
