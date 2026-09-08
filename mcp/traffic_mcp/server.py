@@ -60,8 +60,6 @@ _func_metadata.ArgModelBase = _StrictArgModel
 mcp = FastMCP("trafficdeck-mcp", host=os.environ.get("MCP_HOST", "127.0.0.1"),
               port=int(os.environ.get("MCP_PORT", "8765")))
 
-_SOURCE_KIND = {0: "unspecified", 1: "chrome", 2: "mitmproxy",
-                3: "android_emulator", 4: "android_device", 5: "generic"}
 _STATUS = {0: "unspecified", 1: "open", 2: "decoding", 3: "closed", 4: "error"}
 
 
@@ -131,7 +129,7 @@ def _session_dict(s) -> dict:
         "id": s.id,
         "label": s.label,
         "group": s.group or None,
-        "source_kind": _SOURCE_KIND.get(s.source_kind, "?"),
+        "source": s.source or None,
         "status": _STATUS.get(s.status, "?"),
         "created_at_unix_ms": s.created_at_unix_ms,
         "closed_at_unix_ms": s.closed_at_unix_ms or None,

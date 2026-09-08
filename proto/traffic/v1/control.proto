@@ -215,14 +215,14 @@ enum SourceState {
 }
 
 message StartCaptureRequest {
-  SourceKind source_kind = 1;
+  reserved 1;  // was SourceKind source_kind, superseded by `source` below
+  reserved "source_kind";
   string label = 2;
   map<string, string> params = 3;
   // Source name — a built-in ("chrome", "android", …) or a module's declared name.
-  // Supersedes source_kind, which is a closed enum and cannot name a third-party module
-  // (see ADR-0010). The viewer-facing ControlService.StartCapture uses this to dispatch;
-  // the source-facing CaptureSourceService.StartCapture ignores it (the source is known
-  // by the connection).
+  // A closed enum cannot name a third-party module (see ADR-0010). The viewer-facing
+  // ControlService.StartCapture uses this to dispatch; the source-facing
+  // CaptureSourceService.StartCapture ignores it (the source is known by the connection).
   string source = 4;
 }
 

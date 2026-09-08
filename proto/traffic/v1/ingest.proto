@@ -18,8 +18,13 @@ service IngestService {
 
 message OpenSessionRequest {
   string label = 1;
-  SourceKind source_kind = 2;
+  // How this source delivers its capture. The gateway acts on this once, here: a
+  // FLOWS session is registered live immediately, since it has no upload to start it.
+  SourceShape shape = 2;
   map<string, string> metadata = 3;
+  // The tool opening the session ("chrome", "mitmproxy", a module's name), recorded as
+  // the session's provenance. See Session.source.
+  string source = 4;
 }
 
 message SessionHandle {

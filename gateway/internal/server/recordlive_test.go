@@ -25,7 +25,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, store.NewSession{
-		ID: sid, Label: "rec", SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC,
+		ID: sid, Label: "rec", Source: "import",
 		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING, PcapBytes: 10,
 	}); err != nil {
 		t.Fatal(err)

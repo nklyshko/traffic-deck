@@ -77,7 +77,7 @@ func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
 
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, store.NewSession{
-		ID: sid, Label: "live", SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC,
+		ID: sid, Label: "live", Source: "import",
 		Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN, PcapBytes: 1,
 	}); err != nil {
 		t.Fatal(err)

@@ -199,7 +199,7 @@ func missingColumns(ctx context.Context, db *sql.DB, table string, required []st
 type NewSession struct {
 	ID          string
 	Label       string
-	SourceKind  trafficv1.SourceKind
+	Source      string // producing tool: "chrome", "mitmproxy", "import", a module name
 	Status      trafficv1.SessionStatus
 	PcapBytes   int64
 	KeylogBytes int64
@@ -210,7 +210,7 @@ func (s *Store) CreateSession(ctx context.Context, ns NewSession) error {
 	if _, err := s.catalog.ExecContext(ctx, `
 		INSERT INTO sessions (id, label, source_kind, status, created_at, pcap_bytes, keylog_bytes)
 		VALUES (?,?,?,?,?,?,?)`,
-		ns.ID, ns.Label, ns.SourceKind.String(), ns.Status.String(),
+		ns.ID, ns.Label, ns.Source, ns.Status.String(),
 		time.Now().UnixMilli(), ns.PcapBytes, ns.KeylogBytes); err != nil {
 		return err
 	}
@@ -574,25 +574,53 @@ func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]*traffic
 	return out, nil
 }
 
+// The sessions.source_kind column holds the producing tool's name ("chrome", "import",
+// a module's name). Before that it held a SourceKind enum name, and those values reach
+// us from two directions — a catalog written by an older build, and a bundle exported by
+// one and imported at any time since (ImportSessionRow writes the manifest's string
+// verbatim). So the translation lives on the read path rather than in a one-shot
+// migration, which would only ever fix the first.
+var legacySourceNames = map[string]string{
+	"SOURCE_KIND_CHROME":           "chrome",
+	"SOURCE_KIND_MITMPROXY":        "mitmproxy",
+	"SOURCE_KIND_ANDROID_EMULATOR": "android",
+	"SOURCE_KIND_ANDROID_DEVICE":   "android",
+	"SOURCE_KIND_GENERIC":          "import",
+	"SOURCE_KIND_UNSPECIFIED":      "",
+}
+
+// sourceName maps a stored source_kind cell to a tool name, translating the legacy enum
+// names. An unrecognized SOURCE_KIND_* value (a kind this build never knew) becomes ""
+// rather than being shown raw.
+func sourceName(stored string) string {
+	if name, ok := legacySourceNames[stored]; ok {
+		return name
+	}
+	if strings.HasPrefix(stored, "SOURCE_KIND_") {
+		return ""
+	}
+	return stored
+}
+
 const sessionCols = `id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count, session_group`
 
 func scanSession(row scannable) (*trafficv1.Session, error) {
 	var (
-		id, label, srcKind, status string
-		createdAt                  int64
-		closedAt                   sql.NullInt64
-		pcapBytes, keylogBytes     int64
-		flowCount                  int64
-		group                      sql.NullString
+		id, label, source, status string
+		createdAt                 int64
+		closedAt                  sql.NullInt64
+		pcapBytes, keylogBytes    int64
+		flowCount                 int64
+		group                     sql.NullString
 	)
-	if err := row.Scan(&id, &label, &srcKind, &status, &createdAt, &closedAt,
+	if err := row.Scan(&id, &label, &source, &status, &createdAt, &closedAt,
 		&pcapBytes, &keylogBytes, &flowCount, &group); err != nil {
 		return nil, err
 	}
 	return &trafficv1.Session{
 		Id:              id,
 		Label:           label,
-		SourceKind:      trafficv1.SourceKind(trafficv1.SourceKind_value[srcKind]),
+		Source:          sourceName(source),
 		Status:          trafficv1.SessionStatus(trafficv1.SessionStatus_value[status]),
 		CreatedAtUnixMs: createdAt,
 		ClosedAtUnixMs:  closedAt.Int64,

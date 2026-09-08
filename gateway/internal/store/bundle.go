@@ -15,9 +15,14 @@ import (
 
 // SessionRow is the catalog row for one session, carried in an export manifest.
 type SessionRow struct {
-	ID          string `json:"id"`
-	Label       string `json:"label"`
-	SourceKind  string `json:"source_kind"`
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	// The producing tool's name. The JSON key stays `source_kind` — it is the manifest
+	// format, and bundles are exchanged between installations in both directions, so
+	// renaming it would strand every bundle already exported. A manifest written by an
+	// older build carries a SourceKind enum name here instead; it lands in the catalog
+	// verbatim and is translated on read (see sourceName).
+	Source      string `json:"source_kind"`
 	Status      string `json:"status"`
 	CreatedAt   int64  `json:"created_at"`
 	ClosedAt    *int64 `json:"closed_at,omitempty"`
@@ -33,7 +38,7 @@ func (s *Store) ExportSessionRow(ctx context.Context, id string) (*SessionRow, e
 	err := s.catalog.QueryRowContext(ctx,
 		`SELECT id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count
 		 FROM sessions WHERE id=?`, id).
-		Scan(&r.ID, &r.Label, &r.SourceKind, &r.Status, &r.CreatedAt, &closed,
+		Scan(&r.ID, &r.Label, &r.Source, &r.Status, &r.CreatedAt, &closed,
 			&r.PcapBytes, &r.KeylogBytes, &r.FlowCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -58,7 +63,7 @@ func (s *Store) ImportSessionRow(ctx context.Context, r *SessionRow) error {
 	_, err := s.catalog.ExecContext(ctx, `
 		INSERT INTO sessions (id, label, source_kind, status, created_at, closed_at, pcap_bytes, keylog_bytes, flow_count)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.Label, r.SourceKind, r.Status, r.CreatedAt, closed, r.PcapBytes, r.KeylogBytes, r.FlowCount)
+		r.ID, r.Label, r.Source, r.Status, r.CreatedAt, closed, r.PcapBytes, r.KeylogBytes, r.FlowCount)
 	return err
 }
 

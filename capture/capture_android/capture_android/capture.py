@@ -103,7 +103,7 @@ def run_capture(
     chan = grpc.insecure_channel(gateway)
     ing = ig.IngestServiceStub(chan)
     handle = ing.OpenSession(ip.OpenSessionRequest(
-        label=label, source_kind=cp.SOURCE_KIND_ANDROID_EMULATOR,
+        label=label, source="android", shape=cp.SOURCE_SHAPE_PCAP,
         metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)

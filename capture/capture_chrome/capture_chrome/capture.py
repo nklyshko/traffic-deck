@@ -13,7 +13,6 @@ import subprocess
 from capture_sdk import snap
 from capture_sdk.browser import BUILTIN_PROFILE, profile_desc  # noqa: F401 — re-exported
 from capture_sdk.livecapture import KeylogCapture
-from capture_sdk.proto import common_pb2 as cp
 
 
 class ChromeCapture(KeylogCapture):
@@ -21,7 +20,6 @@ class ChromeCapture(KeylogCapture):
     the session id, non-blocking); `wait` blocks until Chrome closes / duration elapses /
     stop is requested; `stop` tears down and closes the session (idempotent)."""
 
-    source_kind = cp.SOURCE_KIND_CHROME
     name = "chrome"
 
     def __init__(self, *, gateway: str, label: str, chrome: str, profile,

@@ -18,7 +18,7 @@ func seed(t *testing.T, st *store.Store, dataRoot string) string {
 	ctx := context.Background()
 	const sid = "sess-export-1"
 	if err := st.CreateSession(ctx, store.NewSession{
-		ID: sid, Label: "orig", SourceKind: trafficv1.SourceKind_SOURCE_KIND_CHROME,
+		ID: sid, Label: "orig", Source: "chrome",
 		Status: trafficv1.SessionStatus_SESSION_STATUS_CLOSED,
 	}); err != nil {
 		t.Fatal(err)

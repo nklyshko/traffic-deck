@@ -37,7 +37,8 @@ func TestListSessionsLiveFlowCount(t *testing.T) {
 
 	// Open a mitmproxy session (status OPEN, passive live session registered).
 	handle, err := ing.OpenSession(ctx, &trafficv1.OpenSessionRequest{
-		Label: "mitm", SourceKind: trafficv1.SourceKind_SOURCE_KIND_MITMPROXY,
+		Label: "mitm", Source: "mitmproxy",
+		Shape: trafficv1.SourceShape_SOURCE_SHAPE_FLOWS,
 	})
 	if err != nil {
 		t.Fatal(err)

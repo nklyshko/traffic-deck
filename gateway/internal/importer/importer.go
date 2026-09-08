@@ -57,7 +57,7 @@ func Import(ctx context.Context, st *store.Store, obj objstore.Store, opts Optio
 	if err := st.CreateSession(ctx, store.NewSession{
 		ID:          sessionID,
 		Label:       opts.Label,
-		SourceKind:  trafficv1.SourceKind_SOURCE_KIND_GENERIC,
+		Source:      "import",
 		Status:      trafficv1.SessionStatus_SESSION_STATUS_DECODING,
 		PcapBytes:   pcapBytes,
 		KeylogBytes: keylogBytes,

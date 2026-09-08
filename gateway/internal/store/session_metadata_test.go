@@ -17,7 +17,7 @@ func TestSessionMetadataRoundTrip(t *testing.T) {
 
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, NewSession{
-		ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_MITMPROXY,
+		ID: sid, Source: "mitmproxy",
 		Status:   trafficv1.SessionStatus_SESSION_STATUS_OPEN,
 		Metadata: map[string]string{"viewer.columns": "scrape_group,proxy_provider"},
 	}); err != nil {
@@ -35,7 +35,7 @@ func TestSessionMetadataRoundTrip(t *testing.T) {
 	// ListSessions attaches it too; a metadata-less session stays empty.
 	plain := uuid.NewString()
 	if err := st.CreateSession(ctx, NewSession{
-		ID: plain, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC,
+		ID: plain, Source: "import",
 		Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN,
 	}); err != nil {
 		t.Fatal(err)

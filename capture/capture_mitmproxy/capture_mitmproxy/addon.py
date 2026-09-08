@@ -207,8 +207,8 @@ class GatewayPusher:
         self._stub = ig.IngestServiceStub(self._channel)
         metadata = {"viewer.columns": self.viewer_columns} if self.viewer_columns else {}
         handle = await self._stub.OpenSession(
-            ip.OpenSessionRequest(label=self.label, source_kind=cp.SOURCE_KIND_MITMPROXY,
-                                  metadata=metadata)
+            ip.OpenSessionRequest(label=self.label, source="mitmproxy",
+                                  shape=cp.SOURCE_SHAPE_FLOWS, metadata=metadata)
         )
         self.session_id = handle.session_id
         ctx.log.info(f"gateway: session {self.session_id} @ {self.addr}")

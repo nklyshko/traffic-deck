@@ -21,7 +21,7 @@ func TestConcurrentWritesNoBusy(t *testing.T) {
 
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, NewSession{
-		ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_MITMPROXY,
+		ID: sid, Source: "mitmproxy",
 		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING,
 	}); err != nil {
 		t.Fatal(err)

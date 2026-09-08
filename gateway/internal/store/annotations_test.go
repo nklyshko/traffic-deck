@@ -16,7 +16,7 @@ func seedFlows(t *testing.T, st *Store, n int) (string, []string) {
 	ctx := context.Background()
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, NewSession{
-		ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC,
+		ID: sid, Source: "import",
 		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING,
 	}); err != nil {
 		t.Fatalf("create session: %v", err)

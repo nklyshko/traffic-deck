@@ -18,7 +18,7 @@ CAPTURE_MODE_STREAMING_LIVE: CaptureMode
 CAPTURE_MODE_BATCH_ON_CLOSE: CaptureMode
 
 class OpenSessionRequest(_message.Message):
-    __slots__ = ("label", "source_kind", "metadata")
+    __slots__ = ("label", "shape", "metadata", "source")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -27,12 +27,14 @@ class OpenSessionRequest(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     LABEL_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_KIND_FIELD_NUMBER: _ClassVar[int]
+    SHAPE_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
     label: str
-    source_kind: _common_pb2.SourceKind
+    shape: _common_pb2.SourceShape
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, label: _Optional[str] = ..., source_kind: _Optional[_Union[_common_pb2.SourceKind, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    source: str
+    def __init__(self, label: _Optional[str] = ..., shape: _Optional[_Union[_common_pb2.SourceShape, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., source: _Optional[str] = ...) -> None: ...
 
 class SessionHandle(_message.Message):
     __slots__ = ("session_id", "max_chunk_bytes")

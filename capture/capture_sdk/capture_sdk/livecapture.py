@@ -77,11 +77,13 @@ class KeylogCapture(abc.ABC):
     """One live pcap + key.log capture. `start` opens the session and launches everything
     (returns the session id, non-blocking); `wait` blocks until the launched program exits /
     the duration elapses / stop is requested; `stop` tears down and closes the session
-    (idempotent)."""
+    (idempotent).
 
-    #: Recorded on the session so the viewer knows what produced it.
-    source_kind: int = cp.SOURCE_KIND_UNSPECIFIED
-    #: Names this tool's upload stream and its keylog tempdir.
+    Every capture of this kind is `SOURCE_SHAPE_PCAP` by construction — it streams packets
+    for the gateway to decode — so subclasses declare only their `name`."""
+
+    #: The tool's own name, recorded as the session's provenance and used to name this
+    #: capture's upload stream and its keylog tempdir.
     name: str = "capture"
 
     def __init__(self, *, gateway: str, label: str, iface: str | None = None,
@@ -123,7 +125,7 @@ class KeylogCapture(abc.ABC):
         self._chan = grpc.insecure_channel(self.gateway)
         self._ing = ig.IngestServiceStub(self._chan)
         handle = self._ing.OpenSession(ip.OpenSessionRequest(
-            label=self.label, source_kind=self.source_kind,
+            label=self.label, source=self.name, shape=cp.SOURCE_SHAPE_PCAP,
             metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
         self.session_id = handle.session_id
         max_chunk = handle.max_chunk_bytes or (1 << 20)

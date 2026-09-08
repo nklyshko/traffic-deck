@@ -35,7 +35,7 @@ func TestForceCloseSessionGuards(t *testing.T) {
 		trafficv1.SessionStatus_SESSION_STATUS_ERROR,
 	} {
 		sid := uuid.NewString()
-		if err := st.CreateSession(ctx, store.NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: term}); err != nil {
+		if err := st.CreateSession(ctx, store.NewSession{ID: sid, Source: "import", Status: term}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := ing.ForceCloseSession(ctx, &trafficv1.CloseSessionRequest{SessionId: sid}); status.Code(err) != codes.FailedPrecondition {
@@ -56,7 +56,7 @@ func TestForceCloseSessionToleratesOldBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st1.CreateSession(ctx, store.NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_MITMPROXY, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
+	if err := st1.CreateSession(ctx, store.NewSession{ID: sid, Source: "mitmproxy", Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
 		t.Fatal(err)
 	}
 	st1.Close()

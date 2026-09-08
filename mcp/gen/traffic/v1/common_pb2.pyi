@@ -7,14 +7,11 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
-class SourceKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+class SourceShape(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
-    SOURCE_KIND_UNSPECIFIED: _ClassVar[SourceKind]
-    SOURCE_KIND_CHROME: _ClassVar[SourceKind]
-    SOURCE_KIND_MITMPROXY: _ClassVar[SourceKind]
-    SOURCE_KIND_ANDROID_EMULATOR: _ClassVar[SourceKind]
-    SOURCE_KIND_ANDROID_DEVICE: _ClassVar[SourceKind]
-    SOURCE_KIND_GENERIC: _ClassVar[SourceKind]
+    SOURCE_SHAPE_UNSPECIFIED: _ClassVar[SourceShape]
+    SOURCE_SHAPE_PCAP: _ClassVar[SourceShape]
+    SOURCE_SHAPE_FLOWS: _ClassVar[SourceShape]
 
 class FileKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -29,12 +26,9 @@ class SessionStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     SESSION_STATUS_DECODING: _ClassVar[SessionStatus]
     SESSION_STATUS_CLOSED: _ClassVar[SessionStatus]
     SESSION_STATUS_ERROR: _ClassVar[SessionStatus]
-SOURCE_KIND_UNSPECIFIED: SourceKind
-SOURCE_KIND_CHROME: SourceKind
-SOURCE_KIND_MITMPROXY: SourceKind
-SOURCE_KIND_ANDROID_EMULATOR: SourceKind
-SOURCE_KIND_ANDROID_DEVICE: SourceKind
-SOURCE_KIND_GENERIC: SourceKind
+SOURCE_SHAPE_UNSPECIFIED: SourceShape
+SOURCE_SHAPE_PCAP: SourceShape
+SOURCE_SHAPE_FLOWS: SourceShape
 FILE_KIND_UNSPECIFIED: FileKind
 FILE_KIND_PCAP: FileKind
 FILE_KIND_KEYLOG: FileKind
@@ -45,7 +39,7 @@ SESSION_STATUS_CLOSED: SessionStatus
 SESSION_STATUS_ERROR: SessionStatus
 
 class Session(_message.Message):
-    __slots__ = ("id", "label", "source_kind", "status", "created_at_unix_ms", "closed_at_unix_ms", "pcap_bytes", "keylog_bytes", "flow_count", "group", "metadata")
+    __slots__ = ("id", "label", "source", "status", "created_at_unix_ms", "closed_at_unix_ms", "pcap_bytes", "keylog_bytes", "flow_count", "group", "metadata")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -55,7 +49,7 @@ class Session(_message.Message):
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     ID_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
-    SOURCE_KIND_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     CLOSED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
@@ -66,7 +60,7 @@ class Session(_message.Message):
     METADATA_FIELD_NUMBER: _ClassVar[int]
     id: str
     label: str
-    source_kind: SourceKind
+    source: str
     status: SessionStatus
     created_at_unix_ms: int
     closed_at_unix_ms: int
@@ -75,7 +69,7 @@ class Session(_message.Message):
     flow_count: int
     group: str
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., source_kind: _Optional[_Union[SourceKind, str]] = ..., status: _Optional[_Union[SessionStatus, str]] = ..., created_at_unix_ms: _Optional[int] = ..., closed_at_unix_ms: _Optional[int] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., flow_count: _Optional[int] = ..., group: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., label: _Optional[str] = ..., source: _Optional[str] = ..., status: _Optional[_Union[SessionStatus, str]] = ..., created_at_unix_ms: _Optional[int] = ..., closed_at_unix_ms: _Optional[int] = ..., pcap_bytes: _Optional[int] = ..., keylog_bytes: _Optional[int] = ..., flow_count: _Optional[int] = ..., group: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class Header(_message.Message):
     __slots__ = ("name", "value")

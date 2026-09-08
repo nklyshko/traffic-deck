@@ -17,3 +17,4 @@ reasoning at the time. Format: Context → Decision → Consequences.
 | [0010](0010-supervisor-and-capture-modules.md) | The gateway supervises capture; viewers are clients |
 | [0011](0011-incremental-flow-persistence.md) | Live-decoded flows persist incrementally, not on close *(proposed)* |
 | [0012](0012-server-side-filtering-and-pagination.md) | Filtering and pagination happen in the gateway *(proposed)* |
+| [0013](0013-source-name-and-shape.md) | A session records its source as a name plus a delivery shape |

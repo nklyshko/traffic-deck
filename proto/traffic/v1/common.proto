@@ -2,14 +2,20 @@ syntax = "proto3";
 
 package traffic.v1;
 
-// Source that produced a capture.
-enum SourceKind {
-  SOURCE_KIND_UNSPECIFIED = 0;
-  SOURCE_KIND_CHROME = 1;
-  SOURCE_KIND_MITMPROXY = 2;
-  SOURCE_KIND_ANDROID_EMULATOR = 3;
-  SOURCE_KIND_ANDROID_DEVICE = 4;
-  SOURCE_KIND_GENERIC = 5;
+// How a source delivers a capture — the one distinction the gateway must act on, and
+// the only thing it can't work out for itself at OpenSession (both shapes have zero
+// bytes stored at that point; afterwards a pcap's size tells them apart).
+//
+// Which *tool* produced a capture is not this enum's business: that is `source`, a free
+// string, because a closed enum cannot name a third-party module (ADR-0010).
+enum SourceShape {
+  SOURCE_SHAPE_UNSPECIFIED = 0;
+  // Streams raw packets (+ a TLS key-log) for the gateway to decode: a browser, an
+  // Android app capture, an imported pcap.
+  SOURCE_SHAPE_PCAP = 1;
+  // Pushes flows it has already decoded (PushFlows): mitmproxy, a third-party module.
+  // Such a session is live from the moment it opens — there is no pcap to decode.
+  SOURCE_SHAPE_FLOWS = 2;
 }
 
 // Which uploaded artifact a chunk belongs to (see).
@@ -31,7 +37,11 @@ enum SessionStatus {
 message Session {
   string id = 1;
   string label = 2;
-  SourceKind source_kind = 3;
+  // The tool that produced this capture: a built-in ("chrome", "firefox", "android",
+  // "mitmproxy"), "import" for a pcap import, or a module's own name. Free text — see
+  // SourceShape for why this is not an enum. "" for a session recorded before this
+  // field existed and whose legacy source kind could not be mapped.
+  string source = 3;
   SessionStatus status = 4;
   int64 created_at_unix_ms = 5;
   int64 closed_at_unix_ms = 6;

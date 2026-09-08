@@ -30,7 +30,7 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	if err := st.CreateSession(ctx, NewSession{
 		ID:         sid,
 		Label:      "test",
-		SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC,
+		Source: "import",
 		Status:     trafficv1.SessionStatus_SESSION_STATUS_DECODING,
 		PcapBytes:  123,
 	}); err != nil {
@@ -130,7 +130,7 @@ func TestLargeBodySpill(t *testing.T) {
 	ctx := context.Background()
 
 	sid := uuid.NewString()
-	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Source: "import", Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
 		t.Fatal(err)
 	}
 	aid := uuid.NewString()
@@ -178,7 +178,7 @@ func TestGetFlowParsesCookies(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	sid, aid := uuid.NewString(), uuid.NewString()
-	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Source: "import", Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
@@ -220,7 +220,7 @@ func TestRedirectChainLinking(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	sid, aid := uuid.NewString(), uuid.NewString()
-	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Source: "import", Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
@@ -268,7 +268,7 @@ func TestSessionGroup(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	sid := uuid.NewString()
-	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Source: "import", Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetSessionGroup(ctx, sid, "login-flow"); err != nil {
@@ -299,7 +299,7 @@ func TestDeleteSession(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	sid, aid := uuid.NewString(), uuid.NewString()
-	if err := st.CreateSession(ctx, NewSession{ID: sid, SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Source: "import", Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "tshark"}); err != nil {
@@ -341,7 +341,7 @@ func TestSetSessionLabel(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	sid := uuid.NewString()
-	if err := st.CreateSession(ctx, NewSession{ID: sid, Label: "old", SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: trafficv1.SessionStatus_SESSION_STATUS_CLOSED}); err != nil {
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Label: "old", Source: "import", Status: trafficv1.SessionStatus_SESSION_STATUS_CLOSED}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetSessionLabel(ctx, sid, "renamed"); err != nil {

@@ -30,7 +30,7 @@ func openSession(t *testing.T, st2 trafficv1.SessionStatus) (*store.Store, *live
 	t.Cleanup(st.Close)
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, store.NewSession{
-		ID: sid, Label: "cap", SourceKind: trafficv1.SourceKind_SOURCE_KIND_GENERIC, Status: st2,
+		ID: sid, Label: "cap", Source: "import", Status: st2,
 	}); err != nil {
 		t.Fatal(err)
 	}

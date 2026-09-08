@@ -179,17 +179,18 @@ func keylogKey(sid string) string { return path.Join("sessions", sid, "key.log")
 func (i *Ingest) OpenSession(ctx context.Context, req *trafficv1.OpenSessionRequest) (*trafficv1.SessionHandle, error) {
 	sid := uuid.NewString()
 	if err := i.st.CreateSession(ctx, store.NewSession{
-		ID:         sid,
-		Label:      req.GetLabel(),
-		SourceKind: req.GetSourceKind(),
-		Status:     trafficv1.SessionStatus_SESSION_STATUS_OPEN,
-		Metadata:   req.GetMetadata(),
+		ID:       sid,
+		Label:    req.GetLabel(),
+		Source:   req.GetSource(),
+		Status:   trafficv1.SessionStatus_SESSION_STATUS_OPEN,
+		Metadata: req.GetMetadata(),
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "create session: %v", err)
 	}
-	// Supplied (pushed) sources have no UploadBegin to start a live session, so
-	// register a passive one now — viewers can follow from the moment it exists.
-	if req.GetSourceKind() == trafficv1.SourceKind_SOURCE_KIND_MITMPROXY {
+	// A pushed source has no UploadBegin to start a live session, so register a passive
+	// one now — viewers can follow from the moment it exists. PushFlows registers it too
+	// (idempotent); doing it here just closes the window before the first flow arrives.
+	if req.GetShape() == trafficv1.SourceShape_SOURCE_SHAPE_FLOWS {
 		i.hub.startPassive(sid)
 	}
 	return &trafficv1.SessionHandle{SessionId: sid, MaxChunkBytes: maxChunkBytes}, nil
