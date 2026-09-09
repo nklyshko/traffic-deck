@@ -27,6 +27,12 @@ type Conn struct {
 	earlyKey     *keys    // client 0-RTT key (early data rides the application PN space)
 	zeroRTT      [][]byte // client 0-RTT packets buffered until the suite + early secret are known
 
+	// 1-RTT packets that arrived before the key-log secrets were readable, per direction,
+	// replayed by replay1RTT once the keys derive. See buffer1RTT for the size cap.
+	app1RTT      [2][][]byte
+	app1RTTBytes int
+	app1RTTFull  bool
+
 	crypto      [2]cryptoReasm
 	streams     map[streamKey]*streamReasm
 	largestPN   [2]uint64 // 1-RTT, per direction
@@ -211,37 +217,99 @@ func (c *Conn) onHandshake(fromClient bool, msg []byte) {
 			} else {
 				c.unsupp = true
 				c.unsupReason = fmt.Sprintf("QUIC cipher %#04x not supported", id)
+				// Nothing will ever decrypt on this connection; release what's buffered.
+				c.zeroRTT, c.app1RTT, c.app1RTTBytes = nil, [2][][]byte{}, 0
 			}
 		}
 	}
-	c.derive1RTT()
+	derived := c.derive1RTT()
 	c.tryEarly() // 0-RTT only needs the suite + early secret, independent of the 1-RTT keys
+	if derived {
+		// After tryEarly: 0-RTT shares the client's application packet-number space and
+		// precedes 1-RTT in it, so it must be delivered first.
+		c.replay1RTT()
+	}
 }
 
 // derive1RTT pulls the 1-RTT traffic secrets from the key-log (by client_random) once
-// the suite is known, and derives the application keys for both directions.
-func (c *Conn) derive1RTT() {
+// the suite is known, and derives the application keys for both directions. It reports
+// whether the keys were established by this call, so the caller can replay what arrived
+// while they were missing.
+func (c *Conn) derive1RTT() bool {
 	if c.app[0] != nil || c.clientRandom == nil || c.suite == nil {
-		return
+		return false
 	}
 	cs, ok1 := c.keylog.Get("CLIENT_TRAFFIC_SECRET_0", c.clientRandom)
 	ss, ok2 := c.keylog.Get("SERVER_TRAFFIC_SECRET_0", c.clientRandom)
 	if !ok1 || !ok2 {
-		return // secrets not in the key-log yet; retry on a later packet
+		return false // secrets not in the key-log yet; retry on a later packet
 	}
 	c.app[0], _ = deriveKeys(cs, c.suite)
 	c.app[1], _ = deriveKeys(ss, c.suite)
+	return c.app[0] != nil
 }
 
 func (c *Conn) handleShort(fromClient bool, pkt []byte) {
-	c.derive1RTT()
+	derived := c.derive1RTT()
 	if len(c.zeroRTT) > 0 {
 		c.tryEarly() // early secret may have arrived after the app keys were derived
 	}
+	if derived {
+		c.replay1RTT() // after tryEarly, and before this packet: all in arrival order
+	}
 	k := c.app[dirIdx(fromClient)]
 	if k == nil {
-		return // 1-RTT keys not available yet
+		c.buffer1RTT(fromClient, pkt)
+		return
 	}
+	c.handleShortWith(k, fromClient, pkt)
+}
+
+// max1RTTBuffered caps the bytes one connection holds in app1RTT. The gap between the
+// handshake completing and the browser flushing *_TRAFFIC_SECRET_0 to the key-log is a
+// few milliseconds — a handful of packets — so this is ~700 full-size datagrams of
+// headroom.
+const max1RTTBuffered = 1 << 20
+
+// buffer1RTT holds a 1-RTT packet that arrived before its key-log secret was readable, for
+// replay1RTT to decrypt once the keys derive. Beyond the cap we stop buffering and drop as
+// before: the capture is unfiltered, so a QUIC connection from a process not started under
+// SSLKEYLOGFILE is tracked like any other and never gets a secret at all. Since sessions
+// live until capture EOF, buffering one without a bound would retain its whole lifetime's
+// traffic. A connection megabytes past the handshake isn't in the key-log flush race.
+func (c *Conn) buffer1RTT(fromClient bool, pkt []byte) {
+	if c.app1RTTFull {
+		return
+	}
+	if c.app1RTTBytes+len(pkt) > max1RTTBuffered {
+		c.app1RTTFull = true
+		c.app1RTT, c.app1RTTBytes = [2][][]byte{}, 0
+		return
+	}
+	c.app1RTTBytes += len(pkt)
+	i := dirIdx(fromClient)
+	c.app1RTT[i] = append(c.app1RTT[i], append([]byte(nil), pkt...))
+}
+
+// replay1RTT decrypts the packets buffered before the 1-RTT keys were available, each
+// direction in arrival order. Ordering *across* directions doesn't matter: the two share
+// no state, and streamReasm is offset-ordered either way.
+func (c *Conn) replay1RTT() {
+	for i, pkts := range c.app1RTT {
+		if c.app[i] == nil {
+			continue
+		}
+		for _, pkt := range pkts {
+			c.handleShortWith(c.app[i], i == 0, pkt)
+		}
+	}
+	c.app1RTT, c.app1RTTBytes = [2][][]byte{}, 0
+}
+
+// handleShortWith decrypts one short-header packet with the given direction's keys and
+// delivers its STREAM frames. Split out of handleShort so replayed and live packets take
+// the same path.
+func (c *Conn) handleShortWith(k *keys, fromClient bool, pkt []byte) {
 	// Short-header DCID is the peer's chosen connection id; its length isn't on the wire,
 	// so use the length learned from the long headers.
 	dcidLen := len(c.serverSCID)

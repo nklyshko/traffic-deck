@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
@@ -247,5 +248,165 @@ func TestConn0RTT(t *testing.T) {
 
 	if len(got) != 1 || got[0] != "early-request" {
 		t.Fatalf("0-RTT deliveries = %v; want [early-request]", got)
+	}
+}
+
+// streamFrameBytesAt is streamFrameBytes with an explicit offset (OFF|LEN bits), so a test
+// can split one stream across several packets and check they reassemble in order.
+func streamFrameBytesAt(id, offset uint64, data []byte) []byte {
+	out := []byte{0x0e} // STREAM with OFF|LEN (0x08|0x04|0x02)
+	out = append(out, putVarint(id)...)
+	out = append(out, putVarint(offset)...)
+	out = append(out, putVarint(uint64(len(data)))...)
+	return append(out, data...)
+}
+
+// bufFixture is a handshaken Conn whose key.log exists but is still empty — dumpcap
+// records from before the browser has written any secret — plus the packet-protection
+// keys to build 1-RTT packets with and the key-log lines to append when the secrets
+// "flush". Deliveries land in got, in call order.
+type bufFixture struct {
+	c                      *Conn
+	klPath, klSecrets      string
+	clApp, svApp           *keys
+	clientSCID, serverSCID []byte
+	got                    []string
+}
+
+func newBufFixture(t *testing.T) *bufFixture {
+	t.Helper()
+	f := &bufFixture{
+		clientSCID: []byte{0x11, 0x12, 0x13, 0x14},
+		serverSCID: []byte{0x21, 0x22, 0x23, 0x24},
+	}
+	dcid := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	random := make([]byte, 32)
+	clientTS := make([]byte, 32)
+	serverTS := make([]byte, 32)
+	for i := range random {
+		random[i] = byte(i + 1)
+		clientTS[i] = byte(0xa0 + i)
+		serverTS[i] = byte(0xb0 + i)
+	}
+	f.klSecrets = "CLIENT_TRAFFIC_SECRET_0 " + hex.EncodeToString(random) + " " + hex.EncodeToString(clientTS) + "\n" +
+		"SERVER_TRAFFIC_SECRET_0 " + hex.EncodeToString(random) + " " + hex.EncodeToString(serverTS) + "\n"
+
+	f.klPath = filepath.Join(t.TempDir(), "key.log")
+	if err := os.WriteFile(f.klPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.c = NewConn(tlsdecrypt.NewKeylog(f.klPath), func(_ uint64, _ bool, data []byte) {
+		f.got = append(f.got, string(data))
+	})
+
+	clSec, svSec := initialSecrets(dcid)
+	clInit, _ := deriveKeys(clSec, aes128gcm)
+	svInit, _ := deriveKeys(svSec, aes128gcm)
+	suite, _ := suiteByID(0x1301)
+	f.clApp, _ = deriveKeys(clientTS, suite)
+	f.svApp, _ = deriveKeys(serverTS, suite)
+
+	// Handshake: client_random + SNI from the ClientHello, cipher suite from the
+	// ServerHello. Everything but the key-log secrets is now known.
+	f.c.Feed(true, buildInitial(clInit, dcid, f.clientSCID, 0, cryptoFrameBytes(clientHelloMsg(random, "example.com"))))
+	f.c.Feed(false, buildInitial(svInit, f.clientSCID, f.serverSCID, 0, cryptoFrameBytes(serverHelloMsg(0x1301))))
+	if f.c.suite == nil {
+		t.Fatal("suite not learned from the ServerHello")
+	}
+	if f.c.app[0] != nil {
+		t.Fatal("1-RTT keys derived from an empty key.log")
+	}
+	return f
+}
+
+// flushSecrets appends the 1-RTT secrets to the key-log, as the browser does a few
+// milliseconds after the handshake completes.
+func (f *bufFixture) flushSecrets(t *testing.T) {
+	t.Helper()
+	fh, err := os.OpenFile(f.klPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fh.WriteString(f.klSecrets); err != nil {
+		t.Fatal(err)
+	}
+	fh.Close()
+}
+
+// TestConn1RTTBuffered is the regression test for requests lost to the key-log flush race.
+// A browser writes *_TRAFFIC_SECRET_0 a few milliseconds after the handshake completes;
+// the client 1-RTT packets sent in that window used to be dropped outright. In a real
+// capture they carry the QPACK encoder-stream setup, so losing them left every later
+// HEADERS blocked on a dynamic table that was never initialized.
+func TestConn1RTTBuffered(t *testing.T) {
+	f := newBufFixture(t)
+
+	// Client 1-RTT before the secrets land: buffered, not dropped.
+	f.c.Feed(true, build1RTT(f.clApp, f.serverSCID, 0, streamFrameBytesAt(0, 0, []byte("part-one "))))
+	f.c.Feed(true, build1RTT(f.clApp, f.serverSCID, 1, streamFrameBytesAt(0, 9, []byte("part-two "))))
+	if len(f.got) != 0 {
+		t.Fatalf("delivered %v before the keys were available", f.got)
+	}
+
+	f.flushSecrets(t)
+	// The next packet derives the keys, which replays the buffered two ahead of it.
+	f.c.Feed(true, build1RTT(f.clApp, f.serverSCID, 2, streamFrameBytesAt(0, 18, []byte("part-three"))))
+
+	if got := strings.Join(f.got, ""); got != "part-one part-two part-three" {
+		t.Fatalf("stream 0 = %q, want the three parts in order", got)
+	}
+	if len(f.got) != 3 || f.got[0] != "part-one " {
+		t.Fatalf("deliveries = %v; want the buffered packets replayed first, in arrival order", f.got)
+	}
+}
+
+// TestConn1RTTBothDirectionsBuffered covers the server direction: a response that arrives
+// before the secrets flush is replayed too, triggered by a packet from the other side.
+func TestConn1RTTBothDirectionsBuffered(t *testing.T) {
+	f := newBufFixture(t)
+
+	f.c.Feed(false, build1RTT(f.svApp, f.clientSCID, 0, streamFrameBytesAt(0, 0, []byte("response-"))))
+	f.c.Feed(false, build1RTT(f.svApp, f.clientSCID, 1, streamFrameBytesAt(0, 9, []byte("bytes"))))
+	if len(f.got) != 0 {
+		t.Fatalf("delivered %v before the keys were available", f.got)
+	}
+
+	f.flushSecrets(t)
+	// Derivation is triggered from the *client* direction; both directions still replay.
+	f.c.Feed(true, build1RTT(f.clApp, f.serverSCID, 0, streamFrameBytesAt(0, 0, []byte("request-bytes"))))
+
+	if got := strings.Join(f.got, ""); !strings.Contains(got, "response-bytes") {
+		t.Fatalf("deliveries = %v; want the buffered server bytes replayed", f.got)
+	}
+	if !strings.Contains(strings.Join(f.got, ""), "request-bytes") {
+		t.Fatalf("deliveries = %v; want the triggering client packet too", f.got)
+	}
+}
+
+// TestConn1RTTBufferCapped: a connection whose secrets never arrive — one from a process
+// not started under SSLKEYLOGFILE, which an unfiltered capture tracks like any other —
+// must not buffer its whole lifetime's traffic. Past the cap it drops, as before the fix.
+func TestConn1RTTBufferCapped(t *testing.T) {
+	f := newBufFixture(t)
+
+	payload := streamFrameBytesAt(4, 0, make([]byte, 1200))
+	for sent := 0; sent <= max1RTTBuffered; {
+		pkt := build1RTT(f.clApp, f.serverSCID, 0, payload)
+		f.c.Feed(true, pkt)
+		sent += len(pkt)
+	}
+	if !f.c.app1RTTFull {
+		t.Fatal("buffer never hit its cap")
+	}
+	if f.c.app1RTTBytes != 0 || f.c.app1RTT[0] != nil {
+		t.Fatalf("capped buffer still holds %d bytes in %d packets — memory not released",
+			f.c.app1RTTBytes, len(f.c.app1RTT[0]))
+	}
+
+	// Keys arriving late now recover only live traffic; the flood stays dropped.
+	f.flushSecrets(t)
+	f.c.Feed(true, build1RTT(f.clApp, f.serverSCID, 1, streamFrameBytesAt(0, 0, []byte("live-request"))))
+	if len(f.got) != 1 || f.got[0] != "live-request" {
+		t.Fatalf("deliveries = %v; want just [live-request]", f.got)
 	}
 }
