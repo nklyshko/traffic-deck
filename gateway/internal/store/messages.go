@@ -98,10 +98,10 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 			TsUnixMicros: ts,
 			FromClient:   fromClient != 0,
 			Opcode:       opcode.String,
-			Payload:      s.loadBody(ctx, db, payloadRef.String),
+			Payload:      s.loadBody(ctx, db, payloadRef.String, ""),
 		}
 		if rawRef.Valid && rawRef.String != "" {
-			m.Raw = s.loadBody(ctx, db, rawRef.String)
+			m.Raw = s.loadBody(ctx, db, rawRef.String, "")
 		}
 		out = append(out, m)
 	}
@@ -182,10 +182,10 @@ func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*t
 		TsUnixMicros: ts,
 		FromClient:   fromClient != 0,
 		Opcode:       opcode.String,
-		Payload:      s.loadBody(ctx, db, payloadRef.String),
+		Payload:      s.loadBody(ctx, db, payloadRef.String, ""),
 	}
 	if rawRef.Valid && rawRef.String != "" {
-		m.Raw = s.loadBody(ctx, db, rawRef.String)
+		m.Raw = s.loadBody(ctx, db, rawRef.String, "")
 	}
 	if err := s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.WsMessage{m.Id: m})); err != nil {
 		return nil, err

@@ -55,6 +55,18 @@ def _content(msg) -> bytes:
         return msg.raw_content or b""
 
 
+def _wire_encoding(msg) -> str:
+    """The transport encoding the body had on the wire ("gzip", "br"…), "" if none.
+
+    Recorded alongside the (decoded) bytes _content returns, so a reader is told what
+    they were rather than having to trust the header — which stays on the flow either
+    way and can name an encoding the body was not actually sent in. "identity" is
+    spelled-out absence.
+    """
+    enc = (msg.headers.get("content-encoding", "") or "").strip().lower()
+    return "" if enc == "identity" else enc
+
+
 def _is_ws_upgrade(resp) -> bool:
     return bool(resp and resp.status_code == 101 and
                 resp.headers.get("upgrade", "").lower() == "websocket")
@@ -113,11 +125,13 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     rbody = _content(req)
     pf.request_bytes = len(rbody)
     if rbody:
-        pf.request_body.CopyFrom(cp.Body(size=len(rbody), content_type=req.headers.get("content-type", ""), inline=rbody))
+        pf.request_body.CopyFrom(cp.Body(size=len(rbody), content_type=req.headers.get("content-type", ""),
+                                         inline=rbody, content_encoding=_wire_encoding(req)))
     if resp:
         sbody = _content(resp)
         if sbody:
-            pf.response_body.CopyFrom(cp.Body(size=len(sbody), content_type=resp.headers.get("content-type", ""), inline=sbody))
+            pf.response_body.CopyFrom(cp.Body(size=len(sbody), content_type=resp.headers.get("content-type", ""),
+                                              inline=sbody, content_encoding=_wire_encoding(resp)))
 
     # Forward any source-supplied metadata. Other addons (e.g. a scrape manager
     # that knows which proxy/provider served the request) stash it on

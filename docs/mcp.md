@@ -70,6 +70,16 @@ criteria is what keeps a content search cheap. It examines at most `max_scan` ca
 from the beginning on a later page, so prefer one query with a bigger `limit` over walking
 many pages.
 
+## Compressed bodies
+
+Bodies are stored decoded, whatever the protocol carried them: a body that was gzipped on
+the wire is searchable as text and `get_body` returns it readable. What it arrived as is
+kept alongside it as `content_encoding` on the body metadata (`get_flow`,
+`export_request`), so a readable body still says where it came from. Only the encodings
+the gateway can undo are undone — a brotli (`br`) body is stored as it was sent, and its
+`content_encoding` is what tells you that the bytes are compressed rather than binary
+content. Body search sees the stored bytes, so it can't match inside one.
+
 ## Live sessions
 
 Sessions still being captured are readable too: flows, WebSocket frames and bodies are

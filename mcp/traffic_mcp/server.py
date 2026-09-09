@@ -213,6 +213,8 @@ def _body_ref(body) -> dict | None:
     if body is None or body.size == 0:
         return None
     d = {"content_type": body.content_type or None, "size": body.size}
+    if body.content_encoding:
+        d["content_encoding"] = body.content_encoding
     if body.truncated:
         d |= _PARTIAL
     return d
@@ -250,6 +252,12 @@ def _body_meta(body) -> dict | None:
     if body is None or body.size == 0:
         return None
     meta = {"content_type": body.content_type or None, "size": body.size}
+    if body.content_encoding:
+        # The encoding the bytes had on the wire. They are stored decoded from it where
+        # the gateway supports the encoding, so on a readable body this is provenance;
+        # on one that reads as binary (brotli, which the gateway does not decode) it is
+        # the reason. `size` always counts the stored bytes.
+        meta["content_encoding"] = body.content_encoding
     if body.truncated:
         meta |= _PARTIAL
     if body.WhichOneof("content") != "inline":

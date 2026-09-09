@@ -7,8 +7,6 @@ package decode
 // the HTTP/1.1 path, the batch tshark pass on close stays authoritative.
 
 import (
-	"bytes"
-	"compress/gzip"
 	"fmt"
 	"io"
 	"strconv"
@@ -32,13 +30,13 @@ const h2HeaderTableSize = 4096
 const maxHPACKDynamicTableSize = 65536
 
 // h2flow tracks one HTTP/2 stream's Flow plus the decode state the wire spreads across
-// frames (added-yet, response gzip, accumulated bodies).
+// frames (added-yet, response content-encoding, accumulated bodies).
 type h2flow struct {
-	id       uint32
-	flow     *Flow
-	added    bool
-	respGzip bool
-	respTS   time.Time // capture time of the latest server frame; paired with the request
+	id      uint32
+	flow    *Flow
+	added   bool
+	respEnc string    // wire content-encoding of the response body ("" = none)
+	respTS  time.Time // capture time of the latest server frame; paired with the request
 	// time in emitLocked to get the duration. Kept separate because the request and response
 	// directions decode on different goroutines and can be applied in either order.
 }
@@ -321,8 +319,8 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool, ts tim
 			if strings.EqualFold(hd.Name, "content-type") {
 				f.ContentType = hd.Value
 			}
-			if strings.EqualFold(hd.Name, "content-encoding") && strings.EqualFold(hd.Value, "gzip") {
-				hf.respGzip = true
+			if strings.EqualFold(hd.Name, "content-encoding") {
+				hf.respEnc = normalizeEncoding(hd.Value)
 			}
 		}
 	}
@@ -340,19 +338,18 @@ func (h *h2Stream) onData(df *http2.DataFrame, fromClient bool, ts time.Time) {
 		}
 		f.appendReqBody(df.Data())
 		f.RequestBytes = uint64(len(f.RequestBody))
-	} else if !hf.respGzip {
-		hf.respTS = ts
-		f.appendRespBody(df.Data())
 	} else {
 		hf.respTS = ts
-		// gzip: keep the compressed bytes in ResponseBody until end-of-stream, then
-		// gunzip in place (finalize). Capped to bound memory.
+		// An encoded body accumulates in its wire form until end-of-stream (gzip can only
+		// be read whole), then is decoded in place below, so the flow ends up holding
+		// plain bytes. Capped either way to bound memory.
 		f.appendRespBody(df.Data())
+		f.ResponseBodyEncoding = hf.respEnc
 	}
 	if df.StreamEnded() {
-		if !fromClient && hf.respGzip {
-			f.ResponseBody = maybeGunzip(f.ResponseBody)
-			hf.respGzip = false
+		if !fromClient && hf.respEnc != "" {
+			f.ResponseBody = decodeBody(hf.respEnc, f.ResponseBody, int64(maxLiveBody))
+			hf.respEnc = ""
 		}
 		h.emitLocked(hf)
 	}
@@ -387,20 +384,4 @@ func appendCapped(b, data []byte) []byte {
 		data = data[:room]
 	}
 	return append(b, data...)
-}
-
-func maybeGunzip(raw []byte) []byte {
-	if len(raw) == 0 {
-		return raw
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(raw))
-	if err != nil {
-		return raw // truncated/partial (capped) gzip — leave the raw bytes
-	}
-	defer zr.Close()
-	out, err := io.ReadAll(io.LimitReader(zr, int64(maxLiveBody)))
-	if err != nil && len(out) == 0 {
-		return raw
-	}
-	return out
 }

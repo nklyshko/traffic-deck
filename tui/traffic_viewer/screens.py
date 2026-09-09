@@ -2209,6 +2209,11 @@ class FlowDetailScreen(Screen):
         if body is None or body.size == 0:
             return
         meta = f"{body.content_type or '?'} · {body.size} bytes"
+        if body.content_encoding:
+            # What the bytes were encoded as on the wire. They are stored decoded where the
+            # gateway supports the encoding, so this is provenance for a readable body —
+            # except for one it cannot decode (brotli), where it says why this looks binary.
+            meta = f"{body.content_encoding} · {meta}"
         lines.append(Content(""))
         lines.append(Content.from_markup(
             "[b u]$title[/b u] [dim]$meta · press $vkey to view · $key to save[/dim]",

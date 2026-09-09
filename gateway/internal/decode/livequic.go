@@ -70,6 +70,14 @@ type blockedSection struct {
 type h3Stream struct {
 	buf  [2][]byte // accumulated HTTP/3 bytes per direction (0=client, 1=server)
 	flow *Flow
+
+	// An encoded response body (respEnc set from the response headers) accumulates here
+	// in its wire form, because gzip can only be read from the start; the flow's own
+	// ResponseBody holds the decoded bytes. respDecoded is how much of respRaw the last
+	// decode covered — see decodeResp for why a stream can't just decode once at the end.
+	respEnc     string
+	respRaw     []byte
+	respDecoded int
 }
 
 func newQUICSession(lt *liveTCP, connID, serverHost, serverPort, clientAddr string) *quicSession {
@@ -100,6 +108,15 @@ func qdir(fromClient bool) int {
 func (s *quicSession) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Last word on every encoded response body: the connection is over, so what each
+	// stream accumulated is all there will ever be (see decodeResp).
+	for _, st := range s.streams {
+		before := len(st.flow.ResponseBody)
+		st.decodeResp(true)
+		if len(st.flow.ResponseBody) != before {
+			s.emit(st) // the body changed under readers that already saw the flow
+		}
+	}
 	if n := len(s.blocked); n > 0 {
 		log.Printf("live decode: HTTP/3 %s (%s): %d HEADERS section(s) still blocked on QPACK "+
 			"inserts that never arrived — %s",
@@ -296,6 +313,9 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 				if strings.EqualFold(hf.Name, "content-type") {
 					f.ContentType = hf.Value
 				}
+				if strings.EqualFold(hf.Name, "content-encoding") {
+					st.setRespEnc(normalizeEncoding(hf.Value))
+				}
 			}
 		}
 	}
@@ -304,13 +324,64 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 
 func (s *quicSession) onData(st *h3Stream, fromClient bool, payload []byte) {
 	f := st.flow
-	if fromClient {
+	switch {
+	case fromClient:
 		f.appendReqBody(payload)
 		f.RequestBytes = uint64(len(f.RequestBody))
-	} else {
+	case st.respEnc == "":
 		f.appendRespBody(payload)
+	default:
+		st.appendRespRaw(payload)
+		st.decodeResp(false)
 	}
 	s.emit(st)
+}
+
+// appendRespRaw extends the accumulated wire-form response body, capped like the plain
+// path. The cap applies to the compressed bytes here, so on an encoded body the flow's
+// truncation flag says the *wire* body ran past the live preview — which is the honest
+// statement, since what was dropped is bytes we never saw decoded.
+func (st *h3Stream) appendRespRaw(data []byte) {
+	n := len(st.respRaw)
+	st.respRaw = appendCapped(st.respRaw, data)
+	if len(st.respRaw)-n < len(data) {
+		st.flow.ResponseBodyTruncated = true
+	}
+}
+
+// decodeResp refreshes the flow's plain body from the accumulated wire bytes.
+//
+// HTTP/2 can decode once, at END_STREAM; QUIC gives this decoder no end-of-stream
+// callback, and a capture can stop mid-response anyway, so the flow has to hold the best
+// plain bytes available at every emit. Decoding is from the start each time (a gzip
+// stream can only be read whole), so during capture it runs on a doubling schedule —
+// amortized linear in the body's size rather than quadratic in its DATA frames — and
+// `final` forces the last, authoritative pass when the connection ends.
+func (st *h3Stream) decodeResp(final bool) {
+	if st.respEnc == "" || len(st.respRaw) == 0 {
+		return
+	}
+	if !final && len(st.respRaw) < 2*st.respDecoded {
+		return
+	}
+	st.respDecoded = len(st.respRaw)
+	st.flow.ResponseBodyEncoding = st.respEnc
+	st.flow.ResponseBody = decodeBody(st.respEnc, st.respRaw, int64(maxLiveBody))
+}
+
+// setRespEnc records the response body's wire encoding, once its HEADERS are decoded.
+// A QPACK-blocked HEADERS section is applied late (retryBlocked), possibly after DATA
+// frames already arrived, so bytes taken as plain in the meantime move back to the wire
+// buffer and are decoded from there.
+func (st *h3Stream) setRespEnc(enc string) {
+	if enc == "" || enc == st.respEnc {
+		return
+	}
+	st.respEnc = enc
+	if len(st.respRaw) == 0 && len(st.flow.ResponseBody) > 0 {
+		st.respRaw = st.flow.ResponseBody
+	}
+	st.decodeResp(true)
 }
 
 func (s *quicSession) emit(st *h3Stream) {

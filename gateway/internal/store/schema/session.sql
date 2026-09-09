@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS flows (
     ja4 TEXT NOT NULL DEFAULT '',              -- TLS JA4
     tls_client_hello TEXT NOT NULL DEFAULT '', -- readable ClientHello (JA3 text + ALPN), for export
     redirect_location TEXT NOT NULL DEFAULT '', -- absolute Location URL for a 3xx, "" otherwise
-    tls_hrr INTEGER NOT NULL DEFAULT 0          -- server sent a HelloRetryRequest (⇒ a second ClientHello)
+    tls_hrr INTEGER NOT NULL DEFAULT 0,         -- server sent a HelloRetryRequest (⇒ a second ClientHello)
+    -- Transport encoding the body bytes had on the wire ("gzip", "br"…), "" if none. The
+    -- stored blob is decoded from it where the decoder supports the encoding.
+    req_content_encoding  TEXT NOT NULL DEFAULT '',
+    resp_content_encoding TEXT NOT NULL DEFAULT ''
 );
 
 -- Raw ClientHello handshake messages (verbatim, msg_type+length+body), for export/replay.

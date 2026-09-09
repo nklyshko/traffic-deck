@@ -63,6 +63,15 @@ type Flow struct {
 	RequestBodyTruncated  bool
 	ResponseBodyTruncated bool
 
+	// RequestBodyEncoding / ResponseBodyEncoding name the transport encoding the body
+	// bytes carried on the wire ("gzip", "br", …), set whenever the decoder saw one —
+	// whether or not it could undo it (see contentencoding.go). The bytes above are
+	// decoded where we support the encoding, so consumers trust these fields rather
+	// than the content-encoding header, which may name an encoding the body was not
+	// actually sent in. Empty when the body arrived plain.
+	RequestBodyEncoding  string
+	ResponseBodyEncoding string
+
 	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
 	// frames; the frames themselves are WsMessages keyed by this flow's ID.
 	Websocket bool
@@ -304,6 +313,7 @@ func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Data
 	if err := runTshark(ctx, tsharkPath, tsharkArgs([]string{"-r", pcapPath}, keylogPath, false), nil, st); err != nil {
 		return nil, err
 	}
+	st.finish() // bodies are complete now: undo their wire content-encoding
 	decodeCustomStreams(ctx, tsharkPath, pcapPath, keylogPath, st)
 	return ds, nil
 }

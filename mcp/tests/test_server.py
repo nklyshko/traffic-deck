@@ -259,6 +259,20 @@ def test_body_ref_metadata_only():
     assert S._body_ref(cp.Body(size=0)) is None
 
 
+def test_body_metadata_reports_wire_content_encoding():
+    """A body decoded from the wire says so, so the model can tell a readable body that
+    arrived gzipped from one sent plain — and, when the gateway cannot decode an encoding,
+    why the bytes look binary. A plain body carries no such key at all."""
+    gz = cp.Body(size=42, content_type="text/html", inline=b"<html>hi</html>",
+                 content_encoding="gzip")
+    assert S._body_ref(gz)["content_encoding"] == "gzip"
+    assert S._body_meta(gz)["content_encoding"] == "gzip"
+
+    plain = cp.Body(size=5, content_type="text/plain", inline=b"plain")
+    assert "content_encoding" not in S._body_ref(plain)
+    assert "content_encoding" not in S._body_meta(plain)
+
+
 def test_bytes_payload_text_and_binary():
     text = S._bytes_payload(b'{"success":true}')
     assert text["encoding"] == "utf-8" and text["text"] == '{"success":true}'

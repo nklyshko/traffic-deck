@@ -223,7 +223,7 @@ func (h *httpStream) run() {
 			return
 		}
 
-		f.ResponseBody, f.ResponseBodyTruncated = readRespBody(resp)
+		f.ResponseBody, f.ResponseBodyTruncated, f.ResponseBodyEncoding = readRespBody(resp)
 		h.onFlow(f, false)
 	}
 }
@@ -309,15 +309,18 @@ func drainBody(rc io.ReadCloser) ([]byte, bool) {
 	return data, dropped > 0
 }
 
-// readRespBody captures the response body, gunzipping a gzip Content-Encoding so the
+// readRespBody captures the response body, undoing a gzip Content-Encoding so the
 // preview is readable, and always drains the underlying body for keep-alive alignment.
-// Also reports whether the cap cut the body short. The overflow is drained through the
-// same (decoded) reader the capture used, so on a gzip body the flag describes the
-// decompressed bytes the viewer shows, not the compressed ones on the wire.
-func readRespBody(resp *http.Response) ([]byte, bool) {
+// It also reports whether the cap cut the body short, and the encoding the bytes had on
+// the wire ("" when they arrived plain, or when there are no bytes to describe). The
+// overflow is drained through the same (decoded) reader the capture used, so on a gzip
+// body the truncation flag describes the decompressed bytes the viewer shows, not the
+// compressed ones on the wire.
+func readRespBody(resp *http.Response) (body []byte, truncated bool, encoding string) {
 	defer resp.Body.Close()
+	enc := normalizeEncoding(resp.Header.Get("Content-Encoding"))
 	var r io.Reader = resp.Body
-	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+	if enc == "gzip" {
 		if gz, err := gzip.NewReader(resp.Body); err == nil {
 			defer gz.Close()
 			r = gz
@@ -326,7 +329,10 @@ func readRespBody(resp *http.Response) ([]byte, bool) {
 	data, _ := io.ReadAll(io.LimitReader(r, int64(maxLiveBody)))
 	dropped, _ := io.Copy(io.Discard, r)
 	_, _ = io.Copy(io.Discard, resp.Body) // drain remaining compressed/raw bytes
-	return data, dropped > 0
+	if len(data) == 0 {
+		enc = "" // the field describes body bytes; there are none
+	}
+	return data, dropped > 0, enc
 }
 
 func headersOf(h http.Header) []Header {

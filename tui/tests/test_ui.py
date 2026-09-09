@@ -829,6 +829,26 @@ async def test_detail_view_request_body_opens_body_screen():
         assert app.screen._data == b'{"k":1}'
 
 
+def test_body_line_shows_wire_content_encoding():
+    """A body decoded from the wire is labelled with the encoding it arrived in: the
+    reader sees why a readable body is readable, and — for an encoding the gateway does
+    not decode — why one looks binary. A body sent plain gets no label."""
+    lines = []
+    FlowDetailScreen._append_body(
+        lines, "Response body",
+        cp.Body(size=15, content_type="text/html", inline=b"<html>hi</html>",
+                content_encoding="gzip"),
+        "s", "B")
+    assert "gzip · text/html · 15 bytes" in "\n".join(str(line) for line in lines)
+
+    plain = []
+    FlowDetailScreen._append_body(
+        plain, "Response body",
+        cp.Body(size=5, content_type="text/plain", inline=b"plain"), "s", "B")
+    rendered = "\n".join(str(line) for line in plain)
+    assert "text/plain · 5 bytes" in rendered and "gzip" not in rendered
+
+
 async def test_export_client_hellos_writes_hex_lines(tmp_path):
     app = make_app()
     async with app.run_test() as pilot:

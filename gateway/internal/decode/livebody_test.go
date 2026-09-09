@@ -79,7 +79,7 @@ func TestReadBodyMarksTruncation(t *testing.T) {
 	}
 
 	resp := &http.Response{Header: http.Header{}, Body: io.NopCloser(strings.NewReader("abcdefgh"))}
-	if data, truncated := readRespBody(resp); string(data) != "abcd" || !truncated {
+	if data, truncated, _ := readRespBody(resp); string(data) != "abcd" || !truncated {
 		t.Fatalf("readRespBody = %q truncated=%v, want %q flagged", data, truncated, "abcd")
 	}
 }

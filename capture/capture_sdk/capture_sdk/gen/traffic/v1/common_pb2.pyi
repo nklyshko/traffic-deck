@@ -102,18 +102,20 @@ class Cookie(_message.Message):
     def __init__(self, name: _Optional[str] = ..., value: _Optional[str] = ..., domain: _Optional[str] = ..., path: _Optional[str] = ..., expires: _Optional[str] = ..., max_age: _Optional[int] = ..., secure: bool = ..., http_only: bool = ..., same_site: _Optional[str] = ...) -> None: ...
 
 class Body(_message.Message):
-    __slots__ = ("size", "content_type", "inline", "object_ref", "truncated")
+    __slots__ = ("size", "content_type", "inline", "object_ref", "truncated", "content_encoding")
     SIZE_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     INLINE_FIELD_NUMBER: _ClassVar[int]
     OBJECT_REF_FIELD_NUMBER: _ClassVar[int]
     TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_ENCODING_FIELD_NUMBER: _ClassVar[int]
     size: int
     content_type: str
     inline: bytes
     object_ref: str
     truncated: bool
-    def __init__(self, size: _Optional[int] = ..., content_type: _Optional[str] = ..., inline: _Optional[bytes] = ..., object_ref: _Optional[str] = ..., truncated: bool = ...) -> None: ...
+    content_encoding: str
+    def __init__(self, size: _Optional[int] = ..., content_type: _Optional[str] = ..., inline: _Optional[bytes] = ..., object_ref: _Optional[str] = ..., truncated: bool = ..., content_encoding: _Optional[str] = ...) -> None: ...
 
 class Flow(_message.Message):
     __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream", "h2_stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "ws_message_count", "proxy", "metadata", "error", "duration_micros", "http2_fingerprint", "ja3", "ja4", "tls_client_hello", "tls_client_name", "response_cookies", "redirect_location", "redirected_from_id", "client_hellos", "tls_hrr")

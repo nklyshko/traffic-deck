@@ -132,6 +132,10 @@ func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error
 	if err != nil {
 		return nil, err
 	}
+	if err := migrateSession(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// Reject bundles older than the current flows schema up front, so every read/write
 	// path gets a single, actionable ErrSchemaOutdated instead of a raw "no such
 	// column" SQL error deep in a query. A freshly created DB has the current schema
@@ -149,6 +153,26 @@ func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error
 var requiredWsMessageColumns = []string{
 	"id", "flow_id", "frame_number", "ts_micros", "from_client", "opcode",
 	"payload_ref", "raw_ref",
+}
+
+// migrateSession applies additive column migrations to an existing session bundle —
+// CREATE TABLE IF NOT EXISTS never alters a table. Used where a bundle written by an
+// older gateway stays readable without the new column's data: the body content-encoding
+// columns are empty for such a bundle, which reads as "no encoding recorded" — the
+// bodies in it are whatever that gateway stored. Re-import to have them decoded.
+// A column the read path cannot do without belongs in requiredFlowColumns instead, which
+// rejects the bundle outright (ErrSchemaOutdated). Each statement is idempotent: a
+// duplicate-column error means it is already applied.
+func migrateSession(ctx context.Context, db *sql.DB) error {
+	for _, stmt := range []string{
+		`ALTER TABLE flows ADD COLUMN req_content_encoding TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE flows ADD COLUMN resp_content_encoding TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateSessionSchema verifies the flows + ws_messages tables have every column the read
@@ -418,8 +442,9 @@ func (s *Store) InsertFlowWrites(ctx context.Context, sessionID, analysisID stri
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
 			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref,
 			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
-			    ja3, ja4, tls_client_hello, redirect_location, tls_hrr)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			    ja3, ja4, tls_client_hello, redirect_location, tls_hrr,
+			    req_content_encoding, resp_content_encoding)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
@@ -427,7 +452,8 @@ func (s *Store) InsertFlowWrites(ctx context.Context, sessionID, analysisID stri
 			nullIfEmpty(reqRef), nullIfEmpty(respRef),
 			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass),
 			f.Error, int64(f.DurationMicros), f.Http2Fingerprint,
-			f.JA3, f.JA4, f.TLSClientHello, resolveRedirect(f), boolToInt(f.TLSHRR)); err != nil {
+			f.JA3, f.JA4, f.TLSClientHello, resolveRedirect(f), boolToInt(f.TLSHRR),
+			f.RequestBodyEncoding, f.ResponseBodyEncoding); err != nil {
 			return 0, err
 		}
 		if err := insertClientHellos(stmts, id, f.ClientHellos); err != nil {
@@ -906,10 +932,13 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 
 	// Attach bodies (inlined; capped at decode.MaxBodyBytes).
 	var reqRef, respRef sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT req_body_ref, resp_body_ref FROM flows WHERE id=?`, flowID).
-		Scan(&reqRef, &respRef); err == nil {
-		f.RequestBody = s.loadBody(ctx, db, reqRef.String)
-		f.ResponseBody = s.loadBody(ctx, db, respRef.String)
+	var reqEnc, respEnc string
+	if err := db.QueryRowContext(ctx,
+		`SELECT req_body_ref, resp_body_ref, req_content_encoding, resp_content_encoding
+		 FROM flows WHERE id=?`, flowID).
+		Scan(&reqRef, &respRef, &reqEnc, &respEnc); err == nil {
+		f.RequestBody = s.loadBody(ctx, db, reqRef.String, reqEnc)
+		f.ResponseBody = s.loadBody(ctx, db, respRef.String, respEnc)
 	}
 	single := map[string]*trafficv1.Flow{f.Id: f}
 	if err := s.attachAnnotations(ctx, db, flowRecords(single)); err != nil {
@@ -971,8 +1000,10 @@ func cookieToProto(c *http.Cookie) *trafficv1.Cookie {
 }
 
 // loadBody returns body metadata for GetFlow: small bodies inline, large bodies
-// as an object_ref (sha256) to be fetched in full via GetBody.
-func (s *Store) loadBody(ctx context.Context, db *sql.DB, sha string) *trafficv1.Body {
+// as an object_ref (sha256) to be fetched in full via GetBody. enc is the transport
+// encoding the bytes had on the wire, which the stored bytes are decoded from where the
+// decoder supports it — reported so a consumer knows what it is holding.
+func (s *Store) loadBody(ctx context.Context, db *sql.DB, sha, enc string) *trafficv1.Body {
 	if sha == "" {
 		return nil
 	}
@@ -985,7 +1016,7 @@ func (s *Store) loadBody(ctx context.Context, db *sql.DB, sha string) *trafficv1
 		Scan(&size, &ct, &b, &ext); err != nil {
 		return nil
 	}
-	body := &trafficv1.Body{Size: uint64(size), ContentType: ct}
+	body := &trafficv1.Body{Size: uint64(size), ContentType: ct, ContentEncoding: enc}
 	if ext.Valid && ext.String != "" {
 		body.Content = &trafficv1.Body_ObjectRef{ObjectRef: sha}
 	} else {

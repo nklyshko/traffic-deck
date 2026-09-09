@@ -150,6 +150,33 @@ func (s *stitcher) emit(f *Flow, isNew bool) {
 	}
 }
 
+// finish folds each flow's wire content-encoding into its bodies, once all the frames
+// are in: the encoding is recorded, and gzip is undone so what a flow holds is plain
+// bytes. Bodies accumulate across frames, so this can only run after the last one.
+//
+// tshark decompresses some of them for us and not others: its HTTP/3 dissector has no
+// body-decompression preference at all (Wireshark 4.6), so h3 DATA bytes reach us exactly
+// as they were on the wire, while an h1/h2 body it reassembled arrives decoded. Bodies it
+// already decoded are left alone — decoding twice would eat a gzip *file* served under a
+// gzip content-encoding — but their encoding is still recorded, since the field describes
+// what the bytes were on the wire, not who decoded them.
+func (s *stitcher) finish() {
+	for _, f := range s.ds.Flows {
+		if enc := bodyEncoding(f.RequestHeaders); enc != "" && len(f.RequestBody) > 0 {
+			f.RequestBodyEncoding = enc
+			if !f.reqBodyFinal {
+				f.RequestBody = decodeBody(enc, f.RequestBody, noBodyLimit)
+			}
+		}
+		if enc := bodyEncoding(f.ResponseHeaders); enc != "" && len(f.ResponseBody) > 0 {
+			f.ResponseBodyEncoding = enc
+			if !f.respBodyFinal {
+				f.ResponseBody = decodeBody(enc, f.ResponseBody, noBodyLimit)
+			}
+		}
+	}
+}
+
 // add dispatches one per-frame PDML record to the handler for its protocol.
 func (s *stitcher) add(l layers) {
 	tcp := l.first(fTCPStream)

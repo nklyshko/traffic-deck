@@ -574,8 +574,8 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 	for _, h := range f.ResponseHeaders {
 		pf.ResponseHeaders = append(pf.ResponseHeaders, &trafficv1.Header{Name: h.Name, Value: h.Value})
 	}
-	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders), f.RequestBodyTruncated)
-	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders), f.ResponseBodyTruncated)
+	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders), f.RequestBodyTruncated, f.RequestBodyEncoding)
+	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders), f.ResponseBodyTruncated, f.ResponseBodyEncoding)
 	return pf
 }
 
@@ -607,11 +607,13 @@ func wsMsgToProto(m *decode.WsMessage) *trafficv1.WsMessage {
 	return pm
 }
 
-func liveBody(b []byte, ct string, truncated bool) *trafficv1.Body {
+func liveBody(b []byte, ct string, truncated bool, encoding string) *trafficv1.Body {
 	if len(b) == 0 {
 		return nil
 	}
-	body := &trafficv1.Body{Size: uint64(len(b)), ContentType: ct, Truncated: truncated}
+	body := &trafficv1.Body{
+		Size: uint64(len(b)), ContentType: ct, Truncated: truncated, ContentEncoding: encoding,
+	}
 	if len(b) <= store.InlineBlobMax {
 		body.Content = &trafficv1.Body_Inline{Inline: b}
 	}
