@@ -13,7 +13,7 @@ Everything is configured by environment variable; there is no config file.
 | `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
 | `GATEWAY_RECORD_LIVE` | `true` | the live decode is authoritative: persist its flows on close and skip the batch pass, keeping bodies whole (so they are readable in full mid-capture). Set `off` to run an authoritative batch tshark re-decode on close instead (useful to verify the live decoder) — then a live body is capped at 256 KiB and the viewer labels it a preview until the session closes. |
 | `GATEWAY_TSHARK_VERIFY` | `false` | on close, compare the live-decoded flows against a tshark decode and log the differences. |
-| `GATEWAY_MCP` | `false` | auto-start the [MCP server](mcp.md) on launch (headless agent access without a viewer). The TUI can also toggle it with `X`; either way the gateway owns it, so it outlives the viewer. |
+| `GATEWAY_MCP` | `true` | auto-start the [MCP server](mcp.md) on launch, so an agent client can attach without a viewer. Set `off` to keep it down; the TUI toggles it with `X` either way. The gateway owns it, so it outlives the viewer, and a gateway with no MCP launcher installed just logs that and carries on. |
 | `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. |
 
 ### Logging

@@ -4,6 +4,14 @@
 gateway's `ViewerService` (it never touches SQLite directly, so it works against a local
 or remote gateway).
 
+The gateway starts it for you and owns it, so it is up the moment `trafficdeck` is and it
+outlives the viewer. `X` on the TUI's sessions screen stops and restarts it;
+`GATEWAY_MCP=off` keeps it down from the start. If no launcher can be found (no `uv` with
+the repo's `mcp/` dir, no `trafficdeck-mcp` on `PATH`, no `TRAFFICDECK_SERVICE_MCP`) the
+gateway logs that and starts without it.
+
+To run one yourself instead — against a standalone or remote gateway:
+
 ```sh
 mcp/run.sh                                            # GATEWAY_ADDR / MCP_PORT overridable
 # or: GATEWAY_ADDR=127.0.0.1:7331 uv run --directory mcp python -m traffic_mcp.server
@@ -16,9 +24,6 @@ stdio instead, set `MCP_TRANSPORT=stdio` (other value: `sse`):
 ```sh
 MCP_TRANSPORT=stdio mcp/run.sh
 ```
-
-The gateway can also own the server, so it outlives the viewer: `GATEWAY_MCP=true` at
-launch, or `X` on the TUI's sessions screen.
 
 ## Tools
 

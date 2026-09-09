@@ -47,7 +47,7 @@ traffic unless you want one.
   the gateway, including header and body terms, so the viewer holds a page rather than a
   session and a 273k-flow capture opens instantly.
 - **MCP** — [`trafficdeck-mcp`](docs/mcp.md) exposes recorded sessions to LLM/agent
-  clients over the same read API.
+  clients over the same read API, started with the gateway so it's there by default.
 - **Sessions** — self-contained per-session SQLite bundles;
   [export/import](docs/sessions.md) as a single `.tar.gz`.
 

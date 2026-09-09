@@ -1,6 +1,7 @@
 package sourcemgr
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -274,6 +275,12 @@ func killGroup(cmd *exec.Cmd) {
 	}
 }
 
+// ErrServiceNotFound is what Start reports for a name that isn't in the registry. An
+// uninstalled service presents the same way — DefaultServices omits one it can't locate —
+// so a caller that auto-starts can tell "not installed here" from a launch failure.
+var ErrServiceNotFound = errors.New("unknown service")
+
 type notFoundError struct{ name string }
 
 func (e *notFoundError) Error() string { return "unknown service " + e.name }
+func (e *notFoundError) Unwrap() error { return ErrServiceNotFound }

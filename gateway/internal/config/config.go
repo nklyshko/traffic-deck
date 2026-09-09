@@ -35,8 +35,10 @@ type Config struct {
 	// RecordLive on it runs an extra diagnostic tshark decode (not persisted) just for
 	// the comparison. Default false. (Env: GATEWAY_TSHARK_VERIFY.)
 	TsharkVerify bool
-	// StartMCP auto-starts the MCP server on launch (GATEWAY_MCP), for headless agent
-	// access without a viewer. Default false; the TUI can also toggle it.
+	// StartMCP auto-starts the MCP server on launch (GATEWAY_MCP), so an agent can attach
+	// without a viewer having to toggle it. Default true; set GATEWAY_MCP=off to keep it
+	// down. It binds loopback and serves read-only, and a gateway with no MCP launcher
+	// installed just logs that and carries on. The TUI can also toggle it with X.
 	StartMCP bool
 
 	// FingerprintsDir is the directory of user TLS-fingerprint files (*.json) that
@@ -93,7 +95,7 @@ func Load() Config {
 		LiveDecode:      getbool("GATEWAY_LIVE_DECODE", true),
 		RecordLive:      getbool("GATEWAY_RECORD_LIVE", true),
 		TsharkVerify:    getbool("GATEWAY_TSHARK_VERIFY", false),
-		StartMCP:        getbool("GATEWAY_MCP", false),
+		StartMCP:        getbool("GATEWAY_MCP", true),
 		FingerprintsDir: getenv("TRAFFICDECK_FP_DIR", tlsfp.DefaultDir()),
 		LogFile:         getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
 		LogMaxSizeMB:    getint("GATEWAY_LOG_MAX_SIZE_MB", 50),

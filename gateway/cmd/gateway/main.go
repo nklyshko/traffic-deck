@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -135,6 +136,24 @@ func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.St
 	return obj, st
 }
 
+// startMCP brings the MCP server up at launch (GATEWAY_MCP, on by default) so an agent
+// client can attach without anyone toggling it in the TUI first. Not having it installed is
+// not a failure — DefaultServices omits a service it can't locate — so that case says what's
+// missing and how to turn the attempt off, rather than logging an error every launch.
+func startMCP(cfg config.Config, svcs *sourcemgr.Services) {
+	if !cfg.StartMCP {
+		return
+	}
+	_, err := svcs.Start("mcp")
+	switch {
+	case errors.Is(err, sourcemgr.ErrServiceNotFound):
+		log.Print("MCP server not started: no launcher found (needs `uv` with the repo's mcp/ dir, " +
+			"a trafficdeck-mcp on PATH, or TRAFFICDECK_SERVICE_MCP); set GATEWAY_MCP=off to skip this")
+	case err != nil:
+		log.Printf("auto-start mcp: %v", err)
+	}
+}
+
 func serve() {
 	ctx := context.Background()
 	cfg := config.Load()
@@ -151,11 +170,7 @@ func serve() {
 	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
 	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
 	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify)
-	if cfg.StartMCP {
-		if _, err := svcs.Start("mcp"); err != nil {
-			log.Printf("auto-start mcp: %v", err)
-		}
-	}
+	startMCP(cfg, svcs)
 	// Reap spawned capture-source and service processes (and their groups) on shutdown, so a
 	// browser, emulator, or MCP server they started doesn't linger after the gateway stops.
 	sig := make(chan os.Signal, 1)
@@ -207,11 +222,7 @@ func runFused() {
 		stClose = st.Close
 		s = grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
 		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify)
-		if cfg.StartMCP {
-			if _, err := svcs.Start("mcp"); err != nil {
-				log.Printf("auto-start mcp: %v", err)
-			}
-		}
+		startMCP(cfg, svcs)
 		go func() { _ = s.Serve(lis) }()
 		log.Printf("gateway listening on %s (live decode: %v, record live: %v)",
 			cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive)

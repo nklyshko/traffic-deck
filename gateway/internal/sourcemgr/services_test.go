@@ -1,6 +1,7 @@
 package sourcemgr
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 	"testing"
@@ -95,10 +96,16 @@ func TestSpawnedServiceRunsInOwnSession(t *testing.T) {
 	}
 }
 
+// An unknown service must be distinguishable from a launch failure: the gateway auto-starts
+// the MCP server and treats "not installed here" as a note, not an error.
 func TestStartUnknownService(t *testing.T) {
 	svcs := NewServices("addr", map[string]ServiceSpec{})
-	if _, err := svcs.Start("nope"); err == nil {
+	_, err := svcs.Start("nope")
+	if err == nil {
 		t.Fatal("starting an unknown service should error")
+	}
+	if !errors.Is(err, ErrServiceNotFound) {
+		t.Errorf("Start(unknown) = %v, want it to wrap ErrServiceNotFound", err)
 	}
 }
 
