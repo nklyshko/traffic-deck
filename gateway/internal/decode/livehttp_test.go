@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // feedHTTP drives one httpStream with request/response byte chunks and returns the

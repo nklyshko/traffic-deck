@@ -1,4 +1,4 @@
-module gitlab.com/nklyshko/traffic-deck/gateway
+module github.com/nklyshko/traffic-deck/gateway
 
 go 1.25.0
 

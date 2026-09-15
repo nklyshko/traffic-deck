@@ -18,7 +18,7 @@ import (
 
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
+	"github.com/nklyshko/traffic-deck/gateway/internal/config"
 )
 
 // The active configuration, as ChildLog needs it to open a child's own file, and whether

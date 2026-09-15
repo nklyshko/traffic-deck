@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
+	"github.com/nklyshko/traffic-deck/gateway/internal/config"
 )
 
 // captureStderr swaps os.Stderr for a pipe while fn runs and returns what was written there.

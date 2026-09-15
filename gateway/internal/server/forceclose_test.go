@@ -11,9 +11,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 // TestForceCloseSessionGuards covers the guards: a missing session is NotFound, and an

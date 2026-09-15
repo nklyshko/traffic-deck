@@ -11,7 +11,7 @@ import (
 	gplayers "github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // feedProxyTunnel drives one tcpStream through a cleartext CONNECT handshake and then the

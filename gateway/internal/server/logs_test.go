@@ -8,10 +8,10 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/config"
+	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
+	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 )
 
 // fakeLogStream is a minimal grpc.ServerStreamingServer[LogChunk] that accumulates the

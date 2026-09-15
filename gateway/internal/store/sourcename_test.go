@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 )
 
 // The sessions.source_kind column used to hold a SourceKind enum name and now holds the

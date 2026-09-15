@@ -15,7 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 )
 
 // FavoriteTagID is the fixed id of the seeded built-in Favorite tag (catalog.sql).

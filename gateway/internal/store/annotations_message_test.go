@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
 
 // TestMessageAnnotations checks that a WebSocket/parsed message is annotatable like a flow:

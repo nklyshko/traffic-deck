@@ -3,7 +3,7 @@ managed:
   enabled: true
   override:
     - file_option: go_package_prefix
-      value: gitlab.com/nklyshko/traffic-deck/gateway/gen
+      value: github.com/nklyshko/traffic-deck/gateway/gen
 plugins:
   - local: protoc-gen-go
     out: gateway/gen

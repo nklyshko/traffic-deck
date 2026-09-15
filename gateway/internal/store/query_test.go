@@ -7,8 +7,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/filter"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/filter"
 )
 
 // seedQuerySession writes n flows alternating host and method, with a body carrying the

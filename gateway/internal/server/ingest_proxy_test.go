@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 )
 
 // A pushed flow that rode a SOCKS/CONNECT proxy carries a Proxy field (mitmproxy's

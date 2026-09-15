@@ -13,11 +13,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 type Options struct {

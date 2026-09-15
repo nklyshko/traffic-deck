@@ -9,7 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
+	"github.com/nklyshko/traffic-deck/gateway/internal/config"
 )
 
 // Third-party modules self-enroll by dropping a manifest in $TRAFFIC_DECK_HOME/plugins/

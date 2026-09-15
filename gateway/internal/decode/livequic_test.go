@@ -11,7 +11,7 @@ import (
 
 	"github.com/quic-go/qpack"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // putUvarint encodes a QUIC varint (1-byte form is enough for our small test frames).

@@ -13,7 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 type Config struct {

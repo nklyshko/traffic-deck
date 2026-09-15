@@ -26,7 +26,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/vmihailenco/msgpack/v5"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 const (

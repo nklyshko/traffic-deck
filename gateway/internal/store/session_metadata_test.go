@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 )
 
 // TestSessionMetadataRoundTrip checks that capture-source metadata supplied at OpenSession

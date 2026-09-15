@@ -9,7 +9,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 func h2encode(fields ...hpack.HeaderField) []byte {

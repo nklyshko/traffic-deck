@@ -19,7 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 // maxLiveBody caps body bytes kept per live message; the batch decode on close has the

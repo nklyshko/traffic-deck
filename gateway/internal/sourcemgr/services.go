@@ -13,7 +13,7 @@ import (
 	"sync"
 	"syscall"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
+	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
 )
 
 // Auxiliary services are gateway-owned processes that are not capture sources — the MCP

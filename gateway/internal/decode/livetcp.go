@@ -29,9 +29,9 @@ import (
 	"github.com/google/gopacket/reassembly"
 	"github.com/google/uuid"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
+	"github.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // assemblerCtx carries a packet's capture time into the reassembler, so ReassembledSG can

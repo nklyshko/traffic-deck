@@ -14,7 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 // HasCustomDecoders reports whether any custom protocol decoders are registered, so

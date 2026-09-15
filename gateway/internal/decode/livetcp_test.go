@@ -15,9 +15,9 @@ import (
 	gplayers "github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcapgo"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlstest"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlstest"
 )
 
 // --- a trivial length-prefixed test protocol + decoder (registered for this test) ---

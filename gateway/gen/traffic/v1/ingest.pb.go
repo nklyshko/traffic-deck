@@ -845,7 +845,7 @@ const file_traffic_v1_ingest_proto_rawDesc = "" +
 	"\tPushFlows\x12\x15.traffic.v1.FlowBatch\x1a\x13.traffic.v1.PushAck(\x01\x12K\n" +
 	"\fCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummary\x12P\n" +
 	"\x11ForceCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummaryB\xa9\x01\n" +
-	"\x0ecom.traffic.v1B\vIngestProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
+	"\x0ecom.traffic.v1B\vIngestProtoP\x01ZAgithub.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
 	"Traffic.V1\xca\x02\n" +
 	"Traffic\\V1\xe2\x02\x16Traffic\\V1\\GPBMetadata\xea\x02\vTraffic::V1b\x06proto3"
 

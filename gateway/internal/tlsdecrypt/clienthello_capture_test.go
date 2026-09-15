@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlstest"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlstest"
 )
 
 // TestCapturesClientHelloVerbatim runs a real TLS 1.3 handshake and checks that Conn keeps

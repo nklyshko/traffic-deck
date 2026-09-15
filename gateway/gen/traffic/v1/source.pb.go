@@ -32,7 +32,7 @@ const file_traffic_v1_source_proto_rawDesc = "" +
 	"\vStopCapture\x12\x1e.traffic.v1.StopCaptureRequest\x1a\x11.traffic.v1.Empty\x12D\n" +
 	"\rReleaseSource\x12 .traffic.v1.ReleaseSourceRequest\x1a\x11.traffic.v1.Empty\x12=\n" +
 	"\x06Status\x12\x19.traffic.v1.StatusRequest\x1a\x18.traffic.v1.SourceStatusB\xa9\x01\n" +
-	"\x0ecom.traffic.v1B\vSourceProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
+	"\x0ecom.traffic.v1B\vSourceProtoP\x01ZAgithub.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
 	"Traffic.V1\xca\x02\n" +
 	"Traffic\\V1\xe2\x02\x16Traffic\\V1\\GPBMetadata\xea\x02\vTraffic::V1b\x06proto3"
 

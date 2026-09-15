@@ -9,10 +9,10 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 const liveEventBuffer = 256

@@ -3,7 +3,7 @@ package quicdecrypt
 import (
 	"fmt"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // Conn passively decrypts one QUIC connection from its two directional datagram streams,

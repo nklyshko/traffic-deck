@@ -20,8 +20,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/qpackdec"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/qpackdec"
+	"github.com/nklyshko/traffic-deck/gateway/internal/quicdecrypt"
 )
 
 // HTTP/3 frame types (RFC 9114 §7.2) we handle; others are skipped by length.

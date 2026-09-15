@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
 
 // TestWsMessageRawRoundTrip checks that a WebSocket message's original (undecoded) bytes

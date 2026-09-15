@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 )
 
 func f(proto, method, authority, path string) *trafficv1.Flow {

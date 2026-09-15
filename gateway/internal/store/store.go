@@ -24,9 +24,9 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 // ErrNotFound is returned when a requested row does not exist.

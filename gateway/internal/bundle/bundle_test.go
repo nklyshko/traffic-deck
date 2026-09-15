@@ -5,10 +5,10 @@ import (
 	"context"
 	"testing"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/bundle"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 // seed creates a session with one flow (inline + spilled bodies), a tag def, and a

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlstest"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlstest"
 )
 
 // TestDecryptAgainstCryptoTLS runs a real TLS 1.3 handshake + bidirectional app data,

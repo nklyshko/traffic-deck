@@ -27,7 +27,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 // FormatV1 identifies the archive format in the manifest.

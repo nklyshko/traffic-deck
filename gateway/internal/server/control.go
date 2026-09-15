@@ -10,13 +10,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/importer"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/bundle"
+	"github.com/nklyshko/traffic-deck/gateway/internal/importer"
+	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
+	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
+	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 // Control implements trafficv1.ControlServiceServer — annotations, session export, and

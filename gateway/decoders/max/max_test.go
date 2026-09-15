@@ -10,7 +10,7 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"github.com/vmihailenco/msgpack/v5"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
 // frame builds a MAX frame with the given cmd/opcode over a (msgpack) payload,

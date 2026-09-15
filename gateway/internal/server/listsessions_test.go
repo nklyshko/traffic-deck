@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 // sessionByID finds a session in a ListSessions result.

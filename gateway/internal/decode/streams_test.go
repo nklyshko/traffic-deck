@@ -8,8 +8,8 @@ import (
 
 	"github.com/vmihailenco/msgpack/v5"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/decoders"
-	_ "gitlab.com/nklyshko/traffic-deck/gateway/decoders/max" // register the MAX decoder
+	"github.com/nklyshko/traffic-deck/gateway/decoders"
+	_ "github.com/nklyshko/traffic-deck/gateway/decoders/max" // register the MAX decoder
 )
 
 // maxFrame builds a plain (uncompressed) MAX frame over a msgpack body.

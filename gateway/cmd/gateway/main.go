@@ -26,20 +26,20 @@ import (
 
 	"google.golang.org/grpc"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/bundle"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/config"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/importer"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/logging"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/objstore"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/server"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/store"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
+	"github.com/nklyshko/traffic-deck/gateway/internal/bundle"
+	"github.com/nklyshko/traffic-deck/gateway/internal/config"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/importer"
+	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
+	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
+	"github.com/nklyshko/traffic-deck/gateway/internal/server"
+	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 
 	// Custom protocol decoders self-register via init(). Add a blank import
 	// here to compile a decoder into the gateway.
-	_ "gitlab.com/nklyshko/traffic-deck/gateway/decoders/max"
+	_ "github.com/nklyshko/traffic-deck/gateway/decoders/max"
 )
 
 // shutdownTimeout bounds the whole teardown. Quitting the viewer must not be able to hang

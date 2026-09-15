@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
+	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 )
 
 // installViewerModule points $TRAFFIC_DECK_HOME at a temp home holding one plugin manifest.

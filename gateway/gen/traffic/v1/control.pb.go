@@ -3071,7 +3071,7 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\n" +
 	"ListGroups\x12\x1d.traffic.v1.ListGroupsRequest\x1a\x15.traffic.v1.GroupList\x12<\n" +
 	"\tSetGroups\x12\x1c.traffic.v1.SetGroupsRequest\x1a\x11.traffic.v1.EmptyB\xaa\x01\n" +
-	"\x0ecom.traffic.v1B\fControlProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
+	"\x0ecom.traffic.v1B\fControlProtoP\x01ZAgithub.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
 	"Traffic.V1\xca\x02\n" +
 	"Traffic\\V1\xe2\x02\x16Traffic\\V1\\GPBMetadata\xea\x02\vTraffic::V1b\x06proto3"
 

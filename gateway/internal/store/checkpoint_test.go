@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/decode"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
 
 // TestFinishSessionCheckpointsWAL: a finalized bundle's write-ahead log is folded back in

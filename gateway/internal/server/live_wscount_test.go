@@ -3,7 +3,7 @@ package server
 import (
 	"testing"
 
-	trafficv1 "gitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 )
 
 // A pushed WebSocket flow is re-published whole as it progresses (mitmproxy re-pushes on

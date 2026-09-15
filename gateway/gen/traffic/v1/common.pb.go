@@ -1760,7 +1760,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x17SESSION_STATUS_DECODING\x10\x02\x12\x19\n" +
 	"\x15SESSION_STATUS_CLOSED\x10\x03\x12\x18\n" +
 	"\x14SESSION_STATUS_ERROR\x10\x04B\xa9\x01\n" +
-	"\x0ecom.traffic.v1B\vCommonProtoP\x01ZAgitlab.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
+	"\x0ecom.traffic.v1B\vCommonProtoP\x01ZAgithub.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
 	"Traffic.V1\xca\x02\n" +
 	"Traffic\\V1\xe2\x02\x16Traffic\\V1\\GPBMetadata\xea\x02\vTraffic::V1b\x06proto3"
 

@@ -19,7 +19,7 @@ import (
 	"github.com/quic-go/qpack"
 	"golang.org/x/net/http2"
 
-	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
+	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
 // gzipBytes returns s as a gzip stream, the way a server would send it.
