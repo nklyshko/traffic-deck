@@ -1,11 +1,17 @@
-// Package config loads gateway configuration from the environment.
+// Package config loads gateway configuration from the environment, with
+// $TRAFFIC_DECK_HOME/config.toml (default ~/.traffic-deck/config.toml) underneath it as the
+// place to make a choice permanent without a shell rc. Env wins over the file.
 package config
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"gitlab.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
@@ -40,6 +46,11 @@ type Config struct {
 	// down. It binds loopback and serves read-only, and a gateway with no MCP launcher
 	// installed just logs that and carries on. The TUI can also toggle it with X.
 	StartMCP bool
+	// Viewer picks what one-command mode (`trafficdeck` with no args) runs in the
+	// foreground: "tui" (default), "none" (nothing — a module serves the UI and the gateway
+	// just stays up), or a command line to run instead. Kept verbatim: a command is
+	// case-sensitive.
+	Viewer string
 
 	// FingerprintsDir is the directory of user TLS-fingerprint files (*.json) that
 	// register additional well-known ClientHello fingerprints on top of the compiled-in
@@ -56,16 +67,68 @@ type Config struct {
 	LogCompress   bool   // gzip rotated files
 }
 
-func getenv(key, def string) string {
+// Home is $TRAFFIC_DECK_HOME (default ~/.traffic-deck), the per-user root shared with the
+// capture tools: plugin manifests, fingerprints, and config.toml live under it. "" if no
+// home can be resolved.
+func Home() string {
+	if home := os.Getenv("TRAFFIC_DECK_HOME"); home != "" {
+		return home
+	}
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return filepath.Join(h, ".traffic-deck")
+	}
+	return ""
+}
+
+// source resolves one setting: the environment first, then $TRAFFIC_DECK_HOME/config.toml,
+// then the built-in default. Env wins so a one-off `GATEWAY_VIEWER=web trafficdeck` still
+// overrides the file, and the file exists so a permanent choice doesn't have to live in a
+// shell rc.
+type source map[string]string
+
+// loadFile reads config.toml into env-var-keyed strings. The keys *are* the env var names
+// (`GATEWAY_VIEWER = "web"`), matched case-insensitively — one name per setting to document
+// and no mapping table to keep in sync. A malformed or unreadable file is logged and
+// ignored rather than fatal, like a bad plugin manifest: config is not worth refusing to
+// start over.
+func loadFile() source {
+	home := Home()
+	if home == "" {
+		return nil
+	}
+	path := filepath.Join(home, "config.toml")
+	var raw map[string]any
+	if _, err := toml.DecodeFile(path, &raw); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("config: ignoring %s: %v", path, err)
+		}
+		return nil
+	}
+	s := make(source, len(raw))
+	for k, v := range raw {
+		// A nested table is not a setting — it's someone expecting sections we don't have.
+		if _, ok := v.(map[string]any); ok {
+			log.Printf("config: ignoring [%s] in %s: settings are flat, keyed by env var name", k, path)
+			continue
+		}
+		s[strings.ToUpper(k)] = fmt.Sprint(v)
+	}
+	return s
+}
+
+func (s source) str(key, def string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	if v := s[key]; v != "" {
 		return v
 	}
 	return def
 }
 
-// getbool reads a boolean env var (1/true/yes/on enable; 0/false/no/off disable).
-func getbool(key string, def bool) bool {
-	switch strings.ToLower(os.Getenv(key)) {
+// boolean reads a boolean setting (1/true/yes/on enable; 0/false/no/off disable).
+func (s source) boolean(key string, def bool) bool {
+	switch strings.ToLower(s.str(key, "")) {
 	case "1", "true", "yes", "on":
 		return true
 	case "0", "false", "no", "off":
@@ -75,32 +138,33 @@ func getbool(key string, def bool) bool {
 	}
 }
 
-// getint reads an integer env var, falling back to def when unset or unparseable.
-func getint(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
+// integer reads an integer setting, falling back to def when unset or unparseable.
+func (s source) integer(key string, def int) int {
+	if n, err := strconv.Atoi(s.str(key, "")); err == nil {
+		return n
 	}
 	return def
 }
 
-// Load reads config from env with sensible local-dev defaults.
+// Load reads config from the environment and $TRAFFIC_DECK_HOME/config.toml (env wins),
+// with sensible local-dev defaults.
 func Load() Config {
-	dataRoot := getenv("DATA_ROOT", "./data")
+	s := loadFile()
+	dataRoot := s.str("DATA_ROOT", "./data")
 	return Config{
-		GRPCAddr:        getenv("GATEWAY_ADDR", "127.0.0.1:7331"),
+		GRPCAddr:        s.str("GATEWAY_ADDR", "127.0.0.1:7331"),
 		DataRoot:        dataRoot,
-		TsharkPath:      getenv("TSHARK_PATH", "tshark"),
-		LiveDecode:      getbool("GATEWAY_LIVE_DECODE", true),
-		RecordLive:      getbool("GATEWAY_RECORD_LIVE", true),
-		TsharkVerify:    getbool("GATEWAY_TSHARK_VERIFY", false),
-		StartMCP:        getbool("GATEWAY_MCP", true),
-		FingerprintsDir: getenv("TRAFFICDECK_FP_DIR", tlsfp.DefaultDir()),
-		LogFile:         getenv("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
-		LogMaxSizeMB:    getint("GATEWAY_LOG_MAX_SIZE_MB", 50),
-		LogMaxBackups:   getint("GATEWAY_LOG_MAX_BACKUPS", 10),
-		LogMaxAgeDays:   getint("GATEWAY_LOG_MAX_AGE_DAYS", 30),
-		LogCompress:     getbool("GATEWAY_LOG_COMPRESS", true),
+		TsharkPath:      s.str("TSHARK_PATH", "tshark"),
+		LiveDecode:      s.boolean("GATEWAY_LIVE_DECODE", true),
+		RecordLive:      s.boolean("GATEWAY_RECORD_LIVE", true),
+		TsharkVerify:    s.boolean("GATEWAY_TSHARK_VERIFY", false),
+		StartMCP:        s.boolean("GATEWAY_MCP", true),
+		Viewer:          s.str("GATEWAY_VIEWER", "tui"),
+		FingerprintsDir: s.str("TRAFFICDECK_FP_DIR", tlsfp.DefaultDir()),
+		LogFile:         s.str("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
+		LogMaxSizeMB:    s.integer("GATEWAY_LOG_MAX_SIZE_MB", 50),
+		LogMaxBackups:   s.integer("GATEWAY_LOG_MAX_BACKUPS", 10),
+		LogMaxAgeDays:   s.integer("GATEWAY_LOG_MAX_AGE_DAYS", 30),
+		LogCompress:     s.boolean("GATEWAY_LOG_COMPRESS", true),
 	}
 }

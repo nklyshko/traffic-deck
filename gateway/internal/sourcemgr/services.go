@@ -215,11 +215,16 @@ func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 	s.mu.Lock()
 	s.logs[name] = out
 	s.mu.Unlock()
-	if p := logging.ChildLogPath(name); p != "" {
-		log.Printf("service %q started: %s (log: %s)", name, spec.URL, p)
-	} else {
-		log.Printf("service %q started: %s", name, spec.URL)
+	// One line an operator can act on: where to open it, and where to read it. Both are
+	// optional — a service with neither just says it started, rather than leaving gaps.
+	msg := fmt.Sprintf("service %q started", name)
+	if spec.URL != "" {
+		msg += " — open " + spec.URL
 	}
+	if p := logging.ChildLogPath(name); p != "" {
+		msg += " (log: " + p + ")"
+	}
+	log.Print(msg)
 	return cmd, nil
 }
 

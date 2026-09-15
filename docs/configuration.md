@@ -1,12 +1,28 @@
 # Configuration
 
-Everything is configured by environment variable; there is no config file.
+Everything is configured by environment variable. To make a setting permanent without
+touching a shell rc, put it in `~/.traffic-deck/config.toml` — the keys are the same env var
+names, and the environment still wins over the file:
+
+```toml
+# ~/.traffic-deck/config.toml  ($TRAFFIC_DECK_HOME/config.toml)
+GATEWAY_VIEWER = "web"          # bare `trafficdeck` brings up the web UI, not the TUI
+GATEWAY_MCP = false             # values may be strings, bools or numbers
+DATA_ROOT = "/Users/me/captures"
+```
+
+Keys are matched case-insensitively (`gateway_viewer` works too), settings are flat (there
+are no `[sections]`), and an unknown key is ignored. A malformed file is logged and skipped
+rather than fatal — a typo in config must not stop the gateway from starting. Precedence is
+**env → file → built-in default**, so `GATEWAY_VIEWER=tui trafficdeck` still overrides the
+file for one run.
 
 ## Gateway
 
 | Env | Default | Meaning |
 |-----|---------|---------|
 | `DATA_ROOT` | `./data` | SQLite bundles + catalog |
+| `TRAFFIC_DECK_HOME` | `~/.traffic-deck` | per-user root, shared with the capture tools: `config.toml`, [plugin manifests](modules.md), profiles. Env only — a config file can't relocate the directory it lives in. |
 | `GATEWAY_ADDR` | `127.0.0.1:7331` | gRPC listen / viewer + tools connect addr |
 | `TRAFFICDECK_FP_DIR` | `~/.traffic-deck/fingerprints` | dir of user TLS-fingerprint `*.json` files (on top of the builtin set) — see [TLS client fingerprint names](fingerprints.md) |
 | `TSHARK_PATH` | `tshark` | batch-decode / import binary (not used by the default live path) |
@@ -15,6 +31,7 @@ Everything is configured by environment variable; there is no config file.
 | `GATEWAY_TSHARK_VERIFY` | `false` | on close, compare the live-decoded flows against a tshark decode and log the differences. |
 | `GATEWAY_MCP` | `true` | auto-start the [MCP server](mcp.md) on launch, so an agent client can attach without a viewer. Set `off` to keep it down; the TUI toggles it with `X` either way. The gateway owns it, so it outlives the viewer, and a gateway with no MCP launcher installed just logs that and carries on. |
 | `GATEWAY_LOG_FILE` | `<DATA_ROOT>/logs/gateway.log` | rolling log file; logs are teed to stderr. Set `off` for stderr only. |
+| `GATEWAY_VIEWER` | `tui` | what bare `trafficdeck` runs in the foreground: `tui` (built-in); a [module](modules.md) viewer by name (`webui`, or `webui:web` when a module declares several) — its command, `cwd`, `env`, `url` and `screen` come from the manifest; a bare command line (`myviewer --flag`, assumed full-screen, split on spaces, no shell quoting); or `none` — nothing in the foreground, the gateway stays up until Ctrl-C while a module (or you) serves the UI. The viewer inherits the terminal and gets `GATEWAY_ADDR`; when it exits, the gateway shuts down. |
 
 ### Logging
 

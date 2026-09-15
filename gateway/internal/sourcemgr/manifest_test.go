@@ -128,6 +128,63 @@ command = ["npm", "run", "dev"]
 	}
 }
 
+// A module UI is something a user has to open, so the manifest can say where it is: the
+// gateway narrates it on start and hands it to viewers, instead of the address being
+// knowable only from the module's own output.
+func TestApplyManifestsCarriesProcessURL(t *testing.T) {
+	dir := t.TempDir()
+	writeManifest(t, dir, `
+name = "acme"
+[[process]]
+name = "web"
+command = ["npm", "run", "dev"]
+url = "http://127.0.0.1:8081"
+detail = "loopback only"
+`)
+	svc := map[string]ServiceSpec{}
+	ApplyManifests(dir, map[string]Spec{}, svc)
+
+	for _, spec := range svc {
+		if spec.URL != "http://127.0.0.1:8081" || spec.Detail != "loopback only" {
+			t.Errorf("web service = %+v, want the manifest's url and detail", spec)
+		}
+		return
+	}
+	t.Errorf("web process not registered: %+v", svc)
+}
+
+// A viewer is not a service: it must never auto-start alongside the foreground copy the
+// user selected, so it stays out of the service registry entirely.
+func TestApplyManifestsExcludesViewerProcesses(t *testing.T) {
+	dir := t.TempDir()
+	writeManifest(t, dir, `
+name = "acme"
+[[process]]
+name = "adapter"
+command = ["acme-adapter"]
+[[process]]
+name = "ui"
+command = ["acme-ui"]
+viewer = true
+`)
+	svc := map[string]ServiceSpec{}
+	ApplyManifests(dir, map[string]Spec{}, svc)
+
+	for key, spec := range svc {
+		if spec.Argv[0] == "acme-ui" {
+			t.Errorf("viewer process registered as service %q: %+v", key, spec)
+		}
+	}
+	if len(svc) != 1 {
+		t.Errorf("want only the adapter registered, got %+v", svc)
+	}
+
+	viewers := Viewers(dir)
+	if len(viewers) != 1 || viewers[0].Key() != "acme:ui" {
+		t.Fatalf("Viewers = %+v, want just acme:ui", viewers)
+	}
+}
+
 // TestModuleSourceDialsControlAddr is the end-to-end dial-only path: a manifest whose
 // [control].addr points at a running CaptureSourceService, reached without spawning.
 func TestModuleSourceDialsControlAddr(t *testing.T) {

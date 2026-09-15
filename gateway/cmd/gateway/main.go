@@ -19,6 +19,8 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -105,6 +107,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|import|redecode|export|import-session] [flags]")
 	fmt.Fprintln(os.Stderr, "  (no command)  run the gateway and the TUI together")
+	fmt.Fprintln(os.Stderr, "                (GATEWAY_VIEWER=tui|<module>|<command>|none picks the foreground viewer)")
 	os.Exit(2)
 }
 
@@ -189,33 +192,41 @@ func serve() {
 	}
 }
 
-// runFused is the one-command mode: start the gateway in-process and run the TUI in the
+// runFused is the one-command mode: start the gateway in-process and run the viewer in the
 // foreground, so `trafficdeck` alone brings the whole thing up. When the viewer exits the
 // gateway is shut down cleanly (capture sources reaped). If the gateway address is already
 // in use we assume one is running and just attach the viewer to it. See ADR-0010.
+//
+// Which viewer is GATEWAY_VIEWER (see resolveViewer). With no foreground viewer the gateway
+// stays up on its own and Ctrl-C ends it — everything else about the run is identical.
 func runFused() {
 	ctx := context.Background()
 	cfg := config.Load()
 	logging.Setup(cfg)
 	configureFingerprints(cfg)
 
-	tuiDir := findTUIDir()
-	if tuiDir == "" {
-		log.Fatal("cannot locate the tui/ directory; run `trafficdeck serve` and the TUI separately")
+	v, err := resolveViewer(cfg.Viewer)
+	if err != nil {
+		log.Fatal(err)
 	}
-	if _, err := exec.LookPath("uv"); err != nil {
-		log.Fatal("`uv` is required to run the TUI; install it or run the TUI yourself against `trafficdeck serve`")
+	if v != nil && v.screen {
+		// A full-screen viewer owns the terminal: send our logs and every child's output to
+		// the log file alone, or they overwrite the top of it. A viewer that only prints
+		// lines — and no viewer at all — shares the terminal with us.
+		logging.SetupFused(cfg)
 	}
-
-	// Past the preflight the terminal is the viewer's: send our logs and every child's
-	// output to the log file alone, or they overwrite the top of the TUI.
-	logging.SetupFused(cfg)
 
 	var s *grpc.Server
 	var mgr *sourcemgr.Manager
 	var svcs *sourcemgr.Services
 	var stClose func()
 	if lis, err := net.Listen("tcp", cfg.GRPCAddr); err != nil {
+		if v == nil {
+			// Nothing to attach and nothing to tear down: the running gateway already
+			// launched whatever serves the UI. Blocking on a signal here would do nothing.
+			log.Printf("gateway address %s already in use — the running gateway already has the viewer", cfg.GRPCAddr)
+			return
+		}
 		log.Printf("gateway address %s already in use — attaching the viewer to the running gateway", cfg.GRPCAddr)
 	} else {
 		obj, st := openDeps(ctx, cfg)
@@ -226,14 +237,35 @@ func runFused() {
 		go func() { _ = s.Serve(lis) }()
 		log.Printf("gateway listening on %s (live decode: %v, record live: %v)",
 			cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive)
+		if v == nil {
+			warnNoViewer(svcs.List())
+		}
 	}
 
-	// The viewer runs in the foreground, inheriting the terminal.
-	cmd := exec.Command("uv", "run", "--directory", tuiDir, "python", "-m", "traffic_viewer.app")
-	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+cfg.GRPCAddr)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	runErr := cmd.Run()
-	logging.Setup(cfg) // viewer's gone, the terminal is ours again — teardown errors must show
+	var runErr error
+	if v == nil {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		log.Printf("no foreground viewer (GATEWAY_VIEWER=%s) — Ctrl-C to stop", cfg.Viewer)
+		<-sig
+	} else {
+		// The viewer runs in the foreground, inheriting the terminal. A module viewer also
+		// gets the cwd and env its manifest declares, same as when it runs as a service.
+		if v.url != "" {
+			log.Printf("viewer %s — open %s", v.label, v.url)
+		}
+		cmd := exec.Command(v.argv[0], v.argv[1:]...)
+		cmd.Dir = v.cwd
+		cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+cfg.GRPCAddr)
+		for k, val := range v.env {
+			cmd.Env = append(cmd.Env, k+"="+val)
+		}
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		runErr = cmd.Run()
+		if v.screen {
+			logging.Setup(cfg) // viewer's gone, the terminal is ours again — teardown errors must show
+		}
+	}
 
 	// Viewer exited → tear the gateway down (reap capture sources + services, close store).
 	// Narrated and bounded: the terminal is ours again but nothing here used to print, so a
@@ -264,6 +296,98 @@ func runFused() {
 		}
 		log.Fatalf("run viewer: %v", runErr)
 	}
+}
+
+// viewer is the foreground viewer one-command mode runs: the built-in TUI, a module process
+// marked `viewer = true`, or a bare command. Screen means it paints the terminal, so the
+// gateway must stop writing there while it runs.
+type viewer struct {
+	label  string
+	argv   []string
+	cwd    string
+	env    map[string]string
+	url    string
+	screen bool
+}
+
+// resolveViewer turns GATEWAY_VIEWER into the viewer to run, or nil for "no foreground
+// viewer — keep the gateway up until Ctrl-C".
+//
+//	tui                 the built-in TUI (default)
+//	<module>[:<process>] a module's `viewer = true` process (docs/modules.md); the manifest
+//	                    carries its command, cwd, env, url and whether it owns the screen
+//	<command>           run this, e.g. `myviewer --flag`; assumed to own the screen
+//	none                nothing: the gateway stays up and a module (or you) serves the UI
+func resolveViewer(name string) (*viewer, error) {
+	switch {
+	case strings.EqualFold(name, "none"):
+		return nil, nil
+	case strings.EqualFold(name, "tui"):
+		tuiDir := findTUIDir()
+		if tuiDir == "" {
+			return nil, errors.New("cannot locate the tui/ directory; run `trafficdeck serve` and the TUI separately")
+		}
+		if _, err := exec.LookPath("uv"); err != nil {
+			return nil, errors.New("`uv` is required to run the TUI; install it or run the TUI yourself against `trafficdeck serve`")
+		}
+		return &viewer{
+			label:  "tui",
+			argv:   []string{"uv", "run", "--directory", tuiDir, "python", "-m", "traffic_viewer.app"},
+			screen: true,
+		}, nil
+	}
+
+	viewers := sourcemgr.Viewers(sourcemgr.PluginsDir())
+	spec, found, err := sourcemgr.SelectViewer(viewers, name)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		return &viewer{
+			label: spec.Key(), argv: spec.Argv, cwd: spec.Cwd, env: spec.Env,
+			url: spec.URL, screen: spec.Screen,
+		}, nil
+	}
+
+	// Not a module viewer: a command line. ponytail: split on spaces like
+	// TRAFFICDECK_SERVICE_MCP, no shell quoting — a path with a space needs a wrapper
+	// script until someone actually hits that.
+	argv := strings.Fields(name)
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("GATEWAY_VIEWER=%q is empty: %s", name, viewerChoices(viewers))
+	}
+	if _, err := exec.LookPath(argv[0]); err != nil {
+		return nil, fmt.Errorf("GATEWAY_VIEWER=%q: %w — %s", name, err, viewerChoices(viewers))
+	}
+	// A bare command gets the screen: assuming it doesn't would scribble the gateway's log
+	// over a full-screen viewer, while the reverse only sends our own logs to the file.
+	return &viewer{label: argv[0], argv: argv, screen: true}, nil
+}
+
+// viewerChoices names what GATEWAY_VIEWER accepts here, installed modules included — the
+// answer to a typo is the list, not just "not found".
+func viewerChoices(viewers []sourcemgr.ViewerSpec) string {
+	choices := []string{`"tui"`, `"none"`, "a command to run"}
+	for _, v := range viewers {
+		choices = append(choices, strconv.Quote(v.Key()))
+	}
+	return "use " + strings.Join(choices, ", ")
+}
+
+// warnNoViewer says so when nothing at all is serving a UI: with no foreground viewer the
+// gateway would otherwise sit there looking like it worked. Auto-start is the only thing
+// that knows what a module brought up, and a module's service name isn't ours to hardcode,
+// so the check is "did anything besides our own MCP server come up". Not fatal — a gateway
+// with no viewer is still worth having (`trafficdeck serve` is exactly that).
+func warnNoViewer(services []sourcemgr.ServiceInfo) {
+	for _, svc := range services {
+		if svc.Running && svc.Name != "mcp" {
+			return
+		}
+	}
+	log.Print("no foreground viewer and no module process is running — nothing is serving a UI. " +
+		"A module enrolls by dropping its manifest in ~/.traffic-deck/plugins/ (see docs/modules.md); " +
+		"otherwise attach a viewer to this gateway yourself.")
 }
 
 // findTUIDir locates the repo's tui/ directory (holding traffic_viewer/app.py) by walking
