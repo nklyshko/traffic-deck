@@ -74,6 +74,25 @@ class GatewayClient:
             viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)
         )
 
+    def stream_flows(self, session_id: str, filter_expr: str = "", follow: bool = True):
+        """Live FlowEvents for a session. Delta-only by construction — backfill is
+        query_flows' job — so everything this yields arrived after the call. Returns the
+        streaming call itself (an async iterator); cancel it to stop following."""
+        return self._v().StreamFlows(
+            viewer_pb2.StreamFlowsRequest(
+                session_id=session_id, filter=filter_expr, follow=follow)
+        )
+
+    async def query_sql(self, session_id: str, sql: str, params: list[str] | None = None,
+                        limit: int = 0, timeout_millis: int = 0):
+        """One read-only SQL statement against a session bundle (or the catalog when
+        session_id is empty). The gateway opens the file read-only; see ViewerService."""
+        return await self._v().QuerySQL(
+            viewer_pb2.QuerySQLRequest(
+                session_id=session_id, sql=sql, params=params or [],
+                limit=limit, timeout_millis=timeout_millis)
+        )
+
     async def get_body(self, session_id: str, flow_id: str, response: bool) -> tuple[bytes, bool]:
         """The body's bytes, and whether they are only its start — which a live decode
         yields for a body that ran past its preview cap while the session is capturing."""

@@ -188,3 +188,29 @@ class GetMessageBodyRequest(_message.Message):
     message_id: str
     raw: bool
     def __init__(self, session_id: _Optional[str] = ..., message_id: _Optional[str] = ..., raw: bool = ...) -> None: ...
+
+class QuerySQLRequest(_message.Message):
+    __slots__ = ("session_id", "sql", "params", "limit", "timeout_millis")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    SQL_FIELD_NUMBER: _ClassVar[int]
+    PARAMS_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    TIMEOUT_MILLIS_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    sql: str
+    params: _containers.RepeatedScalarFieldContainer[str]
+    limit: int
+    timeout_millis: int
+    def __init__(self, session_id: _Optional[str] = ..., sql: _Optional[str] = ..., params: _Optional[_Iterable[str]] = ..., limit: _Optional[int] = ..., timeout_millis: _Optional[int] = ...) -> None: ...
+
+class QuerySQLResponse(_message.Message):
+    __slots__ = ("columns", "rows_json", "truncated", "elapsed_micros")
+    COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    ROWS_JSON_FIELD_NUMBER: _ClassVar[int]
+    TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    ELAPSED_MICROS_FIELD_NUMBER: _ClassVar[int]
+    columns: _containers.RepeatedScalarFieldContainer[str]
+    rows_json: _containers.RepeatedScalarFieldContainer[str]
+    truncated: bool
+    elapsed_micros: int
+    def __init__(self, columns: _Optional[_Iterable[str]] = ..., rows_json: _Optional[_Iterable[str]] = ..., truncated: bool = ..., elapsed_micros: _Optional[int] = ...) -> None: ...

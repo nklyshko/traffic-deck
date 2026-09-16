@@ -934,3 +934,255 @@ def test_compare_flows_diff_and_identical():
     # A flow compared with itself is identical.
     same = S._compare_flows(a, a)
     assert same["identical"] is True and same["differences"] == []
+
+
+# --- gateway_status -------------------------------------------------------
+
+def _session(**kw):
+    return cp.Session(**kw)
+
+
+def test_gateway_status_totals_and_capturing(monkeypatch):
+    import asyncio
+
+    sessions = [_session(id="s1", label="a", status=3, flow_count=10, pcap_bytes=100),
+                _session(id="s2", label="b", status=1, flow_count=3, keylog_bytes=7)]
+
+    class Fake:
+        async def list_sessions(self):
+            return sessions
+
+    monkeypatch.setattr(S, "client", Fake)
+    monkeypatch.setenv("GATEWAY_ADDR", "1.2.3.4:7331")
+    out = asyncio.run(S.gateway_status())
+    assert out["reachable"] is True and out["gateway_addr"] == "1.2.3.4:7331"
+    assert out["sessions"] == 2 and out["total_flows"] == 13
+    assert out["total_pcap_bytes"] == 100 and out["total_keylog_bytes"] == 7
+    assert out["sessions_by_status"] == {"closed": 1, "open": 1}
+    # Only the still-capturing session is listed — it is the one that grows under a reader
+    # and the one wait_for_flows can wait on.
+    assert [c["id"] for c in out["capturing"]] == ["s2"]
+
+
+def test_gateway_status_reports_an_unreachable_gateway(monkeypatch):
+    """"Is it up" must be answered, not raised: an exception here reads to the caller as a
+    broken tool rather than a stopped gateway."""
+    import asyncio
+
+    class Fake:
+        async def list_sessions(self):
+            raise grpc.aio.AioRpcError(grpc.StatusCode.UNAVAILABLE, None, None,
+                                       details="failed to connect")
+
+    monkeypatch.setattr(S, "client", Fake)
+    out = asyncio.run(S.gateway_status())
+    assert out["reachable"] is False
+    assert "UNAVAILABLE" in out["error"] and "failed to connect" in out["error"]
+
+
+# --- wait_for_flows -------------------------------------------------------
+
+class _StreamCall:
+    """Stands in for the StreamFlows call: yields queued events, then blocks like a real
+    follow does (so a timeout is a timeout, not an exhausted iterator)."""
+
+    def __init__(self, events):
+        self._events = list(events)
+        self.cancelled = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        import asyncio
+        if self._events:
+            return self._events.pop(0)
+        await asyncio.sleep(3600)
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def _added(fid, **kw):
+    return vp.FlowEvent(flow_added=_flow(id=fid, authority="h", scheme="https", **kw))
+
+
+def _session_ev(status):
+    return vp.FlowEvent(session_event=vp.SessionEvent(session_id="s1", status=status))
+
+
+def _run_wait(monkeypatch, events, *, status=1, **kw):
+    import asyncio
+
+    call = _StreamCall(events)
+
+    class Fake:
+        def stream_flows(self, sid, filter_expr="", follow=True):
+            self.sid, self.filter = sid, filter_expr
+            return call
+
+    fake = Fake()
+
+    async def _names():
+        return {}, {}
+
+    async def _resolve_row(sid):
+        return _session(id="s1", status=status)
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_name_maps", _names)
+    monkeypatch.setattr(S, "_resolve_session_row", _resolve_row)
+    kw.setdefault("session_id", "s1")
+    return asyncio.run(S.wait_for_flows(**kw)), fake, call
+
+
+def test_wait_for_flows_returns_as_soon_as_the_count_arrives(monkeypatch):
+    out, fake, call = _run_wait(
+        monkeypatch, [_session_ev(1), _added("f1"), _added("f2"), _added("f3")], count=2)
+    assert [f["id"] for f in out["flows"]] == ["f1", "f2"]
+    assert out["count"] == 2 and out["timed_out"] is False
+    # The named session is the one followed, and the stream is cancelled once the count is
+    # in rather than left following.
+    assert out["session_id"] == "s1" and fake.sid == "s1" and call.cancelled is True
+
+
+def test_wait_for_flows_requires_a_session_id():
+    """There is no "the current session" to fall back on: an omitted id has to be refused
+    at the schema, not resolved to whichever session happens to be open."""
+    import asyncio
+
+    with pytest.raises(Exception) as e:
+        asyncio.run(S.mcp.call_tool("wait_for_flows", {"count": 1}))
+    assert "session_id" in str(e.value)
+
+
+def test_wait_for_flows_does_not_wait_on_a_session_that_is_not_capturing(monkeypatch):
+    """Only an open session has a live decode behind it. Subscribing to any other kind
+    gets one terminal event back, so the timeout must not be spent finding that out."""
+    # Closed: over, and what it recorded is readable.
+    out, fake, _ = _run_wait(monkeypatch, [], status=3, timeout_seconds=300)
+    assert out["status"] == "closed" and out["session_closed"] is True
+    assert out["count"] == 0 and out["timed_out"] is False and out["waited_ms"] == 0
+    assert "network_timeline" in out["note"]
+    # The stream is never opened at all.
+    assert not hasattr(fake, "sid")
+
+    out, _, _ = _run_wait(monkeypatch, [], status=4, timeout_seconds=300)
+    assert out["status"] == "error" and out["session_closed"] is True
+
+    # Decoding is a *different* answer: a pcap import in flight is not a capture that
+    # ended, so it must not be reported as closed — it becomes readable shortly.
+    out, _, _ = _run_wait(monkeypatch, [], status=2, timeout_seconds=300)
+    assert out["status"] == "decoding" and "session_closed" not in out
+    assert "pcap import" in out["note"] and out["timed_out"] is False
+
+
+def test_wait_for_flows_explains_an_empty_timeout(monkeypatch):
+    # An open session with no live decode (upload-on-close, or live decode off) can only
+    # be told from an idle one by waiting, so the reasons are named rather than left as a
+    # bare "0 flows" that reads as "wait again".
+    out, _, _ = _run_wait(monkeypatch, [_session_ev(1)], timeout_seconds=1)
+    assert out["timed_out"] is True and out["count"] == 0
+    assert "idle" in out["note"] and "live decode" in out["note"]
+
+
+def test_wait_for_flows_times_out_with_what_arrived(monkeypatch):
+    out, _, _ = _run_wait(monkeypatch, [_added("f1")], count=5, timeout_seconds=1)
+    assert out["timed_out"] is True and [f["id"] for f in out["flows"]] == ["f1"]
+    assert out["waited_ms"] >= 900
+
+
+def test_wait_for_flows_stops_when_the_capture_ends(monkeypatch):
+    # A terminal session event means nothing more is coming, so waiting out the timeout
+    # would be a pure stall — and "timed out" would misreport why it returned empty.
+    out, _, _ = _run_wait(monkeypatch, [_session_ev(1), _session_ev(3)],
+                          count=1, timeout_seconds=30)
+    assert out["session_closed"] is True and out["timed_out"] is False
+    assert out["count"] == 0 and out["waited_ms"] < 5000
+
+
+def test_wait_for_flows_flags_dropped_events(monkeypatch):
+    # A repeated "subscription live" event is the gateway's resync marker: it had to drop
+    # events, so the returned flows are not all of them and the caller must be told.
+    out, _, _ = _run_wait(monkeypatch, [_session_ev(1), _session_ev(1), _added("f1")],
+                          count=1)
+    assert out["missed_events"] is True and "network_timeline" in out["note"]
+
+
+def test_wait_for_flows_passes_the_filter_through(monkeypatch):
+    out, fake, _ = _run_wait(monkeypatch, [_added("f1", status=200)], filter="~c 200")
+    assert fake.filter == "~c 200" and out["count"] == 1
+
+
+# --- sqlite_query ---------------------------------------------------------
+
+def _run_sql(monkeypatch, resp, **kw):
+    import asyncio
+
+    class Fake:
+        async def query_sql(self, sid, sql, params, limit=0, timeout_millis=0):
+            self.call = (sid, sql, list(params), limit, timeout_millis)
+            if isinstance(resp, Exception):
+                raise resp
+            return resp
+
+    fake = Fake()
+
+    async def _resolve(sid):
+        return "session-full-id"
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    return asyncio.run(S.sqlite_query(**kw)), fake
+
+
+def test_sqlite_query_decodes_rows_and_keeps_column_order(monkeypatch):
+    resp = vp.QuerySQLResponse(
+        columns=["authority", "n"],
+        rows_json=['{"authority":"api.example.com","n":7}', '{"authority":"cdn","n":1}'],
+        elapsed_micros=2500)
+    out, fake = _run_sql(monkeypatch, resp, sql="SELECT authority, COUNT(*) n FROM flows",
+                         session_id="sess", params=["x"], limit=50, timeout_seconds=3)
+    # Columns carry the statement's order, which a JSON object does not.
+    assert out["columns"] == ["authority", "n"]
+    assert out["rows"][0] == {"authority": "api.example.com", "n": 7}
+    assert out["row_count"] == 2 and out["truncated"] is False
+    assert out["elapsed_ms"] == 2.5
+    # A session id is resolved from its prefix; params and timeout reach the gateway.
+    sid, _, params, limit, timeout_ms = fake.call
+    assert sid == "session-full-id" and params == ["x"]
+    assert limit == 50 and timeout_ms == 3000
+
+
+def test_sqlite_query_without_a_session_id_reads_the_catalog(monkeypatch):
+    resp = vp.QuerySQLResponse(columns=["id"], rows_json=['{"id":"s1"}'], truncated=True)
+    out, fake = _run_sql(monkeypatch, resp, sql="SELECT id FROM sessions")
+    assert fake.call[0] == "" and out["database"] == "catalog"
+    assert out["session_id"] is None and out["truncated"] is True
+
+
+def test_sqlite_query_surfaces_sqlites_own_error(monkeypatch):
+    # SQLite names the offending token; flattening that into "query failed" would leave
+    # the caller guessing at what to fix.
+    err = grpc.aio.AioRpcError(grpc.StatusCode.INVALID_ARGUMENT, None, None,
+                               details='no such column: authorityy')
+    with pytest.raises(ValueError, match="no such column: authorityy"):
+        _run_sql(monkeypatch, err, sql="SELECT authorityy FROM flows")
+
+
+def test_sqlite_schema_asks_sqlite_master(monkeypatch):
+    import asyncio
+
+    resp = vp.QuerySQLResponse(columns=["type", "name", "sql"],
+                               rows_json=['{"type":"table","name":"flows","sql":"CREATE ..."}'])
+
+    class Fake:
+        async def query_sql(self, sid, sql, params, limit=0, timeout_millis=0):
+            self.sql = sql
+            return resp
+
+    fake = Fake()
+    monkeypatch.setattr(S, "client", lambda: fake)
+    out = asyncio.run(S.sqlite_schema())
+    assert "sqlite_master" in fake.sql
+    assert out["rows"][0]["name"] == "flows"

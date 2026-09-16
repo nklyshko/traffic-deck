@@ -25,6 +25,18 @@ service ViewerService {
   // session closes or the client disconnects — the live WebSocket timeline.
   rpc StreamMessages(StreamMessagesRequest) returns (stream MessageEvent);
   rpc GetMessageBody(GetMessageBodyRequest) returns (stream BodyChunk);
+
+  // QuerySQL runs one read-only SQL statement against a session bundle's flows.sqlite
+  // (or the catalog), for the aggregations and joins the filter DSL deliberately does
+  // not express — "which authorities served a 429", "header names by frequency". It is
+  // an escape hatch, not the read path: it sees the bundle as written, so a session
+  // still capturing is missing its unflushed tail (which QueryFlows merges in), and a
+  // large body is a blobs row pointing at a file rather than bytes (that's GetBody).
+  //
+  // Read-only is enforced by SQLite — the connection is opened mode=ro with
+  // query_only and no attachable databases, on which every write fails — not by
+  // inspecting the statement.
+  rpc QuerySQL(QuerySQLRequest) returns (QuerySQLResponse);
 }
 
 message ListSessionsRequest {
@@ -181,4 +193,32 @@ message GetMessageBodyRequest {
   string session_id = 1;
   string message_id = 2;
   bool raw = 3; // fetch the original undecoded bytes instead of the decoded payload
+}
+
+message QuerySQLRequest {
+  // Session bundle to query; empty queries the global catalog (sessions, tags, groups).
+  string session_id = 1;
+  // One SQL statement. `?` placeholders are bound from params — the way to put a value
+  // into a query, since the caller cannot know how to quote for SQLite.
+  string sql = 2;
+  repeated string params = 3;
+  // Max rows returned; 0 takes the gateway's default. The gateway caps it either way.
+  uint32 limit = 4;
+  // Abandon the query after this long; 0 takes the gateway's default. A cross join on a
+  // 273k-flow bundle is one keystroke away, so it gets a deadline rather than the
+  // gateway's read path a stall.
+  uint32 timeout_millis = 5;
+}
+
+message QuerySQLResponse {
+  // Column names in the statement's own order (a JSON object does not keep it).
+  repeated string columns = 1;
+  // One JSON object per row, keyed by column name: null / number / bool / string, with a
+  // BLOB base64-encoded as a string (bundles hold raw ClientHellos and bodies as blobs).
+  // JSON rather than a typed value message because the caller is an agent reading text
+  // and every client already has a JSON parser.
+  repeated string rows_json = 2;
+  // More rows matched than were returned — raise limit or aggregate in SQL.
+  bool truncated = 3;
+  uint64 elapsed_micros = 4;
 }

@@ -1241,6 +1241,163 @@ func (x *GetMessageBodyRequest) GetRaw() bool {
 	return false
 }
 
+type QuerySQLRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Session bundle to query; empty queries the global catalog (sessions, tags, groups).
+	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// One SQL statement. `?` placeholders are bound from params — the way to put a value
+	// into a query, since the caller cannot know how to quote for SQLite.
+	Sql    string   `protobuf:"bytes,2,opt,name=sql,proto3" json:"sql,omitempty"`
+	Params []string `protobuf:"bytes,3,rep,name=params,proto3" json:"params,omitempty"`
+	// Max rows returned; 0 takes the gateway's default. The gateway caps it either way.
+	Limit uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Abandon the query after this long; 0 takes the gateway's default. A cross join on a
+	// 273k-flow bundle is one keystroke away, so it gets a deadline rather than the
+	// gateway's read path a stall.
+	TimeoutMillis uint32 `protobuf:"varint,5,opt,name=timeout_millis,json=timeoutMillis,proto3" json:"timeout_millis,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuerySQLRequest) Reset() {
+	*x = QuerySQLRequest{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuerySQLRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuerySQLRequest) ProtoMessage() {}
+
+func (x *QuerySQLRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuerySQLRequest.ProtoReflect.Descriptor instead.
+func (*QuerySQLRequest) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *QuerySQLRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *QuerySQLRequest) GetSql() string {
+	if x != nil {
+		return x.Sql
+	}
+	return ""
+}
+
+func (x *QuerySQLRequest) GetParams() []string {
+	if x != nil {
+		return x.Params
+	}
+	return nil
+}
+
+func (x *QuerySQLRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *QuerySQLRequest) GetTimeoutMillis() uint32 {
+	if x != nil {
+		return x.TimeoutMillis
+	}
+	return 0
+}
+
+type QuerySQLResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Column names in the statement's own order (a JSON object does not keep it).
+	Columns []string `protobuf:"bytes,1,rep,name=columns,proto3" json:"columns,omitempty"`
+	// One JSON object per row, keyed by column name: null / number / bool / string, with a
+	// BLOB base64-encoded as a string (bundles hold raw ClientHellos and bodies as blobs).
+	// JSON rather than a typed value message because the caller is an agent reading text
+	// and every client already has a JSON parser.
+	RowsJson []string `protobuf:"bytes,2,rep,name=rows_json,json=rowsJson,proto3" json:"rows_json,omitempty"`
+	// More rows matched than were returned — raise limit or aggregate in SQL.
+	Truncated     bool   `protobuf:"varint,3,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	ElapsedMicros uint64 `protobuf:"varint,4,opt,name=elapsed_micros,json=elapsedMicros,proto3" json:"elapsed_micros,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QuerySQLResponse) Reset() {
+	*x = QuerySQLResponse{}
+	mi := &file_traffic_v1_viewer_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QuerySQLResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QuerySQLResponse) ProtoMessage() {}
+
+func (x *QuerySQLResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_traffic_v1_viewer_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QuerySQLResponse.ProtoReflect.Descriptor instead.
+func (*QuerySQLResponse) Descriptor() ([]byte, []int) {
+	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *QuerySQLResponse) GetColumns() []string {
+	if x != nil {
+		return x.Columns
+	}
+	return nil
+}
+
+func (x *QuerySQLResponse) GetRowsJson() []string {
+	if x != nil {
+		return x.RowsJson
+	}
+	return nil
+}
+
+func (x *QuerySQLResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
+func (x *QuerySQLResponse) GetElapsedMicros() uint64 {
+	if x != nil {
+		return x.ElapsedMicros
+	}
+	return 0
+}
+
 var File_traffic_v1_viewer_proto protoreflect.FileDescriptor
 
 const file_traffic_v1_viewer_proto_rawDesc = "" +
@@ -1334,7 +1491,19 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x02 \x01(\tR\tmessageId\x12\x10\n" +
-	"\x03raw\x18\x03 \x01(\bR\x03raw2\x8a\x05\n" +
+	"\x03raw\x18\x03 \x01(\bR\x03raw\"\x97\x01\n" +
+	"\x0fQuerySQLRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
+	"\x03sql\x18\x02 \x01(\tR\x03sql\x12\x16\n" +
+	"\x06params\x18\x03 \x03(\tR\x06params\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\rR\x05limit\x12%\n" +
+	"\x0etimeout_millis\x18\x05 \x01(\rR\rtimeoutMillis\"\x8e\x01\n" +
+	"\x10QuerySQLResponse\x12\x18\n" +
+	"\acolumns\x18\x01 \x03(\tR\acolumns\x12\x1b\n" +
+	"\trows_json\x18\x02 \x03(\tR\browsJson\x12\x1c\n" +
+	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12%\n" +
+	"\x0eelapsed_micros\x18\x04 \x01(\x04R\relapsedMicros2\xd1\x05\n" +
 	"\rViewerService\x12H\n" +
 	"\fListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12A\n" +
 	"\n" +
@@ -1346,7 +1515,8 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\n" +
 	"GetMessage\x12\x1d.traffic.v1.GetMessageRequest\x1a\x15.traffic.v1.WsMessage\x12O\n" +
 	"\x0eStreamMessages\x12!.traffic.v1.StreamMessagesRequest\x1a\x18.traffic.v1.MessageEvent0\x01\x12L\n" +
-	"\x0eGetMessageBody\x12!.traffic.v1.GetMessageBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01B\xa9\x01\n" +
+	"\x0eGetMessageBody\x12!.traffic.v1.GetMessageBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12E\n" +
+	"\bQuerySQL\x12\x1b.traffic.v1.QuerySQLRequest\x1a\x1c.traffic.v1.QuerySQLResponseB\xa9\x01\n" +
 	"\x0ecom.traffic.v1B\vViewerProtoP\x01ZAgithub.com/nklyshko/traffic-deck/gateway/gen/traffic/v1;trafficv1\xa2\x02\x03TXX\xaa\x02\n" +
 	"Traffic.V1\xca\x02\n" +
 	"Traffic\\V1\xe2\x02\x16Traffic\\V1\\GPBMetadata\xea\x02\vTraffic::V1b\x06proto3"
@@ -1363,7 +1533,7 @@ func file_traffic_v1_viewer_proto_rawDescGZIP() []byte {
 	return file_traffic_v1_viewer_proto_rawDescData
 }
 
-var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_traffic_v1_viewer_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*ListSessionsRequest)(nil),   // 0: traffic.v1.ListSessionsRequest
 	(*SessionList)(nil),           // 1: traffic.v1.SessionList
@@ -1383,26 +1553,28 @@ var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*FilterHints)(nil),           // 15: traffic.v1.FilterHints
 	(*GetMessageRequest)(nil),     // 16: traffic.v1.GetMessageRequest
 	(*GetMessageBodyRequest)(nil), // 17: traffic.v1.GetMessageBodyRequest
-	(*Session)(nil),               // 18: traffic.v1.Session
-	(*Flow)(nil),                  // 19: traffic.v1.Flow
-	(SessionStatus)(0),            // 20: traffic.v1.SessionStatus
-	(*DecodeProgress)(nil),        // 21: traffic.v1.DecodeProgress
-	(*WsMessage)(nil),             // 22: traffic.v1.WsMessage
+	(*QuerySQLRequest)(nil),       // 18: traffic.v1.QuerySQLRequest
+	(*QuerySQLResponse)(nil),      // 19: traffic.v1.QuerySQLResponse
+	(*Session)(nil),               // 20: traffic.v1.Session
+	(*Flow)(nil),                  // 21: traffic.v1.Flow
+	(SessionStatus)(0),            // 22: traffic.v1.SessionStatus
+	(*DecodeProgress)(nil),        // 23: traffic.v1.DecodeProgress
+	(*WsMessage)(nil),             // 24: traffic.v1.WsMessage
 }
 var file_traffic_v1_viewer_proto_depIdxs = []int32{
-	18, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
+	20, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
 	2,  // 1: traffic.v1.QueryFlowsRequest.after:type_name -> traffic.v1.FlowCursor
 	2,  // 2: traffic.v1.QueryFlowsRequest.before:type_name -> traffic.v1.FlowCursor
-	19, // 3: traffic.v1.FlowPage.flows:type_name -> traffic.v1.Flow
+	21, // 3: traffic.v1.FlowPage.flows:type_name -> traffic.v1.Flow
 	2,  // 4: traffic.v1.FlowPage.next:type_name -> traffic.v1.FlowCursor
 	2,  // 5: traffic.v1.FlowPage.prev:type_name -> traffic.v1.FlowCursor
-	20, // 6: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
-	19, // 7: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
-	19, // 8: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
+	22, // 6: traffic.v1.SessionEvent.status:type_name -> traffic.v1.SessionStatus
+	21, // 7: traffic.v1.FlowEvent.flow_added:type_name -> traffic.v1.Flow
+	21, // 8: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
 	6,  // 9: traffic.v1.FlowEvent.session_event:type_name -> traffic.v1.SessionEvent
-	21, // 10: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
-	22, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
-	22, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
+	23, // 10: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
+	24, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
+	24, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
 	6,  // 13: traffic.v1.MessageEvent.session_event:type_name -> traffic.v1.SessionEvent
 	15, // 14: traffic.v1.MessageEvent.filter_hints:type_name -> traffic.v1.FilterHints
 	0,  // 15: traffic.v1.ViewerService.ListSessions:input_type -> traffic.v1.ListSessionsRequest
@@ -1414,17 +1586,19 @@ var file_traffic_v1_viewer_proto_depIdxs = []int32{
 	16, // 21: traffic.v1.ViewerService.GetMessage:input_type -> traffic.v1.GetMessageRequest
 	13, // 22: traffic.v1.ViewerService.StreamMessages:input_type -> traffic.v1.StreamMessagesRequest
 	17, // 23: traffic.v1.ViewerService.GetMessageBody:input_type -> traffic.v1.GetMessageBodyRequest
-	1,  // 24: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
-	4,  // 25: traffic.v1.ViewerService.QueryFlows:output_type -> traffic.v1.FlowPage
-	7,  // 26: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
-	19, // 27: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
-	10, // 28: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
-	12, // 29: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
-	22, // 30: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
-	14, // 31: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
-	10, // 32: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
-	24, // [24:33] is the sub-list for method output_type
-	15, // [15:24] is the sub-list for method input_type
+	18, // 24: traffic.v1.ViewerService.QuerySQL:input_type -> traffic.v1.QuerySQLRequest
+	1,  // 25: traffic.v1.ViewerService.ListSessions:output_type -> traffic.v1.SessionList
+	4,  // 26: traffic.v1.ViewerService.QueryFlows:output_type -> traffic.v1.FlowPage
+	7,  // 27: traffic.v1.ViewerService.StreamFlows:output_type -> traffic.v1.FlowEvent
+	21, // 28: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
+	10, // 29: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
+	12, // 30: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
+	24, // 31: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
+	14, // 32: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
+	10, // 33: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
+	19, // 34: traffic.v1.ViewerService.QuerySQL:output_type -> traffic.v1.QuerySQLResponse
+	25, // [25:35] is the sub-list for method output_type
+	15, // [15:25] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name
 	15, // [15:15] is the sub-list for extension extendee
 	0,  // [0:15] is the sub-list for field type_name
@@ -1454,7 +1628,7 @@ func file_traffic_v1_viewer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_traffic_v1_viewer_proto_rawDesc), len(file_traffic_v1_viewer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

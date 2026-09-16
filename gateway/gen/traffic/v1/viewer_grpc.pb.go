@@ -28,6 +28,7 @@ const (
 	ViewerService_GetMessage_FullMethodName     = "/traffic.v1.ViewerService/GetMessage"
 	ViewerService_StreamMessages_FullMethodName = "/traffic.v1.ViewerService/StreamMessages"
 	ViewerService_GetMessageBody_FullMethodName = "/traffic.v1.ViewerService/GetMessageBody"
+	ViewerService_QuerySQL_FullMethodName       = "/traffic.v1.ViewerService/QuerySQL"
 )
 
 // ViewerServiceClient is the client API for ViewerService service.
@@ -54,6 +55,17 @@ type ViewerServiceClient interface {
 	// session closes or the client disconnects — the live WebSocket timeline.
 	StreamMessages(ctx context.Context, in *StreamMessagesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[MessageEvent], error)
 	GetMessageBody(ctx context.Context, in *GetMessageBodyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BodyChunk], error)
+	// QuerySQL runs one read-only SQL statement against a session bundle's flows.sqlite
+	// (or the catalog), for the aggregations and joins the filter DSL deliberately does
+	// not express — "which authorities served a 429", "header names by frequency". It is
+	// an escape hatch, not the read path: it sees the bundle as written, so a session
+	// still capturing is missing its unflushed tail (which QueryFlows merges in), and a
+	// large body is a blobs row pointing at a file rather than bytes (that's GetBody).
+	//
+	// Read-only is enforced by SQLite — the connection is opened mode=ro with
+	// query_only and no attachable databases, on which every write fails — not by
+	// inspecting the statement.
+	QuerySQL(ctx context.Context, in *QuerySQLRequest, opts ...grpc.CallOption) (*QuerySQLResponse, error)
 }
 
 type viewerServiceClient struct {
@@ -190,6 +202,16 @@ func (c *viewerServiceClient) GetMessageBody(ctx context.Context, in *GetMessage
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ViewerService_GetMessageBodyClient = grpc.ServerStreamingClient[BodyChunk]
 
+func (c *viewerServiceClient) QuerySQL(ctx context.Context, in *QuerySQLRequest, opts ...grpc.CallOption) (*QuerySQLResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QuerySQLResponse)
+	err := c.cc.Invoke(ctx, ViewerService_QuerySQL_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ViewerServiceServer is the server API for ViewerService service.
 // All implementations must embed UnimplementedViewerServiceServer
 // for forward compatibility.
@@ -214,6 +236,17 @@ type ViewerServiceServer interface {
 	// session closes or the client disconnects — the live WebSocket timeline.
 	StreamMessages(*StreamMessagesRequest, grpc.ServerStreamingServer[MessageEvent]) error
 	GetMessageBody(*GetMessageBodyRequest, grpc.ServerStreamingServer[BodyChunk]) error
+	// QuerySQL runs one read-only SQL statement against a session bundle's flows.sqlite
+	// (or the catalog), for the aggregations and joins the filter DSL deliberately does
+	// not express — "which authorities served a 429", "header names by frequency". It is
+	// an escape hatch, not the read path: it sees the bundle as written, so a session
+	// still capturing is missing its unflushed tail (which QueryFlows merges in), and a
+	// large body is a blobs row pointing at a file rather than bytes (that's GetBody).
+	//
+	// Read-only is enforced by SQLite — the connection is opened mode=ro with
+	// query_only and no attachable databases, on which every write fails — not by
+	// inspecting the statement.
+	QuerySQL(context.Context, *QuerySQLRequest) (*QuerySQLResponse, error)
 	mustEmbedUnimplementedViewerServiceServer()
 }
 
@@ -250,6 +283,9 @@ func (UnimplementedViewerServiceServer) StreamMessages(*StreamMessagesRequest, g
 }
 func (UnimplementedViewerServiceServer) GetMessageBody(*GetMessageBodyRequest, grpc.ServerStreamingServer[BodyChunk]) error {
 	return status.Error(codes.Unimplemented, "method GetMessageBody not implemented")
+}
+func (UnimplementedViewerServiceServer) QuerySQL(context.Context, *QuerySQLRequest) (*QuerySQLResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method QuerySQL not implemented")
 }
 func (UnimplementedViewerServiceServer) mustEmbedUnimplementedViewerServiceServer() {}
 func (UnimplementedViewerServiceServer) testEmbeddedByValue()                       {}
@@ -406,6 +442,24 @@ func _ViewerService_GetMessageBody_Handler(srv interface{}, stream grpc.ServerSt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ViewerService_GetMessageBodyServer = grpc.ServerStreamingServer[BodyChunk]
 
+func _ViewerService_QuerySQL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QuerySQLRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ViewerServiceServer).QuerySQL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ViewerService_QuerySQL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ViewerServiceServer).QuerySQL(ctx, req.(*QuerySQLRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ViewerService_ServiceDesc is the grpc.ServiceDesc for ViewerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -432,6 +486,10 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMessage",
 			Handler:    _ViewerService_GetMessage_Handler,
+		},
+		{
+			MethodName: "QuerySQL",
+			Handler:    _ViewerService_QuerySQL_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

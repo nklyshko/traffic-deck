@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import itertools
+import json
 import os
 import re
 import time
@@ -62,6 +62,20 @@ mcp = FastMCP("trafficdeck-mcp", host=os.environ.get("MCP_HOST", "127.0.0.1"),
 
 _STATUS = {0: "unspecified", 1: "open", 2: "decoding", 3: "closed", 4: "error"}
 
+# Why there is nothing to wait for, per non-open session status (see wait_for_flows). The
+# distinction worth drawing is "this capture is over, read it" against "this one is not
+# live yet, come back" — the gateway reports both as a terminal stream event.
+_NOT_CAPTURING = {
+    "closed": "this session has closed — it is not capturing, so no new flows can arrive; "
+              "read what it recorded with network_timeline or search",
+    "error": "this session ended in an error — no new flows can arrive; what it managed to "
+             "record is still readable with network_timeline or search",
+    "decoding": "this session is being decoded (a pcap import), not captured live, so it "
+                "emits no flow events — poll list_sessions until its status is closed, "
+                "then read it with network_timeline",
+    "?": "this session is not capturing, so no new flows can arrive",
+}
+
 
 def _env_flag(name: str, default: bool) -> bool:
     """Parse a boolean env var; unset -> default. Off values: 0/false/no/off/"" (any case)."""
@@ -98,18 +112,27 @@ def client() -> GatewayClient:
     return _client
 
 
-async def _resolve_session(session_id: str) -> str:
-    """Resolve a full or prefix session id to the full id, with a clear error — so a
-    mistyped/short id fails loudly instead of silently returning an empty result."""
-    ids = [s.id for s in await client().list_sessions()]
-    if session_id in ids:
-        return session_id
-    matches = [i for i in ids if i.startswith(session_id)]
+async def _resolve_session_row(session_id: str):
+    """The session a full id or unique prefix names, as its catalog row — so a caller that
+    needs more than the id (wait_for_flows wants the status) doesn't pay a second
+    list_sessions for it. A mistyped/short id fails loudly instead of silently returning
+    an empty result."""
+    sessions = await client().list_sessions()
+    for s in sessions:
+        if s.id == session_id:
+            return s
+    matches = [s for s in sessions if s.id.startswith(session_id)]
     if len(matches) == 1:
         return matches[0]
     if not matches:
-        raise ValueError(f"no session matching {session_id!r} ({len(ids)} sessions — call list_sessions)")
-    raise ValueError(f"ambiguous session prefix {session_id!r}: matches {len(matches)} ({matches[:5]})")
+        raise ValueError(f"no session matching {session_id!r} ({len(sessions)} sessions — call list_sessions)")
+    raise ValueError(f"ambiguous session prefix {session_id!r}: matches {len(matches)} "
+                     f"({[m.id for m in matches[:5]]})")
+
+
+async def _resolve_session(session_id: str) -> str:
+    """Resolve a full or prefix session id to the full id."""
+    return (await _resolve_session_row(session_id)).id
 
 
 async def _name_maps() -> tuple[dict, dict]:
@@ -578,6 +601,42 @@ def _timeline_row(seq: int, f, t0: int) -> dict:
 # --- tools ---------------------------------------------------------------
 
 @mcp.tool()
+async def gateway_status() -> dict:
+    """Health-check the gateway and size up what it holds — the first call to make when a
+    tool errors or before planning work over a capture.
+
+    Returns whether the gateway answered and at which address, the totals across every
+    session (sessions, flows, pcap/keylog bytes), which sessions are still capturing
+    (`capturing` — those grow under you, and `wait_for_flows` waits on them), and whether
+    this server is read-only. An unreachable gateway comes back `reachable: false` with
+    the reason instead of raising, since "is it up" is the question being asked."""
+    addr = os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331")
+    try:
+        sessions = await client().list_sessions()
+    except grpc.aio.AioRpcError as e:
+        return {"reachable": False, "gateway_addr": addr,
+                "error": f"{e.code().name}: {e.details()}",
+                "note": "the gateway is down or GATEWAY_ADDR points elsewhere — "
+                        "start it with `make run` (or `./trafficdeck`)"}
+    by_status: dict[str, int] = {}
+    for s in sessions:
+        st = _STATUS.get(s.status, "?")
+        by_status[st] = by_status.get(st, 0) + 1
+    return {
+        "reachable": True,
+        "gateway_addr": addr,
+        "readonly": READONLY,
+        "sessions": len(sessions),
+        "sessions_by_status": by_status,
+        "total_flows": sum(s.flow_count for s in sessions),
+        "total_pcap_bytes": sum(s.pcap_bytes for s in sessions),
+        "total_keylog_bytes": sum(s.keylog_bytes for s in sessions),
+        "capturing": [{"id": s.id, "label": s.label, "flow_count": s.flow_count}
+                      for s in sessions if _STATUS.get(s.status) == "open"],
+    }
+
+
+@mcp.tool()
 async def list_sessions() -> list[dict]:
     """List all recorded capture sessions (id, label, group, status, flow count, sizes)."""
     return [_session_dict(s) for s in await client().list_sessions()]
@@ -636,6 +695,100 @@ async def network_timeline(session_id: str, limit: int = 200, cursor: str = "") 
         out["next_cursor"] = _cursor_str(page.next)
     return out
 
+
+@mcp.tool()
+async def wait_for_flows(session_id: str, filter: str = "", count: int = 1,
+                         timeout_seconds: int = 30) -> dict:
+    """Block until new flows are decoded on a capturing session, then return them —
+    how to drive a capture instead of polling it. Fire the traffic (open the page, hit
+    the app), call this, and read what arrived.
+
+    Only flows decoded *after* the call count as new, so there is no baseline to pass and
+    nothing already in the session comes back. Returns as soon as `count` flows have
+    arrived (default 1), or at `timeout_seconds` (default 30, max 300) with whatever did
+    — `timed_out` says which, and `flows` is a list of summaries either way.
+
+    `session_id` is required (a prefix works): only a session that is still capturing has
+    anything to wait for, and `gateway_status` lists those under `capturing`. A session
+    that is not capturing returns at once — `status` says which state it is in, with a
+    `note` telling a closed capture apart from a pcap import that is still decoding — so
+    this never spends the timeout on a session that cannot produce a flow.
+
+    `filter` waits for a *particular* request, in the same DSL as `search_flows`: with one
+    set, only matching flows count, and a flow that only starts matching once its response
+    arrives counts then — so `~c 200` waits for a success and `~u /api/login ~s` waits for
+    that endpoint to answer. An expression the gateway rejects comes back with the syntax
+    reference.
+
+    `session_closed` means the capture ended (before or during the wait) and nothing more
+    will arrive. `missed_events` means the gateway had to drop events to keep up and the
+    result is incomplete — re-read the tail with `network_timeline` instead of trusting
+    `count`."""
+    session = await _resolve_session_row(session_id)
+    sid, status = session.id, _STATUS.get(session.status, "?")
+    count = max(1, count)
+    timeout = max(1, min(timeout_seconds, 300))
+
+    # Only an open session has a live decode behind it, so anything else is answered from
+    # the catalog rather than by subscribing to a stream that would end immediately. The
+    # gateway reports every one of these as a terminal event, which reads as "the capture
+    # ended" — true for a closed one, misleading for an import still being decoded.
+    if status != "open":
+        out = {"session_id": sid, "status": status, "count": 0, "flows": [],
+               "timed_out": False, "waited_ms": 0,
+               "note": _NOT_CAPTURING.get(status, _NOT_CAPTURING["?"])}
+        if status != "decoding":
+            out["session_closed"] = True
+        return out
+
+    tagnames, groupnames = await _name_maps()
+
+    flows: list[dict] = []
+    closed = False
+    live_events = 0  # a repeated "subscription live" event is the gateway's resync marker
+    started = time.monotonic()
+    call = client().stream_flows(sid, filter)
+    try:
+        async with asyncio.timeout(timeout):
+            async for ev in call:
+                kind = ev.WhichOneof("event")
+                if kind == "flow_added":
+                    flows.append(_flow_summary(ev.flow_added, tagnames, groupnames))
+                    if len(flows) >= count:
+                        break
+                elif kind == "session_event":
+                    if _STATUS.get(ev.session_event.status) != "open":
+                        closed = True
+                        break
+                    live_events += 1
+    except TimeoutError:
+        pass
+    except grpc.aio.AioRpcError as e:
+        if e.code() is grpc.StatusCode.INVALID_ARGUMENT:
+            raise ValueError(f"{e.details()}\n\n{FILTER_SYNTAX}") from None
+        raise
+    finally:
+        call.cancel()
+
+    out = {"session_id": sid, "status": status, "count": len(flows), "flows": flows,
+           "timed_out": len(flows) < count and not closed,
+           "waited_ms": round((time.monotonic() - started) * 1000)}
+    if closed:
+        out["session_closed"] = True
+        out["note"] = "the capture ended — no more flows will arrive on this session"
+    elif out["timed_out"] and not flows:
+        # Waiting was the only way to learn this: the session is open, so it *might* have
+        # produced a flow. Name the three reasons it didn't, since "0 flows" alone sends a
+        # caller back to wait again — including the one status can't show, an open session
+        # with no live decode behind it (an upload-on-close capture, or live decode off).
+        out["note"] = (f"nothing arrived in {timeout}s — the capture may simply be idle, "
+                       f"the filter may match nothing, or this session has no live decode "
+                       f"(it uploads on close, so its flows appear only once it closes)")
+    if live_events > 1:
+        out["missed_events"] = True
+        out["note"] = ("the gateway dropped events to keep up, so these are not all of "
+                       "them — read the tail with network_timeline")
+    return out
 
 
 @mcp.tool()
@@ -1110,6 +1263,72 @@ async def export_client_hellos(session_id: str, flow_id: str) -> dict:
         "tls_hrr": f.tls_hrr,
         "client_hellos": [ch.hex() for ch in f.client_hellos],
     }
+
+
+@mcp.tool()
+async def sqlite_query(sql: str, session_id: str = "", params: list[str] | None = None,
+                       limit: int = 200, timeout_seconds: int = 10) -> dict:
+    """Run one read-only SQL statement against a session's SQLite bundle — the escape
+    hatch for questions the other tools don't ask: aggregates, joins, distributions.
+
+    Each session is its own `flows.sqlite`; `session_id` picks it (a prefix works) and an
+    empty `session_id` queries the global catalog instead (`sessions`, `tags`, `groups`).
+    Call `sqlite_schema` for the tables and columns — guessing them wastes a round trip.
+
+    Reach for this when the question is "how many / which distinct / grouped by":
+
+      SELECT authority, COUNT(*) n, SUM(status >= 400) errs FROM flows
+        GROUP BY authority ORDER BY n DESC
+      SELECT name, COUNT(*) FROM flow_headers WHERE direction = 0 GROUP BY name
+      SELECT status, COUNT(*) FROM flows GROUP BY status ORDER BY 2 DESC
+
+    Prefer `search`/`search_flows` for "which flows match" — they page by cursor, return
+    bodies and annotations, and merge in a live capture's newest flows, none of which
+    this does.
+
+    Two things this reads are the bundle *as written to disk*: a session still capturing
+    is missing its unflushed tail (flows are persisted incrementally, so counts here run
+    slightly behind `search` on an open session), and a body is only inline in `blobs`
+    when it was small — `blobs.bytes` NULL means it spilled to a file, so fetch bodies
+    with `get_body`, not from here. Bodies hang off `flows.req_body_ref`/`resp_body_ref`
+    → `blobs.sha256`.
+
+    Writes are refused by SQLite itself (the connection is opened read-only), so a DELETE
+    or UPDATE errors rather than touching the capture. Put values in `params` bound to `?`
+    placeholders rather than pasting them into the SQL — a text param compares correctly
+    against a numeric column. At most `limit` rows come back (default 200, max 2000) with
+    `truncated` when more matched; the query is abandoned after `timeout_seconds`.
+    """
+    sid = await _resolve_session(session_id) if session_id else ""
+    try:
+        res = await client().query_sql(sid, sql, params or [], limit=limit,
+                                       timeout_millis=max(1, timeout_seconds) * 1000)
+    except grpc.aio.AioRpcError as e:
+        if e.code() is grpc.StatusCode.UNIMPLEMENTED:
+            raise ValueError("this gateway is too old for sqlite_query — rebuild it "
+                             "(`make build`)") from None
+        # INVALID_ARGUMENT carries SQLite's own message (bad syntax, unknown column); it
+        # names the token, so it is the whole answer to "why did that fail".
+        raise ValueError(e.details()) from None
+    return {
+        "session_id": sid or None,
+        "database": "catalog" if not sid else "session bundle",
+        "columns": list(res.columns),
+        "row_count": len(res.rows_json),
+        "truncated": res.truncated,
+        "elapsed_ms": round(res.elapsed_micros / 1000, 1),
+        "rows": [json.loads(r) for r in res.rows_json],
+    }
+
+
+@mcp.tool()
+async def sqlite_schema(session_id: str = "") -> dict:
+    """The tables, indexes and views `sqlite_query` can read, with their CREATE
+    statements — so the columns are known rather than guessed. Empty `session_id` gives
+    the catalog's schema; any session id gives a bundle's (they all share one)."""
+    return await sqlite_query(
+        "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL "
+        "ORDER BY type, name", session_id, limit=_LIMIT_MAX)
 
 
 def main() -> None:

@@ -81,6 +81,11 @@ class ViewerServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.GetMessageBodyRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_viewer__pb2.BodyChunk.FromString,
                 _registered_method=True)
+        self.QuerySQL = channel.unary_unary(
+                '/traffic.v1.ViewerService/QuerySQL',
+                request_serializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLResponse.FromString,
+                _registered_method=True)
 
 
 class ViewerServiceServicer(object):
@@ -150,6 +155,22 @@ class ViewerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def QuerySQL(self, request, context):
+        """QuerySQL runs one read-only SQL statement against a session bundle's flows.sqlite
+        (or the catalog), for the aggregations and joins the filter DSL deliberately does
+        not express — "which authorities served a 429", "header names by frequency". It is
+        an escape hatch, not the read path: it sees the bundle as written, so a session
+        still capturing is missing its unflushed tail (which QueryFlows merges in), and a
+        large body is a blobs row pointing at a file rather than bytes (that's GetBody).
+
+        Read-only is enforced by SQLite — the connection is opened mode=ro with
+        query_only and no attachable databases, on which every write fails — not by
+        inspecting the statement.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ViewerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -197,6 +218,11 @@ def add_ViewerServiceServicer_to_server(servicer, server):
                     servicer.GetMessageBody,
                     request_deserializer=traffic_dot_v1_dot_viewer__pb2.GetMessageBodyRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_viewer__pb2.BodyChunk.SerializeToString,
+            ),
+            'QuerySQL': grpc.unary_unary_rpc_method_handler(
+                    servicer.QuerySQL,
+                    request_deserializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -443,6 +469,33 @@ class ViewerService(object):
             '/traffic.v1.ViewerService/GetMessageBody',
             traffic_dot_v1_dot_viewer__pb2.GetMessageBodyRequest.SerializeToString,
             traffic_dot_v1_dot_viewer__pb2.BodyChunk.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def QuerySQL(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ViewerService/QuerySQL',
+            traffic_dot_v1_dot_viewer__pb2.QuerySQLRequest.SerializeToString,
+            traffic_dot_v1_dot_viewer__pb2.QuerySQLResponse.FromString,
             options,
             channel_credentials,
             insecure,
