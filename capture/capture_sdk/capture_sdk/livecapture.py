@@ -86,6 +86,11 @@ class KeylogCapture(abc.ABC):
     #: capture's upload stream and its keylog tempdir.
     name: str = "capture"
 
+    #: (uid, gid) to run the launched program as, when the capture itself needs privilege
+    #: the program must not inherit — macOS pktap needs root, but a browser launched as
+    #: root would use root's home and profile. None (the default) launches as we are.
+    run_as: tuple[int, int] | None = None
+
     def __init__(self, *, gateway: str, label: str, iface: str | None = None,
                  dumpcap: str | None = None, capture_filter: str = "",
                  duration: float | None = None, keylog_dir: str | None = None) -> None:
@@ -110,7 +115,16 @@ class KeylogCapture(abc.ABC):
     @abc.abstractmethod
     def launch(self, keylog: str) -> subprocess.Popen:
         """Start the program under capture, making it write its TLS secrets to `keylog`.
-        Called once dumpcap is recording, so nothing is missed."""
+        Called once the capture is recording, so nothing is missed."""
+
+    def capture_command(self, iface: str) -> list[str]:
+        """The packet-capture command, streaming a pcap to stdout. The default records the
+        whole interface with dumpcap; a source that captures more narrowly (macOS pktap,
+        which filters by process) overrides this."""
+        cmd = [self.dumpcap or dumpcap_mod.binary(), "-i", iface, "-P", "-w", "-", "-q"]
+        if self.capture_filter:
+            cmd += ["-f", self.capture_filter]  # no filter = capture everything
+        return cmd
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -118,9 +132,12 @@ class KeylogCapture(abc.ABC):
         """Open the session, spawn dumpcap + upload threads, launch the program. Returns
         the session id while capture continues."""
         iface = self.iface or dumpcap_mod.default_interface()
-        dumpcap = self.dumpcap or dumpcap_mod.binary()
-        self.keylog = os.path.join(
-            tempfile.mkdtemp(prefix=f"{self.name}-keylog-", dir=self.keylog_dir), "key.log")
+        keydir = tempfile.mkdtemp(prefix=f"{self.name}-keylog-", dir=self.keylog_dir)
+        if self.run_as:
+            # The program writes the keylog as that user; we tail it as ourselves. mkdtemp
+            # made it 0700 and ours, so hand it over or the secrets never get written.
+            os.chown(keydir, *self.run_as)
+        self.keylog = os.path.join(keydir, "key.log")
 
         self._chan = grpc.insecure_channel(self.gateway)
         self._ing = ig.IngestServiceStub(self._chan)
@@ -130,10 +147,12 @@ class KeylogCapture(abc.ABC):
         self.session_id = handle.session_id
         max_chunk = handle.max_chunk_bytes or (1 << 20)
 
-        dump_cmd = [dumpcap, "-i", iface, "-P", "-w", "-", "-q"]
-        if self.capture_filter:
-            dump_cmd += ["-f", self.capture_filter]  # no filter = capture everything
-        self._dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        dump_cmd = self.capture_command(iface)
+        # stderr is inherited, not discarded: it is the only place a capture backend
+        # reports why it produced nothing (a bad filter, a device it cannot open, an
+        # unsupported link type). Swallowing it turns every such failure into a silent
+        # zero-byte capture. It lands in this source's own log when supervised.
+        self._dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE)
         self._rt = threading.Thread(target=_reader_thread, args=(self._dump.stdout, self._q, self._stop), daemon=True)
         self._kt = threading.Thread(target=_keylog_thread, args=(self.keylog, self._q, self._stop), daemon=True)
         self._rt.start()
