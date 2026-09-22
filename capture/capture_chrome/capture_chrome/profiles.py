@@ -64,3 +64,15 @@ def resolve_existing(chrome: str, dir_name: str) -> tuple[str, str]:
         if dirn == dir_name:
             return (udd, dirn)
     return (platform.chrome_user_data_dir(chrome) or "", dir_name)
+
+
+def user_data_dir(chrome: str, profile) -> str | None:
+    """The --user-data-dir a resolved profile launches against — the dir Chrome's singleton
+    is keyed on. Handles all three launch forms: the built-in sentinel (the binary's own
+    default dir), an (user_data_dir, profile_directory) pair, or a path. None when the
+    binary's default dir isn't known."""
+    if profile is BUILTIN_PROFILE:
+        return platform.chrome_user_data_dir(chrome)
+    if isinstance(profile, tuple):
+        return profile[0]
+    return profile

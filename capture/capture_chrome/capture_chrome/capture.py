@@ -8,11 +8,18 @@ session, the pcap/keylog streaming, and teardown — is the shared engine.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
+from capture_chrome import platform, profiles
 from capture_sdk import snap
 from capture_sdk.browser import BUILTIN_PROFILE, profile_desc  # noqa: F401 — re-exported
 from capture_sdk.livecapture import KeylogCapture
+
+
+class AlreadyRunning(RuntimeError):
+    """Chrome is already running on the profile we were asked to capture, so launching it
+    would hand off to that instance and record nothing. Carries an actionable message."""
 
 
 class ChromeCapture(KeylogCapture):
@@ -36,7 +43,25 @@ class ChromeCapture(KeylogCapture):
         self.url = url
         self.extra_args = list(extra_args)
 
-    def launch(self, keylog: str) -> subprocess.Popen:
+    def start(self) -> str:
+        # Chrome is a singleton per user-data-dir. If one is already running on the profile
+        # we're about to capture, our launch just hands the URL to it and exits — no TLS
+        # keys, and the capture tears down the moment that handoff process quits. Refuse
+        # before opening a gateway session, so a bad run leaves no empty session behind.
+        udd = profiles.user_data_dir(self.chrome, self.profile)
+        if udd and (pid := platform.running_instance(udd)):
+            name = os.path.basename(self.chrome)
+            raise AlreadyRunning(
+                f"{name} is already running on this profile (pid {pid}) — a second launch "
+                f"hands off to it and logs no TLS keys. Quit it fully (Cmd+Q on macOS; "
+                f"closing the windows is not enough) and retry, or capture with a "
+                f"temporary profile.")
+        return super().start()
+
+    def launch_command(self, keylog: str) -> list[str]:
+        """The Chrome argv for this capture: the key-log flag, the profile flags, the URL.
+        Split from `launch` so a variant that spawns Chrome differently — the macOS pktap
+        source, which runs as root and must drop to the invoking user — reuses it."""
         cmd = [
             self.chrome,
             f"--ssl-key-log-file={keylog}",
@@ -54,4 +79,8 @@ class ChromeCapture(KeylogCapture):
             cmd.insert(2, f"--user-data-dir={self.profile}")
         if self.url:
             cmd.append(self.url)
-        return subprocess.Popen(cmd)
+        return cmd
+
+    def launch(self, keylog: str) -> subprocess.Popen:
+        return subprocess.Popen(self.launch_command(keylog))
+

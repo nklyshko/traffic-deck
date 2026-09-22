@@ -31,7 +31,7 @@ import os
 import sys
 
 from capture_chrome import platform, profiles
-from capture_chrome.capture import ChromeCapture, profile_desc
+from capture_chrome.capture import AlreadyRunning, ChromeCapture, profile_desc
 from capture_chrome.profiles import BUILTIN_PROFILE
 from capture_sdk import dumpcap, prompt, snap, terminal
 from capture_sdk.shutdown import GracefulInterrupt
@@ -195,7 +195,11 @@ def _capture(argv) -> None:
         gateway=args.gateway, label=args.label, chrome=chrome, profile=profile,
         iface=iface, capture_filter=args.filter, url=args.url, duration=args.duration,
         extra_args=args.chrome_args)
-    sid = cap.start()
+    try:
+        sid = cap.start()
+    except AlreadyRunning as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
     print(f"session {sid}  iface={iface}  profile={profile_desc(profile)}  keylog={cap.keylog}",
           flush=True)
 

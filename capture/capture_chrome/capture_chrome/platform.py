@@ -94,6 +94,36 @@ def chrome_user_data_dir(binary: str) -> str | None:
     return path if os.path.isdir(path) else None
 
 
+def running_instance(user_data_dir: str) -> int | None:
+    """The pid of a Chrome already running on `user_data_dir`, or None.
+
+    Chrome is a singleton per user-data-dir: a second launch on a dir that is already open
+    hands its arguments to the running instance over SingletonSocket and exits within a few
+    seconds ("Opening in existing browser session"). That instance was started without
+    --ssl-key-log-file, so a capture attached to it records no TLS keys and stops the moment
+    the handed-off process exits — an empty session. Closing every window is not enough on
+    macOS; the app keeps running until Cmd+Q.
+
+    The lock is a dangling symlink named `<hostname>-<pid>`, left behind by a crash, so a
+    pid that no longer exists reads as not running."""
+    try:
+        target = os.readlink(os.path.join(user_data_dir, "SingletonLock"))
+    except OSError:
+        return None  # no lock (or not a symlink) → nothing holds the profile
+    _host, _, pid = target.rpartition("-")
+    if not pid.isdigit():
+        return None
+    # ponytail: liveness by pid only — a recycled pid reads as a running Chrome. Compare the
+    # lock's hostname or the pid's argv if that false positive ever shows up.
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return None  # stale lock from a crashed instance
+    except OSError:
+        pass  # EPERM — alive, just not ours
+    return int(pid)
+
+
 def parse_chrome_profiles(local_state: dict) -> list[tuple[str, str]]:
     """Profiles from a parsed `Local State`, as (dir_name, label) in Chrome's UI order.
 

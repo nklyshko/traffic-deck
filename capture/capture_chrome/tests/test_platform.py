@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 
-from capture_chrome import platform
+from capture_chrome import platform, profiles
 
 
 def test_parse_chrome_profiles_orders_and_labels():
@@ -59,3 +60,32 @@ def test_chrome_profiles_missing_local_state(tmp_path, monkeypatch):
     (tmp_path / "Local State").write_text(
         json.dumps({"profile": {"info_cache": {"Default": {"name": "Me"}}}}))
     assert platform.chrome_profiles("google-chrome") == [(str(tmp_path), "Default", "Me")]
+
+
+def test_running_instance(tmp_path):
+    lock = tmp_path / "SingletonLock"
+    assert platform.running_instance(str(tmp_path)) is None  # no lock at all
+
+    # A lock naming a live pid (our own) means a Chrome holds this profile.
+    lock.symlink_to(f"somehost-{os.getpid()}")
+    assert platform.running_instance(str(tmp_path)) == os.getpid()
+
+    # A lock left by a crashed instance names a pid that no longer exists — not running.
+    lock.unlink()
+    lock.symlink_to("somehost-2147483646")
+    assert platform.running_instance(str(tmp_path)) is None
+
+    # Anything that isn't <host>-<pid> is not a claim we can read.
+    lock.unlink()
+    lock.symlink_to("garbage")
+    assert platform.running_instance(str(tmp_path)) is None
+
+
+def test_user_data_dir_covers_every_launch_form(tmp_path, monkeypatch):
+    # The singleton is keyed on the user-data-dir, so the preflight has to find it for all
+    # three forms a profile resolves to — including the sentinel, where it is the binary's
+    # own default dir (the case Cmd+Q actually bites).
+    monkeypatch.setattr(platform, "chrome_user_data_dir", lambda _b: "/default/udd")
+    assert profiles.user_data_dir("chrome", profiles.BUILTIN_PROFILE) == "/default/udd"
+    assert profiles.user_data_dir("chrome", ("/some/udd", "Profile 1")) == "/some/udd"
+    assert profiles.user_data_dir("chrome", str(tmp_path)) == str(tmp_path)
