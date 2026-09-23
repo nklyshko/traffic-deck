@@ -29,6 +29,14 @@ import subprocess
 #: longer is truncated — and the truncated form is what `-Q 'proc = "…"'` compares against.
 MAXCOMLEN = 16
 
+#: Session-metadata key carrying the pids this capture's browser actually used, reported at
+#: CloseSession. Mirrors gateway/internal/server/ingest.go.
+PIDS_KEY = "capture.pids"
+
+#: The Chromium switch that marks the one child process owning the browser's sockets.
+#: Renderers, the GPU process and the rest never appear on the network.
+_NETWORK_SERVICE = "--utility-sub-type=network.mojom.NetworkService"
+
 
 def tcpdump_binary() -> str:
     """Apple's tcpdump, which is the one that speaks PKTAP and the `-Q` metadata filter.
@@ -106,6 +114,50 @@ def matching_pids(proc: str) -> list[int]:
     return sorted(set(named) & owners)
 
 
+def _flag_present(command: str, flag: str) -> bool:
+    """Whether `command` carries exactly `flag`, not a longer one starting the same way.
+
+    `--user-data-dir=/a` must not match `--user-data-dir=/ab`, and a plain `in` would.
+    Trailing spaces make the end of the line behave like any other separator."""
+    return f"{flag} " in f"{command} "
+
+
+def network_service_pids(user_data_dir: str | None, browser_pid: int | None = None) -> set[int]:
+    """Pids of the NetworkService processes belonging to *our* browser.
+
+    This is the per-instance identity the metadata filter cannot express. `proc` matches a
+    16-character name shared by every Chrome-family browser on the machine; a pid is exact,
+    but the one we want does not exist until after we launch, and can be replaced if the
+    network process crashes. So it is resolved here, repeatedly, while the capture runs.
+
+    The mark is the `--user-data-dir` we chose: Chrome passes the resolved directory down to
+    every child, so the browser's own network process carries it in argv while another
+    Chrome's carries a different one. That is only unambiguous because `ChromeCapture.start`
+    refuses to capture a profile something is already running on — the two halves of this
+    source hold each other up. `browser_pid` is the fallback for the one case with no mark:
+    a built-in profile whose default directory we could not resolve.
+    """
+    try:
+        out = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,command="],
+                             capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    flag = f"--user-data-dir={user_data_dir}" if user_data_dir else None
+    pids: set[int] = set()
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        pid, ppid, command = int(parts[0]), parts[1], parts[2]
+        if _NETWORK_SERVICE not in command:
+            continue
+        if flag and _flag_present(command, flag):
+            pids.add(pid)
+        elif browser_pid is not None and ppid.isdigit() and int(ppid) == browser_pid:
+            pids.add(pid)
+    return pids
+
+
 def filter_expression(proc: str, exclude_pids=()) -> str:
     """The metadata filter: `proc`'s packets, minus the pids listed.
 
@@ -115,9 +167,15 @@ def filter_expression(proc: str, exclude_pids=()) -> str:
     to avoid. Excluding the pids that existed a moment before we launch narrows it to the
     instance we are about to start: ours is the only one whose network process is new.
 
-    The set is fixed when tcpdump starts, so a helper another Chrome spawns *during* the
-    capture still slips through. That is rare — Chrome runs one NetworkService and only
-    replaces it after a crash — and the key-log still keeps such flows out of the decode."""
+    The set is fixed when tcpdump starts, so a browser opened *during* the capture still
+    slips past it: its network process has a pid in neither list. That is what this filter
+    cannot fix and why it is only half the narrowing — the kernel makes the cheap cut here
+    (every non-browser process on the machine, which is most of the traffic), and the
+    gateway makes the exact one when the session closes, using the pids
+    [network_service_pids][capture_pktap.pktap.network_service_pids] observed while the
+    capture ran. Keeping this filter broad is deliberate: a pid-only filter would go blind
+    the moment Chrome replaced its network process, and those packets would be gone for
+    good rather than merely unclassified."""
     expr = f'proc = "{proc}"'
     if exclude_pids:
         expr += " and not (" + " or ".join(f"pid = {p}" for p in sorted(exclude_pids)) + ")"

@@ -89,6 +89,90 @@ def test_named_pids_compares_the_truncated_name(monkeypatch):
     assert 9001 not in got      # another app entirely
 
 
+PS_OUTPUT = (
+    # pid  ppid  command
+    " 1159     1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    " --user-data-dir=/Users/me/Library/Application Support/Google/Chrome\n"
+    # Ours: the network process, carrying the profile we launched against.
+    " 1166  1159 /Applications/Google Chrome.app/.../Google Chrome Helper"
+    " --type=utility --utility-sub-type=network.mojom.NetworkService"
+    " --user-data-dir=/Users/me/Library/Application Support/Google/Chrome\n"
+    # A renderer of ours: same name, same profile, but owns no socket.
+    "  471  1159 /Applications/Google Chrome.app/.../Google Chrome Helper (Renderer)"
+    " --type=renderer"
+    " --user-data-dir=/Users/me/Library/Application Support/Google/Chrome\n"
+    # Another Chrome's network process: same 16-character name, different profile. This is
+    # the one the kernel filter cannot exclude when it starts mid-capture.
+    " 4242  4200 /Applications/Google Chrome.app/.../Google Chrome Helper"
+    " --type=utility --utility-sub-type=network.mojom.NetworkService"
+    " --user-data-dir=/Users/me/other-profile\n"
+    # A profile whose path merely starts the same way — must not match.
+    " 4243  4201 /Applications/Google Chrome.app/.../Google Chrome Helper"
+    " --type=utility --utility-sub-type=network.mojom.NetworkService"
+    " --user-data-dir=/Users/me/Library/Application Support/Google/Chrome-backup\n"
+)
+
+
+def _fake_ps(monkeypatch):
+    import subprocess as sp
+
+    class Done:
+        stdout = PS_OUTPUT
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: Done())
+
+
+def test_network_service_pids_identifies_our_browser_by_profile(monkeypatch):
+    # The mark is the --user-data-dir we launched against: Chrome hands the resolved path
+    # to every child, so our network process carries it and another Chrome's carries its
+    # own. This is the identity the metadata filter cannot express, because a pid does not
+    # exist until after the browser starts.
+    _fake_ps(monkeypatch)
+    udd = "/Users/me/Library/Application Support/Google/Chrome"
+    got = pktap.network_service_pids(udd)
+    assert got == {1166}, "only our own NetworkService, by profile"
+
+
+def test_network_service_pids_ignores_a_longer_profile_path(monkeypatch):
+    # ".../Chrome" must not match ".../Chrome-backup"; a plain substring test would, and
+    # would silently adopt another browser's packets as ours.
+    _fake_ps(monkeypatch)
+    assert 4243 not in pktap.network_service_pids(
+        "/Users/me/Library/Application Support/Google/Chrome")
+
+
+def test_network_service_pids_falls_back_to_parentage(monkeypatch):
+    # A built-in profile whose directory we could not resolve leaves no mark in argv, so
+    # fall back to "a child of the browser we launched" — still exact, just less robust to
+    # the process being re-parented.
+    _fake_ps(monkeypatch)
+    assert pktap.network_service_pids(None, browser_pid=1159) == {1166}
+    assert pktap.network_service_pids(None, browser_pid=4200) == {4242}
+    assert pktap.network_service_pids(None) == set()  # nothing to go on: claim nothing
+
+
+def test_network_service_pids_ignores_processes_that_own_no_sockets(monkeypatch):
+    # Renderers share the truncated process name and the profile, so they pass every test
+    # except the one that matters: they are not the network service.
+    _fake_ps(monkeypatch)
+    udd = "/Users/me/Library/Application Support/Google/Chrome"
+    assert 471 not in pktap.network_service_pids(udd)
+    assert 1159 not in pktap.network_service_pids(udd)  # nor the browser itself
+
+
+def test_network_service_pids_survives_ps_failing(monkeypatch):
+    # An empty set means "we identified nothing", which the capture reports as no pids at
+    # all — the gateway must never be handed an empty keep set, which would mean "drop
+    # every packet".
+    import subprocess as sp
+
+    def boom(*a, **k):
+        raise OSError("no ps")
+
+    monkeypatch.setattr(sp, "run", boom)
+    assert pktap.network_service_pids("/Users/me/profile") == set()
+
+
 def test_invoking_user_is_none_when_unprivileged(monkeypatch):
     # Not root → no demotion anywhere; the tool behaves like any other capture source.
     monkeypatch.setattr(os, "geteuid", lambda: 1000)

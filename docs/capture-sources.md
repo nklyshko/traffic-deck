@@ -259,6 +259,35 @@ Two things make this source different from every other one:
   filter matches, so Chrome is `Google Chrome He`. The tool derives this from whichever
   binary you pick, so Brave/Edge/Chromium work too.
 
+### Why the narrowing happens twice
+
+A metadata filter is fixed when `tcpdump` starts, and that is *before* the browser exists.
+So the filter can only say "this process name, minus the instances already running" —
+which drops every other app on the machine, but cannot exclude a Chrome you open later.
+Its network process has a pid in neither list, and `Google Chrome He` is a name every
+Chrome-family browser shares.
+
+So the source keeps watching. Chrome passes the resolved `--user-data-dir` down to every
+child, so its own network process is identifiable in `ps` by the profile this capture
+launched against — and that is unambiguous only because the source refuses to capture a
+profile something is already running on. The pids it finds are reported at `CloseSession`,
+and the gateway prunes the stored pcap to exactly them.
+
+Broad in the kernel, exact at the end. A pid-only kernel filter would be exact too, but it
+would go blind the moment Chrome replaced its network process, and those packets would be
+gone rather than merely unclassified. The prune refuses an empty pid list and keeps any
+packet whose `pktap` header it cannot read, so a failure to identify the browser leaves a
+capture that is too large — never one that is empty.
+
+Two limits worth knowing:
+
+- Flows are decoded **live**, before the prune runs (`GATEWAY_RECORD_LIVE`, on by
+  default). The pcap ends up holding only your browser, but the flow list still reflects
+  everything the decoder saw, so a flow can name a connection whose packets are no longer
+  in the bundle. The gateway logs a line at close when this applies.
+- Nothing here filters by interface, so traffic your browser sends over a VPN `utun` is
+  not captured — `-i pktap,<iface>` taps one NIC.
+
 One capture, interactively (the launcher re-execs under `sudo`; same Chrome/profile
 pickers as the Chrome source, sharing its remembered defaults):
 

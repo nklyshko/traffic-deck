@@ -250,6 +250,21 @@ func (s *Store) CreateSession(ctx context.Context, ns NewSession) error {
 	return err
 }
 
+// SetSessionMetadata merges keys into a session's metadata, overwriting any that already
+// exist. Used when a source reports at CloseSession what it only learned while capturing
+// (see CloseSessionRequest.metadata), so the finalization that follows — and anyone
+// reading the session later — sees it alongside the metadata supplied at open.
+func (s *Store) SetSessionMetadata(ctx context.Context, sessionID string, md map[string]string) error {
+	for k, v := range md {
+		if _, err := s.catalog.ExecContext(ctx,
+			`INSERT OR REPLACE INTO session_metadata (session_id, key, value) VALUES (?,?,?)`,
+			sessionID, k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // attachSessionMetadata fills each session's Metadata map from the session_metadata table.
 func (s *Store) attachSessionMetadata(ctx context.Context, sessions map[string]*trafficv1.Session) error {
 	if len(sessions) == 0 {

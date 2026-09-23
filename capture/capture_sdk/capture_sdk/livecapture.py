@@ -126,6 +126,18 @@ class KeylogCapture(abc.ABC):
             cmd += ["-f", self.capture_filter]  # no filter = capture everything
         return cmd
 
+    def close_metadata(self) -> dict[str, str]:
+        """Metadata to attach to `CloseSession` — what this capture learned while running.
+
+        The metadata passed at `OpenSession` states intent, and has to: the gateway needs it
+        before any packets arrive. This is the other half, for facts that only exist once
+        the capture is under way and may still change during it — the macOS per-process
+        source reports the pids its browser's network process used, which it discovers by
+        watching, and which grow if that process is replaced.
+
+        Empty by default: a source with nothing to add says nothing."""
+        return {}
+
     # --- lifecycle -----------------------------------------------------------
 
     def start(self) -> str:
@@ -203,7 +215,8 @@ class KeylogCapture(abc.ABC):
         self._ut.join(timeout=30)
         ack = self._ack.get("ack")
         try:
-            self._summary = self._ing.CloseSession(ip.CloseSessionRequest(session_id=self.session_id))
+            self._summary = self._ing.CloseSession(ip.CloseSessionRequest(
+                session_id=self.session_id, metadata=self.close_metadata()))
         finally:
             self._chan.close()
         return ack, self._summary
