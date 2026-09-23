@@ -279,14 +279,16 @@ gone rather than merely unclassified. The prune refuses an empty pid list and ke
 packet whose `pktap` header it cannot read, so a failure to identify the browser leaves a
 capture that is too large — never one that is empty.
 
-Two limits worth knowing:
+The flow list is narrowed by the same evidence. Flows are decoded live, while the filter is
+still too broad, so another browser's connections do reach it; the prune records which
+connections carried packets owned by which process, and the flows on connections that only
+ever carried another process's packets are deleted before the session's flow count is
+taken. A connection seen under *both* a kept and a dropped pid is left alone — deleting a
+flow needs positive evidence, not the absence of evidence — and a tunnelled flow is matched
+by its `proxy_addr`, since its `dst_addr` names a target no packet on the wire ever carried.
 
-- Flows are decoded **live**, before the prune runs (`GATEWAY_RECORD_LIVE`, on by
-  default). The pcap ends up holding only your browser, but the flow list still reflects
-  everything the decoder saw, so a flow can name a connection whose packets are no longer
-  in the bundle. The gateway logs a line at close when this applies.
-- Nothing here filters by interface, so traffic your browser sends over a VPN `utun` is
-  not captured — `-i pktap,<iface>` taps one NIC.
+One limit remains: nothing here filters by interface, so traffic your browser sends over a
+VPN `utun` is not captured at all — `-i pktap,<iface>` taps one NIC.
 
 One capture, interactively (the launcher re-execs under `sudo`; same Chrome/profile
 pickers as the Chrome source, sharing its remembered defaults):

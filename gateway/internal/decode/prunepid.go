@@ -6,8 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	gonet "net"
 	"os"
 	"path/filepath"
+	"strconv"
+
+	"github.com/google/gopacket"
+	gplayers "github.com/google/gopacket/layers"
 )
 
 // Cutting a macOS per-process capture down to the browser that was launched.
@@ -47,6 +52,18 @@ const (
 // orders of magnitude while still refusing a length that is obviously garbage.
 const maxBlockBytes = 64 << 20
 
+// ConnKey identifies a connection by its two endpoints ("ip:port"), without a direction —
+// a flow and a packet name the same connection whichever way the bytes were going.
+type ConnKey struct{ A, B string }
+
+// NewConnKey orders the endpoints so both directions produce the same key.
+func NewConnKey(x, y string) ConnKey {
+	if x > y {
+		x, y = y, x
+	}
+	return ConnKey{A: x, B: y}
+}
+
 // PruneResult reports what a prune did, so the caller can log it and a caller's test can
 // assert the capture actually shrank.
 type PruneResult struct {
@@ -56,6 +73,28 @@ type PruneResult struct {
 	// non-zero count here with nothing dropped is the signature of a parsing problem
 	// rather than a capture that genuinely belonged to one process.
 	PacketsUnknown int
+	// Kept and Dropped are the connections observed carrying packets on each side of the
+	// decision. They exist so flows can be narrowed the same way the packets were: a flow
+	// on a connection that only ever carried dropped packets belonged to another process.
+	//
+	// Both are needed, and "not in Kept" is not good enough. A connection whose frame
+	// could not be parsed lands in neither, and a caller that deleted everything outside
+	// Kept would delete those too — turning a parsing gap into lost flows.
+	Kept, Dropped map[ConnKey]bool
+}
+
+// ForeignConns are the connections that carried only packets belonging to other processes.
+// Deleting the flows on these is safe in the way the packet prune is safe: it requires
+// having positively seen the connection owned by a process we did not launch, and never
+// seen it owned by one we did.
+func (r PruneResult) ForeignConns() map[ConnKey]bool {
+	foreign := map[ConnKey]bool{}
+	for c := range r.Dropped {
+		if !r.Kept[c] {
+			foreign[c] = true
+		}
+	}
+	return foreign
 }
 
 // ErrNotPktap is returned when the file is not a pcap-ng recorded off a pktap interface,
@@ -74,6 +113,7 @@ var ErrNotPktap = errors.New("not a PKTAP pcap-ng capture")
 // the capture would hide that.
 func PrunePcapngByPID(path string, keep map[int32]bool) (PruneResult, error) {
 	var res PruneResult
+	res.Kept, res.Dropped = map[ConnKey]bool{}, map[ConnKey]bool{}
 	if len(keep) == 0 {
 		return res, errors.New("prune by pid: empty keep set")
 	}
@@ -212,5 +252,54 @@ func keepPacketBlock(blockType uint32, body []byte, bo binary.ByteOrder,
 		res.PacketsUnknown++
 		return true
 	}
-	return keep[pid]
+	record := body[epbPacketDataOffset : epbPacketDataOffset+int(capLen)]
+	kept := keep[pid]
+	// Note which connection this packet put on which side, so the caller can narrow the
+	// flow list by the same evidence. A frame we cannot read the endpoints out of is
+	// simply not recorded: it still counts for the packet decision above, but it must not
+	// contribute to a claim about who owns a connection.
+	if conn, ok := recordConn(record); ok {
+		if kept {
+			res.Kept[conn] = true
+		} else {
+			res.Dropped[conn] = true
+		}
+	}
+	return kept
+}
+
+// recordConn reads the connection endpoints out of one pktap record's inner frame.
+//
+// The frame's own link type is in the pktap header (EN10MB off a NIC, NULL on loopback),
+// which is what makes this possible without knowing anything about the interface. Lazy
+// decoding stops as soon as the transport layer is reached, so nothing parses a payload.
+func recordConn(record []byte) (ConnKey, bool) {
+	innerLT, frame, ok := pktapPayload(record)
+	if !ok {
+		return ConnKey{}, false
+	}
+	pkt := gopacket.NewPacket(frame, innerLT, gopacket.Lazy)
+	net := pkt.NetworkLayer()
+	if net == nil {
+		return ConnKey{}, false
+	}
+	var srcPort, dstPort uint16
+	switch t := pkt.TransportLayer().(type) {
+	case *gplayers.TCP:
+		srcPort, dstPort = uint16(t.SrcPort), uint16(t.DstPort)
+	case *gplayers.UDP:
+		srcPort, dstPort = uint16(t.SrcPort), uint16(t.DstPort)
+	default:
+		// No ports (ICMP, ARP): there is no connection here to attribute a flow to.
+		return ConnKey{}, false
+	}
+	flow := net.NetworkFlow()
+	// Built exactly as the decoders build a flow's src_addr/dst_addr (livetcp.go) — same
+	// helper, same order — so the two strings are equal by construction rather than by
+	// coincidence. Anything else would silently fail to match on IPv6, which needs
+	// brackets, and a mismatch here means flows are never attributed at all.
+	return NewConnKey(
+		gonet.JoinHostPort(flow.Src().String(), strconv.Itoa(int(srcPort))),
+		gonet.JoinHostPort(flow.Dst().String(), strconv.Itoa(int(dstPort))),
+	), true
 }

@@ -54,9 +54,9 @@ func epb(record []byte) []byte {
 	b := make([]byte, total)
 	binary.LittleEndian.PutUint32(b[0:], blockEnhancedPacket)
 	binary.LittleEndian.PutUint32(b[4:], uint32(total))
-	binary.LittleEndian.PutUint32(b[8:], 0)                     // interface id
-	binary.LittleEndian.PutUint32(b[20:], uint32(len(record)))  // captured length
-	binary.LittleEndian.PutUint32(b[24:], uint32(len(record)))  // original length
+	binary.LittleEndian.PutUint32(b[8:], 0)                    // interface id
+	binary.LittleEndian.PutUint32(b[20:], uint32(len(record))) // captured length
+	binary.LittleEndian.PutUint32(b[24:], uint32(len(record))) // original length
 	copy(b[28:], record)
 	binary.LittleEndian.PutUint32(b[uint32(total)-4:], uint32(total))
 	return b
@@ -127,6 +127,92 @@ func TestPrunePcapngByPIDKeepsOnlyOurBrowser(t *testing.T) {
 	}
 	if !bytes.HasPrefix(after, before[:48]) {
 		t.Error("section and interface blocks were not copied through unchanged")
+	}
+}
+
+// tcpFrame is an Ethernet/IPv4/TCP frame with the given endpoints — enough for the
+// pruner to read a connection out of, and nothing more.
+func tcpFrame(srcIP, dstIP [4]byte, srcPort, dstPort uint16) []byte {
+	f := make([]byte, 54)
+	copy(f[12:14], []byte{0x08, 0x00}) // ethertype IPv4
+	f[14] = 0x45                       // version 4, IHL 5
+	binary.BigEndian.PutUint16(f[16:], 40)
+	f[22] = 64 // TTL
+	f[23] = 6  // protocol TCP
+	copy(f[26:30], srcIP[:])
+	copy(f[30:34], dstIP[:])
+	// TCP header starts at 34 (14 Ethernet + 20 IPv4): source port, then destination.
+	binary.BigEndian.PutUint16(f[34:], srcPort)
+	binary.BigEndian.PutUint16(f[36:], dstPort)
+	f[46] = 0x50 // data offset 5
+	return f
+}
+
+// TestPrunePcapngByPIDReportsConnectionOwnership pins the evidence the flow prune runs
+// on. Packets say which process owned which connection; a connection seen only under a
+// dropped pid is another process's, and one seen under ours never is — whichever
+// direction the packet was going.
+func TestPrunePcapngByPIDReportsConnectionOwnership(t *testing.T) {
+	ours := [4]byte{192, 168, 1, 240}
+	site := [4]byte{93, 184, 216, 34}
+	other := [4]byte{1, 1, 1, 1}
+
+	var buf bytes.Buffer
+	buf.Write(shb())
+	buf.Write(idb(linkTypePKTAP))
+	// Ours, outbound then the reply — the same connection seen both ways.
+	buf.Write(epb(pktapRecord(1166, "Google Chrome He", tcpFrame(ours, site, 49152, 443))))
+	buf.Write(epb(pktapRecord(1166, "Google Chrome He", tcpFrame(site, ours, 443, 49152))))
+	// Another browser's connection entirely.
+	buf.Write(epb(pktapRecord(9999, "Google Chrome He", tcpFrame(ours, other, 50000, 443))))
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := PrunePcapngByPID(path, map[int32]bool{1166: true})
+	if err != nil {
+		t.Fatalf("PrunePcapngByPID: %v", err)
+	}
+
+	mine := NewConnKey("192.168.1.240:49152", "93.184.216.34:443")
+	theirs := NewConnKey("192.168.1.240:50000", "1.1.1.1:443")
+	if !res.Kept[mine] {
+		t.Errorf("our connection missing from Kept: %v", res.Kept)
+	}
+	if !res.Dropped[theirs] {
+		t.Errorf("the other browser's connection missing from Dropped: %v", res.Dropped)
+	}
+
+	foreign := res.ForeignConns()
+	if !foreign[theirs] {
+		t.Error("the other browser's connection was not reported as foreign")
+	}
+	if foreign[mine] {
+		t.Error("our own connection was reported as foreign")
+	}
+	// Both directions of our connection collapse to one key, or a flow would match only
+	// when the decoder happened to name the endpoints the same way round.
+	if len(res.Kept) != 1 {
+		t.Errorf("Kept has %d connections, want 1 — both directions are one connection", len(res.Kept))
+	}
+}
+
+// TestForeignConnsRequiresPositiveEvidence covers the safety direction for flows. A
+// connection carrying packets from both a kept and a dropped pid is not foreign: shared
+// ports get reused, and deleting on ambiguous evidence loses a real flow.
+func TestForeignConnsRequiresPositiveEvidence(t *testing.T) {
+	shared := NewConnKey("10.0.0.1:1234", "10.0.0.2:443")
+	res := PruneResult{
+		Kept:    map[ConnKey]bool{shared: true},
+		Dropped: map[ConnKey]bool{shared: true, NewConnKey("10.0.0.1:2", "10.0.0.3:443"): true},
+	}
+	foreign := res.ForeignConns()
+	if foreign[shared] {
+		t.Error("a connection seen under a kept pid was reported as foreign")
+	}
+	if len(foreign) != 1 {
+		t.Errorf("foreign = %v, want only the connection seen under a dropped pid alone", foreign)
 	}
 }
 

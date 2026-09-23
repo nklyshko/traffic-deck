@@ -6,7 +6,10 @@ import (
 	"os"
 	"testing"
 
+	"github.com/google/uuid"
+
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
@@ -24,6 +27,106 @@ func pruneTestIngest(t *testing.T) *Ingest {
 		t.Fatal(err)
 	}
 	return NewIngest(st, obj, "", newLiveHub(false), false, false, false)
+}
+
+// TestPersistLiveDropsForeignFlows is the flow half of the per-process narrowing. Flows
+// are decoded live, while the kernel filter is still too broad to exclude a second
+// browser, so another process's connections reach the flow list and have to be removed
+// once the packets have proved which they were. The session's flow count must describe
+// what is left, not what was decoded.
+func TestPersistLiveDropsForeignFlows(t *testing.T) {
+	ctx := context.Background()
+	ing := pruneTestIngest(t)
+	st := ing.st
+
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, store.NewSession{
+		ID: sid, Label: "pktap", Source: "pktap",
+		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING, PcapBytes: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ls := &liveSession{
+		recordLive: true,
+		flows:      map[string]*trafficv1.Flow{},
+		dflows:     map[string]*decode.Flow{},
+		subs:       map[int]*flowSub{},
+		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+	}
+	ls.onFlow(&decode.Flow{
+		ID: uuid.NewString(), Authority: "ours.example", Protocol: "HTTP/2",
+		SrcAddr: "192.168.1.240:49152", DstAddr: "93.184.216.34:443",
+	}, true)
+	ls.onFlow(&decode.Flow{
+		ID: uuid.NewString(), Authority: "speedtest.example", Protocol: "HTTP/2",
+		SrcAddr: "192.168.1.240:50000", DstAddr: "1.1.1.1:443",
+	}, true)
+
+	foreign := map[decode.ConnKey]bool{
+		decode.NewConnKey("192.168.1.240:50000", "1.1.1.1:443"): true,
+	}
+	if err := ing.persistLive(ctx, sid, ls, foreign); err != nil {
+		t.Fatalf("persistLive: %v", err)
+	}
+
+	flows, err := st.ListFlows(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 1 || flows[0].GetAuthority() != "ours.example" {
+		got := make([]string, len(flows))
+		for i, f := range flows {
+			got[i] = f.GetAuthority()
+		}
+		t.Fatalf("remaining flows = %v, want just [ours.example]", got)
+	}
+
+	sess, err := st.GetSession(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.GetFlowCount() != 1 {
+		t.Errorf("session flow_count = %d, want 1 — the count must follow the drop",
+			sess.GetFlowCount())
+	}
+}
+
+// TestPersistLiveKeepsEverythingWithoutEvidence is the other side: an ordinary capture
+// reports no foreign connections, and none of its flows may be touched.
+func TestPersistLiveKeepsEverythingWithoutEvidence(t *testing.T) {
+	ctx := context.Background()
+	ing := pruneTestIngest(t)
+
+	sid := uuid.NewString()
+	if err := ing.st.CreateSession(ctx, store.NewSession{
+		ID: sid, Label: "chrome", Source: "chrome",
+		Status: trafficv1.SessionStatus_SESSION_STATUS_DECODING, PcapBytes: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ls := &liveSession{
+		recordLive: true,
+		flows:      map[string]*trafficv1.Flow{},
+		dflows:     map[string]*decode.Flow{},
+		subs:       map[int]*flowSub{},
+		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+	}
+	ls.onFlow(&decode.Flow{
+		ID: uuid.NewString(), Authority: "a.example", Protocol: "HTTP/2",
+		SrcAddr: "10.0.0.1:1", DstAddr: "10.0.0.2:443",
+	}, true)
+
+	if err := ing.persistLive(ctx, sid, ls, nil); err != nil {
+		t.Fatalf("persistLive: %v", err)
+	}
+	flows, err := ing.st.ListFlows(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 1 {
+		t.Errorf("persisted %d flows, want 1", len(flows))
+	}
 }
 
 // TestParseCapturePIDs covers the wire form a source reports. A partial list still
