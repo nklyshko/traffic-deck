@@ -81,6 +81,76 @@ func TestDeleteFlowsByConnection(t *testing.T) {
 	}
 }
 
+// TestDeleteFlowsByConnectionKeepsOurOwnProxiedFlows is the case that matters when the
+// captured browser itself is behind a proxy — a corporate one, or the loopback relay.
+//
+// Both browsers then talk to the *same* proxy address, so the proxy cannot distinguish
+// them. The client source port can, and does: it is unique per connection, so the packets
+// attribute each connection to one process and our own proxied flows are never foreign.
+func TestDeleteFlowsByConnectionKeepsOurOwnProxiedFlows(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+
+	sid := uuid.NewString()
+	if err := st.CreateSession(ctx, NewSession{ID: sid, Source: "pktap"}); err != nil {
+		t.Fatal(err)
+	}
+	aid := uuid.NewString()
+	if err := st.CreateAnalysis(ctx, NewAnalysis{ID: aid, SessionID: sid, Engine: "live"}); err != nil {
+		t.Fatal(err)
+	}
+
+	const proxy = "176.12.75.158:9675"
+	// Same proxy, same target host, different browsers — told apart only by source port.
+	ours := &decode.Flow{
+		ID: "ours", Authority: "example.com", SrcAddr: "192.168.1.240:50002",
+		DstAddr: "203.0.113.9:443", Proxy: &decode.FlowProxy{Addr: proxy, Type: "http"},
+	}
+	theirs := &decode.Flow{
+		ID: "theirs", Authority: "example.com", SrcAddr: "192.168.1.240:50000",
+		DstAddr: "203.0.113.9:443", Proxy: &decode.FlowProxy{Addr: proxy, Type: "http"},
+	}
+	// The CONNECT flow itself, which names the proxy as its destination too.
+	connect := &decode.Flow{
+		ID: "connect", Method: "CONNECT", Authority: "example.com",
+		SrcAddr: "192.168.1.240:50002", DstAddr: proxy,
+		Proxy: &decode.FlowProxy{Addr: proxy, Type: "http"},
+	}
+	if _, err := st.InsertFlows(ctx, sid, aid, []*decode.Flow{ours, theirs, connect}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only the other browser's connection to the proxy was proved foreign.
+	n, err := st.DeleteFlowsByConnection(ctx, sid, [][2]string{
+		{"192.168.1.240:50000", proxy},
+	})
+	if err != nil {
+		t.Fatalf("DeleteFlowsByConnection: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("deleted %d flows, want 1 — only the other browser's", n)
+	}
+
+	left, err := st.ListFlows(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, f := range left {
+		got[f.GetId()] = true
+	}
+	if !got["ours"] || !got["connect"] {
+		t.Errorf("our own proxied flows were deleted; left = %v", got)
+	}
+	if got["theirs"] {
+		t.Error("the other browser's proxied flow survived")
+	}
+}
+
 // TestDeleteFlowsByConnectionIgnoresAnEmptyList is the no-op guard: a capture with
 // nothing to narrow must not have a query run against it that could match everything.
 func TestDeleteFlowsByConnectionIgnoresAnEmptyList(t *testing.T) {
