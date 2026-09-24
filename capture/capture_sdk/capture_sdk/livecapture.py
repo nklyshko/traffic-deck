@@ -15,9 +15,11 @@ a serve-mode source starts it, returns the session id, and lets it run in the ba
 from __future__ import annotations
 
 import abc
+import collections
 import os
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +32,31 @@ from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
 from capture_sdk.upload import SENTINEL, capture_chunks
 from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
+
+#: How long to give the capture backend to fail before assuming it started. One that cannot
+#: open its interface exits at once; one that started is still running well inside this.
+_START_GRACE = 0.3
+
+#: Lines of the backend's stderr kept for the error message. Enough for the real complaint
+#: plus the usage text some tools print after it.
+_MAX_KEPT_STDERR = 20
+
+
+class CaptureBackendFailed(RuntimeError):
+    """The packet-capture backend exited on startup instead of recording. Carries what it
+    printed, which is the only place the reason is ever stated."""
+
+
+def _stderr_thread(stderr, kept: collections.deque) -> None:
+    """Keep the backend's stderr and echo it on, so it is both reportable and logged."""
+    try:
+        for line in iter(stderr.readline, b""):
+            text = line.decode("utf-8", "replace")
+            kept.append(text)
+            sys.stderr.write(text)
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def wait_for_stop(proc: subprocess.Popen, duration: float | None, stop: threading.Event) -> None:
@@ -160,11 +187,20 @@ class KeylogCapture(abc.ABC):
         max_chunk = handle.max_chunk_bytes or (1 << 20)
 
         dump_cmd = self.capture_command(iface)
-        # stderr is inherited, not discarded: it is the only place a capture backend
-        # reports why it produced nothing (a bad filter, a device it cannot open, an
-        # unsupported link type). Swallowing it turns every such failure into a silent
-        # zero-byte capture. It lands in this source's own log when supervised.
-        self._dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE)
+        # stderr is captured rather than discarded or merely inherited: it is the only
+        # place a capture backend says why it produced nothing (a bad filter, a device it
+        # cannot open, an unsupported link type). Discarding it turned every such failure
+        # into a silent zero-byte capture; inheriting it only helps when someone is
+        # watching the terminal this source was started in, which for a serve-mode source
+        # started by hand under sudo is nobody. The lines are echoed on as well as kept,
+        # so they still reach this source's log when supervised.
+        self._dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._dump_err: collections.deque[str] = collections.deque(maxlen=_MAX_KEPT_STDERR)
+        self._et = threading.Thread(target=_stderr_thread, args=(self._dump.stderr, self._dump_err),
+                                    daemon=True)
+        self._et.start()
+        self._fail_if_capture_died(dump_cmd)
+
         self._rt = threading.Thread(target=_reader_thread, args=(self._dump.stdout, self._q, self._stop), daemon=True)
         self._kt = threading.Thread(target=_keylog_thread, args=(self.keylog, self._q, self._stop), daemon=True)
         self._rt.start()
@@ -178,6 +214,37 @@ class KeylogCapture(abc.ABC):
 
         self._proc = self.launch(self.keylog)
         return self.session_id
+
+    def _fail_if_capture_died(self, cmd: list[str]) -> None:
+        """Refuse a capture whose backend exited on startup, quoting what it said.
+
+        A backend that cannot open its interface — no privilege, no such device, a filter
+        the kernel rejects — exits within milliseconds and writes nothing at all, not even
+        a pcap file header. Without this the session runs to completion anyway: the browser
+        opens, the user browses, the key-log fills, and the result is a closed session with
+        zero packets and no stated reason. That failure has cost more time on this project
+        than any other, so it is worth a fraction of a second at every start to turn it into
+        an error that names itself.
+
+        The session is closed before raising, so a refused start leaves no session stuck
+        open behind it."""
+        if self._dump.poll() is None:
+            time.sleep(_START_GRACE)
+        if self._dump.poll() is None:
+            return
+        self._stop.set()
+        self._et.join(timeout=1)
+        why = " ".join(line.strip() for line in self._dump_err if line.strip())
+        try:
+            self._ing.CloseSession(ip.CloseSessionRequest(session_id=self.session_id))
+        except grpc.RpcError:
+            pass  # the capture already failed; a failed cleanup must not mask why
+        finally:
+            self._chan.close()
+        raise CaptureBackendFailed(
+            f"{os.path.basename(cmd[0])} exited immediately (status "
+            f"{self._dump.returncode}) and captured nothing"
+            + (f": {why}" if why else " without saying why"))
 
     def wait(self, stop_event: threading.Event | None = None) -> None:
         """Block until the program exits, the duration elapses, or `stop_event` (or an
