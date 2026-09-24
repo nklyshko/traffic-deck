@@ -8,8 +8,13 @@ import (
 	"testing"
 )
 
-// A PKTAP pcap-ng built by hand. There is no recorded fixture to use: producing one needs
-// root and a Mac, so the format is written here from the spec the pruner reads it by.
+// A pcap-ng in the shape Apple's tcpdump actually writes a per-process capture: the
+// interface's own link type (Ethernet, not DLT_PKTAP), a Process Information Block per
+// process, and an option on every packet naming which one.
+//
+// The layout below was read off a real capture rather than from documentation — assuming
+// the live interface's per-packet header instead is what made this pruner refuse every
+// real file it was given.
 
 func shb() []byte {
 	b := make([]byte, 28)
@@ -25,7 +30,7 @@ func shb() []byte {
 
 func idb(linkType uint16) []byte {
 	b := make([]byte, 20)
-	binary.LittleEndian.PutUint32(b[0:], 0x00000001)
+	binary.LittleEndian.PutUint32(b[0:], blockInterfaceDesc)
 	binary.LittleEndian.PutUint32(b[4:], 20)
 	binary.LittleEndian.PutUint16(b[8:], linkType)
 	binary.LittleEndian.PutUint32(b[12:], 262144) // snaplen
@@ -33,105 +38,44 @@ func idb(linkType uint16) []byte {
 	return b
 }
 
-// pktapRecord is one packet's captured bytes: a pktap header naming the owning process,
-// then a stand-in frame. Only the fields the pruner reads are filled, plus pth_type_next,
-// without which Apple's own tcpdump calls the record UNSUPPORTED rather than a packet.
-func pktapRecord(pid int32, comm string, frame []byte) []byte {
-	const hdrLen = 108
-	b := make([]byte, hdrLen+len(frame))
-	binary.LittleEndian.PutUint32(b[0:], hdrLen)       // pth_length
-	binary.LittleEndian.PutUint32(b[4:], 1)            // pth_type_next = PTH_TYPE_PACKET
-	binary.LittleEndian.PutUint32(b[8:], 1)            // pth_dlt = EN10MB
-	binary.LittleEndian.PutUint32(b[52:], uint32(pid)) // pth_pid
-	copy(b[56:73], comm)                               // pth_comm, NUL-padded
-	copy(b[hdrLen:], frame)
+// pib is a Process Information Block: the pid, then the process name as option 2.
+func pib(pid int32, name string) []byte {
+	nameLen := (len(name) + 3) &^ 3
+	total := 12 + 4 + 4 + nameLen + 4 // header+trailer, pid, option hdr+value, endofopt
+	b := make([]byte, total)
+	binary.LittleEndian.PutUint32(b[0:], blockProcessInfo)
+	binary.LittleEndian.PutUint32(b[4:], uint32(total))
+	binary.LittleEndian.PutUint32(b[8:], uint32(pid))
+	binary.LittleEndian.PutUint16(b[12:], 2) // option code 2: process name
+	binary.LittleEndian.PutUint16(b[14:], uint16(len(name)))
+	copy(b[16:], name)
+	binary.LittleEndian.PutUint32(b[16+nameLen:], 0) // opt_endofopt
+	binary.LittleEndian.PutUint32(b[total-4:], uint32(total))
 	return b
 }
 
-func epb(record []byte) []byte {
-	padded := (len(record) + 3) &^ 3
-	total := 32 + padded
+// epb is an Enhanced Packet Block carrying `frame`, tagged with the process at `pibIndex`.
+func epb(frame []byte, pibIndex uint32) []byte {
+	padded := (len(frame) + 3) &^ 3
+	total := 32 + padded + 8 + 4 // header+trailer+fixed, frame, one option, endofopt
 	b := make([]byte, total)
 	binary.LittleEndian.PutUint32(b[0:], blockEnhancedPacket)
 	binary.LittleEndian.PutUint32(b[4:], uint32(total))
-	binary.LittleEndian.PutUint32(b[8:], 0)                    // interface id
-	binary.LittleEndian.PutUint32(b[20:], uint32(len(record))) // captured length
-	binary.LittleEndian.PutUint32(b[24:], uint32(len(record))) // original length
-	copy(b[28:], record)
-	binary.LittleEndian.PutUint32(b[uint32(total)-4:], uint32(total))
+	binary.LittleEndian.PutUint32(b[8:], 0)                   // interface id
+	binary.LittleEndian.PutUint32(b[20:], uint32(len(frame))) // captured length
+	binary.LittleEndian.PutUint32(b[24:], uint32(len(frame))) // original length
+	copy(b[28:], frame)
+	opt := 28 + padded
+	binary.LittleEndian.PutUint16(b[opt:], optProcessIndex)
+	binary.LittleEndian.PutUint16(b[opt+2:], 4)
+	binary.LittleEndian.PutUint32(b[opt+4:], pibIndex)
+	binary.LittleEndian.PutUint32(b[opt+8:], 0) // opt_endofopt
+	binary.LittleEndian.PutUint32(b[total-4:], uint32(total))
 	return b
 }
 
-// writeCapture assembles a capture from (pid, payload size) pairs and returns its path.
-func writeCapture(t *testing.T, linkType uint16, packets ...struct {
-	pid  int32
-	size int
-}) string {
-	t.Helper()
-	var buf bytes.Buffer
-	buf.Write(shb())
-	buf.Write(idb(linkType))
-	for _, p := range packets {
-		buf.Write(epb(pktapRecord(p.pid, "Google Chrome He", make([]byte, p.size))))
-	}
-	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-type pkt = struct {
-	pid  int32
-	size int
-}
-
-// TestPrunePcapngByPIDKeepsOnlyOurBrowser is the case the whole per-process path exists
-// for: a second Chrome ran during the capture, and its packets — same process name, a pid
-// we never launched — have to go, while ours stay byte-for-byte.
-func TestPrunePcapngByPIDKeepsOnlyOurBrowser(t *testing.T) {
-	path := writeCapture(t, linkTypePKTAP,
-		pkt{pid: 1166, size: 100},
-		pkt{pid: 9999, size: 4000}, // the other browser: big, and most of the file
-		pkt{pid: 1166, size: 100},
-		pkt{pid: 9999, size: 4000},
-	)
-	before, _ := os.ReadFile(path)
-
-	res, err := PrunePcapngByPID(path, map[int32]bool{1166: true})
-	if err != nil {
-		t.Fatalf("PrunePcapngByPID: %v", err)
-	}
-	if res.PacketsIn != 4 || res.PacketsKept != 2 {
-		t.Errorf("kept %d of %d packets, want 2 of 4", res.PacketsKept, res.PacketsIn)
-	}
-	if res.PacketsUnknown != 0 {
-		t.Errorf("PacketsUnknown = %d, want 0 — every record here has a readable header", res.PacketsUnknown)
-	}
-	if res.After >= res.Before {
-		t.Errorf("capture did not shrink: %d -> %d", res.Before, res.After)
-	}
-
-	// The survivors must be intact, not merely counted: a rewrite that corrupted packet
-	// bytes would still produce the right count.
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keptRecord := epb(pktapRecord(1166, "Google Chrome He", make([]byte, 100)))
-	if n := bytes.Count(after, keptRecord); n != 2 {
-		t.Errorf("found %d of our packets in the pruned file, want 2", n)
-	}
-	if bytes.Contains(after, epb(pktapRecord(9999, "Google Chrome He", make([]byte, 4000)))) {
-		t.Error("the other browser's packets survived the prune")
-	}
-	if !bytes.HasPrefix(after, before[:48]) {
-		t.Error("section and interface blocks were not copied through unchanged")
-	}
-}
-
-// tcpFrame is an Ethernet/IPv4/TCP frame with the given endpoints — enough for the
-// pruner to read a connection out of, and nothing more.
+// tcpFrame is an Ethernet/IPv4/TCP frame with the given endpoints — enough for the pruner
+// to read a connection out of, and nothing more.
 func tcpFrame(srcIP, dstIP [4]byte, srcPort, dstPort uint16) []byte {
 	f := make([]byte, 54)
 	copy(f[12:14], []byte{0x08, 0x00}) // ethertype IPv4
@@ -148,6 +92,80 @@ func tcpFrame(srcIP, dstIP [4]byte, srcPort, dstPort uint16) []byte {
 	return f
 }
 
+func padFrame(size int) []byte {
+	f := tcpFrame([4]byte{10, 0, 0, 1}, [4]byte{10, 0, 0, 2}, 1000, 443)
+	if size <= len(f) {
+		return f
+	}
+	return append(f, make([]byte, size-len(f))...)
+}
+
+func writeBlocks(t *testing.T, blocks ...[]byte) string {
+	t.Helper()
+	var buf bytes.Buffer
+	for _, b := range blocks {
+		buf.Write(b)
+	}
+	path := filepath.Join(t.TempDir(), "capture.pcapng")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestPrunePcapngByPIDKeepsOnlyOurBrowser is the case the whole per-process path exists
+// for, and the one seen in the wild: a second Chrome ran during the capture and its
+// packets — same process name, a pid we never launched — took 91% of the file.
+func TestPrunePcapngByPIDKeepsOnlyOurBrowser(t *testing.T) {
+	path := writeBlocks(t,
+		shb(), idb(1),
+		pib(1166, "Google Chrome He"), // index 0: ours
+		pib(9999, "Google Chrome He"), // index 1: the other browser
+		epb(padFrame(100), 0),
+		epb(padFrame(4000), 1), // theirs: big, and most of the file
+		epb(padFrame(100), 0),
+		epb(padFrame(4000), 1),
+	)
+	before, _ := os.ReadFile(path)
+
+	res, err := PrunePcapngByPID(path, map[int32]bool{1166: true})
+	if err != nil {
+		t.Fatalf("PrunePcapngByPID: %v", err)
+	}
+	if res.PacketsIn != 4 || res.PacketsKept != 2 {
+		t.Errorf("kept %d of %d packets, want 2 of 4", res.PacketsKept, res.PacketsIn)
+	}
+	if res.PacketsUnknown != 0 {
+		t.Errorf("PacketsUnknown = %d, want 0 — every packet here names its process", res.PacketsUnknown)
+	}
+	if !res.PIDsSeen[1166] || !res.PIDsSeen[9999] {
+		t.Errorf("PIDsSeen = %v, want both processes reported", res.PIDsSeen)
+	}
+	if res.After >= res.Before {
+		t.Errorf("capture did not shrink: %d -> %d", res.Before, res.After)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := bytes.Count(after, epb(padFrame(100), 0)); n != 2 {
+		t.Errorf("found %d of our packets in the pruned file, want 2", n)
+	}
+	if bytes.Contains(after, epb(padFrame(4000), 1)) {
+		t.Error("the other browser's packets survived the prune")
+	}
+	// Both Process Information Blocks must survive even though one names a process whose
+	// packets all went: dropping it would renumber the rest and reassign every remaining
+	// packet to the wrong process.
+	if !bytes.Contains(after, pib(9999, "Google Chrome He")) {
+		t.Error("a Process Information Block was dropped, which renumbers the others")
+	}
+	if !bytes.HasPrefix(after, before[:48]) {
+		t.Error("section and interface blocks were not copied through unchanged")
+	}
+}
+
 // TestPrunePcapngByPIDReportsConnectionOwnership pins the evidence the flow prune runs
 // on. Packets say which process owned which connection; a connection seen only under a
 // dropped pid is another process's, and one seen under ours never is — whichever
@@ -157,18 +175,16 @@ func TestPrunePcapngByPIDReportsConnectionOwnership(t *testing.T) {
 	site := [4]byte{93, 184, 216, 34}
 	other := [4]byte{1, 1, 1, 1}
 
-	var buf bytes.Buffer
-	buf.Write(shb())
-	buf.Write(idb(linkTypePKTAP))
-	// Ours, outbound then the reply — the same connection seen both ways.
-	buf.Write(epb(pktapRecord(1166, "Google Chrome He", tcpFrame(ours, site, 49152, 443))))
-	buf.Write(epb(pktapRecord(1166, "Google Chrome He", tcpFrame(site, ours, 443, 49152))))
-	// Another browser's connection entirely.
-	buf.Write(epb(pktapRecord(9999, "Google Chrome He", tcpFrame(ours, other, 50000, 443))))
-	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := writeBlocks(t,
+		shb(), idb(1),
+		pib(1166, "Google Chrome He"),
+		pib(9999, "Google Chrome He"),
+		// Ours, outbound then the reply — the same connection seen both ways.
+		epb(tcpFrame(ours, site, 49152, 443), 0),
+		epb(tcpFrame(site, ours, 443, 49152), 0),
+		// Another browser's connection entirely.
+		epb(tcpFrame(ours, other, 50000, 443), 1),
+	)
 
 	res, err := PrunePcapngByPID(path, map[int32]bool{1166: true})
 	if err != nil {
@@ -183,7 +199,6 @@ func TestPrunePcapngByPIDReportsConnectionOwnership(t *testing.T) {
 	if !res.Dropped[theirs] {
 		t.Errorf("the other browser's connection missing from Dropped: %v", res.Dropped)
 	}
-
 	foreign := res.ForeignConns()
 	if !foreign[theirs] {
 		t.Error("the other browser's connection was not reported as foreign")
@@ -199,8 +214,8 @@ func TestPrunePcapngByPIDReportsConnectionOwnership(t *testing.T) {
 }
 
 // TestForeignConnsRequiresPositiveEvidence covers the safety direction for flows. A
-// connection carrying packets from both a kept and a dropped pid is not foreign: shared
-// ports get reused, and deleting on ambiguous evidence loses a real flow.
+// connection carrying packets from both a kept and a dropped pid is not foreign: ports get
+// reused, and deleting on ambiguous evidence loses a real flow.
 func TestForeignConnsRequiresPositiveEvidence(t *testing.T) {
 	shared := NewConnKey("10.0.0.1:1234", "10.0.0.2:443")
 	res := PruneResult{
@@ -217,39 +232,42 @@ func TestForeignConnsRequiresPositiveEvidence(t *testing.T) {
 }
 
 // TestPrunePcapngByPIDRefusesToEmptyACapture covers the two ways this could silently
-// destroy a session: an empty keep set, and a capture that isn't PKTAP at all (so the
-// bytes at the pid's offset are frame data that might match anything).
+// destroy a session: an empty keep set, and a capture with no process information at all,
+// where every packet is unattributable and keeping them is the only safe answer.
 func TestPrunePcapngByPIDRefusesToEmptyACapture(t *testing.T) {
-	path := writeCapture(t, linkTypePKTAP, pkt{pid: 1166, size: 100})
+	path := writeBlocks(t, shb(), idb(1), pib(1166, "Google Chrome He"), epb(padFrame(100), 0))
 	original, _ := os.ReadFile(path)
 
 	if _, err := PrunePcapngByPID(path, nil); err == nil {
 		t.Error("an empty keep set was accepted; it would delete every packet")
 	}
-	ethernet := writeCapture(t, 1, pkt{pid: 1166, size: 100})
-	if _, err := PrunePcapngByPID(ethernet, map[int32]bool{1166: true}); err == nil {
-		t.Error("a non-PKTAP capture was pruned by pid")
-	}
 
+	// An ordinary capture: same blocks, no Process Information Block anywhere.
+	plain := writeBlocks(t, shb(), idb(1), epb(padFrame(100), 0))
+	plainBefore, _ := os.ReadFile(plain)
+	if _, err := PrunePcapngByPID(plain, map[int32]bool{1166: true}); !errorIs(err, ErrNoProcessInfo) {
+		t.Errorf("a capture with no process info gave %v, want ErrNoProcessInfo", err)
+	}
+	if now, _ := os.ReadFile(plain); !bytes.Equal(now, plainBefore) {
+		t.Error("a capture with no process info was modified")
+	}
 	if now, _ := os.ReadFile(path); !bytes.Equal(now, original) {
 		t.Error("a refused prune modified the capture")
 	}
 }
 
-// TestPrunePcapngByPIDKeepsUnreadableRecords pins the safety direction: a record whose
-// pktap header is too short to hold a pid is kept and counted, never dropped. A layout
-// change must show up as a capture that didn't shrink, not one that lost packets.
-func TestPrunePcapngByPIDKeepsUnreadableRecords(t *testing.T) {
-	var buf bytes.Buffer
-	buf.Write(shb())
-	buf.Write(idb(linkTypePKTAP))
-	buf.Write(epb(pktapRecord(1166, "Google Chrome He", make([]byte, 100))))
-	buf.Write(epb([]byte{1, 2, 3, 4, 5, 6, 7, 8})) // too short for a pktap header
-	path := filepath.Join(t.TempDir(), "capture.pcapng")
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
+// TestPrunePcapngByPIDKeepsUnattributablePackets pins the safety direction: a packet whose
+// process option is missing or points past the blocks we have is kept and counted, never
+// dropped. A layout change must show up as a capture that did not shrink, not one that
+// lost packets.
+func TestPrunePcapngByPIDKeepsUnattributablePackets(t *testing.T) {
+	// A packet naming process index 7, of which there is one.
+	path := writeBlocks(t,
+		shb(), idb(1),
+		pib(1166, "Google Chrome He"),
+		epb(padFrame(100), 0),
+		epb(padFrame(100), 7),
+	)
 	res, err := PrunePcapngByPID(path, map[int32]bool{1166: true})
 	if err != nil {
 		t.Fatalf("PrunePcapngByPID: %v", err)
@@ -260,15 +278,16 @@ func TestPrunePcapngByPIDKeepsUnreadableRecords(t *testing.T) {
 	}
 }
 
-// TestPktapPIDReadsProcessIdentity covers the header accessor directly, including the
-// truncated process name the kernel records and the short-record rejection the pruner
-// depends on for its keep-on-unknown behaviour.
-func TestPktapPIDReadsProcessIdentity(t *testing.T) {
-	pid, comm, ok := pktapPID(pktapRecord(1166, "Google Chrome He", []byte{0xAA}))
-	if !ok || pid != 1166 || comm != "Google Chrome He" {
-		t.Errorf("pktapPID = (%d, %q, %v), want (1166, \"Google Chrome He\", true)", pid, comm, ok)
+func errorIs(err, target error) bool {
+	for err != nil {
+		if err == target {
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
 	}
-	if _, _, ok := pktapPID(make([]byte, 40)); ok {
-		t.Error("a record too short to hold a pid reported one")
-	}
+	return false
 }

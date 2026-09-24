@@ -21,31 +21,53 @@ import (
 // filter fixed at capture start can be: the name is shared by every Chrome-family
 // instance on the machine, and the pids that exist when tcpdump starts can be excluded
 // but the ones that appear later cannot. So a browser the user opens mid-capture still
-// lands in the pcap.
+// lands in the pcap — observed in the wild as 91% of one capture, because a second
+// capture launched stable Chrome a minute in and Canary's helper shares its name.
 //
 // The pid is the thing that identifies one instance, and the source learns it — by
 // watching its own browser's children — only after the capture is already running. That
 // is why the narrowing finishes here rather than in the filter: by the time the session
 // closes, the source knows every pid its network process used, including one it was
 // replaced by, and every packet on disk carries the pid that owned it.
+//
+// Where it carries it is the part worth writing down. A *live* pktap interface hands out
+// DLT_PKTAP frames with a per-packet header, but tcpdump writing a file does not store
+// that. It decapsulates, records the interface's real link type (Ethernet), and puts the
+// process into pcap-ng structure instead: a Process Information Block per process, and an
+// option on every packet naming which one. Assuming the per-packet header meant this
+// pruner refused every real capture with "not a PKTAP pcap-ng capture (link type 1)".
 
-// pcap-ng block types we care about. Everything else is copied through untouched, which
-// is what keeps this forward-compatible: a block this doesn't understand is not a packet,
-// so it cannot be another process's traffic.
+// pcap-ng block types. Everything not named here is copied through untouched, which keeps
+// this forward-compatible: a block this does not understand is not a packet, so it cannot
+// be another process's traffic.
 const (
-	blockSectionHeader    = 0x0A0D0D0A
-	blockEnhancedPacket   = 0x00000006
-	blockSimplePacket     = 0x00000003
+	blockSectionHeader  = 0x0A0D0D0A
+	blockInterfaceDesc  = 0x00000001
+	blockEnhancedPacket = 0x00000006
+	blockSimplePacket   = 0x00000003
+	// blockProcessInfo is Apple's addition: pid at body offset 0, process name in an
+	// option. Packets reference it by its position among the PIBs in the file.
+	blockProcessInfo      = 0x80000001
 	sectionByteOrderMagic = 0x1A2B3C4D
 )
 
-// Offsets within an Enhanced Packet Block's *body* — that is, after the 8 bytes of block
-// type and total length this code reads separately: interface id (4), timestamp high and
-// low (8), captured length (4), original length (4), then the captured bytes.
+// optProcessIndex is the per-packet option holding the index of the owning process's
+// Process Information Block. Apple's option space starts at 0x8000; this is the only one
+// of theirs read here (the others carry service class, flow id and direction).
+const optProcessIndex = 0x8001
+
+// Offsets within an Enhanced Packet Block's *body* — after the 8 bytes of block type and
+// total length read separately: interface id (4), timestamp high and low (8), captured
+// length (4), original length (4), then the captured bytes, then options.
 const (
+	epbInterfaceOffset   = 0
 	epbCapturedLenOffset = 12
 	epbPacketDataOffset  = 20
 )
+
+// idbLinkTypeOffset is where an Interface Description Block's body starts: the link type,
+// as a uint16.
+const idbLinkTypeOffset = 0
 
 // maxBlockBytes bounds what a corrupt length field can make this allocate. A block holds
 // one packet, and tcpdump's default snaplen is 256 KiB, so this is generous by three
@@ -69,10 +91,14 @@ func NewConnKey(x, y string) ConnKey {
 type PruneResult struct {
 	Before, After          int64
 	PacketsIn, PacketsKept int
-	// PacketsUnknown is packets kept because their pktap header could not be read. A
+	// PacketsUnknown is packets kept because their owning process could not be read. A
 	// non-zero count here with nothing dropped is the signature of a parsing problem
 	// rather than a capture that genuinely belonged to one process.
 	PacketsUnknown int
+	// PIDsSeen is every process the capture holds packets for, whether kept or not. The
+	// difference between this and what the source reported is the whole point of the
+	// exercise, so it is worth logging.
+	PIDsSeen map[int32]bool
 	// Kept and Dropped are the connections observed carrying packets on each side of the
 	// decision. They exist so flows can be narrowed the same way the packets were: a flow
 	// on a connection that only ever carried dropped packets belonged to another process.
@@ -97,9 +123,9 @@ func (r PruneResult) ForeignConns() map[ConnKey]bool {
 	return foreign
 }
 
-// ErrNotPktap is returned when the file is not a pcap-ng recorded off a pktap interface,
-// so there is no per-packet process to prune by. The file is left untouched.
-var ErrNotPktap = errors.New("not a PKTAP pcap-ng capture")
+// ErrNoProcessInfo is returned when the file carries no Process Information Blocks, so
+// there is nothing to say which process owned which packet. The file is left untouched.
+var ErrNoProcessInfo = errors.New("capture has no per-packet process information")
 
 // PrunePcapngByPID rewrites the pcap-ng at path keeping only packets owned by a pid in
 // keep, and returns what it cut.
@@ -112,15 +138,15 @@ var ErrNotPktap = errors.New("not a PKTAP pcap-ng capture")
 // caller means: it means the source failed to identify its browser, and silently emptying
 // the capture would hide that.
 func PrunePcapngByPID(path string, keep map[int32]bool) (PruneResult, error) {
-	var res PruneResult
-	res.Kept, res.Dropped = map[ConnKey]bool{}, map[ConnKey]bool{}
+	res := PruneResult{
+		PIDsSeen: map[int32]bool{},
+		Kept:     map[ConnKey]bool{},
+		Dropped:  map[ConnKey]bool{},
+	}
 	if len(keep) == 0 {
 		return res, errors.New("prune by pid: empty keep set")
 	}
 
-	// Refuse anything that isn't PKTAP before touching the file: a plain Ethernet pcap-ng
-	// has no pid in its packet data, and reading one out of the frame would be nonsense
-	// that happens to match.
 	f, err := os.Open(path)
 	if err != nil {
 		return res, err
@@ -128,12 +154,6 @@ func PrunePcapngByPID(path string, keep map[int32]bool) (PruneResult, error) {
 	defer f.Close()
 	if fi, err := f.Stat(); err == nil {
 		res.Before = fi.Size()
-	}
-	if lt := pcapngLinkType(bufio.NewReader(f)); lt != linkTypePKTAP {
-		return res, fmt.Errorf("%w (link type %d)", ErrNotPktap, lt)
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return res, err
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".prune-pid-*")
@@ -143,7 +163,8 @@ func PrunePcapngByPID(path string, keep map[int32]bool) (PruneResult, error) {
 	defer os.Remove(tmp.Name()) // no-op once the rename below succeeds
 
 	w := bufio.NewWriter(tmp)
-	if err := pruneBlocks(bufio.NewReader(f), w, keep, &res); err != nil {
+	sawProcessInfo, err := pruneBlocks(bufio.NewReader(f), w, keep, &res)
+	if err != nil {
 		tmp.Close()
 		return res, err
 	}
@@ -151,36 +172,50 @@ func PrunePcapngByPID(path string, keep map[int32]bool) (PruneResult, error) {
 		tmp.Close()
 		return res, err
 	}
-	if fi, err := tmp.Stat(); err == nil {
-		res.After = fi.Size()
-	}
 	if err := tmp.Close(); err != nil {
 		return res, err
+	}
+	// Checked after the pass rather than by sniffing first: the blocks that say which
+	// process owns what are scattered through the file, not in a header. With none of
+	// them every packet is unattributable and was kept, so the rewrite is a copy — and
+	// renaming a copy over the original would be pointless risk.
+	if !sawProcessInfo {
+		return res, ErrNoProcessInfo
+	}
+	if fi, err := os.Stat(tmp.Name()); err == nil {
+		res.After = fi.Size()
 	}
 	return res, os.Rename(tmp.Name(), path)
 }
 
 // pruneBlocks copies pcap-ng blocks from r to w, dropping the packet blocks whose owning
-// pid is not in keep.
+// pid is not in keep. It reports whether the file said anything about processes at all.
 //
 // Byte order is per section and comes from the Section Header Block, so it is re-read at
 // every SHB rather than assumed once: concatenated captures are legal pcap-ng and a
 // second section may disagree with the first.
-func pruneBlocks(r *bufio.Reader, w *bufio.Writer, keep map[int32]bool, res *PruneResult) error {
+func pruneBlocks(r *bufio.Reader, w *bufio.Writer, keep map[int32]bool, res *PruneResult) (bool, error) {
 	bo := binary.ByteOrder(binary.LittleEndian)
+	// pids indexed by the order their Process Information Blocks appear, which is how
+	// packets refer to them. Several blocks can name the same pid — tcpdump writes one
+	// with the process UUID and one without — so this is a list, not a set.
+	var pids []int32
+	// linkTypes indexed by interface id, for decoding a kept packet's frame far enough to
+	// read its connection endpoints.
+	var linkTypes []gplayers.LinkType
 	hdr := make([]byte, 8)
 	for {
 		if _, err := io.ReadFull(r, hdr); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil // a clean end between blocks
+				return len(pids) > 0, nil // a clean end between blocks
 			}
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				// A capture cut off mid-block — tcpdump killed as the session ended. The
 				// partial block is unparseable and cannot be a packet we want, so ending
 				// here leaves a valid file rather than erroring on the whole prune.
-				return nil
+				return len(pids) > 0, nil
 			}
-			return err
+			return len(pids) > 0, err
 		}
 		blockType := bo.Uint32(hdr[0:4])
 		if blockType == blockSectionHeader {
@@ -191,7 +226,7 @@ func pruneBlocks(r *bufio.Reader, w *bufio.Writer, keep map[int32]bool, res *Pru
 			// the length two fields earlier can be read.
 			magic, err := r.Peek(4)
 			if err != nil {
-				return err
+				return len(pids) > 0, err
 			}
 			switch {
 			case binary.BigEndian.Uint32(magic) == sectionByteOrderMagic:
@@ -199,46 +234,69 @@ func pruneBlocks(r *bufio.Reader, w *bufio.Writer, keep map[int32]bool, res *Pru
 			case binary.LittleEndian.Uint32(magic) == sectionByteOrderMagic:
 				bo = binary.LittleEndian
 			default:
-				return errors.New("prune by pid: section header with no byte-order magic")
+				return len(pids) > 0, errors.New("prune by pid: section header with no byte-order magic")
 			}
+			// A new section restarts both numbering spaces.
+			pids, linkTypes = nil, nil
 		}
 		total := bo.Uint32(hdr[4:8])
 		if total < 12 || total%4 != 0 || total > maxBlockBytes {
-			return fmt.Errorf("prune by pid: block type %#x has invalid length %d", blockType, total)
+			return len(pids) > 0, fmt.Errorf("prune by pid: block type %#x has invalid length %d", blockType, total)
 		}
 		body := make([]byte, int(total)-8)
 		if _, err := io.ReadFull(r, body); err != nil {
-			return fmt.Errorf("prune by pid: short block type %#x: %w", blockType, err)
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+				// The same truncation as above, caught one field later: a capture ends
+				// mid-block whenever tcpdump is killed as the session stops, which is
+				// every session. Stop here and keep what was written — the partial block
+				// cannot be parsed, so it cannot be a packet worth keeping.
+				return len(pids) > 0, nil
+			}
+			return len(pids) > 0, fmt.Errorf("prune by pid: short block type %#x: %w", blockType, err)
 		}
 
-		if blockType == blockEnhancedPacket || blockType == blockSimplePacket {
+		switch blockType {
+		case blockProcessInfo:
+			if len(body) >= 8 { // pid, plus the trailing total length
+				pids = append(pids, int32(bo.Uint32(body[0:4])))
+			}
+		case blockInterfaceDesc:
+			lt := gplayers.LinkType(0)
+			if len(body) >= idbLinkTypeOffset+2 {
+				lt = gplayers.LinkType(bo.Uint16(body[idbLinkTypeOffset : idbLinkTypeOffset+2]))
+			}
+			linkTypes = append(linkTypes, lt)
+		case blockEnhancedPacket, blockSimplePacket:
 			res.PacketsIn++
-			if !keepPacketBlock(blockType, body, bo, keep, res) {
+			if !keepPacketBlock(blockType, body, bo, pids, linkTypes, keep, res) {
 				continue // dropped: neither header nor body is written
 			}
 			res.PacketsKept++
 		}
+		// Everything that survives is written back byte for byte, including every Process
+		// Information Block — dropping one would renumber the rest and reassign packets to
+		// the wrong process.
 		if _, err := w.Write(hdr); err != nil {
-			return err
+			return len(pids) > 0, err
 		}
 		if _, err := w.Write(body); err != nil {
-			return err
+			return len(pids) > 0, err
 		}
 	}
 }
 
-// keepPacketBlock decides one packet block. Anything it cannot read the pid out of is
-// kept and counted — a capture that shrinks to nothing because of a layout change would
-// be far worse than one that doesn't shrink at all.
+// keepPacketBlock decides one packet block. Anything it cannot read the owner of is kept
+// and counted — a capture that shrinks to nothing because of a layout change would be far
+// worse than one that does not shrink at all.
 func keepPacketBlock(blockType uint32, body []byte, bo binary.ByteOrder,
-	keep map[int32]bool, res *PruneResult) bool {
+	pids []int32, linkTypes []gplayers.LinkType, keep map[int32]bool, res *PruneResult) bool {
 	if blockType != blockEnhancedPacket {
-		// A Simple Packet Block carries no captured length of its own beyond the original
-		// length and no options, and tcpdump does not write them. Keep rather than guess.
+		// A Simple Packet Block carries no options, so it cannot name its process at all;
+		// tcpdump does not write them. Keep rather than guess.
 		res.PacketsUnknown++
 		return true
 	}
-	if len(body) < epbCapturedLenOffset+4 {
+	if len(body) < epbPacketDataOffset {
 		res.PacketsUnknown++
 		return true
 	}
@@ -247,18 +305,24 @@ func keepPacketBlock(blockType uint32, body []byte, bo binary.ByteOrder,
 		res.PacketsUnknown++
 		return true
 	}
-	pid, _, ok := pktapPID(body[epbPacketDataOffset : epbPacketDataOffset+int(capLen)])
-	if !ok {
+	idx, ok := epbOptionUint32(body, bo, capLen, optProcessIndex)
+	if !ok || uint64(idx) >= uint64(len(pids)) {
 		res.PacketsUnknown++
 		return true
 	}
-	record := body[epbPacketDataOffset : epbPacketDataOffset+int(capLen)]
+	pid := pids[idx]
+	res.PIDsSeen[pid] = true
 	kept := keep[pid]
+
 	// Note which connection this packet put on which side, so the caller can narrow the
 	// flow list by the same evidence. A frame we cannot read the endpoints out of is
 	// simply not recorded: it still counts for the packet decision above, but it must not
 	// contribute to a claim about who owns a connection.
-	if conn, ok := recordConn(record); ok {
+	lt := gplayers.LinkType(0)
+	if iface := bo.Uint32(body[epbInterfaceOffset : epbInterfaceOffset+4]); uint64(iface) < uint64(len(linkTypes)) {
+		lt = linkTypes[iface]
+	}
+	if conn, ok := recordConn(body[epbPacketDataOffset:epbPacketDataOffset+int(capLen)], lt); ok {
 		if kept {
 			res.Kept[conn] = true
 		} else {
@@ -268,17 +332,37 @@ func keepPacketBlock(blockType uint32, body []byte, bo binary.ByteOrder,
 	return kept
 }
 
-// recordConn reads the connection endpoints out of one pktap record's inner frame.
+// epbOptionUint32 finds a 4-byte option by code in an Enhanced Packet Block's option list,
+// which follows the captured bytes padded up to a 4-byte boundary.
 //
-// The frame's own link type is in the pktap header (EN10MB off a NIC, NULL on loopback),
-// which is what makes this possible without knowing anything about the interface. Lazy
-// decoding stops as soon as the transport layer is reached, so nothing parses a payload.
-func recordConn(record []byte) (ConnKey, bool) {
-	innerLT, frame, ok := pktapPayload(record)
-	if !ok {
+// Each option is a 2-byte code, a 2-byte length and a value padded the same way; code 0
+// ends the list. The block's own trailing total length is the last 4 bytes and is not an
+// option, so the walk stops short of it.
+func epbOptionUint32(body []byte, bo binary.ByteOrder, capLen uint32, want uint16) (uint32, bool) {
+	off := epbPacketDataOffset + int((capLen+3)&^3)
+	for off+4 <= len(body)-4 {
+		code := bo.Uint16(body[off : off+2])
+		length := int(bo.Uint16(body[off+2 : off+4]))
+		if code == 0 { // opt_endofopt
+			return 0, false
+		}
+		if code == want && length == 4 && off+8 <= len(body) {
+			return bo.Uint32(body[off+4 : off+8]), true
+		}
+		off += 4 + ((length + 3) &^ 3)
+	}
+	return 0, false
+}
+
+// recordConn reads the connection endpoints out of one captured frame.
+//
+// Lazy decoding stops as soon as the transport layer is reached, so nothing parses a
+// payload.
+func recordConn(frame []byte, linkType gplayers.LinkType) (ConnKey, bool) {
+	if len(frame) == 0 {
 		return ConnKey{}, false
 	}
-	pkt := gopacket.NewPacket(frame, innerLT, gopacket.Lazy)
+	pkt := gopacket.NewPacket(frame, linkType, gopacket.Lazy)
 	net := pkt.NetworkLayer()
 	if net == nil {
 		return ConnKey{}, false

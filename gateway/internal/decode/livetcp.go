@@ -799,30 +799,3 @@ func pktapPayload(data []byte) (gplayers.LinkType, []byte, bool) {
 	}
 	return gplayers.LinkType(dlt), data[hdrLen:], true
 }
-
-// pktapPID reads the owning process out of the same header pktapPayload skips: pth_pid at
-// offset 52, and pth_comm — the kernel's MAXCOMLEN-truncated process name — at 56.
-//
-// This is the only evidence in a capture of which process a packet belonged to, and it is
-// what makes a pktap bundle worth more than an ordinary one: the key-log proves a flow was
-// *decrypted* by keys we hold, while this proves a packet was *sent* by a process we
-// launched. PrunePcapngByPID uses it to cut a capture down to one browser.
-//
-// false means "this record does not say" — too short, or a header that doesn't reach the
-// pid. Callers must treat that as unknown rather than as a non-match; deleting packets we
-// failed to parse would turn a parsing bug into data loss.
-func pktapPID(data []byte) (int32, string, bool) {
-	const pidOff, commOff, commLen = 52, 56, 17 // MAXCOMLEN+1
-	if len(data) < commOff+commLen {
-		return 0, "", false
-	}
-	hdrLen := binary.LittleEndian.Uint32(data[0:4])
-	if uint64(hdrLen) < commOff+commLen || uint64(hdrLen) > uint64(len(data)) {
-		return 0, "", false
-	}
-	comm := data[commOff : commOff+commLen]
-	if i := bytes.IndexByte(comm, 0); i >= 0 {
-		comm = comm[:i]
-	}
-	return int32(binary.LittleEndian.Uint32(data[pidOff : pidOff+4])), string(comm), true
-}

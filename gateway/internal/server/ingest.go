@@ -560,13 +560,14 @@ func (i *Ingest) pruneToCapturePIDs(ctx context.Context, sid string) map[decode.
 	}
 	res, err := decode.PrunePcapngByPID(pcapLocal, keep)
 	if err != nil {
-		// ErrNotPktap is the ordinary case of a source reporting pids for a capture that
-		// isn't per-process; it is worth one line, not an alarm.
+		// ErrNoProcessInfo is the ordinary case of a source reporting pids for a capture
+		// that carries no per-packet process; it is worth one line, not an alarm.
 		log.Printf("prune %s: %v", sid, err)
 		return nil
 	}
-	log.Printf("prune %s: kept %d of %d packets from pids %v, %d -> %d bytes",
-		sid, res.PacketsKept, res.PacketsIn, sortedPIDs(keep), res.Before, res.After)
+	log.Printf("prune %s: kept %d of %d packets, %d -> %d bytes; wanted pids %v, capture held %v",
+		sid, res.PacketsKept, res.PacketsIn, res.Before, res.After,
+		sortedPIDs(keep), sortedPIDs(res.PIDsSeen))
 	if res.PacketsUnknown > 0 {
 		log.Printf("prune %s: %d packets kept because their pktap header could not be read",
 			sid, res.PacketsUnknown)
