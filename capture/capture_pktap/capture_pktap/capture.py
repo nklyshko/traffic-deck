@@ -75,6 +75,10 @@ class PktapCapture(ChromeCapture):
         # and a BPF expression would narrow by port/host on top of it.
         self.excluded_pids = pktap.matching_pids(self.proc_name)
         expr = pktap.filter_expression(self.proc_name, self.excluded_pids)
+        # Logged because it is the one thing needed to explain a capture that recorded
+        # nothing, and the one thing that was missing every time that happened: the process
+        # name that had to match, and the pids that were ruled out before we started.
+        print(f"pktap: filtering {iface} on [{expr}]", flush=True)
         return pktap.capture_command(iface, expr, tcpdump=self.tcpdump)
 
     def launch(self, keylog: str) -> subprocess.Popen:

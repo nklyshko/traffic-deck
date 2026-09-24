@@ -167,6 +167,14 @@ def filter_expression(proc: str, exclude_pids=()) -> str:
     to avoid. Excluding the pids that existed a moment before we launch narrows it to the
     instance we are about to start: ours is the only one whose network process is new.
 
+    Written as a chain of `pid != N` rather than the more natural `not (pid = A or pid =
+    B)`, because Apple's filter parser cannot read the latter. `A and not (B or C)` fails
+    with *"missing right parenthesis"* — tcpdump then exits before capturing anything, so
+    the capture is empty whenever two Chrome-family browsers happen to hold sockets. The
+    single-term form `A and not (B)` parses, which is what made this intermittent and hard
+    to see: it depended on how many browsers were open. The `!=` form parses at every
+    length tested (100 terms, 1.6KB).
+
     The set is fixed when tcpdump starts, so a browser opened *during* the capture still
     slips past it: its network process has a pid in neither list. That is what this filter
     cannot fix and why it is only half the narrowing — the kernel makes the cheap cut here
@@ -178,7 +186,7 @@ def filter_expression(proc: str, exclude_pids=()) -> str:
     good rather than merely unclassified."""
     expr = f'proc = "{proc}"'
     if exclude_pids:
-        expr += " and not (" + " or ".join(f"pid = {p}" for p in sorted(exclude_pids)) + ")"
+        expr += "".join(f" and pid != {p}" for p in sorted(exclude_pids))
     return expr
 
 

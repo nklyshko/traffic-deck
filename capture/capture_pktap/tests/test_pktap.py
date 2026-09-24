@@ -49,7 +49,19 @@ def test_filter_expression_excludes_browsers_that_were_already_running():
     # before launch leaves only the instance we start — the whole point of this source.
     assert pktap.filter_expression("Google Chrome He") == 'proc = "Google Chrome He"'
     expr = pktap.filter_expression("Google Chrome He", [1167, 1165, 1166])
-    assert expr == 'proc = "Google Chrome He" and not (pid = 1165 or pid = 1166 or pid = 1167)'
+    assert expr == 'proc = "Google Chrome He" and pid != 1165 and pid != 1166 and pid != 1167'
+
+
+def test_filter_expression_never_parenthesises_the_exclusion():
+    # Apple's filter parser cannot read `A and not (B or C)` — it fails with "missing right
+    # parenthesis", tcpdump exits before capturing anything, and the session is empty. The
+    # single-term form `A and not (B)` parses, so the bug only appeared when two
+    # Chrome-family browsers held sockets at once, which is why it took a real capture to
+    # find. Chained `pid !=` parses at every length.
+    expr = pktap.filter_expression("Google Chrome He", [1, 2, 3])
+    assert "not (" not in expr
+    assert " or " not in expr
+    assert expr.count("pid != ") == 3
 
 
 def test_matching_pids_keeps_only_socket_owners(monkeypatch):
