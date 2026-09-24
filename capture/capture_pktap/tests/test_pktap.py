@@ -185,6 +185,43 @@ def test_network_service_pids_survives_ps_failing(monkeypatch):
     assert pktap.network_service_pids("/Users/me/profile") == set()
 
 
+def _fake_bundle(tmp_path, app: str, framework: str, helper: str) -> str:
+    """A Chromium app bundle: the app is named one thing, the framework another, and the
+    helper follows the *framework*. Returns the main binary's path."""
+    helpers = (tmp_path / f"{app}.app" / "Contents" / "Frameworks"
+               / f"{framework} Framework.framework" / "Versions" / "156.0.8071.0" / "Helpers")
+    for name in [f"{helper} Helper", f"{helper} Helper (Renderer)",
+                 f"{helper} Helper (GPU)", f"{helper} Helper (Alerts)"]:
+        (helpers / f"{name}.app").mkdir(parents=True, exist_ok=True)
+    macos = tmp_path / f"{app}.app" / "Contents" / "MacOS"
+    macos.mkdir(parents=True, exist_ok=True)
+    (macos / app).write_text("")
+    return str(macos / app)
+
+
+def test_helper_process_name_comes_from_the_bundle_not_the_app_name(tmp_path):
+    # The bug that made a whole capture empty while everything else worked: Chrome Canary
+    # ships "Google Chrome Framework.framework", whose helper is "Google Chrome Helper".
+    # Deriving the name from the app gives "Google Chrome Canary Helper" -> truncates to
+    # "Google Chrome Ca", which no process on the machine is called, so the metadata filter
+    # matches nothing at all and the capture is silently empty.
+    canary = _fake_bundle(tmp_path, "Google Chrome Canary", "Google Chrome", "Google Chrome")
+    assert pktap.helper_process_name(canary) == "Google Chrome He"
+    assert pktap.helper_process_name(canary) != "Google Chrome Ca"
+
+
+def test_helper_process_name_ignores_the_other_child_process_types(tmp_path):
+    # Only the plain "… Helper" owns sockets; (Renderer)/(GPU)/(Alerts) are the other child
+    # types and would each produce a different, useless filter.
+    brave = _fake_bundle(tmp_path, "Brave Browser", "Brave Browser", "Brave Browser")
+    assert pktap.helper_process_name(brave) == "Brave Browser He"
+
+
+def test_helper_process_name_falls_back_when_there_is_no_bundle():
+    # A layout we do not recognise still gets a plausible name rather than nothing.
+    assert pktap.helper_process_name("/usr/bin/chromium") == "chromium Helper"
+
+
 def test_invoking_user_is_none_when_unprivileged(monkeypatch):
     # Not root → no demotion anywhere; the tool behaves like any other capture source.
     monkeypatch.setattr(os, "geteuid", lambda: 1000)

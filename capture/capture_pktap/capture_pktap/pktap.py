@@ -21,6 +21,7 @@ Two facts shape everything here:
 
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import subprocess
@@ -57,11 +58,42 @@ def tcpdump_binary() -> str:
 def helper_process_name(binary: str) -> str:
     """The process name to filter on for a Chrome-family browser at `binary`.
 
-    Chrome's sockets belong to its NetworkService utility process — `Google Chrome Helper`,
-    `Brave Browser Helper`, `Microsoft Edge Helper` — never to the main process, so
-    filtering on the browser's own name captures nothing. Truncated to MAXCOMLEN because
-    that is the form the kernel records and the filter matches."""
+    Chrome's sockets belong to its NetworkService utility process — never to the main
+    process, so filtering on the browser's own name captures nothing at all. Truncated to
+    MAXCOMLEN because that is the form the kernel records and the filter matches.
+
+    The name is read out of the app bundle rather than derived from the browser's filename,
+    because the two disagree on every release channel that keeps the base product's
+    branding in its framework. `Google Chrome Canary.app` ships
+    `Google Chrome Framework.framework`, whose helper is `Google Chrome Helper` — so
+    deriving it gives `Google Chrome Canary Helper`, which truncates to `Google Chrome Ca`,
+    a name no process on the machine has. The filter then matches nothing and the capture
+    is empty with every other part of the system working perfectly.
+
+    Deriving it remains the fallback, for a layout this does not recognise."""
+    if found := _bundled_helper_name(binary):
+        return found[:MAXCOMLEN]
     return f"{os.path.basename(binary)} Helper"[:MAXCOMLEN]
+
+
+def _bundled_helper_name(binary: str) -> str | None:
+    """The NetworkService helper's executable name as the bundle actually spells it.
+
+    Chromium puts its helpers in the framework, not the app:
+    `<app>/Contents/Frameworks/<product> Framework.framework/Versions/<v>/Helpers/`. Only
+    the plain `… Helper.app` is wanted — the bracketed siblings (`(Renderer)`, `(GPU)`,
+    `(Alerts)`) are the other child process types and own no sockets. Several `Versions`
+    directories coexist during an update and agree on the name, so the first will do.
+
+    None when nothing matches, which includes every non-macOS layout."""
+    contents = os.path.dirname(os.path.dirname(binary))  # …/X.app/Contents/MacOS/X → Contents
+    pattern = os.path.join(glob.escape(contents), "Frameworks", "*.framework",
+                           "Versions", "*", "Helpers", "*Helper.app")
+    for path in sorted(glob.glob(pattern)):
+        name = os.path.basename(path).removesuffix(".app")
+        if name.endswith(" Helper"):
+            return name
+    return None
 
 
 def _named_pids(proc: str) -> list[int]:
