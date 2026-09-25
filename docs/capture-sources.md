@@ -1,6 +1,6 @@
 # Getting traffic in
 
-Five ways to feed the gateway. The first is offline; the others capture live and
+Six ways to feed the gateway. The first is offline; the others capture live and
 stream flows into the TUI as they happen. All of them can be started from the TUI's
 sessions screen (`a`), which is usually easier than the command lines below — the gateway
 supervises the capture tool for you. The CLIs are here for scripting and for running a
@@ -11,6 +11,7 @@ capture against a remote gateway.
 - [C) Live-capture Firefox](#c-live-capture-firefox)
 - [D) mitmproxy (any device, incl. WireGuard)](#d-mitmproxy-any-device-incl-wireguard)
 - [E) Android (rooted emulator/device, per-app)](#e-android-rooted-emulatordevice-per-app)
+- [F) Chrome, per-process (macOS, PKTAP)](#f-chrome-per-process-macos-pktap)
 
 See also [`capture/README.md`](../capture/README.md) for how the capture apps are
 structured, and [ADR-0008](adr/0008-independent-capture-apps.md) for why each is its own
@@ -226,3 +227,135 @@ Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatabl
 > HTTPS flows). frida-server is matched to the installed `frida` (pinned to 16.7.x,
 > which still supports older Android — frida 17 fails to spawn on e.g. Android 10) and
 > started as a root daemon in its own session.
+
+## F) Chrome, per-process (macOS, PKTAP)
+
+Everything above records a whole interface and lets the key-log decide what decodes. The
+decoded view is already browser-only, but the **pcap** still carries every other app's
+packets, so a two-minute Chrome session can produce a bundle sized like the machine's
+traffic rather than like the session.
+
+macOS can do better. PKTAP is a pseudo interface that tags each packet with the process
+that sent or received it, and Apple's `tcpdump` filters on that tag — the macOS twin of
+the Android path's per-app nflog capture. In practice the tag drops the overwhelming
+majority of packets before they are ever written:
+
+```
+5 packets captured
+307 packets received by filter
+289 drops by metadata filter
+```
+
+Two things make this source different from every other one:
+
+- **It needs root, every time.** PKTAP creates its interface with a privileged ioctl, so
+  Wireshark's ChmodBPF does not help (that grants `/dev/bpf*`, not interface creation) and
+  it cannot be pre-created at boot and reused. The browser is still launched as *you* —
+  root would use `/var/root`'s profile — and profile directories and state files are
+  created as you too.
+- **The filtered process is not the browser.** Chrome does all of its networking in the
+  NetworkService utility process (`Google Chrome Helper`); the main process owns no
+  sockets. The kernel truncates process names to 16 characters, which is the form the
+  filter matches, so Chrome is `Google Chrome He`. The tool derives this from whichever
+  binary you pick, so Brave/Edge/Chromium work too.
+
+### Why the narrowing happens twice
+
+A metadata filter is fixed when `tcpdump` starts, and that is *before* the browser exists.
+So the filter can only say "this process name, minus the instances already running" —
+which drops every other app on the machine, but cannot exclude a Chrome you open later.
+Its network process has a pid in neither list, and `Google Chrome He` is a name every
+Chrome-family browser shares.
+
+So the source keeps watching. Chrome passes the resolved `--user-data-dir` down to every
+child, so its own network process is identifiable in `ps` by the profile this capture
+launched against — and that is unambiguous only because the source refuses to capture a
+profile something is already running on. The pids it finds are reported at `CloseSession`,
+and the gateway prunes the stored pcap to exactly them.
+
+Broad in the kernel, exact at the end. A pid-only kernel filter would be exact too, but it
+would go blind the moment Chrome replaced its network process, and those packets would be
+gone rather than merely unclassified. The prune refuses an empty pid list and keeps any
+packet whose `pktap` header it cannot read, so a failure to identify the browser leaves a
+capture that is too large — never one that is empty.
+
+The flow list is narrowed by the same evidence. Flows are decoded live, while the filter is
+still too broad, so another browser's connections do reach it; the prune records which
+connections carried packets owned by which process, and the flows on connections that only
+ever carried another process's packets are deleted before the session's flow count is
+taken. A connection seen under *both* a kept and a dropped pid is left alone — deleting a
+flow needs positive evidence, not the absence of evidence — and a tunnelled flow is matched
+by its `proxy_addr`, since its `dst_addr` names a target no packet on the wire ever carried.
+
+One limit remains: nothing here filters by interface, so traffic your browser sends over a
+VPN `utun` is not captured at all — `-i pktap,<iface>` taps one NIC.
+
+One capture, interactively (the launcher re-execs under `sudo`; same Chrome/profile
+pickers as the Chrome source, sharing its remembered defaults):
+
+```sh
+capture/capture-pktap.sh --label "per-process demo" --url https://example.com
+```
+
+(Any argument selects this one-shot mode; a bare `capture/capture-pktap.sh` serves.)
+
+### Serve mode: one sudo, then start/stop from the viewer
+
+The gateway spawns its built-in sources with `Setsid: true` and their stdio redirected to
+log files, so a source it spawned has **no terminal for `sudo` to prompt on** — for the
+TUI and a web UI alike. So this source is not spawned by the gateway: you start it once
+yourself and enrol it as a module the gateway *dials*. A manifest with a `[control]` block
+and no `[[process]]` entries registers a dial-only source — nothing to launch, just an
+address to call:
+
+`make install-pktap` writes it for you (`PKTAP_ADDR=…` to change the port):
+
+```toml
+# ~/.traffic-deck/plugins/pktap.toml
+name = "pktap"
+
+[control]
+addr   = "127.0.0.1:7071"
+source = "chrome-pktap"
+label  = "Chrome (per-process)"
+```
+
+Start the privileged source and leave it running. The launcher re-execs itself under
+`sudo` and takes the address from the manifest, so there is nothing to remember and the
+port cannot drift between the two:
+
+```sh
+capture/capture-pktap.sh
+```
+
+Serving is what a bare invocation does, because that is the mode this tool exists for —
+started once, left up, captures come and go from the viewer. Pass any flag and it falls
+through to a single capture instead.
+
+It now appears in the TUI's source picker (`a`) beside the built-ins, and every capture
+after that starts and stops on demand with no further prompting.
+
+Make the one prompt a fingerprint by enabling Touch ID for `sudo` — the template is
+already on the system, it just ships commented out:
+
+```sh
+sudo sed 's/^#auth/auth/' /etc/pam.d/sudo_local.template | sudo tee /etc/pam.d/sudo_local
+```
+
+`sudo_local` is the post-Sonoma location that survives OS updates. It works in a normal
+terminal; under tmux/screen it needs Homebrew's `pam_reattach`, and over SSH it never
+applies.
+
+Useful flags / env:
+
+| | |
+|---|---|
+| `serve --control ADDR` | serve CaptureSourceService for the gateway to dial (must match the manifest's `addr`) |
+| `--chrome BIN` | which Chrome-family browser (also sets the filtered process name) |
+| `--profile-dir DIR` | use an existing profile instead of a fresh temp one |
+| `--url URL` / `--duration N` | open a URL / auto-stop after N seconds |
+| `--iface IFACE` | interface to tap (default: auto-detected) |
+| `--tcpdump BIN` / `TCPDUMP_BIN` | override tcpdump (must be Apple's — Homebrew's lacks `-Q`) |
+
+> There is no `--filter`: a BPF expression would narrow by port or host *on top of* the
+> process filter, which is not what this source is for. Use the Chrome source for that.

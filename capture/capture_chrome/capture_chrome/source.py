@@ -93,7 +93,7 @@ class ChromeSource(source.CaptureSource):
         profile = self._resolve_profile(chrome, params)
         duration = float(params["duration"]) if params.get("duration") else None
 
-        cap = ChromeCapture(
+        cap = self.new_capture(
             gateway=self._gateway, label=label or "chrome", chrome=chrome, profile=profile,
             url=params.get("url") or None, duration=duration)
         sid = cap.start()
@@ -101,6 +101,12 @@ class ChromeSource(source.CaptureSource):
             self._caps[sid] = cap
         threading.Thread(target=self._watch, args=(sid, cap), daemon=True).start()
         return sid
+
+    def new_capture(self, **kw) -> ChromeCapture:
+        """Build the runner for one capture. A variant that captures Chrome differently —
+        the macOS pktap source — overrides this and inherits the whole option/profile tree
+        above unchanged."""
+        return ChromeCapture(**kw)
 
     def _resolve_profile(self, chrome: str, params: Mapping[str, str]):
         """Turn the chosen profile params into the launch form, mirroring the kinds Describe

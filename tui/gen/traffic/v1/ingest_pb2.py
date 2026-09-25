@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from traffic.v1 import common_pb2 as traffic_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17traffic/v1/ingest.proto\x12\ntraffic.v1\x1a\x17traffic/v1/common.proto\"\xcc\x01\n\x12OpenSessionRequest\x12\r\n\x05label\x18\x01 \x01(\t\x12&\n\x05shape\x18\x02 \x01(\x0e\x32\x17.traffic.v1.SourceShape\x12>\n\x08metadata\x18\x03 \x03(\x0b\x32,.traffic.v1.OpenSessionRequest.MetadataEntry\x12\x0e\n\x06source\x18\x04 \x01(\t\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"<\n\rSessionHandle\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x17\n\x0fmax_chunk_bytes\x18\x02 \x01(\r\"/\n\x08\x46ileMeta\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x15\n\rexpected_size\x18\x02 \x01(\x04\"\xa5\x01\n\x0bUploadBegin\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x11\n\tupload_id\x18\x02 \x01(\t\x12\"\n\x04pcap\x18\x03 \x01(\x0b\x32\x14.traffic.v1.FileMeta\x12$\n\x06keylog\x18\x04 \x01(\x0b\x32\x14.traffic.v1.FileMeta\x12%\n\x04mode\x18\x05 \x01(\x0e\x32\x17.traffic.v1.CaptureMode\"P\n\tDataChunk\x12\"\n\x04kind\x18\x01 \x01(\x0e\x32\x14.traffic.v1.FileKind\x12\x0e\n\x06offset\x18\x02 \x01(\x04\x12\x0f\n\x07payload\x18\x03 \x01(\x0c\"\x1e\n\tUploadEnd\x12\x11\n\tupload_id\x18\x01 \x01(\t\"\x8c\x01\n\x0c\x43\x61ptureChunk\x12(\n\x05\x62\x65gin\x18\x01 \x01(\x0b\x32\x17.traffic.v1.UploadBeginH\x00\x12%\n\x04\x64\x61ta\x18\x02 \x01(\x0b\x32\x15.traffic.v1.DataChunkH\x00\x12$\n\x03\x65nd\x18\x03 \x01(\x0b\x32\x15.traffic.v1.UploadEndH\x00\x42\x05\n\x03msg\"N\n\tUploadAck\x12\x11\n\tupload_id\x18\x01 \x01(\t\x12\x15\n\rpcap_received\x18\x02 \x01(\x04\x12\x17\n\x0fkeylog_received\x18\x03 \x01(\x04\"i\n\tFlowBatch\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x1f\n\x05\x66lows\x18\x02 \x03(\x0b\x32\x10.traffic.v1.Flow\x12\'\n\x08messages\x18\x03 \x03(\x0b\x32\x15.traffic.v1.WsMessage\"\x1b\n\x07PushAck\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\r\")\n\x13\x43loseSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\"6\n\x0eSessionSummary\x12$\n\x07session\x18\x01 \x01(\x0b\x32\x13.traffic.v1.Session*m\n\x0b\x43\x61ptureMode\x12\x1c\n\x18\x43\x41PTURE_MODE_UNSPECIFIED\x10\x00\x12\x1f\n\x1b\x43\x41PTURE_MODE_STREAMING_LIVE\x10\x01\x12\x1f\n\x1b\x43\x41PTURE_MODE_BATCH_ON_CLOSE\x10\x02\x32\xf7\x02\n\rIngestService\x12H\n\x0bOpenSession\x12\x1e.traffic.v1.OpenSessionRequest\x1a\x19.traffic.v1.SessionHandle\x12\x42\n\rUploadCapture\x12\x18.traffic.v1.CaptureChunk\x1a\x15.traffic.v1.UploadAck(\x01\x12\x39\n\tPushFlows\x12\x15.traffic.v1.FlowBatch\x1a\x13.traffic.v1.PushAck(\x01\x12K\n\x0c\x43loseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummary\x12P\n\x11\x46orceCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummaryb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x17traffic/v1/ingest.proto\x12\ntraffic.v1\x1a\x17traffic/v1/common.proto\"\xcc\x01\n\x12OpenSessionRequest\x12\r\n\x05label\x18\x01 \x01(\t\x12&\n\x05shape\x18\x02 \x01(\x0e\x32\x17.traffic.v1.SourceShape\x12>\n\x08metadata\x18\x03 \x03(\x0b\x32,.traffic.v1.OpenSessionRequest.MetadataEntry\x12\x0e\n\x06source\x18\x04 \x01(\t\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"<\n\rSessionHandle\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x17\n\x0fmax_chunk_bytes\x18\x02 \x01(\r\"/\n\x08\x46ileMeta\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x15\n\rexpected_size\x18\x02 \x01(\x04\"\xa5\x01\n\x0bUploadBegin\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x11\n\tupload_id\x18\x02 \x01(\t\x12\"\n\x04pcap\x18\x03 \x01(\x0b\x32\x14.traffic.v1.FileMeta\x12$\n\x06keylog\x18\x04 \x01(\x0b\x32\x14.traffic.v1.FileMeta\x12%\n\x04mode\x18\x05 \x01(\x0e\x32\x17.traffic.v1.CaptureMode\"P\n\tDataChunk\x12\"\n\x04kind\x18\x01 \x01(\x0e\x32\x14.traffic.v1.FileKind\x12\x0e\n\x06offset\x18\x02 \x01(\x04\x12\x0f\n\x07payload\x18\x03 \x01(\x0c\"\x1e\n\tUploadEnd\x12\x11\n\tupload_id\x18\x01 \x01(\t\"\x8c\x01\n\x0c\x43\x61ptureChunk\x12(\n\x05\x62\x65gin\x18\x01 \x01(\x0b\x32\x17.traffic.v1.UploadBeginH\x00\x12%\n\x04\x64\x61ta\x18\x02 \x01(\x0b\x32\x15.traffic.v1.DataChunkH\x00\x12$\n\x03\x65nd\x18\x03 \x01(\x0b\x32\x15.traffic.v1.UploadEndH\x00\x42\x05\n\x03msg\"N\n\tUploadAck\x12\x11\n\tupload_id\x18\x01 \x01(\t\x12\x15\n\rpcap_received\x18\x02 \x01(\x04\x12\x17\n\x0fkeylog_received\x18\x03 \x01(\x04\"i\n\tFlowBatch\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x1f\n\x05\x66lows\x18\x02 \x03(\x0b\x32\x10.traffic.v1.Flow\x12\'\n\x08messages\x18\x03 \x03(\x0b\x32\x15.traffic.v1.WsMessage\"\x1b\n\x07PushAck\x12\x10\n\x08\x61\x63\x63\x65pted\x18\x01 \x01(\r\"\x9b\x01\n\x13\x43loseSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12?\n\x08metadata\x18\x02 \x03(\x0b\x32-.traffic.v1.CloseSessionRequest.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"6\n\x0eSessionSummary\x12$\n\x07session\x18\x01 \x01(\x0b\x32\x13.traffic.v1.Session*m\n\x0b\x43\x61ptureMode\x12\x1c\n\x18\x43\x41PTURE_MODE_UNSPECIFIED\x10\x00\x12\x1f\n\x1b\x43\x41PTURE_MODE_STREAMING_LIVE\x10\x01\x12\x1f\n\x1b\x43\x41PTURE_MODE_BATCH_ON_CLOSE\x10\x02\x32\xf7\x02\n\rIngestService\x12H\n\x0bOpenSession\x12\x1e.traffic.v1.OpenSessionRequest\x1a\x19.traffic.v1.SessionHandle\x12\x42\n\rUploadCapture\x12\x18.traffic.v1.CaptureChunk\x1a\x15.traffic.v1.UploadAck(\x01\x12\x39\n\tPushFlows\x12\x15.traffic.v1.FlowBatch\x1a\x13.traffic.v1.PushAck(\x01\x12K\n\x0c\x43loseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummary\x12P\n\x11\x46orceCloseSession\x12\x1f.traffic.v1.CloseSessionRequest\x1a\x1a.traffic.v1.SessionSummaryb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,8 +34,10 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_OPENSESSIONREQUEST_METADATAENTRY']._loaded_options = None
   _globals['_OPENSESSIONREQUEST_METADATAENTRY']._serialized_options = b'8\001'
-  _globals['_CAPTUREMODE']._serialized_start=1122
-  _globals['_CAPTUREMODE']._serialized_end=1231
+  _globals['_CLOSESESSIONREQUEST_METADATAENTRY']._loaded_options = None
+  _globals['_CLOSESESSIONREQUEST_METADATAENTRY']._serialized_options = b'8\001'
+  _globals['_CAPTUREMODE']._serialized_start=1237
+  _globals['_CAPTUREMODE']._serialized_end=1346
   _globals['_OPENSESSIONREQUEST']._serialized_start=65
   _globals['_OPENSESSIONREQUEST']._serialized_end=269
   _globals['_OPENSESSIONREQUEST_METADATAENTRY']._serialized_start=222
@@ -58,10 +60,12 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_FLOWBATCH']._serialized_end=992
   _globals['_PUSHACK']._serialized_start=994
   _globals['_PUSHACK']._serialized_end=1021
-  _globals['_CLOSESESSIONREQUEST']._serialized_start=1023
-  _globals['_CLOSESESSIONREQUEST']._serialized_end=1064
-  _globals['_SESSIONSUMMARY']._serialized_start=1066
-  _globals['_SESSIONSUMMARY']._serialized_end=1120
-  _globals['_INGESTSERVICE']._serialized_start=1234
-  _globals['_INGESTSERVICE']._serialized_end=1609
+  _globals['_CLOSESESSIONREQUEST']._serialized_start=1024
+  _globals['_CLOSESESSIONREQUEST']._serialized_end=1179
+  _globals['_CLOSESESSIONREQUEST_METADATAENTRY']._serialized_start=222
+  _globals['_CLOSESESSIONREQUEST_METADATAENTRY']._serialized_end=269
+  _globals['_SESSIONSUMMARY']._serialized_start=1181
+  _globals['_SESSIONSUMMARY']._serialized_end=1235
+  _globals['_INGESTSERVICE']._serialized_start=1349
+  _globals['_INGESTSERVICE']._serialized_end=1724
 # @@protoc_insertion_point(module_scope)

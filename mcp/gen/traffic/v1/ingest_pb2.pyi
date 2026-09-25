@@ -119,10 +119,19 @@ class PushAck(_message.Message):
     def __init__(self, accepted: _Optional[int] = ...) -> None: ...
 
 class CloseSessionRequest(_message.Message):
-    __slots__ = ("session_id",)
+    __slots__ = ("session_id", "metadata")
+    class MetadataEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     session_id: str
-    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, session_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class SessionSummary(_message.Message):
     __slots__ = ("session",)
