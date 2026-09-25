@@ -91,6 +91,12 @@ message PushAck {
 
 message CloseSessionRequest {
   string session_id = 1;
+  // What the source learned while capturing and could not know at OpenSession, merged
+  // into the session's metadata before it is finalized. OpenSession metadata states
+  // intent ("prune this capture"); this states findings — the macOS per-process source
+  // reports the pids its browser's network process actually used, which only exist once
+  // the browser has been launched, and can grow if it replaces that process mid-capture.
+  map<string, string> metadata = 2;
 }
 
 message SessionSummary {

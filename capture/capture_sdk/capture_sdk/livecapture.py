@@ -15,9 +15,11 @@ a serve-mode source starts it, returns the session id, and lets it run in the ba
 from __future__ import annotations
 
 import abc
+import collections
 import os
 import queue
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +32,31 @@ from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
 from capture_sdk.upload import SENTINEL, capture_chunks
 from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
+
+#: How long to give the capture backend to fail before assuming it started. One that cannot
+#: open its interface exits at once; one that started is still running well inside this.
+_START_GRACE = 0.3
+
+#: Lines of the backend's stderr kept for the error message. Enough for the real complaint
+#: plus the usage text some tools print after it.
+_MAX_KEPT_STDERR = 20
+
+
+class CaptureBackendFailed(RuntimeError):
+    """The packet-capture backend exited on startup instead of recording. Carries what it
+    printed, which is the only place the reason is ever stated."""
+
+
+def _stderr_thread(stderr, kept: collections.deque) -> None:
+    """Keep the backend's stderr and echo it on, so it is both reportable and logged."""
+    try:
+        for line in iter(stderr.readline, b""):
+            text = line.decode("utf-8", "replace")
+            kept.append(text)
+            sys.stderr.write(text)
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass
 
 
 def wait_for_stop(proc: subprocess.Popen, duration: float | None, stop: threading.Event) -> None:
@@ -86,6 +113,11 @@ class KeylogCapture(abc.ABC):
     #: capture's upload stream and its keylog tempdir.
     name: str = "capture"
 
+    #: (uid, gid) to run the launched program as, when the capture itself needs privilege
+    #: the program must not inherit — macOS pktap needs root, but a browser launched as
+    #: root would use root's home and profile. None (the default) launches as we are.
+    run_as: tuple[int, int] | None = None
+
     def __init__(self, *, gateway: str, label: str, iface: str | None = None,
                  dumpcap: str | None = None, capture_filter: str = "",
                  duration: float | None = None, keylog_dir: str | None = None) -> None:
@@ -110,7 +142,28 @@ class KeylogCapture(abc.ABC):
     @abc.abstractmethod
     def launch(self, keylog: str) -> subprocess.Popen:
         """Start the program under capture, making it write its TLS secrets to `keylog`.
-        Called once dumpcap is recording, so nothing is missed."""
+        Called once the capture is recording, so nothing is missed."""
+
+    def capture_command(self, iface: str) -> list[str]:
+        """The packet-capture command, streaming a pcap to stdout. The default records the
+        whole interface with dumpcap; a source that captures more narrowly (macOS pktap,
+        which filters by process) overrides this."""
+        cmd = [self.dumpcap or dumpcap_mod.binary(), "-i", iface, "-P", "-w", "-", "-q"]
+        if self.capture_filter:
+            cmd += ["-f", self.capture_filter]  # no filter = capture everything
+        return cmd
+
+    def close_metadata(self) -> dict[str, str]:
+        """Metadata to attach to `CloseSession` — what this capture learned while running.
+
+        The metadata passed at `OpenSession` states intent, and has to: the gateway needs it
+        before any packets arrive. This is the other half, for facts that only exist once
+        the capture is under way and may still change during it — the macOS per-process
+        source reports the pids its browser's network process used, which it discovers by
+        watching, and which grow if that process is replaced.
+
+        Empty by default: a source with nothing to add says nothing."""
+        return {}
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -118,9 +171,12 @@ class KeylogCapture(abc.ABC):
         """Open the session, spawn dumpcap + upload threads, launch the program. Returns
         the session id while capture continues."""
         iface = self.iface or dumpcap_mod.default_interface()
-        dumpcap = self.dumpcap or dumpcap_mod.binary()
-        self.keylog = os.path.join(
-            tempfile.mkdtemp(prefix=f"{self.name}-keylog-", dir=self.keylog_dir), "key.log")
+        keydir = tempfile.mkdtemp(prefix=f"{self.name}-keylog-", dir=self.keylog_dir)
+        if self.run_as:
+            # The program writes the keylog as that user; we tail it as ourselves. mkdtemp
+            # made it 0700 and ours, so hand it over or the secrets never get written.
+            os.chown(keydir, *self.run_as)
+        self.keylog = os.path.join(keydir, "key.log")
 
         self._chan = grpc.insecure_channel(self.gateway)
         self._ing = ig.IngestServiceStub(self._chan)
@@ -130,10 +186,21 @@ class KeylogCapture(abc.ABC):
         self.session_id = handle.session_id
         max_chunk = handle.max_chunk_bytes or (1 << 20)
 
-        dump_cmd = [dumpcap, "-i", iface, "-P", "-w", "-", "-q"]
-        if self.capture_filter:
-            dump_cmd += ["-f", self.capture_filter]  # no filter = capture everything
-        self._dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        dump_cmd = self.capture_command(iface)
+        # stderr is captured rather than discarded or merely inherited: it is the only
+        # place a capture backend says why it produced nothing (a bad filter, a device it
+        # cannot open, an unsupported link type). Discarding it turned every such failure
+        # into a silent zero-byte capture; inheriting it only helps when someone is
+        # watching the terminal this source was started in, which for a serve-mode source
+        # started by hand under sudo is nobody. The lines are echoed on as well as kept,
+        # so they still reach this source's log when supervised.
+        self._dump = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._dump_err: collections.deque[str] = collections.deque(maxlen=_MAX_KEPT_STDERR)
+        self._et = threading.Thread(target=_stderr_thread, args=(self._dump.stderr, self._dump_err),
+                                    daemon=True)
+        self._et.start()
+        self._fail_if_capture_died(dump_cmd)
+
         self._rt = threading.Thread(target=_reader_thread, args=(self._dump.stdout, self._q, self._stop), daemon=True)
         self._kt = threading.Thread(target=_keylog_thread, args=(self.keylog, self._q, self._stop), daemon=True)
         self._rt.start()
@@ -147,6 +214,37 @@ class KeylogCapture(abc.ABC):
 
         self._proc = self.launch(self.keylog)
         return self.session_id
+
+    def _fail_if_capture_died(self, cmd: list[str]) -> None:
+        """Refuse a capture whose backend exited on startup, quoting what it said.
+
+        A backend that cannot open its interface — no privilege, no such device, a filter
+        the kernel rejects — exits within milliseconds and writes nothing at all, not even
+        a pcap file header. Without this the session runs to completion anyway: the browser
+        opens, the user browses, the key-log fills, and the result is a closed session with
+        zero packets and no stated reason. That failure has cost more time on this project
+        than any other, so it is worth a fraction of a second at every start to turn it into
+        an error that names itself.
+
+        The session is closed before raising, so a refused start leaves no session stuck
+        open behind it."""
+        if self._dump.poll() is None:
+            time.sleep(_START_GRACE)
+        if self._dump.poll() is None:
+            return
+        self._stop.set()
+        self._et.join(timeout=1)
+        why = " ".join(line.strip() for line in self._dump_err if line.strip())
+        try:
+            self._ing.CloseSession(ip.CloseSessionRequest(session_id=self.session_id))
+        except grpc.RpcError:
+            pass  # the capture already failed; a failed cleanup must not mask why
+        finally:
+            self._chan.close()
+        raise CaptureBackendFailed(
+            f"{os.path.basename(cmd[0])} exited immediately (status "
+            f"{self._dump.returncode}) and captured nothing"
+            + (f": {why}" if why else " without saying why"))
 
     def wait(self, stop_event: threading.Event | None = None) -> None:
         """Block until the program exits, the duration elapses, or `stop_event` (or an
@@ -184,7 +282,8 @@ class KeylogCapture(abc.ABC):
         self._ut.join(timeout=30)
         ack = self._ack.get("ack")
         try:
-            self._summary = self._ing.CloseSession(ip.CloseSessionRequest(session_id=self.session_id))
+            self._summary = self._ing.CloseSession(ip.CloseSessionRequest(
+                session_id=self.session_id, metadata=self.close_metadata()))
         finally:
             self._chan.close()
         return ack, self._summary

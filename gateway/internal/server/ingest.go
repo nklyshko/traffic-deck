@@ -7,6 +7,9 @@ import (
 	"io"
 	"log"
 	"path"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -23,6 +26,16 @@ import (
 )
 
 const maxChunkBytes = 1 << 20 // advertised upload chunk size
+
+// pidsCaptureKey is reported at CloseSession by the macOS per-process source: the pids its
+// browser's network process used while the capture ran, comma-separated. Mirrors
+// capture/capture_pktap/capture_pktap/pktap.py.
+//
+// It arrives at close rather than at open because it cannot be known earlier — the browser
+// has not been launched when the session opens, and the set can still grow if Chrome
+// replaces its network process midway. The kernel filter makes the cheap cut during the
+// capture; this makes the exact one afterwards.
+const pidsCaptureKey = "capture.pids"
 
 // Ingest implements trafficv1.IngestServiceServer: streamed capture upload (decoded
 // live and/or on close) and the pushed-flow path for already-decoded sources.
@@ -396,7 +409,17 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 
 // CloseSession finalizes a session: record sizes, batch-decode the bundle, and
 // return the closed session summary.
+//
+// Any metadata the source reports here is merged into the session first, so finalization
+// and anyone reading the session later see it alongside what was supplied at open.
 func (i *Ingest) CloseSession(ctx context.Context, req *trafficv1.CloseSessionRequest) (*trafficv1.SessionSummary, error) {
+	if md := req.GetMetadata(); len(md) > 0 {
+		if err := i.st.SetSessionMetadata(ctx, req.GetSessionId(), md); err != nil {
+			// Not fatal: the capture is already recorded, and losing this only means a
+			// narrowing doesn't happen. Failing the close would strand the session open.
+			log.Printf("close %s: session metadata: %v", req.GetSessionId(), err)
+		}
+	}
 	return i.finalizeSession(ctx, req.GetSessionId())
 }
 
@@ -442,6 +465,15 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 	// Stop live decode (if any); ls holds the accumulated live flows for record-live mode.
 	ls := i.hub.stop(sid)
 
+	// Narrow a per-process capture to the browser that was launched. This runs before the
+	// size is recorded and before any batch decode, so the stored pcap, the size reported
+	// for it and the flows decoded from it all describe the same packets.
+	//
+	// foreign is the connections it proved belonged to another process. The batch path
+	// needs nothing further — tshark decodes the pruned pcap — but record-live decoded
+	// while the capture ran, so its flows are narrowed separately below.
+	foreign := i.pruneToCapturePIDs(ctx, sid)
+
 	var pcapBytes, keylogBytes int64
 	if fi, err := i.obj.Stat(pcapKey(sid)); err == nil {
 		pcapBytes = fi.Size
@@ -459,7 +491,7 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 	case i.recordLive && ls != nil && pcapBytes > 0:
 		// RECORD-LIVE: persist the flows the live decoder already produced; skip the batch
 		// tshark re-decode. Bodies are the live previews (capped at maxLiveBody).
-		if err := i.persistLive(ctx, sid, ls); err != nil {
+		if err := i.persistLive(ctx, sid, ls, foreign); err != nil {
 			return nil, status.Errorf(codes.Internal, "persist live: %v", err)
 		}
 		if i.tsharkVerify {
@@ -499,10 +531,86 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 	return &trafficv1.SessionSummary{Session: sess}, nil
 }
 
+// pruneToCapturePIDs cuts a PKTAP capture down to the packets owned by the pids the
+// source reported, and is a no-op for every other session — a source that said nothing
+// gets nothing done to its capture. It returns the connections it proved belonged to
+// another process, so the flow list can be narrowed by the same evidence.
+//
+// Every failure here is logged and swallowed. The capture is already recorded and a
+// session that cannot be narrowed is still a good session; failing the close instead
+// would leave it stuck open, which is strictly worse than a bundle that is larger than
+// the user asked for.
+func (i *Ingest) pruneToCapturePIDs(ctx context.Context, sid string) map[decode.ConnKey]bool {
+	sess, err := i.st.GetSession(ctx, sid)
+	if err != nil {
+		return nil
+	}
+	keep := parseCapturePIDs(sess.GetMetadata()[pidsCaptureKey])
+	if len(keep) == 0 {
+		return nil
+	}
+	// A session with no capture (or an empty one) is not a failure to narrow; there is
+	// simply nothing to narrow. Checked before opening so it stays silent.
+	if fi, err := i.obj.Stat(pcapKey(sid)); err != nil || fi.Size == 0 {
+		return nil
+	}
+	pcapLocal, ok := i.obj.LocalPath(pcapKey(sid))
+	if !ok || pcapLocal == "" {
+		return nil
+	}
+	res, err := decode.PrunePcapngByPID(pcapLocal, keep)
+	if err != nil {
+		// ErrNoProcessInfo is the ordinary case of a source reporting pids for a capture
+		// that carries no per-packet process; it is worth one line, not an alarm.
+		log.Printf("prune %s: %v", sid, err)
+		return nil
+	}
+	log.Printf("prune %s: kept %d of %d packets, %d -> %d bytes; wanted pids %v, capture held %v",
+		sid, res.PacketsKept, res.PacketsIn, res.Before, res.After,
+		sortedPIDs(keep), sortedPIDs(res.PIDsSeen))
+	if res.PacketsUnknown > 0 {
+		log.Printf("prune %s: %d packets kept because their pktap header could not be read",
+			sid, res.PacketsUnknown)
+	}
+	return res.ForeignConns()
+}
+
+// parseCapturePIDs reads the comma-separated pid list a source reports. Anything
+// unparseable is skipped rather than failing the whole list: a partial set still narrows
+// the capture, and the alternative is to narrow nothing.
+func parseCapturePIDs(s string) map[int32]bool {
+	if s == "" {
+		return nil
+	}
+	pids := map[int32]bool{}
+	for _, part := range strings.Split(s, ",") {
+		n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 32)
+		if err != nil || n <= 0 {
+			continue
+		}
+		pids[int32(n)] = true
+	}
+	return pids
+}
+
+func sortedPIDs(keep map[int32]bool) []int32 {
+	out := make([]int32, 0, len(keep))
+	for p := range keep {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // persistLive records the flows + WebSocket messages produced by the live decoder as a
 // "live" analysis, then finishes the session — the record-live alternative to the batch
 // tshark pass. The flows are the live path's final state (bodies capped at maxLiveBody).
-func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) error {
+//
+// foreign names connections a per-process capture proved belonged to another process. The
+// live decoder saw them because the kernel filter could not exclude them, so they are
+// dropped here — after everything is in the bundle and before the count is taken, so the
+// session's flow count describes what the session actually holds.
+func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession, foreign map[decode.ConnKey]bool) error {
 	if ls.sink != nil {
 		// The flusher has been writing throughout the capture, so closing is a final
 		// flush of the unwritten tail rather than a transaction over the whole session
@@ -510,6 +618,7 @@ func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) e
 		if err := ls.flush(ctx, true); err != nil {
 			return fmt.Errorf("final flush: %w", err)
 		}
+		i.dropForeignFlows(ctx, sid, foreign)
 		n, err := i.st.CountFlows(ctx, sid)
 		if err != nil {
 			return fmt.Errorf("count flows: %w", err)
@@ -524,14 +633,42 @@ func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession) e
 	if err != nil {
 		return fmt.Errorf("create analysis: %w", err)
 	}
-	n, err := i.st.InsertFlows(ctx, sid, aid, flows)
-	if err != nil {
+	if _, err := i.st.InsertFlows(ctx, sid, aid, flows); err != nil {
 		return fmt.Errorf("insert flows: %w", err)
 	}
 	if _, err := i.st.InsertWsMessages(ctx, sid, msgs); err != nil {
 		return fmt.Errorf("insert ws messages: %w", err)
 	}
+	i.dropForeignFlows(ctx, sid, foreign)
+	// Counted from the bundle rather than from what was just inserted, so the number
+	// still holds after the drop above removed some of it.
+	n, err := i.st.CountFlows(ctx, sid)
+	if err != nil {
+		return fmt.Errorf("count flows: %w", err)
+	}
 	return i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n)
+}
+
+// dropForeignFlows removes the flows on connections that belonged to another process.
+// Best-effort: a session whose flow list could not be narrowed is still a good session,
+// and the packets have already been pruned either way.
+func (i *Ingest) dropForeignFlows(ctx context.Context, sid string, foreign map[decode.ConnKey]bool) {
+	if len(foreign) == 0 {
+		return
+	}
+	conns := make([][2]string, 0, len(foreign))
+	for c := range foreign {
+		conns = append(conns, [2]string{c.A, c.B})
+	}
+	n, err := i.st.DeleteFlowsByConnection(ctx, sid, conns)
+	if err != nil {
+		log.Printf("prune %s: drop foreign flows: %v", sid, err)
+		return
+	}
+	if n > 0 {
+		log.Printf("prune %s: dropped %d flows on %d connections owned by other processes",
+			sid, n, len(conns))
+	}
 }
 
 // protoToDecodeWsMessage converts a live proto WebSocket frame to the decode type the

@@ -304,27 +304,92 @@ func (s *Store) DeleteCustomProtocolFlows(ctx context.Context, sessionID string,
 	}
 
 	err = inTx(ctx, db, func(tx *sql.Tx) error {
-		for _, fid := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM ws_message_metadata WHERE message_id IN
-				   (SELECT id FROM ws_messages WHERE flow_id=?)`, fid); err != nil {
-				return err
-			}
-			for _, q := range []string{
-				`DELETE FROM ws_messages WHERE flow_id=?`,
-				`DELETE FROM flow_headers WHERE flow_id=?`,
-				`DELETE FROM flow_metadata WHERE flow_id=?`,
-				`DELETE FROM flow_client_hellos WHERE flow_id=?`,
-				`DELETE FROM flows WHERE id=?`,
-			} {
-				if _, err := tx.ExecContext(ctx, q, fid); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return deleteFlowRows(ctx, tx, ids)
 	})
 	if err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
+// deleteFlowRows removes a set of flows and everything that hangs off them. Extracted so
+// every caller that deletes flows deletes the same rows — a new table referencing flow_id
+// has one place to be added, not several.
+//
+// Blobs are deliberately left: they are content-addressed, so an orphan costs space and
+// nothing else, and a body may be shared with a flow that is staying.
+func deleteFlowRows(ctx context.Context, tx *sql.Tx, ids []string) error {
+	for _, fid := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM ws_message_metadata WHERE message_id IN
+			   (SELECT id FROM ws_messages WHERE flow_id=?)`, fid); err != nil {
+			return err
+		}
+		for _, q := range []string{
+			`DELETE FROM ws_messages WHERE flow_id=?`,
+			`DELETE FROM flow_headers WHERE flow_id=?`,
+			`DELETE FROM flow_metadata WHERE flow_id=?`,
+			`DELETE FROM flow_client_hellos WHERE flow_id=?`,
+			`DELETE FROM flows WHERE id=?`,
+		} {
+			if _, err := tx.ExecContext(ctx, q, fid); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteFlowsByConnection removes the flows whose connection is one of `conns`, and
+// reports how many went. Used to narrow a per-process capture's flow list the same way
+// its packets were narrowed: the caller passes the connections it proved belonged to
+// another process.
+//
+// A connection is matched in either direction and against the proxy when there is one —
+// a tunnelled flow records the *target* in dst_addr, so matching that against a packet's
+// endpoints would never fire and the flow would silently survive.
+func (s *Store) DeleteFlowsByConnection(ctx context.Context, sessionID string, conns [][2]string) (int, error) {
+	if len(conns) == 0 {
+		return 0, nil
+	}
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+
+	// The endpoint a flow was really talking to: the proxy when it went through one,
+	// otherwise the destination it names.
+	const peer = `COALESCE(NULLIF(proxy_addr,''), dst_addr)`
+	clause := `(src_addr=? AND ` + peer + `=?) OR (src_addr=? AND ` + peer + `=?)`
+	where := "(" + clause + ")" + strings.Repeat(" OR ("+clause+")", len(conns)-1)
+	args := make([]any, 0, len(conns)*4)
+	for _, c := range conns {
+		args = append(args, c[0], c[1], c[1], c[0])
+	}
+
+	var ids []string
+	rows, err := db.QueryContext(ctx, `SELECT id FROM flows WHERE `+where, args...)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if err := inTx(ctx, db, func(tx *sql.Tx) error {
+		return deleteFlowRows(ctx, tx, ids)
+	}); err != nil {
 		return 0, err
 	}
 	return len(ids), nil

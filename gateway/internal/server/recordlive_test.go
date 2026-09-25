@@ -56,7 +56,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 	})
 
 	ing := &Ingest{st: st, recordLive: true}
-	if err := ing.persistLive(ctx, sid, ls); err != nil {
+	if err := ing.persistLive(ctx, sid, ls, nil); err != nil {
 		t.Fatalf("persistLive: %v", err)
 	}
 
