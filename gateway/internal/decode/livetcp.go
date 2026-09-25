@@ -47,6 +47,16 @@ func (c assemblerCtx) GetCaptureInfo() gopacket.CaptureInfo {
 // inner IP packet ourselves (nflogIPPayload).
 const linkTypeNFLOG = gplayers.LinkType(239)
 
+// linkTypePKTAP is LINKTYPE_PKTAP (258), Apple's per-process capture on macOS
+// (`tcpdump -i pktap,<iface> -Q 'proc = "…"'`) — the macOS twin of the nflog path above.
+// gopacket has no decoder for it either, so we strip the tag ourselves (pktapPayload).
+//
+// It is kept as a raw uint32, not a gplayers.LinkType, because that type is a uint8: 258
+// truncates to 2 and would decode as some unrelated link type rather than failing. So the
+// classic-pcap reader's own LinkType() cannot be trusted here and newPacketReader reports
+// the file's real value alongside it.
+const linkTypePKTAP = 258
+
 // packetReader is the subset of pcapgo's classic and pcapng readers that the decode loop
 // uses, so LiveTCPDecode can drive either from one code path.
 type packetReader interface {
@@ -58,20 +68,85 @@ type packetReader interface {
 // both a streamed dumpcap pcap (live capture) and an imported Wireshark pcapng decode with
 // no tshark. The 4 magic bytes are peeked (not consumed) through a bufio.Reader, which is
 // then handed to the chosen reader so it still sees the whole stream.
-func newPacketReader(r io.Reader) (packetReader, error) {
+//
+// It also reports the file's raw link type, because pcapgo narrows that field to a uint8
+// (layers.LinkType) in both readers, and any DLT above 255 — DLT_PKTAP, which the macOS
+// per-process capture writes — would arrive silently wrapped (258 & 0xFF = 2). 0 when it
+// can't be determined, which just means "trust the reader".
+func newPacketReader(r io.Reader) (packetReader, uint32, error) {
 	br := bufio.NewReader(r)
 	magic, err := br.Peek(4)
 	if err != nil {
-		return nil, err // includes EOF if the session sent no pcap
+		return nil, 0, err // includes EOF if the session sent no pcap
 	}
 	// pcapng starts with a Section Header Block whose type is 0x0A0D0D0A (chosen to be
 	// byte-order independent); classic pcap starts with 0xA1B2C3D4 / 0xD4C3B2A1.
 	if magic[0] == 0x0A && magic[1] == 0x0D && magic[2] == 0x0D && magic[3] == 0x0A {
 		opts := pcapgo.DefaultNgReaderOptions
 		opts.SkipUnknownVersion = true // tolerate newer sections rather than erroring out
-		return pcapgo.NewNgReader(br, opts)
+		lt := pcapngLinkType(br)
+		rd, err := pcapgo.NewNgReader(br, opts)
+		return rd, lt, err
 	}
-	return pcapgo.NewReader(br)
+	// Classic header: the link type is a uint32 at offset 20, in the file's own byte order
+	// — which the magic identifies (0xA1 first = written big-endian).
+	var rawLinkType uint32
+	if hdr, err := br.Peek(24); err == nil {
+		if magic[0] == 0xA1 {
+			rawLinkType = binary.BigEndian.Uint32(hdr[20:24])
+		} else {
+			rawLinkType = binary.LittleEndian.Uint32(hdr[20:24])
+		}
+	}
+	rd, err := pcapgo.NewReader(br)
+	return rd, rawLinkType, err
+}
+
+// pcapngLinkType peeks the first Interface Description Block's LinkType without consuming
+// anything, so the reader that follows still sees the whole stream.
+//
+// Layout: the Section Header Block starts the file — block type (4), total length (4),
+// byte-order magic (4) — and the next block begins at that total length. An IDB is type 1
+// and carries LinkType as a uint16 right after its own type and length. Everything is in
+// the section's byte order, which the byte-order magic (0x1A2B3C4D written natively)
+// reveals.
+//
+// Returns 0 for anything unexpected — a short read, a first block that isn't an IDB — so
+// the caller falls back to the reader's own (narrowed) answer rather than guessing.
+func pcapngLinkType(br *bufio.Reader) uint32 {
+	const peek = 1024 // an SHB with options is far smaller; bufio's buffer is 4096
+	buf, err := br.Peek(peek)
+	if err != nil {
+		if buf = mustPeekAtMost(br, peek); len(buf) < 16 {
+			return 0
+		}
+	}
+	bo := binary.ByteOrder(binary.LittleEndian)
+	if binary.BigEndian.Uint32(buf[8:12]) == 0x1A2B3C4D {
+		bo = binary.BigEndian
+	} else if binary.LittleEndian.Uint32(buf[8:12]) != 0x1A2B3C4D {
+		return 0 // not a byte-order magic we recognise
+	}
+	shbLen := bo.Uint32(buf[4:8])
+	// The IDB needs its type (4), length (4) and LinkType (2) to be inside what we peeked.
+	if shbLen < 16 || uint64(shbLen)+10 > uint64(len(buf)) {
+		return 0
+	}
+	if bo.Uint32(buf[shbLen:shbLen+4]) != 1 { // 1 = Interface Description Block
+		return 0
+	}
+	return uint32(bo.Uint16(buf[shbLen+8 : shbLen+10]))
+}
+
+// mustPeekAtMost returns the longest prefix of up to n bytes currently peekable, for a
+// stream shorter than the peek window (a tiny capture, or a pipe that hasn't filled yet).
+func mustPeekAtMost(br *bufio.Reader, n int) []byte {
+	for ; n > 0; n-- {
+		if b, err := br.Peek(n); err == nil {
+			return b
+		}
+	}
+	return nil
 }
 
 // LiveTCPDecode reads a live pcap byte stream from r, reassembles TCP, decrypts TLS
@@ -83,7 +158,7 @@ func newPacketReader(r io.Reader) (packetReader, error) {
 // a connection this decoder skips — nothing else will decode it when authoritative.
 func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage),
 	recordLive bool) error {
-	reader, err := newPacketReader(r)
+	reader, rawLinkType, err := newPacketReader(r)
 	if err != nil {
 		return err // includes EOF if the session sent no pcap
 	}
@@ -108,13 +183,20 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 			continue // truncated trailing packet while the file grows — skip, keep going
 		}
 		var pkt gopacket.Packet
-		if linkType == linkTypeNFLOG {
+		switch {
+		case rawLinkType == linkTypePKTAP:
+			innerLT, frame, ok := pktapPayload(data)
+			if !ok {
+				continue
+			}
+			pkt = gopacket.NewPacket(frame, innerLT, gopacket.Lazy)
+		case linkType == linkTypeNFLOG:
 			ipType, ip, ok := nflogIPPayload(data)
 			if !ok {
 				continue
 			}
 			pkt = gopacket.NewPacket(ip, ipType, gopacket.Lazy)
-		} else {
+		default:
 			pkt = gopacket.NewPacket(data, linkType, gopacket.Lazy)
 		}
 		netLayer := pkt.NetworkLayer()
@@ -693,4 +775,27 @@ func nflogIPPayload(data []byte) (gopacket.LayerType, []byte, bool) {
 		off += (l + 3) &^ 3 // advance to the next 4-byte-aligned TLV
 	}
 	return 0, nil, false
+}
+
+// pktapPayload strips Apple's pktap_header from one LINKTYPE_PKTAP record, returning the
+// link type and bytes of the real frame behind it.
+//
+// The header carries the per-packet metadata the capture filtered on (the owning pid and
+// process name, the interface, the service class) and is versioned by length rather than
+// by a version field: pth_length (offset 0) says how far to skip, so a header that grew in
+// a later macOS is handled by skipping further. pth_dlt (offset 8) is the DLT of the frame
+// that follows — DLT_EN10MB off a NIC, DLT_NULL on loopback — which gopacket decodes
+// natively once it's told which. All fields are host-order, and the capture is written on
+// the machine that reads it here, so little-endian holds for every Mac this runs on.
+func pktapPayload(data []byte) (gplayers.LinkType, []byte, bool) {
+	const minHeader = 12 // through pth_dlt, the two fields we read
+	if len(data) < minHeader {
+		return 0, nil, false
+	}
+	hdrLen := binary.LittleEndian.Uint32(data[0:4])
+	dlt := binary.LittleEndian.Uint32(data[8:12])
+	if hdrLen < minHeader || uint64(hdrLen) > uint64(len(data)) {
+		return 0, nil, false // truncated or nonsense header — drop rather than misparse
+	}
+	return gplayers.LinkType(dlt), data[hdrLen:], true
 }

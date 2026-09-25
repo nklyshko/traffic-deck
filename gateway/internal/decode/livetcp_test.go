@@ -472,3 +472,193 @@ func nflogWrap(ipPacket []byte) []byte {
 	}
 	return rec
 }
+
+// TestLiveTCPDecodePKTAP is the macOS per-process path: the same TLS 1.3 echo exchange
+// wrapped in LINKTYPE_PKTAP records (as `tcpdump -i pktap,en0 -Q 'proc = "…"'` produces),
+// decoded by LiveTCPDecode.
+func TestLiveTCPDecodePKTAP(t *testing.T) {
+	decoders.Register(echoDecoder{})
+	clientApp := frameMsg([]byte("ping"))
+	serverApp := append(frameMsg([]byte("pong")), frameMsg(bytes.Repeat([]byte("Q"), 20000))...)
+	c2s, s2c, keylog := tlstest.Exchange(t, "svc.echo.pktap", clientApp, serverApp)
+
+	dir := t.TempDir()
+	klPath := filepath.Join(dir, "key.log")
+	if err := os.WriteFile(klPath, keylog, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got [][2]string
+	err := LiveTCPDecode(bytes.NewReader(buildPktapPcap(t, c2s, s2c)), klPath,
+		func(*Flow, bool) {},
+		func(m *WsMessage) {
+			d := "S"
+			if m.FromClient {
+				d = "C"
+			}
+			got = append(got, [2]string{d, string(m.Payload)})
+		}, true)
+	if err != nil {
+		t.Fatalf("LiveTCPDecode: %v", err)
+	}
+	want := [][2]string{{"C", "ping"}, {"S", "pong"}, {"S", string(bytes.Repeat([]byte("Q"), 20000))}}
+	if len(got) != len(want) {
+		t.Fatalf("got %d messages, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("msg %d = {%s,%dB}, want {%s,%dB}", i, got[i][0], len(got[i][1]), want[i][0], len(want[i][1]))
+		}
+	}
+}
+
+// buildPktapPcap wraps the Ethernet frames of buildPcap in pktap_headers and declares the
+// file as LINKTYPE_PKTAP. pcapgo cannot write that header itself — WriteFileHeader takes a
+// layers.LinkType (uint8), and 258 does not fit — which is the whole reason the decoder
+// reads the raw link type instead of trusting the reader's. So the Ethernet header is
+// written and its link-type field overwritten in place, exactly as tcpdump emits it.
+func buildPktapPcap(t *testing.T, c2s, s2c []byte) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	w := pcapgo.NewWriter(&out)
+	if err := w.WriteFileHeader(65535, gplayers.LinkTypeEthernet); err != nil {
+		t.Fatal(err)
+	}
+	cli := net.IP{10, 0, 0, 1}
+	srv := net.IP{10, 0, 0, 2}
+	emit := func(payload []byte, src, dst net.IP, sport, dport gplayers.TCPPort, seq uint32) {
+		for off := 0; off < len(payload); off += 1200 {
+			end := off + 1200
+			if end > len(payload) {
+				end = len(payload)
+			}
+			eth := &gplayers.Ethernet{SrcMAC: net.HardwareAddr{1, 1, 1, 1, 1, 1}, DstMAC: net.HardwareAddr{2, 2, 2, 2, 2, 2}, EthernetType: gplayers.EthernetTypeIPv4}
+			ip := &gplayers.IPv4{Version: 4, IHL: 5, TTL: 64, Protocol: gplayers.IPProtocolTCP, SrcIP: src, DstIP: dst}
+			tcp := &gplayers.TCP{SrcPort: sport, DstPort: dport, Seq: seq + uint32(off), ACK: true, PSH: true, Window: 65535}
+			_ = tcp.SetNetworkLayerForChecksum(ip)
+			buf := gopacket.NewSerializeBuffer()
+			if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true},
+				eth, ip, tcp, gopacket.Payload(payload[off:end])); err != nil {
+				t.Fatal(err)
+			}
+			rec := pktapWrap(buf.Bytes())
+			if err := w.WritePacket(gopacket.CaptureInfo{Timestamp: time.Now(), CaptureLength: len(rec), Length: len(rec)}, rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	emit(c2s, cli, srv, 40000, 443, 1000)
+	emit(s2c, srv, cli, 443, 40000, 5000)
+
+	b := out.Bytes()
+	binary.LittleEndian.PutUint32(b[20:24], linkTypePKTAP) // the field pcapgo narrowed
+	return b
+}
+
+// pktapWrap prefixes an Ethernet frame with a pktap_header: pth_length, pth_type_next,
+// pth_dlt, then the process metadata the real capture filtered on (pth_ifname at 12,
+// pth_pid at 108, pth_comm at 112) — carried here at full size so the decoder is exercised
+// against a header longer than the 12 bytes it actually reads.
+func pktapWrap(frame []byte) []byte {
+	const hdrLen = 156 // sizeof(struct pktap_header) as macOS writes it
+	hdr := make([]byte, hdrLen)
+	binary.LittleEndian.PutUint32(hdr[0:4], hdrLen)
+	binary.LittleEndian.PutUint32(hdr[4:8], 1) // PTH_TYPE_PACKET
+	binary.LittleEndian.PutUint32(hdr[8:12], uint32(gplayers.LinkTypeEthernet))
+	copy(hdr[12:], "en0")
+	binary.LittleEndian.PutUint32(hdr[108:112], 1166)
+	copy(hdr[112:], "Google Chrome He")
+	return append(hdr, frame...)
+}
+
+// TestLiveTCPDecodePKTAPNg is what the macOS per-process source actually produces:
+// pcap-**ng** carrying DLT_PKTAP. tcpdump(1) gives no choice — the metadata filter the
+// capture relies on "is meaningful only with capture files in the Pcap-ng file format or
+// for interfaces supporting the PKTAP data link type" — so this format is the live path,
+// and the classic-pcap case above is only for imported files.
+func TestLiveTCPDecodePKTAPNg(t *testing.T) {
+	decoders.Register(echoDecoder{})
+	clientApp := frameMsg([]byte("ping"))
+	serverApp := append(frameMsg([]byte("pong")), frameMsg(bytes.Repeat([]byte("Q"), 20000))...)
+	c2s, s2c, keylog := tlstest.Exchange(t, "svc.echo.pktapng", clientApp, serverApp)
+
+	dir := t.TempDir()
+	klPath := filepath.Join(dir, "key.log")
+	if err := os.WriteFile(klPath, keylog, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var got [][2]string
+	err := LiveTCPDecode(bytes.NewReader(buildPktapNgPcap(t, c2s, s2c)), klPath,
+		func(*Flow, bool) {},
+		func(m *WsMessage) {
+			d := "S"
+			if m.FromClient {
+				d = "C"
+			}
+			got = append(got, [2]string{d, string(m.Payload)})
+		}, true)
+	if err != nil {
+		t.Fatalf("LiveTCPDecode: %v", err)
+	}
+	want := [][2]string{{"C", "ping"}, {"S", "pong"}, {"S", string(bytes.Repeat([]byte("Q"), 20000))}}
+	if len(got) != len(want) {
+		t.Fatalf("got %d messages, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("msg %d = {%s,%dB}, want {%s,%dB}", i, got[i][0], len(got[i][1]), want[i][0], len(want[i][1]))
+		}
+	}
+}
+
+// buildPktapNgPcap writes the pktap-wrapped frames as pcap-ng declaring DLT_PKTAP. pcapgo's
+// NgWriter cannot declare it either (NgInterface.LinkType is a layers.LinkType, a uint8),
+// so the IDB's LinkType field is patched in place afterwards — which is exactly the
+// narrowing pcapngLinkType exists to see past.
+func buildPktapNgPcap(t *testing.T, c2s, s2c []byte) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	w, err := pcapgo.NewNgWriter(&out, gplayers.LinkTypeEthernet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := net.IP{10, 0, 0, 1}
+	srv := net.IP{10, 0, 0, 2}
+	emit := func(payload []byte, src, dst net.IP, sport, dport gplayers.TCPPort, seq uint32) {
+		for off := 0; off < len(payload); off += 1200 {
+			end := off + 1200
+			if end > len(payload) {
+				end = len(payload)
+			}
+			eth := &gplayers.Ethernet{SrcMAC: net.HardwareAddr{1, 1, 1, 1, 1, 1}, DstMAC: net.HardwareAddr{2, 2, 2, 2, 2, 2}, EthernetType: gplayers.EthernetTypeIPv4}
+			ip := &gplayers.IPv4{Version: 4, IHL: 5, TTL: 64, Protocol: gplayers.IPProtocolTCP, SrcIP: src, DstIP: dst}
+			tcp := &gplayers.TCP{SrcPort: sport, DstPort: dport, Seq: seq + uint32(off), ACK: true, PSH: true, Window: 65535}
+			_ = tcp.SetNetworkLayerForChecksum(ip)
+			buf := gopacket.NewSerializeBuffer()
+			if err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{ComputeChecksums: true, FixLengths: true},
+				eth, ip, tcp, gopacket.Payload(payload[off:end])); err != nil {
+				t.Fatal(err)
+			}
+			rec := pktapWrap(buf.Bytes())
+			if err := w.WritePacket(gopacket.CaptureInfo{Timestamp: time.Now(), CaptureLength: len(rec), Length: len(rec)}, rec); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	emit(c2s, cli, srv, 40000, 443, 1000)
+	emit(s2c, srv, cli, 443, 40000, 5000)
+	if err := w.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	b := out.Bytes()
+	// Patch the first IDB's LinkType (uint16 after its type+length) to DLT_PKTAP, the way
+	// tcpdump writes it. The SHB's total length says where that block starts.
+	shbLen := binary.LittleEndian.Uint32(b[4:8])
+	if binary.LittleEndian.Uint32(b[shbLen:shbLen+4]) != 1 {
+		t.Fatalf("second block is not an IDB")
+	}
+	binary.LittleEndian.PutUint16(b[shbLen+8:shbLen+10], uint16(linkTypePKTAP))
+	return b
+}
