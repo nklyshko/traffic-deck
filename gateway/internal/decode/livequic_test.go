@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -175,6 +176,15 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	// aren't left with a blank duration in the TUI/MCP.
 	if flow.DurationMicros == 0 {
 		t.Error("DurationMicros = 0, want it set once the response :status arrives")
+	}
+	// Pseudo-headers are recorded as headers in wire order, as on the H2 and tshark paths.
+	wantReq := []string{":method", ":scheme", ":authority", ":path", "user-agent"}
+	if got := headerNames(flow.RequestHeaders); !slices.Equal(got, wantReq) {
+		t.Errorf("request headers = %v, want %v", got, wantReq)
+	}
+	wantResp := []string{":status", "content-type"}
+	if got := headerNames(flow.ResponseHeaders); !slices.Equal(got, wantResp) {
+		t.Errorf("response headers = %v, want %v", got, wantResp)
 	}
 }
 

@@ -2,6 +2,7 @@ package decode
 
 import (
 	"bytes"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,16 @@ import (
 
 	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
+
+// headerNames lists a flow's header names in the order they were recorded — pseudo-headers
+// included, since their order is the fingerprint under test.
+func headerNames(hs []Header) []string {
+	out := make([]string, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, h.Name)
+	}
+	return out
+}
 
 func h2encode(fields ...hpack.HeaderField) []byte {
 	var b bytes.Buffer
@@ -153,6 +164,16 @@ func TestLiveHTTP2RequestResponse(t *testing.T) {
 	}
 	if string(f.ResponseBody) != `{"ok":true}` {
 		t.Errorf("body=%q", f.ResponseBody)
+	}
+	// Pseudo-headers are recorded as headers in wire order — that order is a client
+	// fingerprint, and the scalar Method/Path/… fields above don't preserve it.
+	wantReq := []string{":method", ":scheme", ":authority", ":path", "user-agent"}
+	if got := headerNames(f.RequestHeaders); !slices.Equal(got, wantReq) {
+		t.Errorf("request headers = %v, want %v", got, wantReq)
+	}
+	wantResp := []string{":status", "content-type"}
+	if got := headerNames(f.ResponseHeaders); !slices.Equal(got, wantResp) {
+		t.Errorf("response headers = %v, want %v", got, wantResp)
 	}
 }
 

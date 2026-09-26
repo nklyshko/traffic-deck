@@ -301,7 +301,10 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool, ts tim
 			path, query, _ := strings.Cut(v, "?")
 			f.Path, f.Query = path, query
 		}
-		for _, hd := range mh.RegularFields() {
+		// All fields, not just RegularFields(): the pseudo-headers stay in their wire
+		// order because that order is a client fingerprint, as on the tshark path
+		// (stitch.go zipHeaders). The scalar fields above are for display.
+		for _, hd := range mh.Fields {
 			f.RequestHeaders = append(f.RequestHeaders, Header{Name: hd.Name, Value: hd.Value})
 			if strings.EqualFold(hd.Name, "user-agent") {
 				f.UserAgent = hd.Value
@@ -314,7 +317,7 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool, ts tim
 				f.Status = uint32(code)
 			}
 		}
-		for _, hd := range mh.RegularFields() {
+		for _, hd := range mh.Fields { // incl. :status, in wire order — see the request side
 			f.ResponseHeaders = append(f.ResponseHeaders, Header{Name: hd.Name, Value: hd.Value})
 			if strings.EqualFold(hd.Name, "content-type") {
 				f.ContentType = hd.Value

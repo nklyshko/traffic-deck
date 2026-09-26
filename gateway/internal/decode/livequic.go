@@ -280,6 +280,10 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 	f := st.flow
 	if fromClient {
 		for _, hf := range fields {
+			// Pseudo-headers are recorded too, in their wire order — that order is a
+			// client fingerprint, as on the tshark path (stitch.go zipHeaders). The
+			// scalar fields below are for display.
+			f.RequestHeaders = append(f.RequestHeaders, Header{Name: hf.Name, Value: hf.Value})
 			switch hf.Name {
 			case ":method":
 				f.Method = hf.Value
@@ -291,16 +295,14 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 				path, query, _ := strings.Cut(hf.Value, "?")
 				f.Path, f.Query = path, query
 			default:
-				if !strings.HasPrefix(hf.Name, ":") {
-					f.RequestHeaders = append(f.RequestHeaders, Header{Name: hf.Name, Value: hf.Value})
-					if strings.EqualFold(hf.Name, "user-agent") {
-						f.UserAgent = hf.Value
-					}
+				if strings.EqualFold(hf.Name, "user-agent") {
+					f.UserAgent = hf.Value
 				}
 			}
 		}
 	} else {
 		for _, hf := range fields {
+			f.ResponseHeaders = append(f.ResponseHeaders, Header{Name: hf.Name, Value: hf.Value})
 			if hf.Name == ":status" {
 				if code, e := strconv.Atoi(hf.Value); e == nil {
 					f.Status = uint32(code)
@@ -309,7 +311,6 @@ func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpack
 					f.DurationMicros = uint64(max(tsMicros(s.curTS)-f.TSUnixMicros, 0))
 				}
 			} else if !strings.HasPrefix(hf.Name, ":") {
-				f.ResponseHeaders = append(f.ResponseHeaders, Header{Name: hf.Name, Value: hf.Value})
 				if strings.EqualFold(hf.Name, "content-type") {
 					f.ContentType = hf.Value
 				}
