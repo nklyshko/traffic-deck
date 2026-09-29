@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nklyshko/traffic-deck/gateway/internal/config"
 	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 )
 
@@ -232,11 +233,15 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 
 // List is every component to check, TrafficDeck first so a manifest naming a directory
 // *inside* this checkout is deduplicated away rather than reported as a repo of its own.
+//
+// Being first is also why TrafficDeck's own hint comes from a setting rather than a manifest:
+// a manifest claiming this checkout loses the dedupe, so there would be no way to correct the
+// hint for an install that is updated by one script covering several checkouts.
 func List() []Component {
 	var out []Component
 	if dir := selfDir(); dir != "" {
 		out = append(out, Component{
-			Name: "trafficdeck", Dir: dir, UpdateHint: "git pull && make build"})
+			Name: "trafficdeck", Dir: dir, UpdateHint: config.SelfUpdateHint()})
 	}
 	out = append(out, sourcemgr.Components(sourcemgr.PluginsDir())...)
 	return sourcemgr.Dedupe(out)

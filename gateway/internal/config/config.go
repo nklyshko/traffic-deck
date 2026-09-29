@@ -87,6 +87,22 @@ func Home() string {
 	return ""
 }
 
+// SelfUpdateHint is what to tell the user to run when TrafficDeck itself is behind its remote
+// (GATEWAY_UPDATE_HINT). The default suits a plain checkout, which most installs are.
+//
+// It is settable because TrafficDeck is the one component that cannot say this for itself. A
+// module carries its own `update_hint` in the manifest it writes, but TrafficDeck has no
+// manifest — and one claiming this checkout would be deduplicated away, since the gateway's
+// own entry comes first (ADR-0014). So an installer that lays TrafficDeck down beside other
+// checkouts and rebuilds them together sets this to its own one-shot script, and the
+// notification then offers one action instead of a different one per component.
+//
+// Read on demand rather than from Config, so updates.List stays a plain func() the checker can
+// hold: the cost is one config.toml read per update check, a few times a day.
+func SelfUpdateHint() string {
+	return loadFile().str("GATEWAY_UPDATE_HINT", "git pull && make build")
+}
+
 // source resolves one setting: the environment first, then $TRAFFIC_DECK_HOME/config.toml,
 // then the built-in default. Env wins so a one-off `GATEWAY_VIEWER=web trafficdeck` still
 // overrides the file, and the file exists so a permanent choice doesn't have to live in a

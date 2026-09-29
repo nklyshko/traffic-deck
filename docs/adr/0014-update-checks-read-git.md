@@ -54,6 +54,16 @@ readable whether or not the module is running:
 module-specific: a bundle install is updated by its `update.sh`, a lone checkout by
 `git pull && make build`. The gateway does not guess, and it never runs the hint.
 
+**TrafficDeck's own hint is a setting, `GATEWAY_UPDATE_HINT`, because it is the one component
+with nowhere to declare it.** Every module has a manifest; TrafficDeck has none, and a manifest
+claiming this checkout loses the dedupe below to the gateway's own entry — so without a setting
+there is no way to correct the advice. Correcting it matters because the viewer prints each
+component's hint: an install where one script updates several checkouts would otherwise show
+`git pull && make build` for TrafficDeck beside that script for every module, which is a menu
+where one action was wanted, and the `git pull` half of it leaves the modules unrebuilt. It is
+read through the normal config path, so an installer can set it in the launcher it writes
+without editing anyone's `config.toml`.
+
 **There is deliberately no fallback to `[[process]].cwd`.** For the modules that ship today
 the cwd happens to equal the checkout root, which makes the fallback tempting — but `cwd`
 means *working directory*, and the two coincide by accident. A module without `source_dir`

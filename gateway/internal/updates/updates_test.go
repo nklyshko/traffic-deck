@@ -173,6 +173,29 @@ func TestFindSelfIgnoresAnUnrelatedCheckout(t *testing.T) {
 	}
 }
 
+// TrafficDeck is the only component with nowhere to declare its own hint: it has no manifest,
+// and one claiming this checkout loses Dedupe to the entry List puts first. So the setting is
+// the only way an install updated by one script covering several checkouts can correct it, and
+// List has to consult it rather than carry the literal default.
+func TestListTakesTheSelfHintFromTheSetting(t *testing.T) {
+	t.Setenv("TRAFFIC_DECK_HOME", t.TempDir()) // no real modules or config.toml in the way
+	t.Setenv("GATEWAY_UPDATE_HINT", "run /opt/td/update.sh")
+
+	found := false
+	for _, c := range List() {
+		if c.Name != "trafficdeck" {
+			continue
+		}
+		found = true
+		if c.UpdateHint != "run /opt/td/update.sh" {
+			t.Errorf("self hint = %q, want the setting's value", c.UpdateHint)
+		}
+	}
+	if !found {
+		t.Skip("no TrafficDeck checkout around this test binary, so there is no self entry")
+	}
+}
+
 // TestRefreshWaitsForTheCheckAlreadyRunning is the bug the TUI surfaced: pressing U during the
 // launch check returned the still-empty cache, whose checked_unix_ms = 0 is how "unknown" is
 // spelled — so the viewer announced that checks were off, and only a second press worked.

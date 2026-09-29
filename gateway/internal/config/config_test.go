@@ -10,7 +10,7 @@ import (
 // clears the env vars under test so a developer who exports them doesn't see a false failure.
 func writeConfig(t *testing.T, body string) {
 	t.Helper()
-	for _, key := range []string{"GATEWAY_VIEWER", "GATEWAY_ADDR", "GATEWAY_MCP", "GATEWAY_LOG_MAX_BACKUPS", "GATEWAY_LIVE_DECODE"} {
+	for _, key := range []string{"GATEWAY_VIEWER", "GATEWAY_ADDR", "GATEWAY_MCP", "GATEWAY_LOG_MAX_BACKUPS", "GATEWAY_LIVE_DECODE", "GATEWAY_UPDATE_HINT"} {
 		t.Setenv(key, "")
 	}
 	home := t.TempDir()
@@ -68,5 +68,27 @@ func TestNoFileIsFine(t *testing.T) {
 	cfg := Load()
 	if cfg.Viewer != "tui" || cfg.GRPCAddr != "127.0.0.1:7331" {
 		t.Errorf("with no config.toml, want built-in defaults, got %+v", cfg)
+	}
+}
+
+// TrafficDeck cannot carry its own update_hint in a manifest — the gateway's own component
+// comes first and wins the dedupe — so this setting is the only way an install updated by one
+// script covering several checkouts can correct the advice.
+func TestSelfUpdateHintDefaultsToAPlainCheckout(t *testing.T) {
+	writeConfig(t, "")
+	if got := SelfUpdateHint(); got != "git pull && make build" {
+		t.Errorf("SelfUpdateHint() = %q, want the plain-checkout default", got)
+	}
+}
+
+func TestSelfUpdateHintFromFileAndEnv(t *testing.T) {
+	writeConfig(t, "GATEWAY_UPDATE_HINT = \"run ~/bundle/update.sh\"\n")
+	if got := SelfUpdateHint(); got != "run ~/bundle/update.sh" {
+		t.Errorf("SelfUpdateHint() = %q, want the value from config.toml", got)
+	}
+	// Env wins, so the launcher wrapper an installer writes does not need to edit config.toml.
+	t.Setenv("GATEWAY_UPDATE_HINT", "run /opt/td/update.sh")
+	if got := SelfUpdateHint(); got != "run /opt/td/update.sh" {
+		t.Errorf("SelfUpdateHint() = %q, want the environment to win", got)
 	}
 }
