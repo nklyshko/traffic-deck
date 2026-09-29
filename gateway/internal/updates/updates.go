@@ -27,11 +27,15 @@ const (
 	// remote that may be a VPN away, and it is per component because they run concurrently.
 	componentTimeout = 15 * time.Second
 	// rateFloor is how soon after a completed check a refresh is answered from the cache
-	// instead of dialing again. The viewers own the cadence (the web UI notifies once a day,
-	// the TUI on a keypress), so this is the gateway protecting itself rather than trusting
-	// them: ten tabs opening at once cost one round of ls-remote, and a page-reload loop
-	// cannot become an ls-remote loop against someone's git host.
-	rateFloor = 3 * time.Minute
+	// instead of dialing again. It exists to collapse a *burst* — ten tabs opening at once,
+	// a page-reload loop — into one round of ls-remote, so it only has to outlast a burst.
+	//
+	// Kept short on purpose. It was three minutes, and a viewer with a "check for updates"
+	// button then lied for three minutes after anything else had asked: the gateway cannot
+	// tell an automatic poll from a human pressing the button, so the floor has to be short
+	// enough that being wrong about that barely matters. A page-reload loop now costs one
+	// ls-remote every 15s, which is the price of a manual check being honest.
+	rateFloor = 15 * time.Second
 )
 
 // Component is one checkout to compare against its remote. ComponentSpec is reused as-is:

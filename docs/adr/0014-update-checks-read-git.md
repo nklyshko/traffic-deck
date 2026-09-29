@@ -110,10 +110,16 @@ and evaluated on page open; the TUI's is a keypress. Neither needs the gateway's
 and a second viewer does not inherit the first's schedule.
 
 The gateway protects itself rather than trusting the cadence: refreshes are serialized, and
-one arriving within a few minutes of the last completed check returns the cache instead of
-dialing out. Ten browser tabs opening at once therefore cost one round of `ls-remote`. A
+one arriving within seconds of the last completed check returns the cache instead of dialing
+out. Ten browser tabs opening at once therefore cost one round of `ls-remote`. A
 `refresh = true` that returns an unchanged `checked_unix_ms` is a normal outcome, not an
 error, and the proto says so.
+
+That floor is deliberately **seconds, not minutes**. It exists to collapse a burst, and it
+has to outlast nothing longer than one; the gateway cannot tell an automatic poll from a
+human pressing "check for updates", so a floor long enough to be felt turns into a viewer
+insisting everything is up to date after something was published. It was three minutes
+first, and that is exactly what happened.
 
 **5. `CheckUpdates` is a new RPC on `ControlService`, not a field on `ListServices`.**
 `ServiceInfo` describes one gateway-owned *process*; updates are a property of a *checkout*.

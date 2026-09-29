@@ -386,12 +386,13 @@ type CheckUpdatesRequest struct {
 	// for a viewer's first paint.
 	//
 	// true: contact each remote before answering, so the reply may take as long as the
-	// gateway's per-component timeout — give the call a deadline. Use it when the viewer's own
-	// policy says the answer is stale (the web UI re-checks once a day, tracked in its own
-	// localStorage; the TUI re-checks on an explicit keypress). The gateway serializes
-	// concurrent refreshes and ignores one that arrives within a few minutes of the last
-	// check, so N tabs opening at once cost one round of `ls-remote`, not N — a refresh can
-	// therefore legitimately return an unchanged checked_unix_ms.
+	// gateway's per-component timeout — give the call a deadline. Use it whenever the viewer's
+	// own policy says the answer is stale, and always for a "check for updates" the user asked
+	// for: reading the cache there is how a viewer ends up insisting everything is up to date
+	// after something was published. The gateway serializes concurrent refreshes and answers
+	// one arriving within seconds of the last completed check from the cache, so N tabs opening
+	// at once cost one round of `ls-remote`, not N — a refresh can therefore legitimately
+	// return an unchanged checked_unix_ms.
 	Refresh       bool `protobuf:"varint,1,opt,name=refresh,proto3" json:"refresh,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

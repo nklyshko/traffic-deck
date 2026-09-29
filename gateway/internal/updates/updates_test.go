@@ -222,3 +222,15 @@ func TestRefreshStopsWaitingWhenTheCallerDoes(t *testing.T) {
 		t.Errorf("got %+v, want the unknown cache once the deadline passed", st)
 	}
 }
+
+// TestRateFloorStaysShortEnoughForAButton guards the incident that set this value: with a
+// three-minute floor, a viewer's "check for updates" button reported everything up to date
+// for three minutes after a commit had been published, and only a gateway restart fixed it.
+// The floor is there to collapse a burst of viewers, which takes seconds, not minutes — this
+// is the assertion that stops it drifting back up "to be safe".
+func TestRateFloorStaysShortEnoughForAButton(t *testing.T) {
+	if rateFloor > 30*time.Second {
+		t.Errorf("rateFloor = %s: long enough that a user pressing a check button gets a "+
+			"stale answer; it only has to outlast a burst", rateFloor)
+	}
+}
