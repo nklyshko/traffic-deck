@@ -245,3 +245,32 @@ def test_raw_message():
     assert req.startswith(b"POST /v1?a=1 HTTP/1.1\ncontent-type: text/plain\n\nbody")
     resp = render.raw_message(f, b"ok", response=True)
     assert resp.startswith(b"HTTP/1.1 201\nserver: nginx\n\nok")
+
+
+def component(name, available=False, local="a1b2c3", remote="d4e5f6", hint="", error=""):
+    return types.SimpleNamespace(
+        name=name, update_available=available, local_rev=local, remote_rev=remote,
+        update_hint=hint, error=error)
+
+
+def status(*components):
+    return types.SimpleNamespace(components=list(components), checked_unix_ms=1)
+
+
+def test_update_notice():
+    msg, severity = render.update_notice(status(component("trafficdeck")))
+    assert (msg, severity) == ("everything is up to date", "information")
+
+    msg, severity = render.update_notice(
+        status(component("acme", available=True, hint="run update.sh")))
+    assert msg == "update available: acme a1b2c3 → d4e5f6 (run update.sh)"
+    assert severity == "warning"
+
+
+def test_update_notice_never_reads_a_failed_check_as_up_to_date():
+    # A component that couldn't be checked is named as unknown, not counted as up to date —
+    # and an answer where *everything* failed must not come out reassuring.
+    msg, severity = render.update_notice(
+        status(component("trafficdeck"), component("pktap", error="cannot reach origin")))
+    assert msg == "no updates found — could not check pktap (cannot reach origin)"
+    assert severity == "warning"

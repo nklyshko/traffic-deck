@@ -26,6 +26,18 @@ type Manifest struct {
 	Name    string        `toml:"name"`
 	Process []ProcessSpec `toml:"process"`
 	Control *ControlSpec  `toml:"control"`
+	// SourceDir is the module's git checkout, which the gateway compares against its remote
+	// to answer CheckUpdates (ADR-0014). Optional: without it the module is not checked.
+	//
+	// Deliberately not defaulted from a process's Cwd. For the modules that ship today the
+	// two happen to be equal, but Cwd means *working directory* — they coincide by accident,
+	// and telling someone to update the wrong checkout is worse than telling them nothing.
+	SourceDir string `toml:"source_dir"`
+	// UpdateHint is what to run to update this module, shown verbatim with the notification
+	// ("run ~/src/acme/update.sh"). Free text, because how to update is the module's own
+	// business: a bundle install is updated by one script, a lone checkout by
+	// `git pull && make build`. The gateway never executes it.
+	UpdateHint string `toml:"update_hint"`
 }
 
 // ProcessSpec is one long-lived process a module runs (started in declared order — lazily
@@ -125,6 +137,54 @@ func Viewers(dir string) []ViewerSpec {
 				Cwd: p.Cwd, Env: p.Env, URL: p.URL, Screen: p.Screen,
 			})
 		}
+	}
+	return out
+}
+
+// ComponentSpec is one thing the gateway can check for updates: a git checkout and the name
+// to report it under. See ADR-0014.
+type ComponentSpec struct {
+	Name       string
+	Dir        string // the git checkout
+	UpdateHint string // free text: what to run to update it
+}
+
+// Components lists every module in dir that opted into update checks by declaring a
+// source_dir, in manifest order. A module without one is absent, not an error — the feature
+// is opt-in, and its cost is that the notification can under-report silently.
+func Components(dir string) []ComponentSpec {
+	var out []ComponentSpec
+	for _, m := range LoadManifests(dir) {
+		if m.SourceDir == "" {
+			continue
+		}
+		out = append(out, ComponentSpec{Name: m.Name, Dir: m.SourceDir, UpdateHint: m.UpdateHint})
+	}
+	return out
+}
+
+// Dedupe drops entries whose checkout resolves to one an earlier entry already claims, so
+// the same repo is never reported twice under two names. Order is the priority: the caller
+// puts TrafficDeck itself first, which is what keeps a manifest pointing *into* the
+// TrafficDeck checkout (plugins/pktap.toml names capture/capture-pktap.sh, which is not a
+// repo of its own) from also appearing as a separate component.
+//
+// Symlinks are resolved because a checkout reached two ways is still one checkout. A path
+// that cannot be resolved — it does not exist yet, or is not readable — keeps its cleaned
+// form and stays in the list: the checker is the right place to report why it failed.
+func Dedupe(cs []ComponentSpec) []ComponentSpec {
+	seen := make(map[string]bool, len(cs))
+	var out []ComponentSpec
+	for _, c := range cs {
+		key, err := filepath.EvalSymlinks(c.Dir)
+		if err != nil {
+			key = filepath.Clean(c.Dir)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, c)
 	}
 	return out
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
+	"github.com/nklyshko/traffic-deck/gateway/internal/updates"
 )
 
 // Viewer implements trafficv1.ViewerServiceServer backed by the store + live hub.
@@ -502,7 +503,7 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 // Register attaches all implemented services to s, sharing one live hub between the ingest
 // (producer) and viewer (subscriber) sides. gatewayAddr is where spawned capture sources
 // connect back for ingest. Returns the source manager so the caller can reap it on shutdown.
-func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, recordLive, tsharkVerify bool) (*sourcemgr.Manager, *sourcemgr.Services) {
+func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, recordLive, tsharkVerify, updateCheck bool) (*sourcemgr.Manager, *sourcemgr.Services) {
 	if recordLive {
 		// The persisted record is the live decode, so keep full bodies (not previews).
 		decode.SetUnlimitedLiveBodies()
@@ -527,6 +528,30 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	hub.setPersistence(st, ingest.liveAnalysis, ingest.onFlushError)
 	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
 	trafficv1.RegisterIngestServiceServer(s, ingest)
-	trafficv1.RegisterControlServiceServer(s, NewControl(st, obj, dataRoot, tshark, mgr, svcs))
+	trafficv1.RegisterControlServiceServer(s, NewControl(st, obj, dataRoot, tshark, mgr, svcs, newUpdateChecker(updateCheck)))
 	return mgr, svcs
+}
+
+// newUpdateChecker builds the update checker and fills its cache once, in the background, so
+// a viewer's first paint usually has a warm answer without waiting on a network round trip.
+// That launch check is the only schedule the gateway keeps: the viewers own the cadence, and
+// the component that knows when a notification is *due* is the one that knows whether it has
+// already shown it (ADR-0014). Returns nil when checking is off.
+func newUpdateChecker(enabled bool) *updates.Checker {
+	if !enabled {
+		return nil
+	}
+	c := updates.NewChecker(updates.List)
+	go func() {
+		for _, r := range c.Refresh(context.Background()).Components {
+			switch {
+			case r.Err != "":
+				log.Printf("update check: %s: %s", r.Name, r.Err)
+			case r.Available:
+				log.Printf("update available: %s is at %s, %s is published — %s",
+					r.Name, r.LocalRev, r.RemoteRev, r.UpdateHint)
+			}
+		}
+	}()
+	return c
 }

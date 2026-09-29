@@ -46,6 +46,7 @@ from .render import (
     is_text,
     raw_message,
     status_cell,
+    update_notice,
 )
 from .wireshark import (
     build_display_filter,
@@ -427,6 +428,7 @@ class SessionsScreen(Screen):
         Binding("s", "stop_capture", "Stop"),
         Binding("X", "toggle_mcp", "MCP"),
         Binding("L", "logs", "Logs"),
+        Binding("U", "check_updates", "Updates"),
         Binding("r", "refresh", "Refresh"),
         Binding("n", "rename", "Rename"),
         Binding("g", "set_group", "Group"),
@@ -529,6 +531,29 @@ class SessionsScreen(Screen):
     def action_logs(self) -> None:
         """Open the log browser: the gateway's own log and each spawned child's."""
         self.app.push_screen(LogsScreen())
+
+    @work(exclusive=True, group="check-updates")
+    async def action_check_updates(self) -> None:
+        """Ask the gateway whether a newer version of TrafficDeck — or of any module that
+        declared a source_dir — is published. This keypress *is* the TUI's cadence: the
+        gateway keeps no periodic schedule, so nothing refreshes unless a viewer asks
+        (ADR-0014). It contacts each remote, subject to the gateway's rate floor, so an
+        answer identical to the last one is a normal outcome rather than a failure."""
+        self.notify("checking for updates…")
+        try:
+            status = await self.app.client.check_updates(refresh=True)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f"update check failed: {exc}", severity="error")
+            return
+        if status is None:
+            # No answer at all — not "nothing to update". The gateway collapses "checks are
+            # off" and "no check has completed" into the same reply, so name both rather than
+            # asserting one of them.
+            self.notify("no update answer yet — checks may be off (GATEWAY_UPDATE_CHECK)",
+                        severity="warning")
+            return
+        msg, severity = update_notice(status)
+        self.notify(msg, severity=severity, timeout=15)
 
     @work(exclusive=True, group="load-sessions")
     async def load_sessions(self, quiet: bool = False) -> None:

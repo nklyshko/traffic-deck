@@ -17,6 +17,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
+	"github.com/nklyshko/traffic-deck/gateway/internal/updates"
 )
 
 // Control implements trafficv1.ControlServiceServer — annotations, session export, and
@@ -30,10 +31,42 @@ type Control struct {
 	tshark   string              // tshark binary, for a tshark-engine pcap import
 	mgr      *sourcemgr.Manager  // nil disables capture control
 	svcs     *sourcemgr.Services // nil disables auxiliary services
+	upd      *updates.Checker    // nil disables update checks (GATEWAY_UPDATE_CHECK=off)
 }
 
-func NewControl(st *store.Store, obj objstore.Store, dataRoot, tshark string, mgr *sourcemgr.Manager, svcs *sourcemgr.Services) *Control {
-	return &Control{st: st, obj: obj, dataRoot: dataRoot, tshark: tshark, mgr: mgr, svcs: svcs}
+func NewControl(st *store.Store, obj objstore.Store, dataRoot, tshark string, mgr *sourcemgr.Manager, svcs *sourcemgr.Services, upd *updates.Checker) *Control {
+	return &Control{st: st, obj: obj, dataRoot: dataRoot, tshark: tshark, mgr: mgr, svcs: svcs, upd: upd}
+}
+
+// CheckUpdates reports whether a newer version is published, per component (TrafficDeck
+// itself plus every module that declared a source_dir). refresh=false answers from the cache
+// without touching the network; refresh=true contacts each remote first, subject to the
+// checker's rate floor.
+//
+// With checking off there is no answer to give, so the reply is empty with
+// checked_unix_ms = 0 — the same shape as "no check has completed yet", which the viewer
+// clients turn into a null/None rather than an empty list. An empty list renders as "nothing
+// to update" in any UI written the obvious way, and unknown must never read as up to date.
+func (c *Control) CheckUpdates(ctx context.Context, req *trafficv1.CheckUpdatesRequest) (*trafficv1.UpdateStatus, error) {
+	if c.upd == nil {
+		return &trafficv1.UpdateStatus{}, nil
+	}
+	st := c.upd.Status()
+	if req.GetRefresh() {
+		st = c.upd.Refresh(ctx)
+	}
+	out := &trafficv1.UpdateStatus{CheckedUnixMs: st.CheckedUnixMs}
+	for _, r := range st.Components {
+		out.Components = append(out.Components, &trafficv1.ComponentUpdate{
+			Name:            r.Name,
+			UpdateAvailable: r.Available,
+			LocalRev:        r.LocalRev,
+			RemoteRev:       r.RemoteRev,
+			UpdateHint:      r.UpdateHint,
+			Error:           r.Err,
+		})
+	}
+	return out, nil
 }
 
 // ListServices reports the auxiliary services (MCP, module UIs) and whether each is running.

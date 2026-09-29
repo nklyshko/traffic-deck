@@ -76,6 +76,11 @@ class ControlServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_control__pb2.Empty.FromString,
                 _registered_method=True)
+        self.CheckUpdates = channel.unary_unary(
+                '/traffic.v1.ControlService/CheckUpdates',
+                request_serializer=traffic_dot_v1_dot_control__pb2.CheckUpdatesRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_control__pb2.UpdateStatus.FromString,
+                _registered_method=True)
         self.ListLogs = channel.unary_unary(
                 '/traffic.v1.ControlService/ListLogs',
                 request_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
@@ -252,6 +257,17 @@ class ControlServiceServicer(object):
 
     def StopService(self, request, context):
         """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CheckUpdates(self, request, context):
+        """Is a newer version published? The gateway compares each component's checkout against
+        its git remote and caches the answer; a component is TrafficDeck itself or a module that
+        declared `source_dir` in its manifest. The viewer owns the cadence — it decides when to
+        ask and when to notify — so the only schedule the gateway keeps is one check at launch.
+        See ADR-0014.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -469,6 +485,11 @@ def add_ControlServiceServicer_to_server(servicer, server):
                     servicer.StopService,
                     request_deserializer=traffic_dot_v1_dot_control__pb2.ServiceRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_control__pb2.Empty.SerializeToString,
+            ),
+            'CheckUpdates': grpc.unary_unary_rpc_method_handler(
+                    servicer.CheckUpdates,
+                    request_deserializer=traffic_dot_v1_dot_control__pb2.CheckUpdatesRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_control__pb2.UpdateStatus.SerializeToString,
             ),
             'ListLogs': grpc.unary_unary_rpc_method_handler(
                     servicer.ListLogs,
@@ -808,6 +829,33 @@ class ControlService(object):
             '/traffic.v1.ControlService/StopService',
             traffic_dot_v1_dot_control__pb2.ServiceRequest.SerializeToString,
             traffic_dot_v1_dot_control__pb2.Empty.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CheckUpdates(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ControlService/CheckUpdates',
+            traffic_dot_v1_dot_control__pb2.CheckUpdatesRequest.SerializeToString,
+            traffic_dot_v1_dot_control__pb2.UpdateStatus.FromString,
             options,
             channel_credentials,
             insecure,

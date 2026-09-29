@@ -22,6 +22,13 @@ service ControlService {
   rpc StartService(ServiceRequest) returns (ServiceInfo);
   rpc StopService(ServiceRequest) returns (Empty);
 
+  // Is a newer version published? The gateway compares each component's checkout against
+  // its git remote and caches the answer; a component is TrafficDeck itself or a module that
+  // declared `source_dir` in its manifest. The viewer owns the cadence — it decides when to
+  // ask and when to notify — so the only schedule the gateway keeps is one check at launch.
+  // See ADR-0014.
+  rpc CheckUpdates(CheckUpdatesRequest) returns (UpdateStatus);
+
   // Child logs. The gateway keeps one rolling file per spawned child (capture source,
   // service, module process) plus its own; a viewer lists them and reads the tail of one,
   // streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
@@ -105,6 +112,45 @@ message ServiceInfo {
   bool running = 3;
   string url = 4;      // where it's reachable when running (e.g. http://127.0.0.1:8765/mcp)
   string detail = 5;   // note for the viewer (e.g. exposure warning)
+}
+
+// --- Update checks (see ADR-0014): one entry per component the gateway can compare against
+// its git remote — TrafficDeck itself, plus every module whose manifest declares
+// `source_dir`. A module is not asked; the gateway reads its checkout. ---
+
+message CheckUpdatesRequest {
+  // false: answer from cache, immediately, without touching the network. This is the call
+  // for a viewer's first paint.
+  //
+  // true: contact each remote before answering, so the reply may take as long as the
+  // gateway's per-component timeout — give the call a deadline. Use it when the viewer's own
+  // policy says the answer is stale (the web UI re-checks once a day, tracked in its own
+  // localStorage; the TUI re-checks on an explicit keypress). The gateway serializes
+  // concurrent refreshes and ignores one that arrives within a few minutes of the last
+  // check, so N tabs opening at once cost one round of `ls-remote`, not N — a refresh can
+  // therefore legitimately return an unchanged checked_unix_ms.
+  bool refresh = 1;
+}
+
+message UpdateStatus {
+  repeated ComponentUpdate components = 1;
+  // When the cache was last filled. 0 = no check has completed yet, which a viewer must not
+  // render as "up to date" — the viewer clients turn this case into a null/None instead of
+  // an empty list, so no UI code can mistake the two.
+  int64 checked_unix_ms = 2;
+}
+
+message ComponentUpdate {
+  string name = 1;              // "trafficdeck", or the module's manifest name
+  bool update_available = 2;    // the remote tip is not present in the local checkout
+  string local_rev = 3;         // short HEAD
+  string remote_rev = 4;        // short remote tip; empty when unknown
+  // What to run, verbatim from the manifest's `update_hint` ("run …/update.sh"). Free text:
+  // how to update is the module's business, and the gateway never executes it.
+  string update_hint = 5;
+  // Why this component could not be checked (no upstream, remote unreachable, not a git
+  // checkout). update_available is false whenever this is set — offline is not up to date.
+  string error = 6;
 }
 
 // --- Child logs (see ADR-0010 logging): the gateway's own log and one rolling file per

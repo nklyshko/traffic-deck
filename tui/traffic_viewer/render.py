@@ -325,3 +325,30 @@ def raw_message(flow, body: bytes, response: bool) -> bytes:
         headers = flow.request_headers
     lines = [start] + [f"{h.name}: {h.value}" for h in headers]
     return ("\n".join(lines) + "\n\n").encode() + (body or b"")
+
+
+def update_notice(status) -> tuple[str, str]:
+    """One line for the update check, plus the notification severity it should carry.
+
+    `status` is the gateway's UpdateStatus — never None: the client turns "no answer" into
+    None precisely so it can't reach here and be read as "nothing to update" (ADR-0014).
+    A component that could not be checked is listed as unknown rather than folded into the
+    up-to-date count, for the same reason.
+    """
+    behind = [c for c in status.components if c.update_available]
+    unknown = [c for c in status.components if c.error]
+    if behind:
+        parts = [
+            f"{c.name} {c.local_rev} → {c.remote_rev}" + (f" ({c.update_hint})" if c.update_hint else "")
+            for c in behind
+        ]
+        msg, severity = "update available: " + "; ".join(parts), "warning"
+    elif not status.components:
+        return "nothing is enrolled for update checks", "information"
+    elif unknown:
+        msg, severity = "no updates found", "warning"
+    else:
+        return "everything is up to date", "information"
+    if unknown:
+        msg += " — could not check " + ", ".join(f"{c.name} ({c.error})" for c in unknown)
+    return msg, severity

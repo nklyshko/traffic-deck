@@ -51,6 +51,13 @@ type Config struct {
 	// just stays up), or a command line to run instead. Kept verbatim: a command is
 	// case-sensitive.
 	Viewer string
+	// UpdateCheck lets the gateway compare this checkout — and every module that declared a
+	// source_dir — against its git remote, so a viewer can say a newer version is published
+	// (ADR-0014). Default true: a check nobody enables is a check that never fires. The
+	// traffic is one `git ls-remote` per checkout at launch, plus whatever a viewer asks for,
+	// to the remotes the user cloned from and carrying nothing; GATEWAY_UPDATE_CHECK=off is
+	// there because it is still an outbound connection made without being asked each time.
+	UpdateCheck bool
 
 	// FingerprintsDir is the directory of user TLS-fingerprint files (*.json) that
 	// register additional well-known ClientHello fingerprints on top of the compiled-in
@@ -160,6 +167,7 @@ func Load() Config {
 		TsharkVerify:    s.boolean("GATEWAY_TSHARK_VERIFY", false),
 		StartMCP:        s.boolean("GATEWAY_MCP", true),
 		Viewer:          s.str("GATEWAY_VIEWER", "tui"),
+		UpdateCheck:     s.boolean("GATEWAY_UPDATE_CHECK", true),
 		FingerprintsDir: s.str("TRAFFICDECK_FP_DIR", tlsfp.DefaultDir()),
 		LogFile:         s.str("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
 		LogMaxSizeMB:    s.integer("GATEWAY_LOG_MAX_SIZE_MB", 50),

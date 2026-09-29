@@ -306,6 +306,24 @@ class GatewayClient:
     async def stop_service(self, name: str) -> None:
         await self._ctrl().StopService(control_pb2.ServiceRequest(name=name))
 
+    # --- update checks (ADR-0014) ---------------------------------------
+
+    async def check_updates(self, refresh: bool = False, timeout: float = 30.0):
+        """Whether a newer version is published, per component — or **None** when the gateway
+        has no answer: no check has completed yet, or checking is off.
+
+        That None is the contract, not a convenience. "Unknown" and "nothing to update" arrive
+        as the same empty list, and an empty list renders as up to date in any UI written the
+        obvious way — so the distinction is resolved here, one level below anything that
+        draws, rather than left to each caller to remember.
+
+        refresh contacts each component's remote before answering (subject to the gateway's
+        rate floor), which is why this call carries a deadline; the default reads the cache.
+        """
+        resp = await self._ctrl().CheckUpdates(
+            control_pb2.CheckUpdatesRequest(refresh=refresh), timeout=timeout)
+        return resp if resp.checked_unix_ms else None
+
     # --- child logs (gateway, capture sources, services) ----------------
 
     async def list_logs(self):

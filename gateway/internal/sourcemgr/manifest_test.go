@@ -212,3 +212,66 @@ source = "acme"
 		t.Errorf("dialed the wrong source: %q", d.GetMessage())
 	}
 }
+
+func TestComponentsNeedsAnExplicitSourceDir(t *testing.T) {
+	dir := t.TempDir()
+	writeManifest(t, dir, `
+name = "acme"
+source_dir = "/opt/acme"
+update_hint = "run /opt/acme/update.sh"
+
+[[process]]
+name = "adapter"
+cwd = "/opt/acme"
+command = ["acme-adapter"]
+`)
+	// A module that declares no source_dir opts out, and its process cwd must not stand in
+	// for one: that guesses at the checkout, and a wrong guess tells someone to update the
+	// wrong thing.
+	if err := os.WriteFile(filepath.Join(dir, "quiet.toml"), []byte(`
+name = "quiet"
+
+[[process]]
+name = "adapter"
+cwd = "/opt/quiet"
+command = ["quiet-adapter"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Components(dir)
+	if len(got) != 1 {
+		t.Fatalf("got %+v, want only the module with a source_dir", got)
+	}
+	if got[0].Name != "acme" || got[0].Dir != "/opt/acme" ||
+		got[0].UpdateHint != "run /opt/acme/update.sh" {
+		t.Errorf("component = %+v", got[0])
+	}
+}
+
+func TestDedupeKeepsTheFirstClaimOnACheckout(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	// "trafficdeck" is first, as the gateway assembles it, so it wins over a module naming
+	// the same checkout by another path — plugins/pktap.toml lives inside the TrafficDeck
+	// repo and is not a repo of its own.
+	got := Dedupe([]ComponentSpec{
+		{Name: "trafficdeck", Dir: real},
+		{Name: "pktap", Dir: link},
+		{Name: "missing", Dir: "/nonexistent/acme"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("got %+v, want trafficdeck and missing", got)
+	}
+	if got[0].Name != "trafficdeck" {
+		t.Errorf("the first claim should win, got %q", got[0].Name)
+	}
+	// An unresolvable path is not silently dropped — the checker reports why it failed.
+	if got[1].Name != "missing" {
+		t.Errorf("a checkout that does not exist should survive dedupe, got %q", got[1].Name)
+	}
+}

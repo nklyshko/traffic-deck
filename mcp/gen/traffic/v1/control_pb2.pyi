@@ -73,6 +73,36 @@ class ServiceInfo(_message.Message):
     detail: str
     def __init__(self, name: _Optional[str] = ..., label: _Optional[str] = ..., running: bool = ..., url: _Optional[str] = ..., detail: _Optional[str] = ...) -> None: ...
 
+class CheckUpdatesRequest(_message.Message):
+    __slots__ = ("refresh",)
+    REFRESH_FIELD_NUMBER: _ClassVar[int]
+    refresh: bool
+    def __init__(self, refresh: bool = ...) -> None: ...
+
+class UpdateStatus(_message.Message):
+    __slots__ = ("components", "checked_unix_ms")
+    COMPONENTS_FIELD_NUMBER: _ClassVar[int]
+    CHECKED_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    components: _containers.RepeatedCompositeFieldContainer[ComponentUpdate]
+    checked_unix_ms: int
+    def __init__(self, components: _Optional[_Iterable[_Union[ComponentUpdate, _Mapping]]] = ..., checked_unix_ms: _Optional[int] = ...) -> None: ...
+
+class ComponentUpdate(_message.Message):
+    __slots__ = ("name", "update_available", "local_rev", "remote_rev", "update_hint", "error")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    UPDATE_AVAILABLE_FIELD_NUMBER: _ClassVar[int]
+    LOCAL_REV_FIELD_NUMBER: _ClassVar[int]
+    REMOTE_REV_FIELD_NUMBER: _ClassVar[int]
+    UPDATE_HINT_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    update_available: bool
+    local_rev: str
+    remote_rev: str
+    update_hint: str
+    error: str
+    def __init__(self, name: _Optional[str] = ..., update_available: bool = ..., local_rev: _Optional[str] = ..., remote_rev: _Optional[str] = ..., update_hint: _Optional[str] = ..., error: _Optional[str] = ...) -> None: ...
+
 class LogList(_message.Message):
     __slots__ = ("logs",)
     LOGS_FIELD_NUMBER: _ClassVar[int]

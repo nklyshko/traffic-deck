@@ -27,6 +27,7 @@ const (
 	ControlService_ListServices_FullMethodName          = "/traffic.v1.ControlService/ListServices"
 	ControlService_StartService_FullMethodName          = "/traffic.v1.ControlService/StartService"
 	ControlService_StopService_FullMethodName           = "/traffic.v1.ControlService/StopService"
+	ControlService_CheckUpdates_FullMethodName          = "/traffic.v1.ControlService/CheckUpdates"
 	ControlService_ListLogs_FullMethodName              = "/traffic.v1.ControlService/ListLogs"
 	ControlService_GetLog_FullMethodName                = "/traffic.v1.ControlService/GetLog"
 	ControlService_ExportSession_FullMethodName         = "/traffic.v1.ControlService/ExportSession"
@@ -73,6 +74,12 @@ type ControlServiceClient interface {
 	ListServices(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ServiceList, error)
 	StartService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*ServiceInfo, error)
 	StopService(ctx context.Context, in *ServiceRequest, opts ...grpc.CallOption) (*Empty, error)
+	// Is a newer version published? The gateway compares each component's checkout against
+	// its git remote and caches the answer; a component is TrafficDeck itself or a module that
+	// declared `source_dir` in its manifest. The viewer owns the cadence — it decides when to
+	// ask and when to notify — so the only schedule the gateway keeps is one check at launch.
+	// See ADR-0014.
+	CheckUpdates(ctx context.Context, in *CheckUpdatesRequest, opts ...grpc.CallOption) (*UpdateStatus, error)
 	// Child logs. The gateway keeps one rolling file per spawned child (capture source,
 	// service, module process) plus its own; a viewer lists them and reads the tail of one,
 	// streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
@@ -215,6 +222,16 @@ func (c *controlServiceClient) StopService(ctx context.Context, in *ServiceReque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Empty)
 	err := c.cc.Invoke(ctx, ControlService_StopService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlServiceClient) CheckUpdates(ctx context.Context, in *CheckUpdatesRequest, opts ...grpc.CallOption) (*UpdateStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateStatus)
+	err := c.cc.Invoke(ctx, ControlService_CheckUpdates_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +519,12 @@ type ControlServiceServer interface {
 	ListServices(context.Context, *Empty) (*ServiceList, error)
 	StartService(context.Context, *ServiceRequest) (*ServiceInfo, error)
 	StopService(context.Context, *ServiceRequest) (*Empty, error)
+	// Is a newer version published? The gateway compares each component's checkout against
+	// its git remote and caches the answer; a component is TrafficDeck itself or a module that
+	// declared `source_dir` in its manifest. The viewer owns the cadence — it decides when to
+	// ask and when to notify — so the only schedule the gateway keeps is one check at launch.
+	// See ADR-0014.
+	CheckUpdates(context.Context, *CheckUpdatesRequest) (*UpdateStatus, error)
 	// Child logs. The gateway keeps one rolling file per spawned child (capture source,
 	// service, module process) plus its own; a viewer lists them and reads the tail of one,
 	// streamed in chunks. The gateway owns the files, so a remote viewer needs no filesystem
@@ -584,6 +607,9 @@ func (UnimplementedControlServiceServer) StartService(context.Context, *ServiceR
 }
 func (UnimplementedControlServiceServer) StopService(context.Context, *ServiceRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopService not implemented")
+}
+func (UnimplementedControlServiceServer) CheckUpdates(context.Context, *CheckUpdatesRequest) (*UpdateStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckUpdates not implemented")
 }
 func (UnimplementedControlServiceServer) ListLogs(context.Context, *Empty) (*LogList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListLogs not implemented")
@@ -811,6 +837,24 @@ func _ControlService_StopService_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServiceServer).StopService(ctx, req.(*ServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ControlService_CheckUpdates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckUpdatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServiceServer).CheckUpdates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ControlService_CheckUpdates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServiceServer).CheckUpdates(ctx, req.(*CheckUpdatesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1256,6 +1300,10 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopService",
 			Handler:    _ControlService_StopService_Handler,
+		},
+		{
+			MethodName: "CheckUpdates",
+			Handler:    _ControlService_CheckUpdates_Handler,
 		},
 		{
 			MethodName: "ListLogs",

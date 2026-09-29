@@ -29,7 +29,7 @@ func TestGetSessionArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := NewControl(st, obj, dir, "", nil, nil)
+	c := NewControl(st, obj, dir, "", nil, nil, nil)
 
 	pcap, _ := filepath.Abs("../decode/testdata/sample.pcap")
 	keylog, _ := filepath.Abs("../decode/testdata/sample.key.log")
@@ -80,7 +80,7 @@ func TestGetSessionArtifactsUnknownSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := NewControl(st, obj, dir, "", nil, nil)
+	c := NewControl(st, obj, dir, "", nil, nil, nil)
 
 	if _, err := c.GetSessionArtifacts(ctx, &trafficv1.GetSessionArtifactsRequest{
 		SessionId: "nope",

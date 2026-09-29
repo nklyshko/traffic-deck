@@ -13,6 +13,8 @@ speaks `CaptureSourceService` registers the module as a capture source the gatew
 
 ```toml
 name = "acme"
+source_dir  = "/home/you/src/acme"          # optional: the module's git checkout (see below)
+update_hint = "run ~/src/acme/update.sh"    # optional: what to run to update it
 
 [[process]]
 name    = "adapter"
@@ -65,3 +67,23 @@ overwrite the display. A viewer that just prints a line and opens a browser leav
 `false` and shares the terminal with the gateway's log. With no viewer at all
 (`GATEWAY_VIEWER=none`) a module's UI runs as an ordinary auto-started service and the
 gateway waits on Ctrl-C.
+
+## Update checks
+
+`source_dir` opts a module into update checks: the gateway compares that checkout against its
+git remote (`ls-remote`, never `fetch` — nothing in your working tree is touched) and reports
+it alongside TrafficDeck itself, so a viewer can say a newer version is published. It is the
+whole integration — one line in whatever already writes the manifest, no RPC to implement and
+nothing to keep in sync per language. `update_hint` is free text shown with the notification,
+because how to update is the module's own business; the gateway never runs it.
+
+The gateway reads the checkout rather than asking the module, because a module is not running
+most of the time: its processes start lazily on first use of its capture source, and a
+dial-only source may declare none at all. See
+[ADR-0014](adr/0014-update-checks-read-git.md).
+
+A module that declares no `source_dir` is simply not checked — there is deliberately no
+fallback to a process's `cwd`, which means *working directory* and only coincides with the
+checkout root by accident. A checkout with no upstream branch, or one whose remote is
+unreachable, is reported as unknown rather than as up to date. The whole feature is off under
+`GATEWAY_UPDATE_CHECK=off` ([configuration](configuration.md)).

@@ -28,7 +28,7 @@ func TestImportCaptureNative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := NewControl(st, obj, dir, "", nil, nil)
+	c := NewControl(st, obj, dir, "", nil, nil, nil)
 
 	pcap, _ := filepath.Abs("../decode/testdata/sample.pcap")
 	keylog, _ := filepath.Abs("../decode/testdata/sample.key.log")
@@ -53,7 +53,7 @@ func TestImportCaptureNative(t *testing.T) {
 // TestImportCaptureRequiresPcapPath checks the empty-path guard returns InvalidArgument
 // (and never dereferences the store/objstore).
 func TestImportCaptureRequiresPcapPath(t *testing.T) {
-	c := NewControl(nil, nil, t.TempDir(), "", nil, nil)
+	c := NewControl(nil, nil, t.TempDir(), "", nil, nil, nil)
 	_, err := c.ImportCapture(context.Background(), &trafficv1.ImportCaptureRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("err = %v, want InvalidArgument", err)
