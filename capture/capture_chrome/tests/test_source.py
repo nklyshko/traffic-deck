@@ -51,26 +51,26 @@ def test_describe_offers_kind_then_drills_in_by_redescribe(monkeypatch):
     # Top level: binary + profile_kind (+ the capture opts). No which-one field yet — that's
     # the single-mechanism point: nothing shown before its kind is picked.
     d0 = src.describe({})
-    assert _keys(d0) == ["chrome", "profile_kind", "url", "duration"]
+    assert _keys(d0) == ["chrome", "profile_kind", "incognito", "url", "duration"]
     kind_values = [c.value for c in d0.params[1].choices]
     assert kind_values == ["existing", "default", "temp", "custom"]  # existing offered: profiles exist
 
     # Pick "existing" → re-describe grows the which-existing param.
     d1 = src.describe({"profile_kind": "existing"})
-    assert _keys(d1) == ["chrome", "profile_kind", "existing_profile", "url", "duration"]
+    assert _keys(d1) == ["chrome", "profile_kind", "existing_profile", "incognito", "url", "duration"]
     assert [c.value for c in d1.params[2].choices] == ["Default", "Profile 2"]
 
     # Pick "custom" → the saved-profile param, ending in a "new" option.
     d2 = src.describe({"profile_kind": "custom"})
-    assert _keys(d2) == ["chrome", "profile_kind", "saved_profile", "url", "duration"]
+    assert _keys(d2) == ["chrome", "profile_kind", "saved_profile", "incognito", "url", "duration"]
     assert [c.value for c in d2.params[2].choices] == ["research", "__new__"]
 
     # Pick "custom" + new → the name field appears (and only then).
     d3 = src.describe({"profile_kind": "custom", "saved_profile": "__new__"})
-    assert _keys(d3) == ["chrome", "profile_kind", "saved_profile", "new_profile_name", "url", "duration"]
+    assert _keys(d3) == ["chrome", "profile_kind", "saved_profile", "new_profile_name", "incognito", "url", "duration"]
 
     # default/temp are terminal — no extra field.
-    assert _keys(src.describe({"profile_kind": "temp"})) == ["chrome", "profile_kind", "url", "duration"]
+    assert _keys(src.describe({"profile_kind": "temp"})) == ["chrome", "profile_kind", "incognito", "url", "duration"]
 
 
 def test_describe_hides_existing_kind_when_no_profiles(monkeypatch):
@@ -156,3 +156,37 @@ def test_start_stop_through_the_served_harness(monkeypatch):
 def test_stop_capture_unknown_session_is_noop(monkeypatch):
     src = make_source(monkeypatch, binaries=[])
     src.stop_capture("nope")  # must not raise
+
+
+def test_incognito_rides_from_the_form_to_the_launch(monkeypatch):
+    """The whole path: the answered param reaches the runner, and the runner puts the flag on
+    Chrome's argv. The profile flags stay untouched — incognito says what is written back,
+    the profile says which Chrome state is launched against."""
+    FakeCapture.instances.clear()
+    src = make_source(monkeypatch, binaries=["/usr/bin/google-chrome"])
+    monkeypatch.setattr(chrome_source, "ChromeCapture", FakeCapture)
+    monkeypatch.setattr(chrome_source.profiles, "temp_profile", lambda _c: "/tmp/prof")
+
+    src.start_capture("run", {"chrome": "/usr/bin/google-chrome", "profile_kind": "temp",
+                              "incognito": "true"})
+    assert FakeCapture.instances[0].kw["incognito"] is True
+    # Anything other than the wizard's "true" is off — an unanswered BOOL arrives as "".
+    for answer in ({}, {"incognito": ""}):
+        FakeCapture.instances.clear()
+        src.start_capture("run", {"chrome": "/usr/bin/google-chrome", "profile_kind": "temp",
+                                  **answer})
+        assert FakeCapture.instances[0].kw["incognito"] is False
+
+
+def test_launch_command_carries_incognito(monkeypatch, tmp_path):
+    from capture_chrome.capture import ChromeCapture
+
+    def cap(**kw):
+        # A real ChromeCapture, but nothing is started: only its argv is under test.
+        return ChromeCapture(gateway="127.0.0.1:1", label="t", chrome="/usr/bin/google-chrome",
+                             profile=str(tmp_path / "prof"), **kw)
+
+    argv = cap(incognito=True).launch_command("/tmp/key.log")
+    assert "--incognito" in argv
+    assert f"--user-data-dir={tmp_path / 'prof'}" in argv  # profile flags unaffected
+    assert "--incognito" not in cap().launch_command("/tmp/key.log")

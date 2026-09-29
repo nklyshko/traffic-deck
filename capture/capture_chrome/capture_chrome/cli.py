@@ -154,6 +154,9 @@ def _capture(argv) -> None:
                          "pairs with --profile-dir for a specific discovered profile")
     ap.add_argument("--default-profile", action="store_true",
                     help="use the browser's own default profile (launch with no --user-data-dir)")
+    ap.add_argument("--incognito", action="store_true",
+                    help="open an incognito window, so the session writes nothing back to the "
+                         "profile it launches against (TLS keys are logged either way)")
     ap.add_argument("--no-prompt", action="store_true",
                     help="skip the interactive Chrome/profile pickers (use defaults)")
     ap.add_argument("--duration", type=float, default=None,
@@ -194,7 +197,7 @@ def _capture(argv) -> None:
     cap = ChromeCapture(
         gateway=args.gateway, label=args.label, chrome=chrome, profile=profile,
         iface=iface, capture_filter=args.filter, url=args.url, duration=args.duration,
-        extra_args=args.chrome_args)
+        incognito=args.incognito, extra_args=args.chrome_args)
     try:
         sid = cap.start()
     except AlreadyRunning as e:

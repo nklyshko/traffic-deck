@@ -32,7 +32,8 @@ class ChromeCapture(KeylogCapture):
     def __init__(self, *, gateway: str, label: str, chrome: str, profile,
                  iface: str | None = None, dumpcap: str | None = None,
                  capture_filter: str = "", url: str | None = None,
-                 duration: float | None = None, extra_args=()) -> None:
+                 duration: float | None = None, incognito: bool = False,
+                 extra_args=()) -> None:
         # A snap-confined Chrome has a private /tmp, so its keylog has to go under the
         # snap's own writable area or the TLS keys never reach us.
         super().__init__(gateway=gateway, label=label, iface=iface, dumpcap=dumpcap,
@@ -41,6 +42,7 @@ class ChromeCapture(KeylogCapture):
         self.chrome = chrome
         self.profile = profile
         self.url = url
+        self.incognito = incognito
         self.extra_args = list(extra_args)
 
     def start(self) -> str:
@@ -67,6 +69,11 @@ class ChromeCapture(KeylogCapture):
             f"--ssl-key-log-file={keylog}",
             "--no-first-run",
             "--no-default-browser-check",
+            # Incognito is orthogonal to the profile: the profile still says *which* Chrome
+            # state to launch against, and --incognito says this session writes nothing back
+            # to it. The key-log flag is process-wide, so an incognito window's TLS keys are
+            # logged exactly like a normal one's — nothing about decoding changes.
+            *(["--incognito"] if self.incognito else []),
             *[a for a in self.extra_args if a != "--"],
         ]
         # Pin a user-data-dir only for temp/explicit/persistent profiles; for the browser

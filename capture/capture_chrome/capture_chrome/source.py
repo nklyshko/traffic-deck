@@ -47,6 +47,10 @@ class ChromeSource(source.CaptureSource):
         # the same drill-down the CLI picker prompts, no field shown before it applies.
         if chrome:
             out.extend(self._profile_params(chrome, params))
+            # Deliberately not remembered, unlike the binary and the profile: incognito
+            # changes what the browser keeps, so it is asked fresh each capture rather than
+            # inherited from a run the user may not remember making.
+            out.append(source.param("incognito", "Incognito window", source.BOOL))
             out.append(source.param("url", "Open URL", source.STRING))
             out.append(source.param("duration", "Auto-stop after (seconds)", source.INT))
         return source.descriptor(out)
@@ -95,7 +99,8 @@ class ChromeSource(source.CaptureSource):
 
         cap = self.new_capture(
             gateway=self._gateway, label=label or "chrome", chrome=chrome, profile=profile,
-            url=params.get("url") or None, duration=duration)
+            url=params.get("url") or None, duration=duration,
+            incognito=params.get("incognito") == "true")
         sid = cap.start()
         with self._caps_lock:
             self._caps[sid] = cap

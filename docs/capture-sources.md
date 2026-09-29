@@ -78,6 +78,7 @@ Useful flags / env:
 | | |
 |---|---|
 | `--profile-dir DIR` | use an existing profile instead of a fresh temp one |
+| `--incognito` | open an incognito window: the profile still decides *which* Chrome state is launched against, incognito decides that the session writes nothing back to it. TLS keys are logged either way (the key-log flag is process-wide), so the decoded view is unchanged. In the viewer's wizard this is the "Incognito window" step. |
 | `--url URL` | open a URL on launch |
 | `--duration N` | auto-stop after N seconds |
 | `--iface IFACE` | capture interface (default: auto-detected) |

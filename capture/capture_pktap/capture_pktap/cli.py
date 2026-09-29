@@ -91,6 +91,9 @@ def _capture(argv) -> None:
                     help="profile within --profile-dir to launch (e.g. 'Profile 1')")
     ap.add_argument("--default-profile", action="store_true",
                     help="use the browser's own default profile")
+    ap.add_argument("--incognito", action="store_true",
+                    help="open an incognito window (the profile still decides which Chrome "
+                         "state is launched; incognito decides that nothing is written back)")
     ap.add_argument("--no-prompt", action="store_true",
                     help="skip the interactive Chrome/profile pickers (use defaults)")
     ap.add_argument("--duration", type=float, default=None,
@@ -125,6 +128,7 @@ def _capture(argv) -> None:
     iface = args.iface or dumpcap.default_interface()
     cap = PktapCapture(gateway=args.gateway, label=args.label, chrome=chrome, profile=profile,
                        iface=iface, url=args.url, duration=args.duration,
+                       incognito=args.incognito,
                        run_as=run_as, tcpdump=args.tcpdump, extra_args=args.chrome_args)
     try:
         sid = cap.start()
