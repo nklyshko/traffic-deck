@@ -328,27 +328,52 @@ def raw_message(flow, body: bytes, response: bool) -> bytes:
 
 
 def update_notice(status) -> tuple[str, str]:
-    """One line for the update check, plus the notification severity it should carry.
+    """The update check as notification text, plus the severity it should carry.
 
     `status` is the gateway's UpdateStatus — never None: the client turns "no answer" into
     None precisely so it can't reach here and be read as "nothing to update" (ADR-0014).
-    A component that could not be checked is listed as unknown rather than folded into the
+    A component that could not be checked is named as unknown rather than folded into the
     up-to-date count, for the same reason.
+
+    One fact per line. A toast is 60 cells wide and wraps regardless, so the choice was never
+    one line or several — it was whether the breaks mean anything. A separator in the middle of
+    a wrap reads as continuation; a newline reads as "and separately". Repetition is collapsed
+    for the same reason: an action shared by every component behind, or one error shared by
+    every component that failed, is stated once instead of per entry.
     """
     behind = [c for c in status.components if c.update_available]
     unknown = [c for c in status.components if c.error]
+    checked = [c for c in status.components if not c.error]
+
+    lines = []
     if behind:
-        parts = [
-            f"{c.name} {c.local_rev} → {c.remote_rev}" + (f" ({c.update_hint})" if c.update_hint else "")
-            for c in behind
-        ]
-        msg, severity = "update available: " + "; ".join(parts), "warning"
+        revs = [f"{c.name} {c.local_rev} → {c.remote_rev}" for c in behind]
+        actions = {c.update_hint for c in behind}
+        shared = actions.pop() if len(actions) == 1 else ""
+        if shared:
+            lines.append(f"update available — {shared}")
+            lines += revs
+        else:
+            # Hints differ (a plain checkout beside a module with its own), so each component
+            # has to carry its own or the wrong one gets attached to it.
+            lines.append("update available")
+            lines += [rev + (f" — {c.update_hint}" if c.update_hint else "")
+                      for rev, c in zip(revs, behind)]
     elif not status.components:
         return "nothing is enrolled for update checks", "information"
-    elif unknown:
-        msg, severity = "no updates found", "warning"
-    else:
+    elif not unknown:
         return "everything is up to date", "information"
-    if unknown:
-        msg += " — could not check " + ", ".join(f"{c.name} ({c.error})" for c in unknown)
-    return msg, severity
+    elif checked:
+        # Deliberately not "no updates found": it did not find none, it could not find out, and
+        # up-to-date phrasing on a partly-unknown answer is the confusion ADR-0014 §6 is about.
+        # When *nothing* answered there is no such claim to make, so only the failures are said.
+        lines.append("nothing new where it could be checked")
+
+    errors = {c.error for c in unknown}
+    if len(errors) == 1 and len(unknown) > 1:
+        # One cause, several casualties — the VPN is down and every internal remote is gone.
+        lines.append(f"could not check {', '.join(c.name for c in unknown)} ({errors.pop()})")
+    else:
+        lines += [f"could not check {c.name} ({c.error})" for c in unknown]
+    return "\n".join(lines), "warning"
+

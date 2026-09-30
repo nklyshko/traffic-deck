@@ -553,7 +553,11 @@ class SessionsScreen(Screen):
                         severity="warning")
             return
         msg, severity = update_notice(status)
-        self.notify(msg, severity=severity, timeout=15)
+        # markup=False: this text carries git and ssh output verbatim, and Toast runs a marked-up
+        # message through Content.from_markup — where anything in square brackets is a style tag.
+        # Today's errors have none, but git emits them freely ("[new branch]"), and a mangled or
+        # raising toast is a poor way to be told a remote was unreachable. Nothing here is styled.
+        self.notify(msg, severity=severity, timeout=15, markup=False)
 
     @work(exclusive=True, group="load-sessions")
     async def load_sessions(self, quiet: bool = False) -> None:

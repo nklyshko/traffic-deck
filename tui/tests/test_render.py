@@ -261,16 +261,70 @@ def test_update_notice():
     msg, severity = render.update_notice(status(component("trafficdeck")))
     assert (msg, severity) == ("everything is up to date", "information")
 
+    assert render.update_notice(status())[0] == "nothing is enrolled for update checks"
+
     msg, severity = render.update_notice(
         status(component("acme", available=True, hint="run update.sh")))
-    assert msg == "update available: acme a1b2c3 → d4e5f6 (run update.sh)"
+    assert msg == "update available — run update.sh\nacme a1b2c3 → d4e5f6"
     assert severity == "warning"
 
 
+def test_update_notice_says_a_shared_action_once():
+    # The point of a bundle: one script updates every checkout, so this is one offer. Repeating
+    # it per component turns a single action into a menu.
+    msg, _ = render.update_notice(status(
+        component("trafficdeck", available=True, local="aaa", remote="bbb", hint="run update.sh"),
+        component("requester", available=True, local="111", remote="222", hint="run update.sh"),
+        component("webui", available=True, local="333", remote="444", hint="run update.sh")))
+    assert msg == ("update available — run update.sh\n"
+                   "trafficdeck aaa → bbb\nrequester 111 → 222\nwebui 333 → 444")
+    assert msg.count("run update.sh") == 1
+
+
+def test_update_notice_keeps_actions_apart_when_they_differ():
+    # A plain checkout beside a module with its own script: collapsing here would attach one
+    # component's action to the other.
+    msg, _ = render.update_notice(status(
+        component("trafficdeck", available=True, local="aaa", remote="bbb", hint="git pull"),
+        component("acme", available=True, local="111", remote="222", hint="make -C ~/acme")))
+    assert msg == ("update available\n"
+                   "trafficdeck aaa → bbb — git pull\nacme 111 → 222 — make -C ~/acme")
+
+
 def test_update_notice_never_reads_a_failed_check_as_up_to_date():
-    # A component that couldn't be checked is named as unknown, not counted as up to date —
-    # and an answer where *everything* failed must not come out reassuring.
+    # "no updates found" was up-to-date phrasing on a partly-unknown answer — the confusion
+    # ADR-0014 §6 exists to prevent. It did not find none, it could not find out.
     msg, severity = render.update_notice(
         status(component("trafficdeck"), component("pktap", error="cannot reach origin")))
-    assert msg == "no updates found — could not check pktap (cannot reach origin)"
+    assert msg == ("nothing new where it could be checked\n"
+                   "could not check pktap (cannot reach origin)")
+    assert severity == "warning"
+
+    # With nothing answering at all there is no such claim to make, so only the failures are.
+    msg, severity = render.update_notice(status(
+        component("trafficdeck", error="timed out"), component("webui", error="no route")))
+    assert msg == "could not check trafficdeck (timed out)\ncould not check webui (no route)"
+    assert severity == "warning"
+
+
+def test_update_notice_says_one_shared_cause_once():
+    # The VPN is down, so every internal remote is gone for the same reason. One cause, one
+    # sentence — same rule as a shared action, and these errors run to 100 characters.
+    msg, _ = render.update_notice(status(
+        component("trafficdeck"),
+        component("requester", error="cannot reach origin: no such host"),
+        component("webui", error="cannot reach origin: no such host")))
+    assert msg == ("nothing new where it could be checked\n"
+                   "could not check requester, webui (cannot reach origin: no such host)")
+
+
+def test_update_notice_reports_behind_and_unreachable_together():
+    # One unreachable module must not hide what was learned about the rest, and each fact takes
+    # its own line rather than being joined by a separator implying they are related.
+    msg, severity = render.update_notice(status(
+        component("trafficdeck", available=True, local="bcd", remote="ef5", hint="run update.sh"),
+        component("webui", error="cannot reach origin: no such host")))
+    assert msg == ("update available — run update.sh\n"
+                   "trafficdeck bcd → ef5\n"
+                   "could not check webui (cannot reach origin: no such host)")
     assert severity == "warning"
