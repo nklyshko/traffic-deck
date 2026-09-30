@@ -220,7 +220,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		if msg, _, _ := strings.Cut(strings.TrimSpace(stderr.String()), "\n"); msg != "" {
+		if msg := firstLine(stderr.String()); msg != "" {
 			return "", errors.New(msg)
 		}
 		if ctx.Err() != nil {
@@ -229,6 +229,18 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// firstLine is git's complaint: the first line of its stderr, which carries the cause, without
+// the "fatal: Could not read from remote repository" boilerplate under it.
+//
+// The trim is applied to the line taken, not to the buffer before cutting. Trimming first only
+// reaches the buffer's own two ends, so the first line keeps whatever trailing space it had —
+// and ssh leaves one after "…nodename nor servname provided, or not known", which a viewer then
+// showed as "or not known )".
+func firstLine(stderr string) string {
+	line, _, _ := strings.Cut(stderr, "\n")
+	return strings.TrimSpace(line)
 }
 
 // List is every component to check, TrafficDeck first so a manifest naming a directory

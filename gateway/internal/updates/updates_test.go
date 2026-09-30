@@ -109,6 +109,24 @@ func TestCheckOneReportsUnknownRatherThanUpToDate(t *testing.T) {
 	}
 }
 
+// The error text goes straight into a viewer's notification, so its edges matter. This is the
+// real thing ssh prints with the VPN down — note the trailing space before the newline, which
+// reached a toast as "or not known )" while the trim was being applied to the whole buffer.
+func TestFirstLineTrimsTheLineItTakes(t *testing.T) {
+	stderr := "ssh: Could not resolve hostname gitlab.ozon.ru: nodename nor servname provided, or not known \n" +
+		"fatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights.\n"
+	want := "ssh: Could not resolve hostname gitlab.ozon.ru: nodename nor servname provided, or not known"
+	if got := firstLine(stderr); got != want {
+		t.Errorf("firstLine() = %q, want %q", got, want)
+	}
+	if got := firstLine("  only one line, itself padded  "); got != "only one line, itself padded" {
+		t.Errorf("single line: %q", got)
+	}
+	if got := firstLine(""); got != "" {
+		t.Errorf("empty stderr should stay empty, got %q", got)
+	}
+}
+
 // TestRefreshHoldsTheRateFloor: the viewers own the cadence, so the gateway's protection is
 // this — a refresh that arrives right after a completed check is answered from the cache and
 // dials nothing. Ten tabs opening at once cost one round, not ten.
