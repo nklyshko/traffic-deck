@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -40,6 +42,10 @@ type Spec struct {
 	Module   string // owning module, whose processes are started before this source is dialed
 	Label    string
 	KeepWarm bool
+	// External marks a dial-only source with nothing for the gateway to start: its module
+	// declares no processes, so whatever serves Addr is the user's to run (ApplyManifests).
+	// Such a source is offered only while it is actually listening — see Available.
+	External bool
 }
 
 // SourceInfo names a registered source for the viewer-facing list.
@@ -174,7 +180,14 @@ func New(gatewayAddr string, specs map[string]Spec) *Manager {
 // unset for built-in sources, which have no module processes.
 func (m *Manager) SetModuleStarter(fn func(module string) error) { m.startModule = fn }
 
-// Sources lists the registered source names and whether each keeps a warm resource.
+// Sources lists the registered source names and whether each keeps a warm resource. This
+// is the whole registry, including sources that cannot run right now — the log catalogue
+// wants them, so a source that was never reachable still has a log to read.
+//
+// Sorted by the label a viewer shows, because the registry is a map and iterating it handed
+// the picker a different order on every open — unusable for something a user builds muscle
+// memory on. Case-insensitive, so "mitmproxy" sits among the capitalised ones rather than
+// after them, and the name breaks ties so the order is total.
 func (m *Manager) Sources() []SourceInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,7 +195,89 @@ func (m *Manager) Sources() []SourceInfo {
 	for name, spec := range m.specs {
 		out = append(out, SourceInfo{Name: name, Label: spec.Label, KeepWarm: spec.KeepWarm})
 	}
+	slices.SortFunc(out, func(a, b SourceInfo) int {
+		if c := strings.Compare(strings.ToLower(orName(a)), strings.ToLower(orName(b))); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
 	return out
+}
+
+// orName is what the viewer actually displays: the label, or the name when there is none.
+func orName(s SourceInfo) string {
+	if s.Label == "" {
+		return s.Name
+	}
+	return s.Label
+}
+
+// Available is Sources minus the externally-started ones that are not listening — the list
+// to offer a viewer.
+//
+// Everything else is offered unconditionally, because the gateway can bring it up: a
+// built-in is spawned on demand, and a module with processes has them started before its
+// source is dialed. An external source is the one case where "registered" and "usable" come
+// apart, and offering it anyway is what made every viewer sit on "starting …" for two
+// minutes before failing.
+//
+// The probe is a TCP connect, not an RPC: the question is whether the user's daemon is
+// running at all, and a dial answers it in a millisecond on loopback without waking the
+// source up. It races, of course — the daemon can stop between this and the capture — so
+// the start path still has to fail cleanly, and does.
+func (m *Manager) Available(ctx context.Context) []SourceInfo {
+	m.mu.Lock()
+	ext := map[string]string{}
+	for name, spec := range m.specs {
+		if spec.External && spec.Addr != "" {
+			ext[name] = spec.Addr
+		}
+	}
+	m.mu.Unlock()
+
+	all := m.Sources()
+	if len(ext) == 0 {
+		return all
+	}
+	var mu sync.Mutex
+	live := map[string]bool{}
+	var wg sync.WaitGroup
+	for name, addr := range ext {
+		wg.Go(func() {
+			if !listening(ctx, addr) {
+				return
+			}
+			mu.Lock()
+			live[name] = true
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+
+	out := make([]SourceInfo, 0, len(all))
+	for _, s := range all {
+		if _, isExt := ext[s.Name]; isExt && !live[s.Name] {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// probeTimeout bounds one availability probe. A loopback connect either succeeds at once or
+// is refused at once; this only covers a listener that accepted the SYN and then stalled.
+const probeTimeout = 500 * time.Millisecond
+
+func listening(ctx context.Context, addr string) bool {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	var d net.Dialer
+	c, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 func (m *Manager) ensure(ctx context.Context, name string) (*conn, error) {
@@ -327,8 +422,21 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 		// The module's adapter serves this address and may have just been launched (its
 		// processes now start lazily), so wait for it to accept connections before handing
 		// back a client — otherwise the first Describe would race the adapter's bind.
-		if err := waitReady(ctx, cc, moduleReadyTimeout); err != nil {
+		//
+		// An external source had nothing launched for it, so there is nothing to wait for:
+		// either the user's daemon is listening or it is not, and waiting two minutes to say
+		// so is what made a viewer look hung rather than wrong.
+		timeout := moduleReadyTimeout
+		if spec.External {
+			timeout = externalReadyTimeout
+		}
+		if err := waitReady(ctx, cc, timeout); err != nil {
 			_ = cc.Close()
+			if spec.External {
+				return nil, fmt.Errorf("nothing is serving source %q at %s — it is started by "+
+					"you, not by the gateway (it needs privileges the gateway cannot ask for); "+
+					"start it and try again", name, spec.Addr)
+			}
 			return nil, fmt.Errorf("source %q at %s: %w", name, spec.Addr, err)
 		}
 		return &conn{client: trafficv1.NewCaptureSourceServiceClient(cc), cc: cc}, nil
@@ -393,6 +501,12 @@ const readyTimeout = 120 * time.Second
 // moduleReadyTimeout is readyTimeout for a module's dial-only adapter, whose process the
 // gateway just launched (npm/uv, also cold-slow) and now waits to bind.
 const moduleReadyTimeout = readyTimeout
+
+// externalReadyTimeout is the same wait for a source the gateway did not launch. Nothing is
+// starting up, so this covers only the handshake with a listener already accepting — long
+// enough that a loaded machine is not called unavailable, short enough that a viewer gets
+// an answer rather than a spinner.
+const externalReadyTimeout = 3 * time.Second
 
 // waitReady blocks until the channel reaches Ready, or the timeout / ctx expires. Used on a
 // module's dial-only connection, whose adapter may still be binding after a lazy start.

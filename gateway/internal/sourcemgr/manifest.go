@@ -228,10 +228,12 @@ func SelectViewer(viewers []ViewerSpec, name string) (spec ViewerSpec, found boo
 func ApplyManifests(dir string, srcSpecs map[string]Spec, svcSpecs map[string]ServiceSpec) {
 	for _, m := range LoadManifests(dir) {
 		lazy := m.Control != nil && m.Control.Addr != ""
+		startable := 0 // processes the gateway can bring up for this module
 		for i, p := range m.Process {
 			if len(p.Command) == 0 || p.Viewer {
 				continue // a viewer isn't a service: it runs only when GATEWAY_VIEWER selects it
 			}
+			startable++
 			key := fmt.Sprintf("module:%s:%02d-%s", m.Name, i, p.Name)
 			spec := ServiceSpec{
 				Argv: p.Command, Cwd: p.Cwd, Env: p.Env,
@@ -257,9 +259,19 @@ func ApplyManifests(dir string, srcSpecs map[string]Spec, svcSpecs map[string]Se
 			}
 			srcSpecs[name] = Spec{
 				Addr: m.Control.Addr, Module: m.Name, Label: label, KeepWarm: m.Control.KeepWarm,
+				// Nothing here for the gateway to start, so whatever serves that address is
+				// the user's to run — `plugins/pktap.toml` declares no [[process]] precisely
+				// because PKTAP needs root and a child of the gateway has no terminal to ask
+				// on. Recorded now, while the manifest is in hand.
+				External: startable == 0,
 			}
-			log.Printf("plugin %q: capture source at %s (processes start on first use)",
-				m.Name, m.Control.Addr)
+			if startable == 0 {
+				log.Printf("plugin %q: capture source at %s (started by you, not by the gateway)",
+					m.Name, m.Control.Addr)
+			} else {
+				log.Printf("plugin %q: capture source at %s (processes start on first use)",
+					m.Name, m.Control.Addr)
+			}
 		}
 	}
 }

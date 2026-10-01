@@ -215,7 +215,7 @@ func (c *Control) ListCaptureSources(ctx context.Context, _ *trafficv1.Empty) (*
 		return &trafficv1.CaptureSourceList{}, nil
 	}
 	out := &trafficv1.CaptureSourceList{}
-	for _, s := range c.mgr.Sources() {
+	for _, s := range c.mgr.Available(ctx) {
 		out.Sources = append(out.Sources, &trafficv1.CaptureSourceInfo{
 			Name: s.Name, Label: s.Label, KeepWarm: s.KeepWarm})
 	}

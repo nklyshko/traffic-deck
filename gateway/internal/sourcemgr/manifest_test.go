@@ -185,6 +185,50 @@ viewer = true
 	}
 }
 
+// A [control] module with no startable process is one the gateway cannot bring up: that is
+// what External records, and it is the difference between a source worth offering always
+// and one worth offering only while it is listening.
+func TestApplyManifestsMarksASourceNobodyCanStartForUs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		external bool
+	}{
+		{"no process at all", `
+name = "acme"
+[control]
+addr = "127.0.0.1:7071"
+`, true},
+		{"only a viewer, which is not a service", `
+name = "acme"
+[[process]]
+name = "web"
+command = ["npm", "run", "dev"]
+viewer = true
+[control]
+addr = "127.0.0.1:7071"
+`, true},
+		{"an adapter the gateway starts", `
+name = "acme"
+[[process]]
+name = "adapter"
+command = ["acme-adapter"]
+[control]
+addr = "127.0.0.1:7071"
+`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeManifest(t, dir, tc.body)
+			src := map[string]Spec{}
+			ApplyManifests(dir, src, map[string]ServiceSpec{})
+			if got := src["acme"].External; got != tc.external {
+				t.Errorf("External = %v, want %v", got, tc.external)
+			}
+		})
+	}
+}
+
 // TestModuleSourceDialsControlAddr is the end-to-end dial-only path: a manifest whose
 // [control].addr points at a running CaptureSourceService, reached without spawning.
 func TestModuleSourceDialsControlAddr(t *testing.T) {

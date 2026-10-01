@@ -120,6 +120,12 @@ func (s *Services) List() []ServiceInfo {
 	for name, spec := range s.specs {
 		out = append(out, s.infoLocked(name, spec))
 	}
+	// By key, for the same reason Manager.Sources sorts: a map gave the viewer's service
+	// and log lists a different order on every call. The key is right rather than the label
+	// here — `module:acme:00-adapter` carries the module and the manifest's own process
+	// order, so a module's processes stay together and in the order it declared them, the
+	// same way the start paths below already rely on.
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

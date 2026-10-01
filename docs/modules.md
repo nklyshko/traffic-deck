@@ -41,6 +41,17 @@ source = "acme"
 label  = "Acme"
 ```
 
+A `[control]` module's processes are **started on first use of its capture source**, not at
+gateway launch, so its adapter and UI come up only when its capture is actually used. A
+module that declares a `[control]` block and no startable `[[process]]` is the other case:
+there is nothing for the gateway to launch, so whatever serves that address is yours to run
+(`plugins/pktap.toml` is deliberately like this — PKTAP needs root, and a child of the
+gateway has no terminal to ask for a password on). Such a source is offered to viewers
+**only while it is listening**: the gateway probes the address when it builds the picker
+list and leaves the source out when nothing answers, rather than letting a user pick
+something that can only time out. Starting it by name anyway fails in seconds with the
+address it tried.
+
 Each spawned process gets its own rolling log file under `<DATA_ROOT>/logs/` — see
 [configuration](configuration.md). A process's `url` is narration only: the gateway prints
 `service "module:acme:01-web" started — open http://127.0.0.1:5173 (log: …)` and passes it to

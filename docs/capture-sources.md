@@ -336,6 +336,12 @@ through to a single capture instead.
 It now appears in the TUI's source picker (`a`) beside the built-ins, and every capture
 after that starts and stops on demand with no further prompting.
 
+> It appears there **only while it is running.** A source with no `[[process]]` is one the
+> gateway cannot start for you, so the picker probes its address and leaves it out when
+> nothing answers — otherwise picking it would sit on "starting …" until the dial timed
+> out. If it is missing from the list, that is the daemon, not the manifest; the gateway's
+> log names the address it looked at.
+
 Make the one prompt a fingerprint by enabling Touch ID for `sudo` — the template is
 already on the system, it just ships commented out:
 
