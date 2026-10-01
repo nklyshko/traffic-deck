@@ -153,6 +153,22 @@ class KeylogCapture(abc.ABC):
             cmd += ["-f", self.capture_filter]  # no filter = capture everything
         return cmd
 
+    def open_metadata(self) -> dict[str, str]:
+        """How this capture was configured, recorded on the session at `OpenSession`.
+
+        A bundle otherwise says what was captured and never how it was produced: which
+        browser, which profile, whether anything was asked to auto-stop. Those are known
+        before the first packet, so they go on at open — the other half, for what only the
+        running capture learns, is `close_metadata`.
+
+        The values are strings for a person reading the session back, not for anything to
+        parse: nothing in the gateway or the viewers interprets them (`capture.pids` is the
+        one exception, and it is reported at close). Subclasses add their own and keep these."""
+        md = {}
+        if self.duration:
+            md["capture.duration_s"] = f"{self.duration:g}"
+        return md
+
     def close_metadata(self) -> dict[str, str]:
         """Metadata to attach to `CloseSession` — what this capture learned while running.
 
@@ -182,7 +198,8 @@ class KeylogCapture(abc.ABC):
         self._ing = ig.IngestServiceStub(self._chan)
         handle = self._ing.OpenSession(ip.OpenSessionRequest(
             label=self.label, source=self.name, shape=cp.SOURCE_SHAPE_PCAP,
-            metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
+            metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS,
+                      "capture.iface": iface, **self.open_metadata()}))
         self.session_id = handle.session_id
         max_chunk = handle.max_chunk_bytes or (1 << 20)
 

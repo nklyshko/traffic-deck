@@ -443,7 +443,8 @@ class SessionsScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         table = NavDataTable(id="sessions", cursor_type="row", zebra_stripes=True)
-        table.add_columns("Group", "Session", "Label", "Status", "Flows", "pcap", "Created")
+        table.add_columns("Group", "Session", "Label", "Status", "Flows", "pcap",
+                          "Created", "Closed")
         yield table
         yield Footer()
 
@@ -606,6 +607,7 @@ class SessionsScreen(Screen):
                 str(s.flow_count),
                 f"{s.pcap_bytes/1_048_576:.1f}M",
                 created,
+                _closed_cell(s),
                 key=s.id,
             )
         if prev_key is not None:  # put the cursor back on the previously selected session
@@ -830,6 +832,17 @@ def _page_size() -> int:
     except ValueError:
         return _PAGE_SIZE
     return max(50, min(n, 2000))
+
+
+def _closed_cell(session) -> str:
+    """When capture ended, for the sessions list. Bare %H:%M when it ended on the day it
+    started — the normal case, where repeating the date only widens the column — and "—"
+    while it is still open (closed_at is unset until the session reaches a terminal state)."""
+    if not session.closed_at_unix_ms:
+        return "—"
+    closed = datetime.fromtimestamp(session.closed_at_unix_ms / 1e3)
+    created = datetime.fromtimestamp(session.created_at_unix_ms / 1e3)
+    return closed.strftime("%H:%M" if closed.date() == created.date() else "%Y-%m-%d %H:%M")
 
 
 def _session_view_columns(session) -> list[str]:

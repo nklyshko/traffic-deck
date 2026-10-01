@@ -13,7 +13,7 @@ import os
 import subprocess
 
 from capture_sdk import snap
-from capture_sdk.browser import BUILTIN_PROFILE, profile_desc  # noqa: F401 — re-exported
+from capture_sdk.browser import BUILTIN_PROFILE, launch_metadata, profile_desc  # noqa: F401 — profile_desc re-exported
 from capture_sdk.livecapture import KeylogCapture
 
 
@@ -55,3 +55,7 @@ class FirefoxCapture(KeylogCapture):
             cmd.append(self.url)
         # NSS writes the TLS secrets to $SSLKEYLOGFILE; there is no equivalent flag.
         return subprocess.Popen(cmd, env={**os.environ, "SSLKEYLOGFILE": keylog})
+
+    def open_metadata(self) -> dict[str, str]:
+        return super().open_metadata() | launch_metadata(
+            self.firefox, self.profile, self.url, self.extra_args)

@@ -219,7 +219,18 @@ class GatewayPusher:
             ("grpc.max_receive_message_length", 256 * 1024 * 1024),
         ])
         self._stub = ig.IngestServiceStub(self._channel)
-        metadata = {"viewer.columns": self.viewer_columns} if self.viewer_columns else {}
+        # The proxy options this capture is running with, recorded on the session as every
+        # other source records its own. ctx.options rather than the argv we were started
+        # with: an option mitmproxy defaulted still shows up here.
+        metadata = {"mitmproxy.mode": ",".join(ctx.options.mode)}
+        # Both are None/"" unless they were actually passed — mitmproxy applies its own
+        # defaults later — so an unset one is left out rather than recorded as "None".
+        if ctx.options.listen_port:
+            metadata["mitmproxy.listen_port"] = str(ctx.options.listen_port)
+        if ctx.options.listen_host:
+            metadata["mitmproxy.listen_host"] = ctx.options.listen_host
+        if self.viewer_columns:
+            metadata["viewer.columns"] = self.viewer_columns
         handle = await self._stub.OpenSession(
             ip.OpenSessionRequest(label=self.label, source="mitmproxy",
                                   shape=cp.SOURCE_SHAPE_FLOWS, metadata=metadata)

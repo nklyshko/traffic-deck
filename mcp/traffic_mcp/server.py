@@ -159,6 +159,10 @@ def _session_dict(s) -> dict:
         "flow_count": s.flow_count,
         "pcap_bytes": s.pcap_bytes,
         "keylog_bytes": s.keylog_bytes,
+        # How the capture was configured (browser.*, android.*, mitmproxy.*, capture.*) plus
+        # the viewer hints — whatever the source declared. Omitted when a session has none,
+        # which is every session recorded before the sources reported their options.
+        "metadata": dict(s.metadata) or None,
     }
 
 

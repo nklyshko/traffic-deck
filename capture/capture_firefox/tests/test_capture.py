@@ -83,3 +83,11 @@ def test_extra_args_pass_through_without_the_separator(launched):
 
 def test_source_name_is_firefox():
     assert FirefoxCapture.name == "firefox"
+
+
+def test_open_metadata_reports_the_firefox_binary():
+    # Same browser.* keys a Chrome session gets, so sessions from the two can be compared;
+    # the binary is the one this runner has to fill in itself.
+    md = make("/tmp/prof", url="https://example.com").open_metadata()
+    assert md == {"browser.binary": "/usr/bin/firefox", "browser.profile": "/tmp/prof",
+                  "browser.url": "https://example.com"}

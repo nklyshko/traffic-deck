@@ -89,3 +89,25 @@ def profile_desc(profile) -> str:
     if isinstance(profile, tuple):
         return f"{profile[0]} [{profile[1]}]"
     return str(profile)
+
+
+def launch_metadata(binary: str, profile, url: str | None = None, extra_args=()) -> dict[str, str]:
+    """Session metadata describing how a browser was launched, for `open_metadata`.
+
+    Shared by the browser runners rather than written per tool: what a person wants when
+    reading a session back ("which browser, which profile, which page") is the same whether
+    it was Chrome or Firefox, and the keys should be too — a comparison across two sessions
+    from different browsers is the case that breaks when they drift. Hence `browser.*` and
+    not `chrome.*`.
+
+    Only `url` is omitted when unset; the rest are always stated, because a missing key
+    reads as "unknown" rather than as a default."""
+    md = {
+        "browser.binary": binary,
+        "browser.profile": profile_desc(profile),
+    }
+    if url:
+        md["browser.url"] = url
+    if args := [a for a in extra_args if a != "--"]:
+        md["browser.extra_args"] = " ".join(args)
+    return md

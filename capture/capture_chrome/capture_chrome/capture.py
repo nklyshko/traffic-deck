@@ -13,7 +13,7 @@ import subprocess
 
 from capture_chrome import platform, profiles
 from capture_sdk import snap
-from capture_sdk.browser import BUILTIN_PROFILE, profile_desc  # noqa: F401 — re-exported
+from capture_sdk.browser import BUILTIN_PROFILE, launch_metadata, profile_desc  # noqa: F401 — profile_desc re-exported
 from capture_sdk.livecapture import KeylogCapture
 
 
@@ -90,4 +90,11 @@ class ChromeCapture(KeylogCapture):
 
     def launch(self, keylog: str) -> subprocess.Popen:
         return subprocess.Popen(self.launch_command(keylog))
+
+    def open_metadata(self) -> dict[str, str]:
+        # Incognito is always stated, not only when on: "no incognito key" would otherwise
+        # be ambiguous between a normal window and a session captured before this existed.
+        return super().open_metadata() | launch_metadata(
+            self.chrome, self.profile, self.url, self.extra_args
+        ) | {"browser.incognito": "true" if self.incognito else "false"}
 

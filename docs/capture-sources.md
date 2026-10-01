@@ -360,3 +360,33 @@ Useful flags / env:
 
 > There is no `--filter`: a BPF expression would narrow by port or host *on top of* the
 > process filter, which is not what this source is for. Use the Chrome source for that.
+
+## What a session records about itself
+
+Every source states its options when it opens the session, and the gateway keeps them as
+session metadata. A bundle read back a week later then says how it was produced, not just
+what it caught:
+
+| key | from |
+|---|---|
+| `capture.iface` | the resolved interface, every pcap-based source (the auto-detected one, not the blank you left) |
+| `capture.duration_s` | `--duration` / the form's auto-stop, when one was set |
+| `browser.binary`, `browser.profile` | Chrome, Firefox, PKTAP |
+| `browser.url`, `browser.extra_args` | the same, when given |
+| `browser.incognito` | Chrome and PKTAP — always stated, so "off" is distinguishable from "not recorded" |
+| `pktap.proc` | the process name the kernel filter matched |
+| `android.package`, `android.uid`, `android.scripts`, `android.url` | the Android source |
+| `mitmproxy.mode`, `mitmproxy.listen_port`, `mitmproxy.listen_host` | the proxy source |
+| `viewer.columns` | not an option — the source's suggested flow-table columns ([tui.md](tui.md#decoder-fields-are-columns)) |
+| `capture.pids` | reported at *close*, not at open: the pids the PKTAP source actually saw |
+
+The values are for a person to read; nothing parses them back (`capture.pids` is the one
+exception, and the gateway writes the key it reads). Read them with the MCP server's
+`list_sessions`, or straight from the catalog:
+
+```sh
+sqlite3 "$DATA_ROOT/catalog.sqlite" \
+  "select key, value from session_metadata where session_id like '24d112a1%'"
+```
+
+Sessions captured before a source learned to report an option simply have no key for it.

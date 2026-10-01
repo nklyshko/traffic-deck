@@ -190,3 +190,30 @@ def test_launch_command_carries_incognito(monkeypatch, tmp_path):
     assert "--incognito" in argv
     assert f"--user-data-dir={tmp_path / 'prof'}" in argv  # profile flags unaffected
     assert "--incognito" not in cap().launch_command("/tmp/key.log")
+
+
+def test_open_metadata_records_the_capture_options(tmp_path):
+    """What the session says about how it was produced. Keys are browser.* rather than
+    chrome.*: a Firefox session reports the same ones, so the two can be compared."""
+    from capture_chrome.capture import ChromeCapture
+
+    md = ChromeCapture(gateway="127.0.0.1:1", label="t", chrome="/usr/bin/google-chrome",
+                       profile=(str(tmp_path), "Profile 1"), url="https://example.com",
+                       incognito=True, duration=30, extra_args=["--", "--lang=de"]
+                       ).open_metadata()
+    assert md == {
+        "capture.duration_s": "30",
+        "browser.binary": "/usr/bin/google-chrome",
+        "browser.profile": f"{tmp_path} [Profile 1]",
+        "browser.url": "https://example.com",
+        "browser.extra_args": "--lang=de",  # the bare -- separator is not an option
+        "browser.incognito": "true",
+    }
+
+    # Unset options are left out rather than reported empty — except incognito, where the
+    # absence of a key could not be told from a session recorded before it existed.
+    plain = ChromeCapture(gateway="127.0.0.1:1", label="t", chrome="/usr/bin/chromium",
+                          profile=str(tmp_path)).open_metadata()
+    assert plain == {"browser.binary": "/usr/bin/chromium",
+                     "browser.profile": str(tmp_path),
+                     "browser.incognito": "false"}

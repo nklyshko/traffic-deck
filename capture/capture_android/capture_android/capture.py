@@ -102,9 +102,18 @@ def run_capture(
 
     chan = grpc.insecure_channel(gateway)
     ing = ig.IngestServiceStub(chan)
+    # The capture's own options ride along as session metadata, as the browser sources do:
+    # a bundle read back a week later otherwise says nothing about which app it recorded
+    # under which uid. Strings for a person reading them, nothing parses them back.
+    md = {VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS,
+          "android.package": package, "android.uid": str(uid),
+          "android.scripts": str(1 + len(extra_scripts))}
+    if url:
+        md["android.url"] = url
+    if duration:
+        md["capture.duration_s"] = f"{duration:g}"
     handle = ing.OpenSession(ip.OpenSessionRequest(
-        label=label, source="android", shape=cp.SOURCE_SHAPE_PCAP,
-        metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS}))
+        label=label, source="android", shape=cp.SOURCE_SHAPE_PCAP, metadata=md))
     sid = handle.session_id
     max_chunk = handle.max_chunk_bytes or (1 << 20)
     log(f"session {sid}")

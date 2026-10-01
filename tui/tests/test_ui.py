@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 
 from textual.app import App, ComposeResult
 from textual.widgets import DataTable, Input, Label, OptionList, Static, TabPane
@@ -729,6 +730,22 @@ def test_resolve_columns_unions_env_and_source(monkeypatch):
     s.metadata["viewer.columns"] = "scrape_group, proxy_provider"
     assert _session_view_columns(s) == ["scrape_group", "proxy_provider"]
     assert _session_view_columns(cp.Session(id="s2")) == []
+
+
+def test_closed_cell_shows_the_end_time_and_dashes_while_open():
+    from traffic_viewer.screens import _closed_cell
+
+    created = datetime(2026, 9, 30, 23, 40).timestamp() * 1e3
+    s = cp.Session(id="s1", created_at_unix_ms=int(created))
+    assert _closed_cell(s) == "—"  # still capturing: closed_at is unset
+
+    # Same day as the start: the time alone, since the date is already in the Created cell.
+    s.closed_at_unix_ms = int(datetime(2026, 9, 30, 23, 55).timestamp() * 1e3)
+    assert _closed_cell(s) == "23:55"
+
+    # Ran past midnight — the bare time would read as "ended before it started".
+    s.closed_at_unix_ms = int(datetime(2026, 10, 1, 0, 15).timestamp() * 1e3)
+    assert _closed_cell(s) == "2026-10-01 00:15"
 
 
 def test_col_id_maps_field_names_and_metadata_keys():

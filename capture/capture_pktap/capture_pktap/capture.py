@@ -117,6 +117,12 @@ class PktapCapture(ChromeCapture):
                       f"(browser pid {browser_pid})", flush=True)
             self._stop.wait(_WATCH_INTERVAL)
 
+    def open_metadata(self) -> dict[str, str]:
+        # The process name the kernel filter matches, which is what explains a capture that
+        # recorded nothing. excluded_pids is deliberately absent: capture_command fills it
+        # after the session is already open.
+        return super().open_metadata() | {"pktap.proc": self.proc_name}
+
     def close_metadata(self) -> dict[str, str]:
         # The kernel filter could only exclude the pids that existed before launch, so the
         # pcap may still hold a browser started midway through. These pids are the exact
