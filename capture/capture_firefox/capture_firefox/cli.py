@@ -33,6 +33,7 @@ from capture_firefox import platform, profiles
 from capture_firefox.capture import FirefoxCapture, profile_desc
 from capture_firefox.profiles import BUILTIN_PROFILE
 from capture_sdk import dumpcap, prompt, snap, terminal
+from capture_sdk.livecapture import AlreadyRunning
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.state import Store
 
@@ -191,7 +192,10 @@ def _capture(argv) -> None:
         gateway=args.gateway, label=args.label, firefox=firefox, profile=profile,
         iface=iface, capture_filter=args.filter, url=args.url, duration=args.duration,
         extra_args=args.firefox_args)
-    sid = cap.start()
+    try:
+        sid = cap.start()
+    except AlreadyRunning as e:
+        sys.exit(f"error: {e}")
     print(f"session {sid}  iface={iface}  profile={profile_desc(profile)}  keylog={cap.keylog}",
           flush=True)
 

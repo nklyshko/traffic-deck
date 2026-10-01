@@ -12,7 +12,7 @@ import subprocess
 
 import pytest
 
-from capture_sdk.livecapture import CaptureBackendFailed, KeylogCapture
+from capture_sdk.livecapture import AlreadyRunning, CaptureBackendFailed, KeylogCapture
 
 
 class _FakeIngest:
@@ -45,9 +45,10 @@ class _Capture(KeylogCapture):
 
     name = "test"
 
-    def __init__(self, backend: list[str], **kw) -> None:
+    def __init__(self, backend: list[str], program=("sleep", "30"), **kw) -> None:
         super().__init__(gateway="127.0.0.1:1", label="t", iface="lo0", **kw)
         self.backend = backend
+        self.program = list(program)
         self.launched = False
 
     def capture_command(self, iface: str) -> list[str]:
@@ -55,7 +56,7 @@ class _Capture(KeylogCapture):
 
     def launch(self, keylog: str) -> subprocess.Popen:
         self.launched = True
-        return subprocess.Popen(["sleep", "30"])
+        return subprocess.Popen(self.program)
 
 
 def _wire(cap: _Capture, monkeypatch) -> _FakeIngest:
@@ -121,6 +122,36 @@ def test_backend_stderr_is_echoed_on(monkeypatch, capfd):
 def test_start_grace_is_short_enough_to_not_be_felt():
     # A guard that made every capture visibly slower would get removed, and the failure it
     # catches would come back.
-    from capture_sdk.livecapture import _START_GRACE
+    from capture_sdk.livecapture import _LAUNCH_GRACE, _START_GRACE
 
     assert _START_GRACE <= 0.5
+    assert _LAUNCH_GRACE <= 0.5
+
+
+def test_a_program_that_hands_off_and_exits_is_refused(monkeypatch):
+    """The Firefox case: a browser launched against a profile another instance holds hands
+    its arguments over and exits — status 0, silent, in a fraction of a second. Without this
+    the capture tears itself down and leaves a one-second session with no stated reason."""
+    cap = _Capture(["sh", "-c", "sleep 5"], program=["sh", "-c", "exit 0"])
+    ing = _wire(cap, monkeypatch)
+
+    with pytest.raises(AlreadyRunning) as e:
+        cap.start()
+
+    assert "handed off" in str(e.value)
+    assert "temporary profile" in str(e.value), "the message has to say what to do instead"
+    assert ing.closed == ["sess-1"], "the refused capture must not be left recording"
+    assert cap._dump.poll() is not None, "dumpcap has to be stopped with it"
+
+
+def test_a_program_that_keeps_running_is_not_refused(monkeypatch):
+    cap = _Capture(["sh", "-c", "sleep 5"])
+    _wire(cap, monkeypatch)
+
+    assert cap.start() == "sess-1"
+    try:
+        assert cap._proc.poll() is None
+    finally:
+        cap._stop.set()
+        cap._dump.kill()
+        cap._proc.kill()

@@ -41,10 +41,26 @@ _START_GRACE = 0.3
 #: plus the usage text some tools print after it.
 _MAX_KEPT_STDERR = 20
 
+#: How long to give the launched program to hand off before assuming it is really running.
+#: A browser that handed its arguments to an instance already holding the profile is gone
+#: in under a fifth of a second (measured: 0.17s); one that started is up for minutes. The
+#: wait cannot be cut short, since being alive at 50ms proves nothing about 170ms — so it is
+#: paid at every start, which is why it stays this close to the measurement.
+_LAUNCH_GRACE = 0.5
+
 
 class CaptureBackendFailed(RuntimeError):
     """The packet-capture backend exited on startup instead of recording. Carries what it
     printed, which is the only place the reason is ever stated."""
+
+
+class AlreadyRunning(RuntimeError):
+    """The browser was already running on the profile we were asked to capture, so our
+    launch handed off to that instance and recorded nothing. Carries an actionable message.
+
+    Lives here rather than beside one browser's runner because both ways of finding out are
+    general: a preflight on the profile lock before launching (ChromeCapture.start), and the
+    launched process exiting at once (KeylogCapture._fail_if_program_died)."""
 
 
 def _stderr_thread(stderr, kept: collections.deque) -> None:
@@ -230,7 +246,35 @@ class KeylogCapture(abc.ABC):
         self._ut.start()
 
         self._proc = self.launch(self.keylog)
+        self._fail_if_program_died()
         return self.session_id
+
+    def _fail_if_program_died(self) -> None:
+        """Refuse a capture whose program exited instead of running under it.
+
+        A browser launched against a profile another instance already holds does not
+        complain: it hands its arguments to that instance and exits — status 0, nothing on
+        stderr, in under a fifth of a second. `wait` is waiting on that process, so the
+        capture tears itself down at once, and what the user gets is a one-second session
+        holding twenty packets, no flows and no stated reason.
+
+        Chrome preflights the case it can read (`ChromeCapture.start`, via the singleton
+        lock). This catches it for every program, including the ones where there is nothing
+        to read beforehand: on macOS Firefox leaves no lock file at all, only a `.parentlock`
+        that is present whether or not it is running.
+
+        Torn down through `stop`, so nothing keeps recording and the session is closed
+        rather than left open."""
+        time.sleep(_LAUNCH_GRACE)
+        if self._proc.poll() is None:
+            return
+        rc = self._proc.returncode
+        self.stop()
+        raise AlreadyRunning(
+            f"{self.name} exited immediately (status {rc}) instead of running under "
+            f"capture — it handed off to a copy already running on this profile, which logs "
+            f"no TLS keys. Quit it fully (Cmd+Q on macOS; closing the windows is not "
+            f"enough) and retry, or capture with a temporary profile.")
 
     def _fail_if_capture_died(self, cmd: list[str]) -> None:
         """Refuse a capture whose backend exited on startup, quoting what it said.

@@ -14,12 +14,10 @@ import subprocess
 from capture_chrome import platform, profiles
 from capture_sdk import snap
 from capture_sdk.browser import BUILTIN_PROFILE, launch_metadata, profile_desc  # noqa: F401 — profile_desc re-exported
-from capture_sdk.livecapture import KeylogCapture
-
-
-class AlreadyRunning(RuntimeError):
-    """Chrome is already running on the profile we were asked to capture, so launching it
-    would hand off to that instance and record nothing. Carries an actionable message."""
+# AlreadyRunning is the SDK's: the preflight below is one way of finding out, and a program
+# that exits the moment it is launched is the other. Re-exported, since this is where every
+# caller already imports it from.
+from capture_sdk.livecapture import AlreadyRunning, KeylogCapture  # noqa: F401
 
 
 class ChromeCapture(KeylogCapture):
