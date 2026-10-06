@@ -1,7 +1,11 @@
 package main
 
 import (
+	"errors"
+	"os"
+	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -59,5 +63,51 @@ func TestShutdownStepSkipsWhenOutOfTime(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "out of time") {
 		t.Fatalf("skipping must say why, got:\n%s", buf.String())
+	}
+}
+
+// A signal with no handler installed takes the runtime's default action and kills the
+// process where it stands — skipping every teardown step above, which is how one-command
+// mode used to leave its capture sources, module processes and MCP server running with no
+// parent. They outlive it: spawned with Setsid, nothing the shell sends reaches them, so
+// the gateway's own teardown is the only thing that ever stops them.
+func TestShutdownSignalsCoverTheWaysTrafficDeckIsStopped(t *testing.T) {
+	for _, s := range []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !slices.Contains(shutdownSignals, s) {
+			t.Errorf("%s is not handled — stopping that way would orphan every child", s)
+		}
+	}
+}
+
+func TestStopViewerOnSignalForwardsAndNarrates(t *testing.T) {
+	buf := captureLog(t)
+	sig := make(chan os.Signal, 1)
+	sig <- syscall.SIGHUP
+	stopped := make(chan struct{})
+
+	go stopViewerOnSignal(sig, func() error { close(stopped); return nil })
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the viewer was never asked to stop, so the teardown would never be released")
+	}
+	// Under a full-screen viewer this goes to the log file, which is where someone looks
+	// afterwards to find out why it stopped.
+	if out := buf.String(); !strings.Contains(out, "hangup") || !strings.Contains(out, "again to force") {
+		t.Errorf("the signal and the escape hatch must both be named, got:\n%s", out)
+	}
+}
+
+// A viewer that has already exited is the normal case for Ctrl-C, which reached it too.
+func TestStopViewerOnSignalSurvivesAnAlreadyDeadViewer(t *testing.T) {
+	buf := captureLog(t)
+	sig := make(chan os.Signal, 1)
+	sig <- syscall.SIGINT
+
+	stopViewerOnSignal(sig, func() error { return errors.New("os: process already finished") })
+
+	if !strings.Contains(buf.String(), "already finished") {
+		t.Errorf("the failure is worth one line, not a panic, got:\n%s", buf.String())
 	}
 }

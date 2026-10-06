@@ -46,6 +46,36 @@ import (
 // on something that will not finish; past this, what is left is forced.
 const shutdownTimeout = 3 * time.Minute
 
+// shutdownSignals have to reach the teardown rather than the Go runtime's default action,
+// which is to kill the process where it stands — leaving every capture source, module
+// process and the MCP server running with no parent, detached from the terminal (they are
+// spawned with Setsid) and so immune to anything the shell would have sent them.
+//
+// SIGHUP is here for closing the terminal, which is otherwise exactly that case.
+var shutdownSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
+
+// stopViewerOnSignal waits for the first shutdown signal and passes it on to the foreground
+// viewer, whose exit is what releases the teardown.
+//
+// Forwarding matters only for a signal aimed at this process alone: a Ctrl-C reaches the
+// whole foreground group, so the viewer has already been told and `stop` is a no-op on a
+// process that is on its way out. A SIGTERM or SIGHUP has not.
+//
+// The handlers are reset first, so a *second* signal takes the default action and kills us.
+// A teardown that has wedged must still be escapable — even though escaping it is what
+// leaves processes behind, which is the whole problem this function exists to avoid.
+func stopViewerOnSignal(sig <-chan os.Signal, stop func() error) {
+	s, ok := <-sig
+	if !ok {
+		return
+	}
+	signal.Reset(shutdownSignals...)
+	log.Printf("got %s — stopping the viewer, then shutting down (signal again to force)", s)
+	if err := stop(); err != nil {
+		log.Printf("stopping the viewer: %v", err) // already gone, most likely
+	}
+}
+
 // shutdownStep runs one teardown step, narrating it: what is starting, a tick while it is
 // still going, and how long it took. Reports whether it finished before the deadline.
 //
@@ -177,7 +207,7 @@ func serve() {
 	// Reap spawned capture-source and service processes (and their groups) on shutdown, so a
 	// browser, emulator, or MCP server they started doesn't linger after the gateway stops.
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, shutdownSignals...)
 	go func() {
 		<-sig
 		log.Println("shutting down: reaping capture sources and services")
@@ -242,10 +272,22 @@ func runFused() {
 		}
 	}
 
+	// Installed before the viewer starts, and whether or not there is one: with no handler
+	// the Go runtime takes the default action for these signals and the process dies on the
+	// spot, skipping every teardown step below. That is how a Ctrl-C in one-command mode
+	// left capture sources and the MCP server running with no parent — the handler used to
+	// be installed only on the no-viewer branch, so the common way of running TrafficDeck
+	// was the one way that leaked.
+	//
+	// SIGHUP is in the set because closing the terminal is the other way this happens, and
+	// nothing else saves the children from it: they are spawned with Setsid on purpose (so
+	// they cannot write over the viewer), which also detaches them from the terminal whose
+	// hangup would otherwise have reached them.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, shutdownSignals...)
+
 	var runErr error
 	if v == nil {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		log.Printf("no foreground viewer (GATEWAY_VIEWER=%s) — Ctrl-C to stop", cfg.Viewer)
 		<-sig
 	} else {
@@ -261,7 +303,10 @@ func runFused() {
 			cmd.Env = append(cmd.Env, k+"="+val)
 		}
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		runErr = cmd.Run()
+		if runErr = cmd.Start(); runErr == nil {
+			go stopViewerOnSignal(sig, func() error { return cmd.Process.Signal(syscall.SIGTERM) })
+			runErr = cmd.Wait()
+		}
 		if v.screen {
 			logging.Setup(cfg) // viewer's gone, the terminal is ours again — teardown errors must show
 		}
