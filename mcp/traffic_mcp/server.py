@@ -20,7 +20,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities import func_metadata as _func_metadata
 from pydantic import ConfigDict, model_validator
 
-from traffic_mcp.client import GatewayClient, viewer_pb2
+from traffic_mcp.client import GatewayClient, control_pb2, viewer_pb2
 from traffic_mcp.filter import FILTER_SYNTAX, MSG_FILTER_SYNTAX, flow_url
 
 
@@ -672,6 +672,158 @@ async def rename_session(session_id: str, label: str) -> dict:
     sid = await _resolve_session(session_id)
     await client().set_session_label(sid, label)
     return {"session_id": sid, "label": label}
+
+
+# --- capture control -----------------------------------------------------
+#
+# Starting a capture launches real processes on the operator's machine (a browser, a packet
+# capture), which is why these live behind the same MCP_READONLY gate as the session edits
+# rather than being always on.
+#
+# The loop they complete: list_capture_sources -> start_capture -> (drive the traffic) ->
+# wait_for_flows -> stop_capture -> read it with network_timeline/search. For a source that
+# takes a `url`, "drive the traffic" is a parameter, so the loop needs nothing outside this
+# server; anything more than that needs a tool that can control the browser, and the one the
+# gateway launches cannot be attached to yet (see ADR-0015).
+
+#: Default auto-stop for an agent-started capture, in seconds. Nothing in the gateway closes
+#: an abandoned live session, so a caller that starts a capture and then fails leaves a
+#: browser running and the session open indefinitely. Sources that offer a `duration` option
+#: already auto-stop, so the default is applied with the source's own mechanism rather than a
+#: new one. Five minutes is longer than the interactions this is for and short enough that a
+#: forgotten capture is a nuisance, not a leak.
+_DEFAULT_DURATION_SECONDS = 300
+
+_PARAM_TYPES = {
+    control_pb2.PARAM_TYPE_STRING: "string",
+    control_pb2.PARAM_TYPE_PATH: "path",
+    control_pb2.PARAM_TYPE_BOOL: "bool",
+    control_pb2.PARAM_TYPE_INT: "int",
+    control_pb2.PARAM_TYPE_CHOICE: "choice",
+}
+
+
+def _param_dict(p) -> dict:
+    out = {"key": p.key, "label": p.label,
+           "type": _PARAM_TYPES.get(p.type, "unspecified"),
+           "required": p.required, "default": p.default or None}
+    if p.choices:
+        out["choices"] = [{"value": c.value, "label": c.label} for c in p.choices]
+    return out
+
+
+def _descriptor_dict(desc) -> dict:
+    return {
+        "params": [_param_dict(p) for p in desc.params],
+        "provision_required": desc.readiness == control_pb2.READINESS_PROVISION_REQUIRED,
+        "message": desc.message or None,
+    }
+
+
+@_write_tool()
+async def list_capture_sources() -> list[dict]:
+    """The capture sources this gateway can start right now — call this before
+    `start_capture`.
+
+    Each entry is `{name, label, keep_warm}`; `name` is what `start_capture` takes. The
+    list is what will actually work, not what is configured: a source the user has to start
+    by hand (a privileged one, e.g. macOS per-process capture) is left out while its daemon
+    is not running, so an absent source means "not running", not "not installed".
+
+    `keep_warm` marks a source holding a resource across captures (an Android emulator) —
+    its first start is slow and later ones are not."""
+    return [{"name": s.name, "label": s.label or s.name, "keep_warm": s.keep_warm}
+            for s in await client().list_capture_sources()]
+
+
+@_write_tool()
+async def describe_capture_source(source: str, params: dict[str, str] | None = None) -> dict:
+    """The options a source takes, for the answers given so far. Only needed to choose
+    something specific — **every option has a default**, so `start_capture(source)` works
+    with no params at all.
+
+    The form **cascades**: answering one option can change which options come back next
+    (pick a browser binary and its profiles are listed; pick "an existing profile" and a
+    which-one option appears). Pass the answers accumulated so far in `params` and call
+    again until nothing new appears.
+
+    Returns `{params: [{key, label, type, required, default, choices}], provision_required,
+    message}`. `key` is the params key to send to `start_capture`, and values are always
+    strings — for a `bool`, `"true"` is on and `""` is off. `provision_required` means the
+    source must build something expensive (an emulator) before it can list the rest; the
+    `message` says what, and starting a capture is what triggers it.
+
+    The first call for a source starts it, which on a cold environment can take a minute."""
+    desc = await client().describe_capture_source(source, params or {})
+    return _descriptor_dict(desc)
+
+
+@_write_tool()
+async def start_capture(source: str, label: str = "agent",
+                        params: dict[str, str] | None = None,
+                        duration_seconds: int = _DEFAULT_DURATION_SECONDS) -> dict:
+    """Start a live capture and return its session id, which the read tools then take.
+
+    `source` is a name from `list_capture_sources`. `params` is optional — every source
+    defaults every option (a browser source opens a fresh temporary profile), so
+    `start_capture("chrome")` is a valid call. Use `describe_capture_source` to choose a
+    specific profile or binary, and note a browser source takes `url`, which is the simplest
+    way to make a capture produce traffic without driving the browser from outside.
+
+    `duration_seconds` auto-stops the capture, defaulting to five minutes: nothing closes an
+    abandoned session, so a capture whose caller stops calling would otherwise hold a browser
+    open indefinitely. It is applied only when the source offers that option (a proxy source
+    does not), and `duration_seconds=0` opts out — the returned `auto_stop_seconds` says
+    which happened. Stopping early with `stop_capture` is always allowed.
+
+    Then: produce the traffic, `wait_for_flows` to block until it is decoded, and
+    `stop_capture` to end it. A start can legitimately fail — a browser already running on
+    the profile hands off instead of recording, and a source the user must start by hand may
+    not be up; both come back as a message saying what to do about it."""
+    params = dict(params or {})
+    auto_stop = 0
+    # > 0 rather than truthy: a caller that computed a duration and got zero or less means
+    # "no auto-stop", and passing a negative one through would make the source stop the
+    # capture the instant it started.
+    if duration_seconds > 0 and not params.get("duration"):
+        # Only when the source actually declares it: setting a params key a source does not
+        # read would silently do nothing, and claiming an auto-stop that will not happen is
+        # worse than admitting there is none.
+        desc = await client().describe_capture_source(source, params)
+        if any(p.key == "duration" for p in desc.params):
+            params["duration"] = str(int(duration_seconds))
+            auto_stop = int(duration_seconds)
+    elif params.get("duration"):
+        auto_stop = int(float(params["duration"]))
+
+    sid = await client().start_capture(source, label, params)
+    out = {
+        "session_id": sid,
+        "source": source,
+        "label": label,
+        # What ran, not what was asked for: the source resolves its own defaults, and only
+        # the keys here were actually sent.
+        "params_sent": params,
+        "auto_stop_seconds": auto_stop or None,
+    }
+    if not auto_stop:
+        out["note"] = ("this capture has no auto-stop — call stop_capture when done, or it "
+                       "stays open until something closes it")
+    return out
+
+
+@_write_tool()
+async def stop_capture(session_id: str) -> dict:
+    """Stop a capture this gateway started, and return the finished session.
+
+    The source tears the capture down and the session is closed before this returns, so the
+    `flow_count` and `pcap_bytes` on the result are final — read the traffic with
+    `network_timeline`, `search` or `sqlite_query` afterwards.
+
+    Only captures the gateway started can be stopped here; one started from a command line
+    has to be stopped where it was started. Accepts a session id prefix."""
+    sid = await _resolve_session(session_id)
+    return _session_dict(await client().stop_capture(sid))
 
 
 @mcp.tool()

@@ -40,10 +40,63 @@ and `sqlite_query` + `sqlite_schema` (read-only SQL over a session bundle). Sess
 accept an id prefix.
 
 It runs **read-only by default**: only the inspection tools above are exposed. Set
-`MCP_READONLY=0` to additionally expose the mutating tools `rename_session` and
-`set_session_group` (relabel / regroup a recorded session).
+`MCP_READONLY=0` to additionally expose the mutating tools — `rename_session` and
+`set_session_group` (relabel / regroup a recorded session), and the four capture-control
+tools below, which start real processes on this machine. In read-only mode they are not
+registered at all, so they never appear in the tool list.
 
 ## Driving a capture
+
+With `MCP_READONLY=0` an agent runs the whole loop itself:
+
+```
+list_capture_sources → start_capture → (produce the traffic) → wait_for_flows
+                                     → stop_capture → network_timeline / search
+```
+
+`list_capture_sources` is what will actually work, not what is configured: a source the
+user has to start by hand (macOS per-process capture) is left out while its daemon is not
+running — see [modules.md](modules.md). `keep_warm` marks a source holding a resource
+across captures (an Android emulator), whose first start is slow.
+
+`start_capture(source)` needs nothing else. Every source defaults every option — a browser
+source opens a fresh temporary profile — so the parameters are for choosing something
+specific, and `describe_capture_source` enumerates them: `{key, label, type, required,
+default, choices}`, values always strings (`"true"`/`""` for a bool). That form
+**cascades** — answering one option changes which options come back next — so pass the
+answers so far and call again until nothing new appears.
+
+The response reports `params_sent`: what actually reached the source, including anything
+the server added, rather than an echo of the request.
+
+**An agent cannot drive the browser the gateway launched** — there is no debugging port to
+attach to, and the profile is a throwaway. Two things do work: a browser source takes a
+`url`, which is the simplest way to make a capture produce traffic from this server alone;
+or use the `mitmproxy` source and point the agent's own browser at the proxy, accepting
+that a terminating proxy costs the real client fingerprint and the `conn`/`stream` columns.
+See [ADR-0015](adr/0015-agents-drive-capture-over-mcp.md).
+
+```python
+# a self-contained capture: open a page, wait for it to decode, read it back
+started = start_capture("chrome", label="checkout", params={"url": "https://example.com"})
+wait_for_flows(started["session_id"], filter="~u /api ~s", count=5)
+done = stop_capture(started["session_id"])      # flow_count/pcap_bytes are final here
+network_timeline(done["id"])
+```
+
+`start_capture` **auto-stops after five minutes by default**: nothing in the gateway closes
+an abandoned session, so a capture whose caller stops calling would hold a browser open
+indefinitely. It applies only when the source offers that option — a proxy source does not
+— and `auto_stop_seconds` on the response says which happened, with a `note` when there is
+none. `duration_seconds=0` opts out; stopping early is always allowed.
+
+`stop_capture` returns the finished session, so `flow_count` and `pcap_bytes` are final on
+return and there is no second round trip to learn what was recorded. Only captures this
+gateway started can be stopped — one launched from a command line has to be stopped there.
+
+The first describe or start of a source *starts* it, which on a cold environment can take a
+minute (the built-ins launch through `uv`, which builds their dependencies first). The
+calls allow for that; a client with its own short tool timeout may not.
 
 `wait_for_flows` blocks until new flows are decoded, so an agent can act and then read
 what its action produced instead of polling `network_timeline`: fire the traffic, call it,

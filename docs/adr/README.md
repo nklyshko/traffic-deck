@@ -19,3 +19,4 @@ reasoning at the time. Format: Context → Decision → Consequences.
 | [0012](0012-server-side-filtering-and-pagination.md) | Filtering and pagination happen in the gateway *(proposed)* |
 | [0013](0013-source-name-and-shape.md) | A session records its source as a name plus a delivery shape |
 | [0014](0014-update-checks-read-git.md) | Update checks read git; a module declares a source directory, not a version |
+| [0015](0015-agents-drive-capture-over-mcp.md) | An agent starts and stops captures through the MCP server |

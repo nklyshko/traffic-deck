@@ -4,12 +4,15 @@ built from the generated stubs, so these exercise the same objects the tools see
 
 from __future__ import annotations
 
+import os
+
 # Importing the server wires the generated `gen/` tree onto sys.path (via client.py),
 # so `traffic.v1.*` resolves afterwards.
 import grpc
 import pytest
 import traffic_mcp.server as S
 from traffic.v1 import common_pb2 as cp
+from traffic.v1 import control_pb2 as cp2
 from traffic.v1 import viewer_pb2 as vp
 
 
@@ -41,6 +44,180 @@ def test_write_tools_hidden_in_readonly_mode():
     assert "list_sessions" in names and "get_flow" in names
     assert "rename_session" not in names
     assert "set_session_group" not in names
+    # Capture control is behind the same gate: these start real processes on the
+    # operator's machine (a browser, a packet capture), so a read-only server must not
+    # even advertise them.
+    for t in ("list_capture_sources", "describe_capture_source", "start_capture",
+              "stop_capture"):
+        assert t not in names
+
+
+def test_capture_tools_appear_once_writes_are_enabled():
+    # Registration happens at import, so the writable variant needs its own interpreter.
+    # Worth the subprocess: "the agent cannot start a capture at all" is the failure this
+    # whole surface exists to prevent.
+    import json
+    import subprocess
+    import sys
+
+    src = ("import asyncio, traffic_mcp.server as S;"
+           "print(json.dumps(sorted(t.name for t in asyncio.run(S.mcp.list_tools()))))")
+    out = subprocess.run([sys.executable, "-c", "import json;" + src],
+                         capture_output=True, text=True, check=True,
+                         env={**os.environ, "MCP_READONLY": "0"})
+    names = set(json.loads(out.stdout))
+    assert {"list_capture_sources", "describe_capture_source", "start_capture",
+            "stop_capture", "rename_session"} <= names
+
+
+# --- capture control ------------------------------------------------------
+
+def _descriptor(*params):
+    return cp2.SourceDescriptor(params=params, readiness=cp2.READINESS_READY)
+
+
+def _duration_param():
+    return cp2.Param(key="duration", label="Auto-stop after (seconds)",
+                     type=cp2.PARAM_TYPE_INT)
+
+
+class _CaptureClient:
+    """Records what the tools send to the gateway, and answers as a source would."""
+
+    def __init__(self, descriptor=None, session=None) -> None:
+        self._descriptor = descriptor if descriptor is not None else _descriptor()
+        self._session = session or cp.Session(id="sess-1")
+        self.described: list[dict] = []
+        self.started: list[tuple] = []
+        self.stopped: list[str] = []
+
+    async def list_capture_sources(self):
+        return [cp2.CaptureSourceInfo(name="chrome", label="Chrome"),
+                cp2.CaptureSourceInfo(name="android", label="Android", keep_warm=True)]
+
+    async def describe_capture_source(self, source, params=None):
+        self.described.append(dict(params or {}))
+        return self._descriptor
+
+    async def start_capture(self, source, label="", params=None):
+        self.started.append((source, label, dict(params or {})))
+        return self._session.id
+
+    async def stop_capture(self, session_id):
+        self.stopped.append(session_id)
+        return self._session
+
+
+def _wire(monkeypatch, fake):
+    async def _resolve(sid):
+        return "sess-1"
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    return fake
+
+
+def test_list_capture_sources_reports_what_can_run(monkeypatch):
+    import asyncio
+
+    _wire(monkeypatch, _CaptureClient())
+    assert asyncio.run(S.list_capture_sources()) == [
+        {"name": "chrome", "label": "Chrome", "keep_warm": False},
+        {"name": "android", "label": "Android", "keep_warm": True},
+    ]
+
+
+def test_describe_capture_source_flattens_the_form(monkeypatch):
+    import asyncio
+
+    desc = _descriptor(
+        cp2.Param(key="profile_kind", label="Profile", type=cp2.PARAM_TYPE_CHOICE,
+                  default="temp", required=True,
+                  choices=[cp2.Choice(value="temp", label="A fresh temporary profile")]),
+        cp2.Param(key="incognito", label="Incognito window", type=cp2.PARAM_TYPE_BOOL),
+    )
+    fake = _wire(monkeypatch, _CaptureClient(descriptor=desc))
+
+    out = asyncio.run(S.describe_capture_source("chrome", {"chrome": "/bin/chrome"}))
+    assert fake.described == [{"chrome": "/bin/chrome"}], "answers so far must be passed on"
+    assert out == {
+        "params": [
+            {"key": "profile_kind", "label": "Profile", "type": "choice", "required": True,
+             "default": "temp",
+             "choices": [{"value": "temp", "label": "A fresh temporary profile"}]},
+            # An unanswered bool has no default, and "" (off) must not read as a value.
+            {"key": "incognito", "label": "Incognito window", "type": "bool",
+             "required": False, "default": None},
+        ],
+        "provision_required": False,
+        "message": None,
+    }
+
+
+def test_start_capture_auto_stops_by_default(monkeypatch):
+    import asyncio
+
+    fake = _wire(monkeypatch, _CaptureClient(descriptor=_descriptor(_duration_param())))
+
+    out = asyncio.run(S.start_capture("chrome"))
+    assert fake.started == [("chrome", "agent", {"duration": "300"})]
+    assert out["session_id"] == "sess-1"
+    assert out["auto_stop_seconds"] == 300
+    assert out["params_sent"] == {"duration": "300"}
+    assert "note" not in out, "there is an auto-stop; nothing to warn about"
+
+
+def test_start_capture_does_not_claim_an_auto_stop_the_source_cannot_honour(monkeypatch):
+    # A proxy source has no duration option. Setting the key anyway would be read by
+    # nobody, and reporting an auto-stop that will never fire is worse than admitting
+    # there is none — the caller has to know it owns the stop.
+    import asyncio
+
+    fake = _wire(monkeypatch, _CaptureClient(descriptor=_descriptor()))
+
+    out = asyncio.run(S.start_capture("mitmproxy"))
+    assert fake.started == [("mitmproxy", "agent", {})]
+    assert out["auto_stop_seconds"] is None
+    assert "stop_capture" in out["note"]
+
+
+def test_start_capture_keeps_an_explicit_duration_without_describing(monkeypatch):
+    import asyncio
+
+    fake = _wire(monkeypatch, _CaptureClient(descriptor=_descriptor(_duration_param())))
+
+    out = asyncio.run(S.start_capture("chrome", label="login", params={"duration": "20"}))
+    assert fake.described == [], "the caller already decided; no need to ask the source"
+    assert fake.started == [("chrome", "login", {"duration": "20"})]
+    assert out["auto_stop_seconds"] == 20
+
+
+def test_start_capture_zero_duration_opts_out(monkeypatch):
+    import asyncio
+
+    fake = _wire(monkeypatch, _CaptureClient(descriptor=_descriptor(_duration_param())))
+
+    out = asyncio.run(S.start_capture("chrome", duration_seconds=0))
+    assert fake.described == []
+    assert fake.started == [("chrome", "agent", {})]
+    assert out["auto_stop_seconds"] is None
+    assert "note" in out
+
+
+def test_stop_capture_returns_the_finished_session(monkeypatch):
+    # The counts have to be final on return: the whole point of answering with the session
+    # is that the caller learns what it recorded without a second round trip.
+    import asyncio
+
+    done = cp.Session(id="sess-1", label="agent", source="chrome",
+                      status=cp.SESSION_STATUS_CLOSED, flow_count=42, pcap_bytes=1024)
+    fake = _wire(monkeypatch, _CaptureClient(session=done))
+
+    out = asyncio.run(S.stop_capture("sess"))
+    assert fake.stopped == ["sess-1"], "a prefix is resolved before stopping"
+    assert out["status"] == "closed"
+    assert out["flow_count"] == 42
+    assert out["pcap_bytes"] == 1024
 
 
 # --- argument validation --------------------------------------------------

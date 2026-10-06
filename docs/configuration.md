@@ -64,4 +64,4 @@ additionally teed to the terminal tagged `[chrome]`.
 | `GATEWAY_ADDR` | `127.0.0.1:7331` | gateway to read from |
 | `MCP_TRANSPORT` | `streamable-http` | also `sse` or `stdio` |
 | `MCP_HOST` / `MCP_PORT` | `127.0.0.1` / `8765` | bind address for the HTTP transports (endpoint `/mcp`) |
-| `MCP_READONLY` | `1` | expose only the read tools; `0` also exposes `rename_session` and `set_session_group` |
+| `MCP_READONLY` | `1` | expose only the read tools; `0` also exposes `rename_session`, `set_session_group` and capture control (`start_capture`/`stop_capture` — these launch processes, see [mcp.md](mcp.md#driving-a-capture)) |

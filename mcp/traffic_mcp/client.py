@@ -1,8 +1,10 @@
 """Async gRPC client for the gateway, used by the MCP server.
 
-Read-only: ViewerService (sessions/flows/bodies/ws messages) plus ControlService's
-ListTags/ListGroups so name-based annotation filters resolve. The generated stubs
-live in the sibling `gen/` tree (absolute `traffic.v1.*` imports).
+Mostly read-only: ViewerService (sessions/flows/bodies/ws messages) plus ControlService's
+ListTags/ListGroups so name-based annotation filters resolve. The exceptions are the
+session-metadata writes and the capture-control calls at the bottom, which the MCP server
+only exposes when it is not in read-only mode. The generated stubs live in the sibling
+`gen/` tree (absolute `traffic.v1.*` imports).
 """
 
 from __future__ import annotations
@@ -135,3 +137,46 @@ class GatewayClient:
     async def set_session_label(self, session_id: str, label: str) -> None:
         await self._c().SetSessionLabel(control_pb2.SetSessionLabelRequest(
             session_id=session_id, label=label))
+
+    # --- capture control ---------------------------------------------------
+    #
+    # The one place this client is not read-only. Each call carries its own deadline,
+    # because the first describe or start of a source *spawns* it: the built-ins launch
+    # through `uv`, which on a cold environment resolves and builds the tool's
+    # dependencies first (the gateway allows two minutes for that — sourcemgr.readyTimeout,
+    # and the TUI paints a "this can take a minute" notice over the same wait). A client
+    # default of thirty seconds would give up in the middle of that build and leave the
+    # source coming up behind it.
+
+    #: Deadline for a call that may have to spawn a source. Matches the gateway's own
+    #: patience, plus a margin so the gateway's error arrives instead of our timeout.
+    SPAWN_DEADLINE = 150.0
+
+    async def list_capture_sources(self):
+        """The sources the gateway can drive right now. A source the user has to start by
+        hand (see modules.md) is absent while it is not listening, so this is "what will
+        work", not "what is configured"."""
+        resp = await self._c().ListCaptureSources(control_pb2.Empty(), timeout=30.0)
+        return list(resp.sources)
+
+    async def describe_capture_source(self, source: str, params: dict[str, str] | None = None):
+        """One step of a source's option form, for the answers so far. Cascading: answering
+        a param can change which params come back next."""
+        return await self._c().DescribeCaptureSource(
+            control_pb2.DescribeCaptureSourceRequest(source=source, params=params or {}),
+            timeout=self.SPAWN_DEADLINE)
+
+    async def start_capture(self, source: str, label: str = "",
+                            params: dict[str, str] | None = None) -> str:
+        resp = await self._c().StartCapture(
+            control_pb2.StartCaptureRequest(source=source, label=label, params=params or {}),
+            timeout=self.SPAWN_DEADLINE)
+        return resp.session_id
+
+    async def stop_capture(self, session_id: str):
+        """Stop a capture the gateway started, returning the closed session. The source
+        tears its capture down and closes the session before this returns, so the counts
+        on the result are final."""
+        resp = await self._c().StopCapture(
+            control_pb2.StopCaptureRequest(session_id=session_id), timeout=120.0)
+        return resp.session
