@@ -89,7 +89,13 @@ def _reader_thread(stdout, q: queue.Queue, stop: threading.Event) -> None:
     """Stream dumpcap's pcap bytes (stdout) into the queue."""
     try:
         while not stop.is_set():
-            b = stdout.read(65536)
+            # read1: return as soon as any data is available (one underlying read), rather
+            # than read() which blocks until the full 64 KiB or EOF. On a quiet capture
+            # that block takes minutes to fill, and until it does the gateway has no
+            # packets: requests sit in the viewer counting up a duration that never
+            # arrives, and the whole tail lands at once when the capture stops. `-U` on
+            # the sniffer does not help — it flushes into the pipe we then sit on.
+            b = stdout.read1(65536)
             if not b:
                 break
             q.put(("pcap", b))
