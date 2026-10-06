@@ -28,7 +28,7 @@ from traffic_viewer.client import control_pb2 as cpb, viewer_pb2
 from textual.widgets.option_list import Option
 from rich.text import Text
 
-from .filters import FILTER_HELP, MSG_FILTER_HELP
+from .filters import FILTER_HELP, MSG_FILTER_HELP, with_meta_keys
 from .render import (
     MARK_COLORS,
     SESSION_STATUS,
@@ -259,6 +259,10 @@ class CaptureWizardScreen(ModalScreen[str | None]):
         self._params: dict[str, str] = {}   # answers accumulated so far
         self._answered: list[str] = []      # param keys answered, in order (for Back)
         self._current = None                # the Param being shown, or None on the label step
+        # Set once StartCapture is in flight. Every other step here is idempotent — describe
+        # is a read — but starting a capture is not, and it is the last step, where a second
+        # ↵ is easy to send before the first has answered.
+        self._starting = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="wizard"):
@@ -356,29 +360,53 @@ class CaptureWizardScreen(ModalScreen[str | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "wizard-label":
+            if self._starting:
+                return  # a second ↵ on the last step — see _start
+            self._starting = True
+            self.query_one("#wizard-msg", Static).update("⏳ starting capture…")
             self._start(event.value)
         elif event.input.id == "wizard-input" and self._current is not None:
             self._commit(self._current.key, event.value)
 
     def action_back(self) -> None:
         """Return to the previous step, dropping its answer so it's re-asked."""
-        if not self._answered:
-            return
+        if self._starting or not self._answered:
+            return  # a requested capture cannot be un-requested from here
         key = self._answered.pop()
         self._params.pop(key, None)
         self._current = None
         self._advance()
 
-    @work(exclusive=True)
+    @work
     async def _start(self, label: str) -> None:
+        """Start the capture and dismiss with its session id.
+
+        Deliberately **not** `exclusive=True`, and guarded by `_starting` in the callers.
+        Exclusive is right for `_advance`, which only reads, and wrong here: it cancels the
+        worker already in flight, and cancelling this one does not cancel the capture. The
+        request has been sent, the gateway has opened a session and the source has launched a
+        browser; all the cancellation removes is the `dismiss` that would have reported it.
+        Two fast ↵ presses therefore produced two captures, the first of them orphaned —
+        listed, never reported, and holding zero flows because its browser was the one that
+        lost the race for the profile.
+        """
         try:
             sid = await self.app.client.start_capture(self._source, label or self._source, self._params)
         except Exception as exc:  # noqa: BLE001
+            # Retryable on purpose: "quit the browser and try again" is the usual reason, so
+            # release the guard and leave the label step up for another ↵.
+            self._starting = False
             self.query_one("#wizard-msg", Static).update(f"[red]start failed: {exc}[/red]")
             return
         self.dismiss(sid)
 
     def action_cancel(self) -> None:
+        if self._starting:
+            # The capture is already being started; leaving now would abandon it exactly as
+            # the double-↵ did. Stop it from the session list instead.
+            self.query_one("#wizard-msg", Static).update(
+                "⏳ starting capture… (already requested — stop it from the list with `s`)")
+            return
         self.dismiss(None)
 
 
@@ -1275,9 +1303,13 @@ class SessionPane(AnnotatableTable, Vertical):
         self._extra_cols.remove(cid)
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
-        # Reveal the filter help only while the filter input is being edited.
+        # Reveal the filter help only while the filter input is being edited, with the
+        # ~meta keys these flows actually carry — discovered, so nothing can list them
+        # ahead of time.
         if event.widget.id == "filter":
-            self.query_one("#filter-help", Static).display = True
+            help_ = self.query_one("#filter-help", Static)
+            help_.update(with_meta_keys(FILTER_HELP, self._meta_keys()))
+            help_.display = True
 
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
         if event.widget.id == "filter":
@@ -1743,15 +1775,21 @@ class SessionPane(AnnotatableTable, Vertical):
             return None
         return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
 
+    def _meta_keys(self) -> list[str]:
+        """Source-metadata keys the loaded flows carry, plus any already shown as a column
+        even if no loaded flow has it. What `~meta` and the column picker can reach."""
+        keys = sorted({k for f in self.flows.values() for k in f.metadata.keys()})
+        for cid in self._extra_cols:
+            if cid.startswith("meta:") and (k := cid[len("meta:"):]) not in keys:
+                keys.append(k)
+        return keys
+
     @work(exclusive=True)
     async def action_columns(self) -> None:
         """Toggle an optional table column: the built-in flow-field columns (Conn, Stream)
         first, then the source-metadata keys discovered from the loaded flows (plus any
         already shown). ✓ marks columns currently displayed."""
-        keys = sorted({k for f in self.flows.values() for k in f.metadata.keys()})
-        for cid in self._extra_cols:  # keep a shown column listed even if no loaded flow has it
-            if cid.startswith("meta:") and (k := cid[len("meta:"):]) not in keys:
-                keys.append(k)
+        keys = self._meta_keys()
         cids = [*_FIELD_COLUMNS, *(_meta_col_id(k) for k in keys)]
         opts = [(c, Text(("✓ " if c in self._extra_cols else "  ") + _extra_col_label(c)))
                 for c in cids]
@@ -2516,7 +2554,9 @@ class WsMessagesScreen(AnnotatableTable, Screen):
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
         if event.widget.id == "filter":
-            self.query_one("#filter-help", Static).display = True
+            help_ = self.query_one("#filter-help", Static)
+            help_.update(with_meta_keys(MSG_FILTER_HELP, self._meta_keys()))
+            help_.display = True
 
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
         if event.widget.id == "filter":
@@ -2610,12 +2650,17 @@ class WsMessagesScreen(AnnotatableTable, Screen):
     def _ordered_msg_cols(self) -> list:
         return [*self._cols, *(self._msg_col_ids[k] for k in self._msg_col_keys)]
 
+    def _meta_keys(self) -> list[str]:
+        """Decoder field keys the loaded frames carry, shown as a column or not — a hidden
+        column is still filterable with `~meta`."""
+        return sorted({k for m in self._msgs.values() for k in m.metadata.keys()}
+                      | set(self._msg_col_keys))
+
     @work(exclusive=True, group="columns")
     async def action_columns(self) -> None:
         """Toggle a decoder field column. The keys are whatever the loaded frames carry —
         `max.cmd`, `max.seq` — with ✓ marking those currently shown."""
-        keys = sorted({k for m in self._msgs.values() for k in m.metadata.keys()}
-                      | set(self._msg_col_keys))
+        keys = self._meta_keys()
         if not keys:
             self.notify("no decoder fields on these frames — nothing to show")
             return

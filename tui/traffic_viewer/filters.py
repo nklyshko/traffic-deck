@@ -7,6 +7,8 @@ here, because it is UI chrome rather than part of the language.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 FILTER_HELP = (
     "Filter terms are space-separated and ANDed; prefix ! to negate a term.\n"
     "  No & | and or ( ) — a stray one is matched as a regex against the URL.\n"
@@ -31,8 +33,28 @@ MSG_FILTER_HELP = (
     "  ~b <re> payload    ~op <re> opcode     ~from <re> client|server\n"
     "  ~mark <re> color   ~tag <re> name      ~group <re> name\n"
     "  ~comment <re>      ~fav favorited\n"
+    "  ~meta <key>=<re>   a decoder field off the frame header (~meta <key>: presence)\n"
     "  <re>  a bare regex matches the payload — there is no URL on a frame\n"
     "  args are unquoted RE2 regexes: escape dots, quotes match literally\n"
     "  flow terms (~m ~c ~d ~h …) are not message terms and are rejected\n"
     "                                               Enter apply · Esc cancel"
 )
+
+
+def with_meta_keys(help_text: str, keys: Iterable[str]) -> str:
+    """`help_text` with the ~meta keys the loaded rows actually carry spliced in above the
+    footer line. The keys come from a decoder or a capture source, not from here, so there
+    is no static list to print — the only honest example is the one on screen."""
+    keys = sorted(set(keys))
+    if not keys:
+        return help_text
+    line = "  ~meta keys here (the extra column names): " + "  ".join(keys)
+    if len(line) > _HELP_WIDTH:
+        line = line[:_HELP_WIDTH - 1] + "…"
+    head, _, footer = help_text.rpartition("\n")
+    return f"{head}\n{line}\n{footer}"
+
+
+# The widest line the two cheat sheets already use, so a spliced line doesn't widen the
+# docked panel and reflow the table under it.
+_HELP_WIDTH = max(len(ln) for ln in (FILTER_HELP + "\n" + MSG_FILTER_HELP).splitlines())

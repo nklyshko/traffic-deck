@@ -1183,6 +1183,20 @@ async def test_ws_messages_filter_help_shown_only_while_focused():
         assert help_.display is False
 
 
+async def test_ws_messages_filter_help_names_the_live_meta_keys():
+    """The cheat sheet documents ~meta, and the example is the keys these frames carry —
+    the viewer cannot know a decoder's fields ahead of time, so it shows the ones on
+    screen rather than a protocol nobody here is looking at."""
+    app = make_app()
+    async with app.run_test() as pilot:
+        await _open_ws_timeline(pilot)
+        await pilot.press("f")
+        await settle(pilot)
+        text = str(app.screen.query_one("#filter-help", Static).content)
+        assert "~meta <key>=<re>" in text
+        assert "max.cmd" in text and "max.opcode" in text and "max.seq" in text
+
+
 async def test_ws_messages_filter_error_is_reported():
     """A flow term is not a message term. The gateway refuses it, and the timeline says so
     rather than showing an empty table that reads as "no frames"."""
@@ -1960,6 +1974,110 @@ async def test_capture_wizard_provision_step_then_continues():
         wiz._advance()                                    # simulate the poll firing
         await settle(pilot, n=15)
         assert wiz._current is not None and wiz._current.key == "package"
+
+
+async def _to_label_step(pilot):
+    """Drive the wizard to its last step (the label + start step)."""
+    await settle(pilot)
+    await pilot.press("a")
+    await settle(pilot)
+    await pilot.press("enter")        # answer mode
+    await settle(pilot)
+    await pilot.press("enter")        # answer profile → label step
+    await settle(pilot)
+
+
+def _held_start(app):
+    """Make start_capture block until the returned event is set, as a real round trip does,
+    so a second keypress lands while the first call is still out.
+
+    The attempt is recorded on *entry*, before the wait — that is what makes this a test of
+    the real bug. The gateway opens the session from the request alone; cancelling the
+    client's await afterwards unwinds nothing. A fake that recorded only calls which
+    returned would show one capture and miss the orphan entirely.
+    """
+    gate = asyncio.Event()
+    attempts: list[tuple] = []
+
+    async def slow(source, label, params):
+        attempts.append((source, label, dict(params)))
+        await gate.wait()
+        return f"cap-sess-{len(attempts)}"
+
+    app.client.start_capture = slow
+    return gate, attempts
+
+
+async def test_capture_wizard_second_enter_does_not_start_a_second_capture():
+    """Two fast ↵ on the last step used to start two captures and orphan the first.
+
+    `_start` was exclusive, so the second press cancelled the first worker — but the
+    request had already gone out, the gateway had already opened a session, and cancelling
+    only removed the `dismiss` that would have reported it. What was left was a phantom
+    session in the list holding zero flows.
+    """
+    app = make_app()
+    gate, attempts = _held_start(app)
+    async with app.run_test() as pilot:
+        await _to_label_step(pilot)
+
+        await pilot.press("enter")        # start
+        await pilot.press("enter")        # and again, before the first has answered
+        await pilot.press("enter")
+        await settle(pilot)
+        assert len(attempts) == 1, f"asked the gateway to capture {len(attempts)} times"
+
+        gate.set()
+        await settle(pilot, n=15)
+        assert len(attempts) == 1, f"started more than once: {attempts}"
+        assert isinstance(app.screen, SessionsScreen), "the wizard reported its session"
+
+
+async def test_capture_wizard_escape_while_starting_does_not_orphan_the_capture():
+    # The same hazard by another key: the capture has been requested, so leaving now would
+    # abandon a session nothing reported. Esc holds until the start answers.
+    app = make_app()
+    gate, attempts = _held_start(app)
+    async with app.run_test() as pilot:
+        await _to_label_step(pilot)
+
+        await pilot.press("enter")        # start
+        await pilot.press("escape")       # ignored while it is in flight
+        await settle(pilot)
+        assert isinstance(app.screen, CaptureWizardScreen)
+        assert "stop it from the list" in app.screen.query_one("#wizard-msg", Static).render().plain
+
+        gate.set()
+        await settle(pilot, n=15)
+        assert len(attempts) == 1
+        assert isinstance(app.screen, SessionsScreen)
+
+
+async def test_capture_wizard_retries_after_a_failed_start():
+    # "Quit the browser and try again" is the usual start failure, so a second ↵ after one
+    # has to work — the guard releases on failure.
+    app = make_app()
+    calls = {"n": 0}
+
+    async def flaky_start(source, label, params):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("chrome is already running on this profile")
+        return "cap-sess-2"
+
+    app.client.start_capture = flaky_start
+    async with app.run_test() as pilot:
+        await _to_label_step(pilot)
+
+        await pilot.press("enter")
+        await settle(pilot)
+        assert isinstance(app.screen, CaptureWizardScreen)
+        assert "already running" in app.screen.query_one("#wizard-msg", Static).render().plain
+
+        await pilot.press("enter")        # retry
+        await settle(pilot, n=15)
+        assert calls["n"] == 2
+        assert isinstance(app.screen, SessionsScreen)
 
 
 async def test_capture_wizard_cancel_starts_nothing():
