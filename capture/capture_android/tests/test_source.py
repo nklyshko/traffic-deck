@@ -16,12 +16,13 @@ from capture_sdk.proto import control_pb2 as ctl
 from capture_sdk.proto import source_pb2_grpc as sp_grpc
 
 
-def describe_provisioned(src, action="attach"):
+def describe_provisioned(src, action="attach", extra=None):
     """Consent, then poll Describe until the (background) provisioning is done and it goes
     READY — mirroring how the viewer polls."""
-    src.describe({"provision": action})  # kicks off provisioning
+    params = {"provision": action, **(extra or {})}
+    src.describe(params)  # kicks off provisioning
     for _ in range(400):
-        d = src.describe({"provision": action})
+        d = src.describe(params)
         if d.readiness == ctl.READINESS_READY:
             return d
         time.sleep(0.005)
@@ -34,6 +35,7 @@ class FakeBackend:
     def __init__(self, options=None):
         self.provisioned = 0
         self.provision_action = None
+        self.show_window = None
         self.options = options or [("attach", "Use the connected device")]
         self.packages = ["com.a", "com.b"]
         self.browsers = ["com.android.chrome"]
@@ -44,9 +46,10 @@ class FakeBackend:
     def provision_options(self):
         return list(self.options)
 
-    def provision(self, action):
+    def provision(self, action, *, show_window=False):
         self.provisioned += 1
         self.provision_action = action
+        self.show_window = show_window
 
     def frida_versions(self):
         return ["16.7.19", "17.15.1"], "16.7.19"
@@ -88,8 +91,45 @@ def test_describe_offers_provision_options_first():
     for src in srcs.values():
         d = src.describe({})
         assert d.readiness == ctl.READINESS_PROVISION_REQUIRED
-        assert [p.key for p in d.params] == ["provision"]
-        assert [c.value for c in d.params[0].choices] == ["attach", "pixel"]
+        provision = next(p for p in d.params if p.key == "provision")
+        assert [c.value for c in provision.choices] == ["attach", "pixel"]
+
+
+def test_the_window_option_comes_before_the_device_choice():
+    """Order is load-bearing, not cosmetic: a viewer fills one param per re-describe, and
+    answering `provision` is what starts the boot — so a flag asked after it would arrive
+    too late to affect how the emulator comes up."""
+    srcs = two_sources(FakeBackend(options=[("attach", "Use device"),
+                                            ("pixel", "Boot emulator: pixel")]))
+    d = srcs["android"].describe({})
+    assert [p.key for p in d.params] == ["show_window", "provision"]
+    window = d.params[0]
+    assert window.type == ctl.PARAM_TYPE_BOOL
+    assert window.default == ""  # headless unless asked for: usually nobody is watching
+
+
+def test_the_window_option_is_not_offered_when_nothing_can_be_booted():
+    # Only a device the user already has running → there is no boot to influence, and its
+    # window is theirs either way.
+    srcs = two_sources(FakeBackend(options=[("attach", "Use the connected device")]))
+    d = srcs["android"].describe({})
+    assert [p.key for p in d.params] == ["provision"]
+
+
+def test_the_window_choice_reaches_the_backend():
+    b = FakeBackend(options=[("pixel", "Boot emulator: pixel")])
+    describe_provisioned(two_sources(b)["android"], action="pixel",
+                         extra={"show_window": "true"})
+    assert b.provision_action == "pixel"
+    assert b.show_window is True
+
+
+def test_an_unanswered_window_option_boots_headless():
+    """"No" and "not asked" are the same string in a params map, and both mean headless —
+    so an agent that never answers it gets the old behaviour rather than a stuck wizard."""
+    b = FakeBackend(options=[("pixel", "Boot emulator: pixel")])
+    describe_provisioned(two_sources(b)["android"], action="pixel")
+    assert b.show_window is False
 
 
 def test_app_source_offers_frida_and_packages():
@@ -144,9 +184,9 @@ def test_provisioning_state_is_shared_so_both_report_it():
             super().__init__()
             self.gate = threading.Event()
 
-        def provision(self, action):
+        def provision(self, action, *, show_window=False):
             self.gate.wait(timeout=5)  # block until released
-            super().provision(action)
+            super().provision(action, show_window=show_window)
 
     b = SlowBackend()
     srcs = two_sources(b)

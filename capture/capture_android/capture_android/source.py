@@ -31,6 +31,11 @@ from typing import Mapping, Protocol
 from capture_sdk import source
 from capture_sdk.proto import control_pb2 as ctl
 
+# The one provision action that boots nothing: a device the user already has running is
+# attached to as it is. Shared with RealAndroidBackend, which branches on the same value —
+# so the window option is offered only when there is actually something to boot.
+_ATTACH = "attach"
+
 
 class AndroidBackend(Protocol):
     """The device-side operations the Android sources drive. owns_resource says whether *we*
@@ -43,9 +48,11 @@ class AndroidBackend(Protocol):
         """(value, label) choices for the provision step, from what's connected: attach to a
         running device, or boot/create an emulator. Cheap (no boot) — probes device state."""
 
-    def provision(self, action: str) -> None:
+    def provision(self, action: str, *, show_window: bool = False) -> None:
         """Carry out the chosen provision action — attach to the running device, boot an AVD
-        by name, or create+boot one. Blocking; booting can take tens of seconds."""
+        by name, or create+boot one. Blocking; booting can take tens of seconds.
+        show_window boots the emulator with a window; ignored when attaching to a device the
+        user already has running, which is theirs as it is."""
 
     def frida_versions(self) -> tuple[list[str], str]:
         """(offered frida versions, recommended default) for the connected device — frida
@@ -95,14 +102,21 @@ class _Device:
         back as PROVISION_REQUIRED and the viewer frames it as consent. The choices depend on
         what's connected (attach vs boot an AVD)."""
         options = self.backend.provision_options()
+        params = []
+        if any(value != _ATTACH for value, _ in options):
+            # Offered *before* the device choice, and that order is load-bearing: a viewer
+            # fills one param per re-describe, and answering `provision` is what starts the
+            # boot — anything asked after it would arrive too late to affect how it boots.
+            params.append(source.param("show_window", "Show the emulator window", source.BOOL))
+        params.append(source.param(
+            "provision", "Device / emulator", source.CHOICE, required=True,
+            choices=[source.choice(v, label) for v, label in options]))
         return ctl.SourceDescriptor(
             readiness=ctl.READINESS_PROVISION_REQUIRED,
             message="Choose the device or emulator to capture on (booting one can take ~30s).",
-            params=[source.param(
-                "provision", "Device / emulator", source.CHOICE, required=True,
-                choices=[source.choice(v, label) for v, label in options])])
+            params=params)
 
-    def start_provisioning(self, action: str) -> ctl.SourceDescriptor:
+    def start_provisioning(self, action: str, *, show_window: bool = False) -> ctl.SourceDescriptor:
         """Kick off provisioning in the background (once, for all sources) and report
         progress. Returns a PROVISION_REQUIRED descriptor with a message and no params, which
         the viewer renders as "working…" and polls until it goes READY — so the viewer never
@@ -115,14 +129,15 @@ class _Device:
             if not self._started:
                 self._started = True
                 self.provisioning = True
-                threading.Thread(target=self._run, args=(action,), daemon=True).start()
+                threading.Thread(target=self._run, args=(action, show_window),
+                                 daemon=True).start()
         return ctl.SourceDescriptor(
             readiness=ctl.READINESS_PROVISION_REQUIRED,
             message="Setting up the device — this can take ~30s…")
 
-    def _run(self, action: str) -> None:
+    def _run(self, action: str, show_window: bool) -> None:
         try:
-            self.backend.provision(action)
+            self.backend.provision(action, show_window=show_window)
             self.provisioned = True
         except Exception as exc:  # noqa: BLE001 — reported to the viewer via Describe
             self._error = str(exc)
@@ -186,7 +201,8 @@ class _AndroidSource(source.CaptureSource):
         if not params.get("provision"):
             return self._device.choice_descriptor()
         if not self._device.provisioned:
-            return self._device.start_provisioning(params["provision"])
+            return self._device.start_provisioning(
+                params["provision"], show_window=params.get("show_window") == "true")
         return self._options(params)
 
     @abc.abstractmethod

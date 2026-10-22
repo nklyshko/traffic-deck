@@ -197,6 +197,15 @@ sources are served by one module process over one connection, so picking the sec
 not provision a second emulator, and releasing either one leaves a capture running on the
 other alone. See [ADR-0010 §4a](adr/0010-supervisor-and-capture-modules.md).
 
+Either source first asks which device to capture on: a connected one to attach to, or an
+AVD to boot (or create). When there is an AVD to boot, the form also offers **"Show the
+emulator window"** — off by default, since a gateway-driven capture usually has nobody
+watching, but an app that needs a tap (a login, a consent screen, navigating to the
+interesting request) is unreachable without it. It is asked *before* the device choice
+because answering that is what starts the boot. Attaching to a device you already have
+running ignores the option: that window is yours either way. The interactive CLI is the
+other way round — it shows a window unless given `--headless`.
+
 ### E1) `android` — per-app packets + TLS keylog (needs root)
 
 Frida hooks the system `libssl.so` to dump TLS secrets (NSS `key.log`, no proxy/CA), and

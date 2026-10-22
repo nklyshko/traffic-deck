@@ -59,7 +59,7 @@ class RealAndroidBackend:
         opts.append((_CREATE, "Create + boot a new emulator (~1GB on first run)"))
         return opts
 
-    def provision(self, action: str) -> None:
+    def provision(self, action: str, *, show_window: bool = False) -> None:
         if action == "attach":
             running = self._running_serials()
             if not running:
@@ -75,7 +75,10 @@ class RealAndroidBackend:
                 avd = DEFAULT_AVD
             else:
                 avd = action
-            sdk.boot(avd, headless=True)
+            # Headless by default because a gateway-driven capture usually has nobody
+            # watching — but an app that needs a tap (a login, a consent screen) is
+            # unreachable without a window, so the viewer can ask for one.
+            sdk.boot(avd, headless=not show_window)
             self._serial = sdk.wait_for_boot()
             self.owns_resource = True  # we booted it → ReleaseSource stops it
         self._release = AdbClient(serial=self._serial).shell(
