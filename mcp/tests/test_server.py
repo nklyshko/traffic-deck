@@ -4,6 +4,7 @@ built from the generated stubs, so these exercise the same objects the tools see
 
 from __future__ import annotations
 
+import json
 import os
 
 # Importing the server wires the generated `gen/` tree onto sys.path (via client.py),
@@ -1363,3 +1364,72 @@ def test_sqlite_schema_asks_sqlite_master(monkeypatch):
     out = asyncio.run(S.sqlite_schema())
     assert "sqlite_master" in fake.sql
     assert out["rows"][0]["name"] == "flows"
+
+
+# --- undecodable bodies ---------------------------------------------------
+
+def test_body_term_is_recognised_in_a_filter():
+    # Only the body terms trigger the caveat, and only as whole terms: ~bqx is not ~bq,
+    # and ~d/~h read no body at all.
+    for f in ("~bs needle", "~bq needle", "~b needle", "~c 200 ~bs x", "~bs"):
+        assert S._BODY_TERM.search(f), f
+    for f in ("", "~d ok\\.ru", "~hs gzip", "~bsx needle", "~meta b=1"):
+        assert not S._BODY_TERM.search(f), f
+
+
+def _sql_client(rows, recorder=None):
+    class Fake:
+        async def query_sql(self, sid, sql, params=None, limit=0, timeout_millis=0):
+            if recorder is not None:
+                recorder.append((sql, list(params or [])))
+            return vp.QuerySQLResponse(columns=["enc", "n"],
+                                       rows_json=[json.dumps(r) for r in rows])
+    return Fake()
+
+
+def test_unsearchable_bodies_counts_only_what_nothing_can_undo(monkeypatch):
+    # The decodable encodings are excluded in SQL, so a gzip body — stored decoded, its
+    # label kept as provenance — must not be reported as unsearchable.
+    import asyncio
+
+    calls: list = []
+    monkeypatch.setattr(S, "client", lambda: _sql_client([{"enc": "gzip, br", "n": 3}], calls))
+
+    out = asyncio.run(S._unsearchable_bodies("s1"))
+    assert out == {"gzip, br": 3}
+    sql, params = calls[0]
+    assert params == list(S._DECODED_ENCODINGS)
+    assert "NOT IN" in sql and "req_content_encoding" in sql and "resp_content_encoding" in sql
+
+
+def test_body_search_caveat_says_a_miss_is_unknown(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(S, "client", lambda: _sql_client(
+        [{"enc": "gzip, br", "n": 2}, {"enc": "exi", "n": 1}]))
+
+    out = asyncio.run(S._body_search_caveat("s1"))
+    assert out["unsearchable_bodies"] == {"gzip, br": 2, "exi": 1}
+    note = out["unsearchable_bodies_note"]
+    assert "3 body" in note, "the total is what a caller acts on"
+    # The distinction the whole feature exists for.
+    assert "'unknown', not 'absent'" in note
+
+
+def test_body_search_caveat_is_silent_when_everything_decoded(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(S, "client", lambda: _sql_client([]))
+    assert asyncio.run(S._body_search_caveat("s1")) == {}
+
+
+def test_unsearchable_bodies_survives_a_gateway_without_sql(monkeypatch):
+    # A diagnostic must never be the reason a search fails — an older gateway has no SQL.
+    import asyncio
+
+    class Fake:
+        async def query_sql(self, *a, **kw):
+            raise grpc.aio.AioRpcError(grpc.StatusCode.UNIMPLEMENTED, None, None, "nope", None)
+
+    monkeypatch.setattr(S, "client", lambda: Fake())
+    assert asyncio.run(S._unsearchable_bodies("s1")) == {}

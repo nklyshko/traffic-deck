@@ -186,13 +186,32 @@ many pages.
 
 ## Compressed bodies
 
-Bodies are stored decoded, whatever the protocol carried them: a body that was gzipped on
-the wire is searchable as text and `get_body` returns it readable. What it arrived as is
-kept alongside it as `content_encoding` on the body metadata (`get_flow`,
-`export_request`), so a readable body still says where it came from. Only the encodings
-the gateway can undo are undone — a brotli (`br`) body is stored as it was sent, and its
-`content_encoding` is what tells you that the bytes are compressed rather than binary
-content. Body search sees the stored bytes, so it can't match inside one.
+Bodies are stored decoded, whatever the protocol carried them: a body sent `gzip`, `br`,
+`deflate` or `zstd` is searchable as text and `get_body` returns it readable. What it
+arrived as is kept alongside it as `content_encoding` on the body metadata (`get_flow`,
+`export_request`), so a readable body still says where it came from — the field is
+provenance, not a statement about the bytes you are holding.
+
+Two cases are left compressed, both of them deliberate. A **chain** (`gzip, br`) is
+recorded verbatim and never unwrapped. An encoding **newer than the gateway build** is
+unknown to it. And one case is left compressed on purpose even though we could try: a body
+whose label and bytes disagree. `br` and raw `deflate` carry no header to check, so a
+decode of a mislabelled body is kept only if it comes back clean — garbage in the body
+would be worse than a body that is merely unsearchable.
+
+Body search reads the stored bytes, so it cannot match inside what stayed compressed. That
+used to be silent: a `response_body_contains` over a brotli page reported *no match* for
+text that was sitting right there. `search` and `search_flows` now report it when the
+criteria read a body:
+
+```json
+"unsearchable_bodies": {"gzip, br": 3},
+"unsearchable_bodies_note": "3 body/bodies … a miss on those is 'unknown', not 'absent' …"
+```
+
+Match on headers or the URL for those, or re-capture. Decoding happens when a body is
+stored, so a session recorded by an older gateway keeps whatever it kept — `redecode` fixes
+one that still has its pcap.
 
 ## Live sessions
 

@@ -7,15 +7,20 @@ package decode
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/hex"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/quic-go/qpack"
 	"golang.org/x/net/http2"
 
@@ -34,6 +39,55 @@ func gzipBytes(t *testing.T, s string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// compress writes s through a writer that closes into buf, for the encodings below.
+func compress(t *testing.T, s string, mk func(*bytes.Buffer) io.WriteCloser) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := mk(&buf)
+	if _, err := w.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func brBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	return compress(t, s, func(b *bytes.Buffer) io.WriteCloser { return brotli.NewWriter(b) })
+}
+
+func zstdBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	return compress(t, s, func(b *bytes.Buffer) io.WriteCloser {
+		w, err := zstd.NewWriter(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	})
+}
+
+// zlibBytes is Content-Encoding: deflate as RFC 9110 specifies it (zlib-wrapped).
+func zlibBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	return compress(t, s, func(b *bytes.Buffer) io.WriteCloser { return zlib.NewWriter(b) })
+}
+
+// rawDeflateBytes is deflate as some servers actually send it: no zlib wrapper, and no
+// header to recognise it by.
+func rawDeflateBytes(t *testing.T, s string) []byte {
+	t.Helper()
+	return compress(t, s, func(b *bytes.Buffer) io.WriteCloser {
+		w, err := flate.NewWriter(b, flate.DefaultCompression)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	})
 }
 
 // h3Layers builds the PDML record the stitcher sees for one HTTP/3 frame, addressed as
@@ -162,9 +216,37 @@ func TestStitchKeepsBodyWhenEncodingHeaderLies(t *testing.T) {
 	}
 }
 
-// An encoding we can't undo (no brotli decoder) leaves the bytes compressed. That's the
-// case the field exists for: without it a consumer has binary bytes and no idea why.
+// An encoding we can't undo leaves the bytes compressed. That's the case the field exists
+// for: without it a consumer has binary bytes and no idea why. A chain is the live example
+// — we decode single encodings, never unwrap a stack of them.
 func TestStitchRecordsUndecodableEncoding(t *testing.T) {
+	ds := &Dataset{}
+	st := newStitcher(ds, nil)
+
+	st.addHTTP3(h3Request(), "0")
+	st.addHTTP3(h3Layers(false, map[string][]string{
+		fH3Status:   {"200"},
+		fH3HdrName:  {"content-encoding"},
+		fH3HdrValue: {"gzip, br"},
+	}), "0")
+	st.addHTTP3(h3Layers(false, map[string][]string{fH3Data: {"cafebabe"}}), "0")
+
+	st.finish()
+
+	f := ds.Flows[0]
+	if got := hex.EncodeToString(f.ResponseBody); got != "cafebabe" {
+		t.Errorf("ResponseBody = %s, want the doubly-encoded bytes untouched", got)
+	}
+	if f.ResponseBodyEncoding != "gzip, br" {
+		t.Errorf("ResponseBodyEncoding = %q, want the chain recorded verbatim", f.ResponseBodyEncoding)
+	}
+}
+
+// Brotli over HTTP/3, end to end on the path that actually hands us wire bytes (tshark's h3
+// dissector decompresses nothing). This is the case a body search used to miss completely:
+// the bytes were stored still-compressed, so ~bs matched them as binary noise and reported
+// no match rather than "cannot match".
+func TestStitchDecodesHTTP3BrotliBody(t *testing.T) {
 	ds := &Dataset{}
 	st := newStitcher(ds, nil)
 
@@ -174,16 +256,19 @@ func TestStitchRecordsUndecodableEncoding(t *testing.T) {
 		fH3HdrName:  {"content-encoding"},
 		fH3HdrValue: {"br"},
 	}), "0")
-	st.addHTTP3(h3Layers(false, map[string][]string{fH3Data: {"cafebabe"}}), "0")
+	st.addHTTP3(h3Layers(false, map[string][]string{
+		fH3Data: {hex.EncodeToString(brBytes(t, "searchable needle in a brotli body"))},
+	}), "0")
 
 	st.finish()
 
 	f := ds.Flows[0]
-	if got := hex.EncodeToString(f.ResponseBody); got != "cafebabe" {
-		t.Errorf("ResponseBody = %s, want the brotli bytes untouched", got)
+	if !strings.Contains(string(f.ResponseBody), "searchable needle") {
+		t.Errorf("ResponseBody = %.60q, want it decompressed", f.ResponseBody)
 	}
 	if f.ResponseBodyEncoding != "br" {
-		t.Errorf("ResponseBodyEncoding = %q, want %q", f.ResponseBodyEncoding, "br")
+		t.Errorf("ResponseBodyEncoding = %q, want %q — the field is provenance, not state",
+			f.ResponseBodyEncoding, "br")
 	}
 }
 
@@ -387,12 +472,96 @@ func TestLiveHTTP1EncodingOmitted(t *testing.T) {
 	}
 }
 
-// A gzip stream cut short (the live preview cap, a capture that ended mid-response)
+// A stream cut short (the live preview cap, a capture that ended mid-response)
 // decompresses to as much as it has: a partial page beats no page.
 func TestMaybeGunzipPartialStream(t *testing.T) {
 	raw := gzipBytes(t, strings.Repeat("searchable ", 2000))
-	got := maybeGunzip(raw[:len(raw)-20], noBodyLimit)
+	got := decodeBody("gzip", raw[:len(raw)-20], noBodyLimit)
 	if !strings.HasPrefix(string(got), "searchable searchable") {
 		t.Errorf("partial gunzip = %.40q…, want the decompressed prefix", got)
+	}
+}
+
+// Every encoding the gateway claims to undo, undone. The claim is load-bearing: a body
+// left compressed is a body `~bs` matches as binary noise, so it reports "no match" for
+// text that is right there — which is how a brotli page looked before this.
+func TestDecodeBodyUndoesEveryEncodingWeClaim(t *testing.T) {
+	const needle = "searchable needle"
+	for _, tc := range []struct {
+		enc  string
+		body []byte
+	}{
+		{"gzip", gzipBytes(t, needle)},
+		{"br", brBytes(t, needle)},
+		{"zstd", zstdBytes(t, needle)},
+		{"deflate", zlibBytes(t, needle)},       // as RFC 9110 specifies it
+		{"deflate", rawDeflateBytes(t, needle)}, // as some servers send it
+	} {
+		t.Run(tc.enc+"-"+strconv.Itoa(len(tc.body)), func(t *testing.T) {
+			if got := string(decodeBody(tc.enc, tc.body, noBodyLimit)); got != needle {
+				t.Errorf("decodeBody(%q) = %.40q, want %q", tc.enc, got, needle)
+			}
+		})
+	}
+}
+
+// The safety property, and the reason this is sniff-or-fail rather than trust-the-label: a
+// content-encoding header can name an encoding the body was not actually sent in, and a
+// pushing source labels *decoded* bytes with the encoding they arrived in. Decoding such a
+// body must leave it alone, not corrupt it — brotli and raw deflate have no header to check,
+// so they are attempted and kept only if the attempt produced something.
+func TestDecodeBodyLeavesAMislabelledPlainBodyAlone(t *testing.T) {
+	plain := "{\"ok\":true,\"searchable\":\"needle\"}"
+	for _, enc := range []string{"gzip", "br", "zstd", "deflate"} {
+		if got := string(decodeBody(enc, []byte(plain), noBodyLimit)); got != plain {
+			t.Errorf("a plain body labelled %q came back as %.60q, want it untouched", enc, got)
+		}
+	}
+}
+
+// Chains are recorded verbatim and never unwrapped, so they stay the one case a consumer
+// is told about rather than silently mis-served. Same for an encoding we have never heard of.
+func TestDecodeBodyLeavesWhatItCannotUndo(t *testing.T) {
+	raw := brBytes(t, "searchable needle")
+	for _, enc := range []string{"gzip, br", "br, gzip", "exi", "compress"} {
+		if got := decodeBody(enc, raw, noBodyLimit); !bytes.Equal(got, raw) {
+			t.Errorf("decodeBody(%q) changed the bytes; an encoding we cannot undo must not be touched", enc)
+		}
+	}
+}
+
+func TestDecodeBodyHonoursTheLimit(t *testing.T) {
+	raw := brBytes(t, strings.Repeat("ab", 5000))
+	if got := decodeBody("br", raw, 64); len(got) != 64 {
+		t.Errorf("decoded %d bytes under a 64-byte cap", len(got))
+	}
+}
+
+// The live HTTP/1.1 path decodes while it reads, so it needs the same set — it used to
+// handle gzip alone, which left an h1 brotli response stored compressed.
+func TestLiveHTTP1DecodesEveryEncodingWeClaim(t *testing.T) {
+	for _, tc := range []struct {
+		enc  string
+		body []byte
+	}{
+		{"gzip", gzipBytes(t, "searchable needle")},
+		{"br", brBytes(t, "searchable needle")},
+		{"zstd", zstdBytes(t, "searchable needle")},
+		{"deflate", zlibBytes(t, "searchable needle")},
+	} {
+		t.Run(tc.enc, func(t *testing.T) {
+			resp := &http.Response{
+				StatusCode: 200,
+				Header:     http.Header{"Content-Encoding": {tc.enc}},
+				Body:       io.NopCloser(bytes.NewReader(tc.body)),
+			}
+			body, _, enc := readRespBody(resp)
+			if string(body) != "searchable needle" {
+				t.Errorf("body = %.40q, want it decompressed", body)
+			}
+			if enc != tc.enc {
+				t.Errorf("encoding = %q, want %q recorded as provenance", enc, tc.enc)
+			}
+		})
 	}
 }

@@ -10,7 +10,6 @@ package decode
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"io"
 	"net/http"
 	"strings"
@@ -309,21 +308,22 @@ func drainBody(rc io.ReadCloser) ([]byte, bool) {
 	return data, dropped > 0
 }
 
-// readRespBody captures the response body, undoing a gzip Content-Encoding so the
-// preview is readable, and always drains the underlying body for keep-alive alignment.
-// It also reports whether the cap cut the body short, and the encoding the bytes had on
-// the wire ("" when they arrived plain, or when there are no bytes to describe). The
-// overflow is drained through the same (decoded) reader the capture used, so on a gzip
-// body the truncation flag describes the decompressed bytes the viewer shows, not the
-// compressed ones on the wire.
+// readRespBody captures the response body, undoing its Content-Encoding so the preview is
+// readable, and always drains the underlying body for keep-alive alignment. It also reports
+// whether the cap cut the body short, and the encoding the bytes had on the wire ("" when
+// they arrived plain, or when there are no bytes to describe). The overflow is drained
+// through the same (decoded) reader the capture used, so on a compressed body the
+// truncation flag describes the decompressed bytes the viewer shows, not the wire ones.
 func readRespBody(resp *http.Response) (body []byte, truncated bool, encoding string) {
 	defer resp.Body.Close()
 	enc := normalizeEncoding(resp.Header.Get("Content-Encoding"))
 	var r io.Reader = resp.Body
-	if enc == "gzip" {
-		if gz, err := gzip.NewReader(resp.Body); err == nil {
-			defer gz.Close()
-			r = gz
+	// Same encodings as the whole-body path (decoderFor); streaming here, because this one
+	// reads a live response rather than bytes already in hand.
+	if newReader := decoderFor(enc); newReader != nil {
+		if dr, err := newReader(resp.Body); err == nil {
+			defer dr.Close()
+			r = dr
 		}
 	}
 	data, _ := io.ReadAll(io.LimitReader(r, int64(maxLiveBody)))

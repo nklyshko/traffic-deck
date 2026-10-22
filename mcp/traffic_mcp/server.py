@@ -579,6 +579,66 @@ def _url_previews(f, crit: dict) -> dict:
     return prev
 
 
+#: The filter terms that read a body (`~b`, `~bq`, `~bs`), for deciding whether a result
+#: needs the undecodable-body caveat. Word-bounded so `~bq` is not seen inside `~bqx`.
+_BODY_TERM = re.compile(r"(?:^|\s)~b[qs]?(?:\s|$)")
+
+#: Content-encodings the gateway undoes when it stores a body, so one of these labels means
+#: the stored bytes are plain and a body search can read them. Mirrors `attemptsFor` in
+#: gateway/internal/decode/contentencoding.go — keep the two in step.
+_DECODED_ENCODINGS = ("gzip", "br", "deflate", "zstd")
+
+
+async def _unsearchable_bodies(sid: str) -> dict[str, int]:
+    """Bodies in this session still held compressed, counted per encoding — the ones a body
+    search cannot honestly match.
+
+    A body search is a regex over the stored bytes, so a body nothing could decompress is
+    matched as binary noise: it reports *no match* for text that is sitting right there.
+    That silence is the thing worth naming, which is what this is for.
+
+    What is left after the gateway's own decoding is a chain ("gzip, br" — chains are
+    recorded verbatim and never unwrapped) or an encoding newer than the gateway build.
+    Under-reports one case: a decode that was attempted and refused (a corrupt or
+    mislabelled stream) leaves a decodable label on compressed bytes, and the label alone
+    cannot tell that from a success.
+
+    Best-effort against the gateway: an older one has no SQL endpoint, and a diagnostic
+    must never be the reason a search fails. A malformed answer is *not* tolerated — that
+    would be a bug here, and swallowing it would hide it."""
+    holes = ",".join("?" * len(_DECODED_ENCODINGS))
+    sql = ("SELECT enc, COUNT(*) AS n FROM ("
+           "  SELECT req_content_encoding AS enc FROM flows WHERE req_content_encoding != ''"
+           "  UNION ALL "
+           "  SELECT resp_content_encoding AS enc FROM flows WHERE resp_content_encoding != ''"
+           f") WHERE enc NOT IN ({holes}) GROUP BY enc ORDER BY n DESC")
+    try:
+        res = await client().query_sql(sid, sql, list(_DECODED_ENCODINGS), limit=20)
+    except grpc.aio.AioRpcError:
+        return {}
+    out: dict[str, int] = {}
+    for raw in res.rows_json:
+        row = json.loads(raw)
+        enc, n = (row["enc"], row["n"]) if isinstance(row, dict) else (row[0], row[1])
+        out[str(enc)] = int(n)
+    return out
+
+
+async def _body_search_caveat(sid: str) -> dict:
+    """The `unsearchable_bodies` key for a result whose criteria read a body, or {}."""
+    holes = await _unsearchable_bodies(sid)
+    if not holes:
+        return {}
+    total = sum(holes.values())
+    return {"unsearchable_bodies": holes,
+            "unsearchable_bodies_note":
+                f"{total} body/bodies in this session are stored still-compressed in an "
+                f"encoding nothing here can undo, so a body search reads them as binary "
+                f"and cannot match them — a miss on those is 'unknown', not 'absent'. "
+                f"Match on headers or the URL instead, or re-capture once the encoding is "
+                f"supported."}
+
+
 def _timeline_row(seq: int, f, t0: int) -> dict:
     """One compact DevTools-Network-style row (ordered by time)."""
     path = (f.path or "") + (f"?{f.query}" if f.query else "")
@@ -1094,6 +1154,11 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     if out["scan_limited"]:
         out["note"] = (f"stopped after scanning {scanned} flows — narrow the criteria, "
                        f"add a since/until window, or raise max_scan")
+    # A body criterion over a session holding undecodable bodies cannot give a complete
+    # answer, and saying nothing makes a partial answer look whole. Only when one session
+    # is named: across a whole gateway this would be a query per session for a footnote.
+    if (request_body_contains or response_body_contains) and session_id:
+        out |= await _body_search_caveat(await _resolve_session(session_id))
     return out
 
 
@@ -1173,6 +1238,11 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
         elif not out.get("hints"):
             out.setdefault("hints", []).append(
                 "nothing matched — try one term at a time, or widen the regex")
+    # A body term over bodies nothing could decompress has no honest answer, so the miss
+    # has to be reported as unknown rather than as absence. Checked whether or not anything
+    # matched: a partial hit is as misleading as none.
+    if _BODY_TERM.search(filter):
+        out |= await _body_search_caveat(sid)
     return out
 
 
