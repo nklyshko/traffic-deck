@@ -52,6 +52,15 @@ list and leaves the source out when nothing answers, rather than letting a user 
 something that can only time out. Starting it by name anyway fails in seconds with the
 address it tried.
 
+**One address can serve several sources.** A module that owns one expensive resource and
+offers more than one technique against it does not need a process per source: every request
+carries the source name, so one server can answer for all of them. In Python,
+`capture_sdk.source.serve_forever({"acme": …, "acme-lite": …}, addr)` — the built-in Android
+tool does exactly this for its per-app and browser sources over one emulator (see
+[ADR-0010 §4a](adr/0010-supervisor-and-capture-modules.md)). A resource the sources share is
+released by the last one to let go, not the first. Declaring the extra names in a manifest
+is not wired up yet; a module can already do it by serving each source on its own address.
+
 Each spawned process gets its own rolling log file under `<DATA_ROOT>/logs/` — see
 [configuration](configuration.md). A process's `url` is narration only: the gateway prints
 `service "module:acme:01-web" started — open http://127.0.0.1:5173 (log: …)` and passes it to

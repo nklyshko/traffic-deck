@@ -10,7 +10,7 @@ capture against a remote gateway.
 - [B) Live-capture Chrome](#b-live-capture-chrome)
 - [C) Live-capture Firefox](#c-live-capture-firefox)
 - [D) mitmproxy (any device, incl. WireGuard)](#d-mitmproxy-any-device-incl-wireguard)
-- [E) Android (rooted emulator/device, per-app)](#e-android-rooted-emulatordevice-per-app)
+- [E) Android (emulator/device, per-app or browser)](#e-android-emulatordevice-per-app-or-browser)
 - [F) Chrome, per-process (macOS, PKTAP)](#f-chrome-per-process-macos-pktap)
 
 See also [`capture/README.md`](../capture/README.md) for how the capture apps are
@@ -180,13 +180,30 @@ Because mitmproxy terminates the connection there is no pcap for these sessions,
 `W` (open in Wireshark) has nothing to open and the `Conn`/`Stream` columns stay empty —
 see [the TUI guide](tui.md#http2-connections-and-streams).
 
-## E) Android (rooted emulator/device, per-app)
+## E) Android (emulator/device, per-app or browser)
 
-Captures **one app's** traffic from a rooted emulator/device: Frida hooks the system
-`libssl.so` to dump TLS secrets (NSS `key.log`, no proxy/CA), and the app's packets
-are isolated by UID via `iptables … NFLOG` + on-device `tcpdump -i nflog:<group>`.
-Both stream to the gateway over the same pipeline as Chrome and decode to decrypted
-flows. See [ADR-0007](adr/0007-android-per-app-capture.md) for the design.
+Captures **one app's** traffic from an emulator or device. The Android tool offers this as
+**two capture sources**, picked like any other in the source list:
+
+| Source | Target | Needs root | Session |
+|---|---|---|---|
+| `android` — "Android" | any app on the system TLS stack | yes | pcap + `key.log` |
+| `android-browser` — "Android browser" | a Chromium browser | no | pushed flows |
+
+They are two tools rather than two settings of one, because the targets, the prerequisites
+and the recorded session all differ — and the browser is the one thing the first cannot
+decrypt at all. What they share is the expensive part: **one device, booted once**. Both
+sources are served by one module process over one connection, so picking the second does
+not provision a second emulator, and releasing either one leaves a capture running on the
+other alone. See [ADR-0010 §4a](adr/0010-supervisor-and-capture-modules.md).
+
+### E1) `android` — per-app packets + TLS keylog (needs root)
+
+Frida hooks the system `libssl.so` to dump TLS secrets (NSS `key.log`, no proxy/CA), and
+the app's packets are isolated by UID via `iptables … NFLOG` + on-device
+`tcpdump -i nflog:<group>`. Both stream to the gateway over the same pipeline as Chrome and
+decode to decrypted flows, so this keeps the app's own TLS fingerprint and the `conn`/
+`stream` columns. See [ADR-0007](adr/0007-android-per-app-capture.md) for the design.
 
 Prereqs: the Android SDK (so `adb`/`emulator` are available) and a **rooted** target.
 Root is auto-detected: `adb root` (emulator / `userdebug` builds) or **Magisk `su`**
@@ -197,7 +214,8 @@ Magisk devices already ship `tcpdump` + `iptables`.
 **Interactive (recommended)** — guided flow: pick target (emulator/device), set up or
 boot an emulator if needed, ensure root, pick the **frida version** (v16/v17, defaulting
 to the one recommended for the device's Android release — frida 17 can't spawn on
-Android ≤ 11), pick the app, optionally add Frida scripts (SSL-unpinning/bypass):
+Android ≤ 11), pick the method, pick the app, optionally add Frida scripts
+(SSL-unpinning/bypass):
 
 ```sh
 uv run --project capture/capture_android trafficdeck-capture-android
@@ -215,19 +233,63 @@ uv run --project capture/capture_android python -m capture_android.headless \
     --package com.example.app --url https://example.com --duration 30 --script unpin.js
 ```
 
-Flags: `--package` (required), `--url`, `--duration`, `--script FILE` (repeatable),
-`--attach` (hook the running app instead of spawning), `--serial`, `--nflog-group`,
-`--gateway`.
+Flags: `--package` (required), `--method frida|proxy`, `--url`, `--duration`,
+`--script FILE` (repeatable), `--attach` (hook the running app instead of spawning),
+`--serial`, `--nflog-group`, `--gateway`.
 
 > Works for apps using the **system** TLS stack (OkHttp/`HttpURLConnection`→Conscrypt).
 > Apps that **bundle their own BoringSSL** (Chrome, most Flutter apps) won't be
-> decrypted by the `libssl.so` hook — Chrome has its own `--ssl-key-log-file` for that.
+> decrypted by the `libssl.so` hook — for a browser, use E2 below.
 > The agent hooks the main process **and** matching `<pkg>:child` processes.
 >
 > Verified end-to-end on both an emulator and a Magisk-rooted retail device (decrypted
 > HTTPS flows). frida-server is matched to the installed `frida` (pinned to 16.7.x,
 > which still supports older Android — frida 17 fails to spawn on e.g. Android 10) and
 > started as a root daemon in its own session.
+
+### E2) `android-browser` — a browser through mitmproxy (needs no root)
+
+```sh
+uv run --project capture/capture_android python -m capture_android.headless \
+    --method proxy --package com.android.chrome --url https://example.org --duration 30
+```
+
+(`--method` is the module's own flag for its two techniques; through the gateway you pick
+the `android-browser` *source* instead and there is no method to choose.)
+
+A Chromium browser is the one target E1 cannot decrypt, and nothing about it is fixable
+from the Frida side: Chrome's BoringSSL is statically linked into `libmonochrome` with no
+exported symbols, so the keylog hook resolves *conscrypt's* `libssl` instead and silently
+produces an **empty** `key.log`. Chrome's own `--ssl-key-log-file` is read on Android but
+aborts its NetworkService on `fdsan` (seen on Chrome 91 / Android 11; the flag plumbing is
+right, so a newer build may differ). So the browser is captured the other way round:
+mitmproxy terminates TLS and the browser is pointed at it.
+
+The capture starts its own `mitmdump` on a **dynamic port**, bound to loopback only, and
+the device reaches it over **`adb reverse`** — so no port is exposed to the network, there
+is no host address to discover (`10.0.2.2` vs a LAN IP), and the same flags work on an
+emulator and on a USB-attached phone. The browser is restarted onto
+`/data/local/tmp/chrome-command-line`, which `adb shell` can write **unrooted** —
+`/data/local/tmp` belongs to the shell user. Flows reach the gateway from mitmproxy's own
+addon (`PushFlows`), so this is a FLOWS session recording `android.package`/`android.method`
+in its metadata.
+
+Both the flags file and the `adb reverse` are removed when the capture ends, including when
+it fails partway — a command-line file left behind would silently proxy, and stop verifying
+certificates for, every later browser launch.
+
+> **What this costs.** A terminating proxy means no pcap, no `key.log`, no real client
+> fingerprint and no `conn`/`stream` columns — bodies are readable, the TLS handshake is
+> mitmproxy's. `--ignore-certificate-errors` is what saves installing a CA on the device
+> (the system store needs root, the user store needs a trip through Settings), and it turns
+> off certificate checking for that browser run, which is why the browser is restarted
+> again on the way out. `--disable-quic` keeps traffic from leaving over UDP, which a
+> CONNECT proxy would never see.
+>
+> Needs `ro.debuggable=1` (emulators, `userdebug` builds) for the command-line file to be
+> read; on a production phone enable `chrome://flags#enable-command-line-on-non-rooted-devices`
+> once instead. Verified end-to-end on an emulator (Android 11, Chrome 91): decrypted
+> HTTPS flows in the gateway, session closed with its bodies searchable.
 
 ## F) Chrome, per-process (macOS, PKTAP)
 
@@ -382,6 +444,7 @@ what it caught:
 | `browser.incognito` | Chrome and PKTAP — always stated, so "off" is distinguishable from "not recorded" |
 | `pktap.proc` | the process name the kernel filter matched |
 | `android.package`, `android.uid`, `android.scripts`, `android.url` | the Android source |
+| `android.method`, `android.serial` | the Android source's browser-through-mitmproxy method |
 | `mitmproxy.mode`, `mitmproxy.listen_port`, `mitmproxy.listen_host` | the proxy source |
 | `viewer.columns` | not an option — the source's suggested flow-table columns ([tui.md](tui.md#decoder-fields-are-columns)) |
 | `capture.pids` | reported at *close*, not at open: the pids the PKTAP source actually saw |

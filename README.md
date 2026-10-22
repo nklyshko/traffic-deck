@@ -30,8 +30,9 @@ traffic unless you want one.
 - **Capture sources** — [live Chrome](docs/capture-sources.md#b-live-capture-chrome) and
   [Firefox](docs/capture-sources.md#c-live-capture-firefox) (`dumpcap` + `SSLKEYLOGFILE`),
   [mitmproxy](docs/capture-sources.md#d-mitmproxy-any-device-incl-wireguard) (any device,
-  incl. WireGuard), [per-app Android](docs/capture-sources.md#e-android-rooted-emulatordevice-per-app)
-  from a rooted device/emulator (Frida `libssl` key-log + UID→NFLOG `tcpdump`), and
+  incl. WireGuard), [Android](docs/capture-sources.md#e-android-emulatordevice-per-app-or-browser)
+  per app from a rooted device/emulator (Frida `libssl` key-log + UID→NFLOG `tcpdump`) or
+  per browser through a loopback mitmproxy with no root at all, and
   [pcap import](docs/capture-sources.md#a-import-a-pre-captured-pcap--keylog).
 - **Live decode** — a streaming capture decodes as it arrives, no tshark, and the flows
   are persisted incrementally, so a running capture is fully readable mid-flight.

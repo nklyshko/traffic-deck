@@ -167,7 +167,7 @@ class DescribeCaptureSourceRequest(_message.Message):
     def __init__(self, source: _Optional[str] = ..., params: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class DescribeRequest(_message.Message):
-    __slots__ = ("params",)
+    __slots__ = ("params", "source")
     class ParamsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -176,8 +176,10 @@ class DescribeRequest(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     PARAMS_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
     params: _containers.ScalarMap[str, str]
-    def __init__(self, params: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    source: str
+    def __init__(self, params: _Optional[_Mapping[str, str]] = ..., source: _Optional[str] = ...) -> None: ...
 
 class SourceDescriptor(_message.Message):
     __slots__ = ("params", "readiness", "message")
@@ -214,12 +216,16 @@ class Choice(_message.Message):
     def __init__(self, value: _Optional[str] = ..., label: _Optional[str] = ...) -> None: ...
 
 class ReleaseSourceRequest(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
+    __slots__ = ("source",)
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    source: str
+    def __init__(self, source: _Optional[str] = ...) -> None: ...
 
 class StatusRequest(_message.Message):
-    __slots__ = ()
-    def __init__(self) -> None: ...
+    __slots__ = ("source",)
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    source: str
+    def __init__(self, source: _Optional[str] = ...) -> None: ...
 
 class SourceStatus(_message.Message):
     __slots__ = ("state", "active_sessions", "detail")

@@ -9,10 +9,12 @@ A frida-free front-end over the capture library. Guided flow:
      the latest available (auto-checked on GitHub); v16 and v17 are always offered
 
 Then a main menu loops:
-  * Start a capture — pick the app (installed list, shown as "App Name (package)";
-    names come from Frida, which also starts frida-server for the capture to reuse —
-    --no-app-names lists packages only) + optional unpinning scripts + URL, then run it.
-    Ctrl-C stops that capture (graceful, then force on a second Ctrl-C) and returns here.
+  * Start a capture — pick the method first. Per-app packets + TLS keylog: pick the app
+    (installed list, shown as "App Name (package)"; names come from Frida, which also
+    starts frida-server for the capture to reuse — --no-app-names lists packages only) +
+    optional unpinning scripts + URL. Browser through mitmproxy: pick the browser + URL,
+    and nothing needs root (see chromeproxy). Ctrl-C stops that capture (graceful, then
+    force on a second Ctrl-C) and returns here.
   * Stop / Delete emulator — shut it down, or delete the AVD.
   * Exit — and offer to stop an emulator we booted.
 
@@ -30,6 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from capture_android import chromeproxy
 from capture_android import frida_versions
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
@@ -168,9 +171,18 @@ def app_choices(packages: list[str], labels: dict[str, str]) -> list[tuple[str, 
 
 
 def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str, args) -> None:
-    """One capture: pick app + scripts + URL, then run the capture as a subprocess and
-    wait. Ctrl-C is owned by the capture (its two-stage stop), so we keep waiting and
+    """One capture: pick the method, then its options, then run the capture as a subprocess
+    and wait. Ctrl-C is owned by the capture (its two-stage stop), so we keep waiting and
     return to the main menu once it stops, rather than exec'ing and never coming back."""
+    method = store.remember("method", prompt.select(
+        "Capture method:",
+        [("Per-app packets + TLS keylog (needs root)", "frida"),
+         ("Browser through mitmproxy (no root — the only way to decrypt Chrome)", "proxy")],
+        default=store.get("method", "frida")))
+    if method == "proxy":
+        _run_proxy_capture(adb, store, serial, args)
+        return
+
     tp = not args.all_apps
     pkgs = adb.list_packages(third_party=tp)
     if not pkgs:
@@ -189,7 +201,7 @@ def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str,
         "URL to open in the app (optional)", store.get("url", "")))
 
     cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
-           "python", "-m", "capture_android.headless",
+           "python", "-m", "capture_android.headless", "--method", "frida",
            "--serial", serial, "--package", package, "--gateway", args.gateway]
     if url:
         cmd += ["--url", url]
@@ -197,7 +209,36 @@ def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str,
         cmd += ["--duration", str(args.duration)]
     for s in scripts:
         cmd += ["--script", s]
-    print(f"\nlaunching capture: {package} under frida {fver}  (Ctrl-C to stop)\n")
+    _launch_and_wait(cmd, f"{package} under frida {fver}")
+
+
+def _run_proxy_capture(adb: AdbClient, store: Store, serial: str, args) -> None:
+    """The proxy method: pick a browser and run it through mitmproxy. No frida version and
+    no root — and no app-name resolution, since the targets are a known handful."""
+    browsers = chromeproxy.installed_browsers(adb)
+    if browsers:
+        package = store.remember("browser", prompt.select(
+            "Browser to capture:", browsers, default=store.get_valid("browser", browsers)))
+    else:
+        package = prompt.text("Browser package (none of the known ones is installed)", "")
+        if not package:
+            print("no browser chosen\n")
+            return
+    url = store.remember("url", prompt.text(
+        "URL to open in the browser (optional)", store.get("url", "")))
+
+    cmd = ["uv", "run", "--project", _PROJECT,
+           "python", "-m", "capture_android.headless", "--method", "proxy",
+           "--serial", serial, "--package", package, "--gateway", args.gateway]
+    if url:
+        cmd += ["--url", url]
+    if args.duration is not None:
+        cmd += ["--duration", str(args.duration)]
+    _launch_and_wait(cmd, f"{package} through mitmproxy")
+
+
+def _launch_and_wait(cmd: list[str], what: str) -> None:
+    print(f"\nlaunching capture: {what}  (Ctrl-C to stop)\n")
     proc = subprocess.Popen(cmd)
     while True:
         try:
@@ -265,7 +306,7 @@ def main(argv=None) -> None:
 
 
 def _serve(argv) -> None:
-    from capture_android.source import AndroidSource
+    from capture_android.source import sources
     from capture_sdk import source as harness
 
     ap = argparse.ArgumentParser(prog="capture-android serve",
@@ -274,7 +315,8 @@ def _serve(argv) -> None:
     ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:0"),
                     help="address to serve CaptureSourceService on (host:port; :0 auto-assigns)")
     args = ap.parse_args(argv)
-    harness.serve_forever(AndroidSource(args.gateway), args.control)
+    # Two sources over this one connection — one device, booted once. See source.sources.
+    harness.serve_forever(sources(args.gateway), args.control)
 
 
 def _interactive(argv) -> None:

@@ -65,6 +65,29 @@ calling `OpenSession`/`UploadCapture`/`PushFlows`/`CloseSession` as today) and a
 this one. `StartCaptureRequest` gains `string source`, since `SourceKind` is a closed enum
 and cannot name a module.
 
+**4a. Amendment: one connection may serve several named sources.** Originally a source was
+identified *by its connection* — one process, one source, and `StartCaptureRequest.source`
+was ignored on the source-facing side. That held until one tool needed to offer two
+genuinely different capture techniques over one expensive resource: Android captures an app
+with per-app packets + a Frida keylog (needs root), and a browser by routing it through
+mitmproxy (needs none, and is the only thing that decrypts Chrome). Those are not two
+settings of one form — different targets, different prerequisites, different recorded
+session — so they are two sources. But they cannot be two *processes*, because the second
+would boot a second emulator.
+
+So the source name moved into the requests (`DescribeRequest`, `StatusRequest` and
+`ReleaseSourceRequest` gained `source`; `StartCaptureRequest` already had it and now has it
+honoured), and the gateway's registry gained `Spec.ServedBy` — a source reached over
+another's connection, with no launcher of its own. `StopCapture` needs no name: a session id
+already identifies one capture across the module. The fields are additive and empty means
+"your only/primary source", so every single-source tool is unchanged — and a tool serving
+one source answers whatever name it is dialed for, since it cannot have been dialed for
+anything else.
+
+The resource rule of decision 4 then needs its matching half: a resource *shared* between
+sources outlives a release of any one of them. The last source to let go tears it down, so
+stopping a browser capture cannot pull the emulator out from under a running app capture.
+
 **5. `Describe` carries the whole option model; transient vs persistent is one policy
 knob.** `Describe(source, partial_params)` returns a typed `SourceDescriptor` (params:
 key, label, type, choices, default, required), so viewers render the form generically and
@@ -130,7 +153,14 @@ mutating, because a one-tap toggle otherwise hides a network-exposure action.
 - **Teardown follows provisioning ownership** — the one non-uniform rule. If TrafficDeck
   booted the emulator it tears it down; if Android *attached* to one the user already had
   running, `ReleaseSource` must leave it alone. Same principle as "only close the session
-  you opened".
+  you opened". With decision 4a there is a second clause: a resource shared by several
+  sources in one process is released by the last of them, never the first.
+- **A tool may be a toolbox.** Several sources over one connection (4a) is what lets one
+  module expose genuinely different techniques against one resource without the registry,
+  the pickers or any viewer learning about it — they are name-driven already, so two entries
+  cost no UI work. The price is that a source is no longer identified by its connection,
+  which is one more thing a module author can get wrong; the empty-name default keeps that
+  cost at zero for the common single-source tool.
 - The CLI pickers stay for direct human use — they already skip themselves without a TTY
   (`cli.py`: `interactive = not args.no_prompt and sys.stdin.isatty()`). The `Describe`
   logic and the interactive picker must call the *same* discovery code

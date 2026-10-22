@@ -8,6 +8,11 @@ sessions are live so `Status` is automatic, and on SIGTERM/SIGINT (the superviso
 group-kill) stops each live capture and releases the resource before exiting, so a
 supervised tool finalizes cleanly rather than stranding sessions. See ADR-0010.
 
+One process can serve **several named sources** — pass `{name: source}` to serve_forever.
+That is for a module whose tools share one expensive resource: Android offers per-app
+capture and browser capture as two sources over one emulator, booted once. Requests carry
+the source name, so a single-source tool needs no change.
+
 The control plane only lives here; the *data* plane (OpenSession/UploadCapture/PushFlows)
 stays in the tool, exactly as the standalone CLI already does it — `start_capture` opens
 the session and returns its id while capture continues in the background.
@@ -90,7 +95,8 @@ class CaptureSource(abc.ABC):
 
     def release(self) -> None:
         """Drop any warm resource. Default no-op. Teardown follows provisioning ownership:
-        only tear down what this source created, never a resource it merely attached to."""
+        only tear down what this source created, never a resource it merely attached to —
+        and never one another source in this process is still using (see serve)."""
 
     # --- for the source to call --------------------------------------------
 
@@ -135,50 +141,101 @@ class CaptureSource(abc.ABC):
 
 
 class _Servicer(sp_grpc.CaptureSourceServiceServicer):
-    """Adapts a CaptureSource to the generated servicer, marshaling proto<->Python and
-    turning source-raised errors into gRPC status rather than crashing the server."""
+    """Adapts one or more CaptureSources to the generated servicer, marshaling
+    proto<->Python and turning source-raised errors into gRPC status rather than crashing
+    the server.
 
-    def __init__(self, source: CaptureSource) -> None:
-        self._source = source
+    A module may serve several named sources over this one connection (ADR-0010), so each
+    request names the one it addresses. An empty name means "the primary source" — what a
+    single-source module always gets, and what an older gateway sends.
+    """
+
+    def __init__(self, sources: CaptureSource | Mapping[str, CaptureSource]) -> None:
+        if isinstance(sources, CaptureSource):
+            # A tool serving one source does not know the name the gateway registered it
+            # under, and does not need to: it has exactly one tool, and the gateway would not
+            # have dialed it for anything else. So it answers whatever name it is asked for.
+            self._named: dict[str, CaptureSource] = {}
+            self._primary = sources
+            return
+        if not sources:
+            raise ValueError("serve needs at least one source")
+        self._named = dict(sources)
+        # First declared wins the unnamed requests — declaration order is the module's own
+        # statement of which tool is the obvious one.
+        self._primary = next(iter(self._named.values()))
+
+    def _all(self) -> list[CaptureSource]:
+        return list(self._named.values()) or [self._primary]
+
+    def _pick(self, name: str, context) -> CaptureSource:
+        if not name or not self._named:
+            return self._primary
+        src = self._named.get(name)
+        if src is None:
+            context.abort(grpc.StatusCode.NOT_FOUND,
+                          f"this module does not serve source {name!r} "
+                          f"(serves: {', '.join(sorted(self._named))})")
+        return src
+
+    def _owner(self, session_id: str) -> CaptureSource:
+        """Which source started this session. Stop and its untracking must land on the
+        source that owns the capture, and StopCapture carries no source name — the session
+        id already identifies one capture across the whole module."""
+        for src in self._all():
+            if session_id in src._status().active_sessions:
+                return src
+        return self._primary
 
     def Describe(self, request, context):
+        src = self._pick(request.source, context)
         try:
-            return self._source.describe(dict(request.params))
+            return src.describe(dict(request.params))
         except Exception as exc:  # noqa: BLE001
             context.abort(grpc.StatusCode.INTERNAL, f"describe: {exc}")
 
     def StartCapture(self, request, context):
+        src = self._pick(request.source, context)
         try:
-            sid = self._source.start_capture(request.label, dict(request.params))
+            sid = src.start_capture(request.label, dict(request.params))
         except Exception as exc:  # noqa: BLE001
             context.abort(grpc.StatusCode.INTERNAL, f"start: {exc}")
-        self._source._track(sid)
+        src._track(sid)
         return ctl.StartCaptureResponse(session_id=sid)
 
     def StopCapture(self, request, context):
+        src = self._owner(request.session_id)
         try:
-            self._source.stop_capture(request.session_id)
+            src.stop_capture(request.session_id)
         except Exception as exc:  # noqa: BLE001
             context.abort(grpc.StatusCode.INTERNAL, f"stop: {exc}")
-        self._source.session_ended(request.session_id)
+        src.session_ended(request.session_id)
         return ctl.Empty()
 
     def ReleaseSource(self, request, context):
+        src = self._pick(request.source, context)
         try:
-            self._source.release()
+            src.release()
         except Exception as exc:  # noqa: BLE001
             context.abort(grpc.StatusCode.INTERNAL, f"release: {exc}")
         return ctl.Empty()
 
     def Status(self, request, context):
-        return self._source._status()
+        return self._pick(request.source, context)._status()
 
 
-def serve(source: CaptureSource, addr: str) -> tuple[grpc.Server, int]:
-    """Start a gRPC server for `source` bound to `addr` (host:port; port 0 auto-assigns).
-    Returns the running server and the bound port. Does not block."""
+def serve(sources: CaptureSource | Mapping[str, CaptureSource],
+          addr: str) -> tuple[grpc.Server, int]:
+    """Start a gRPC server for `sources` bound to `addr` (host:port; port 0 auto-assigns).
+    Returns the running server and the bound port. Does not block.
+
+    `sources` is one CaptureSource, or a `{name: source}` mapping when this module offers
+    several tools over one connection — the way to expose one warm resource (an emulator)
+    as more than one source without provisioning it twice. The names are the ones the
+    gateway registered; the first is the primary.
+    """
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=8))
-    sp_grpc.add_CaptureSourceServiceServicer_to_server(_Servicer(source), server)
+    sp_grpc.add_CaptureSourceServiceServicer_to_server(_Servicer(sources), server)
     port = server.add_insecure_port(addr)
     if port == 0:
         raise RuntimeError(f"could not bind {addr!r}")
@@ -191,12 +248,13 @@ def serve(source: CaptureSource, addr: str) -> tuple[grpc.Server, int]:
 READY_PREFIX = "traffic-deck source ready "
 
 
-def serve_forever(source: CaptureSource, addr: str, *, on_ready=None) -> None:
-    """Serve `source` and block until SIGTERM/SIGINT, then shut down gracefully — stop
-    every live capture and release the resource — so a supervised tool never strands a
+def serve_forever(sources: CaptureSource | Mapping[str, CaptureSource], addr: str,
+                  *, on_ready=None) -> None:
+    """Serve `sources` and block until SIGTERM/SIGINT, then shut down gracefully — stop
+    every live capture and release each resource — so a supervised tool never strands a
     session. Prints the canonical READY_PREFIX line the supervisor waits for; `on_ready(port)`
     is an extra hook."""
-    server, port = serve(source, addr)
+    server, port = serve(sources, addr)
     print(f"{READY_PREFIX}127.0.0.1:{port}", flush=True)
     if on_ready is not None:
         on_ready(port)
@@ -204,5 +262,8 @@ def serve_forever(source: CaptureSource, addr: str, *, on_ready=None) -> None:
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     stop.wait()
-    source._shutdown()
+    # Every source, not just the primary: each stops its own captures, and a resource shared
+    # between them is torn down by whichever of them is last (see CaptureSource.release).
+    for src in ([sources] if isinstance(sources, CaptureSource) else list(sources.values())):
+        src._shutdown()
     server.stop(grace=5).wait()

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"testing"
@@ -123,14 +124,18 @@ func equal(a, b []string) bool {
 // what it was asked to stop, so the manager's dispatch and routing can be checked.
 type fakeSource struct {
 	trafficv1.UnimplementedCaptureSourceServiceServer
-	name    string
-	mu      sync.Mutex
-	n       int
-	started []*trafficv1.StartCaptureRequest
-	stopped []string
+	name      string
+	mu        sync.Mutex
+	n         int
+	described []*trafficv1.DescribeRequest
+	started   []*trafficv1.StartCaptureRequest
+	stopped   []string
 }
 
-func (f *fakeSource) Describe(_ context.Context, _ *trafficv1.DescribeRequest) (*trafficv1.SourceDescriptor, error) {
+func (f *fakeSource) Describe(_ context.Context, req *trafficv1.DescribeRequest) (*trafficv1.SourceDescriptor, error) {
+	f.mu.Lock()
+	f.described = append(f.described, req)
+	f.mu.Unlock()
 	return &trafficv1.SourceDescriptor{Message: f.name}, nil
 }
 
@@ -299,6 +304,79 @@ func TestUnknownSourceErrors(t *testing.T) {
 	m, _, _ := managerWithFakes(t, "chrome")
 	if _, err := m.StartCapture(context.Background(), "nope", "run", nil); err == nil {
 		t.Fatal("unknown source should error")
+	}
+}
+
+// One tool can offer several sources: the Android module serves per-app capture and browser
+// capture over one emulator. They must share a *connection*, because a second process would
+// boot a second device — so the shared source is spawned zero times of its own, and every
+// request names the source so the module knows which of its tools is being addressed.
+func TestSeveralSourcesShareOneConnection(t *testing.T) {
+	m, fakes, counts := managerWithFakes(t, "android")
+	m.specs["android-browser"] = Spec{ServedBy: "android", Label: "Android browser"}
+	ctx := context.Background()
+
+	for _, name := range []string{"android", "android-browser"} {
+		if _, err := m.Describe(ctx, name, nil); err != nil {
+			t.Fatalf("describe %s: %v", name, err)
+		}
+	}
+	if *counts["android"] != 1 {
+		t.Errorf("spawned %d processes for two sources, want 1 (one device)", *counts["android"])
+	}
+
+	f := fakes["android"]
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var asked []string
+	for _, d := range f.described {
+		asked = append(asked, d.GetSource())
+	}
+	if want := []string{"android", "android-browser"}; !slices.Equal(asked, want) {
+		t.Errorf("describe named %v, want %v — the module cannot tell its tools apart otherwise", asked, want)
+	}
+}
+
+// A capture on a shared source is routed by name on the way in and by session id on the way
+// out, both over the one connection.
+func TestSharedSourceRoundTripsStartAndStop(t *testing.T) {
+	m, fakes, _ := managerWithFakes(t, "android")
+	m.specs["android-browser"] = Spec{ServedBy: "android"}
+	ctx := context.Background()
+
+	sid, err := m.StartCapture(ctx, "android-browser", "run", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StopCapture(ctx, sid); err != nil {
+		t.Fatal(err)
+	}
+
+	f := fakes["android"]
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.started) != 1 || f.started[0].GetSource() != "android-browser" {
+		t.Errorf("start reached the module as %q, want android-browser", f.started[0].GetSource())
+	}
+	if !slices.Equal(f.stopped, []string{sid}) {
+		t.Errorf("stopped %v, want [%s]", f.stopped, sid)
+	}
+}
+
+// A source served by one that could not be located is not offerable — the same promise a
+// missing launcher already gets, rather than a picker entry that fails on use.
+func TestASharedSourceIsDroppedWithItsServer(t *testing.T) {
+	t.Setenv("TRAFFICDECK_SOURCE_ANDROID", "") // force the android launcher to be missing
+	t.Setenv("TRAFFICDECK_SOURCE_CHROME", "true")
+	t.Setenv("PATH", t.TempDir()) // nothing installed, and no repo dir is found from here
+	t.Chdir(t.TempDir())
+
+	specs := DefaultSpecs()
+	if _, ok := specs["android"]; ok {
+		t.Skip("android launcher was located anyway; this environment cannot show the drop")
+	}
+	if _, ok := specs["android-browser"]; ok {
+		t.Error("android-browser was offered with no android to serve it")
 	}
 }
 

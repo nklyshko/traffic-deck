@@ -16,12 +16,17 @@ import sys
 
 from capture_android.adb import AdbClient
 from capture_android.capture import run_capture
+from capture_android.chromeproxy import run_proxy_capture
 from capture_android.frida_server import ensure_target_ready
 
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="Per-app Android capture → gateway")
     ap.add_argument("--package", required=True, help="target app package name")
+    ap.add_argument("--method", choices=("frida", "proxy"), default="frida",
+                    help="frida: per-app pcap + TLS keylog (needs root). "
+                         "proxy: route a Chromium browser through mitmproxy (no root, "
+                         "no keylog — the only way to decrypt Chrome)")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
     ap.add_argument("--label", default=None, help="session label (default: the package)")
     ap.add_argument("--url", default=None, help="open this URL in the app after launch")
@@ -36,11 +41,18 @@ def main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     adb = AdbClient(serial=args.serial)
-    ensure_target_ready(adb)
     # A supervisor (the serve-mode source) parses this line to learn the session id while
     # the capture runs; harmless noise for a human.
     on_session = lambda sid: print(f"SESSION {sid}", flush=True)
     try:
+        if args.method == "proxy":
+            # No root, no frida-server: the browser connects out through mitmproxy, so
+            # ensure_target_ready's elevation is not needed (and not wanted — this path is
+            # the one that works on a stock device).
+            run_proxy_capture(adb, args.package, gateway=args.gateway, label=args.label,
+                              url=args.url, duration=args.duration, on_session=on_session)
+            return
+        ensure_target_ready(adb)
         run_capture(adb, args.package, gateway=args.gateway, label=args.label, url=args.url,
                     duration=args.duration, extra_scripts=args.script,
                     nflog_group=args.nflog_group, mark=args.mark, attach=args.attach,

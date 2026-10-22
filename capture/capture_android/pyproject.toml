@@ -25,3 +25,8 @@ artifacts = ["capture_android/*.js"]
 
 [tool.uv.sources]
 trafficdeck-capture-sdk = { path = "../capture_sdk", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

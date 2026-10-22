@@ -32,6 +32,10 @@ class CaptureSourceServiceStub(object):
     enumerate options and drive capture. Chrome, Android and a third-party module all look
     identical to the gateway — an address speaking this service. See ADR-0010.
 
+    One connection may serve *several* named sources: a module that owns one expensive
+    resource (an emulator) can offer it as more than one tool without booting it twice, so
+    every request below carries the source name and empty means "your only/primary one".
+
     A source is also a *client* of IngestService: StartCapture below opens a session
     (OpenSession) and streams into it (UploadCapture / PushFlows), then returns its id.
     """
@@ -76,6 +80,10 @@ class CaptureSourceServiceServicer(object):
     enumerate options and drive capture. Chrome, Android and a third-party module all look
     identical to the gateway — an address speaking this service. See ADR-0010.
 
+    One connection may serve *several* named sources: a module that owns one expensive
+    resource (an emulator) can offer it as more than one tool without booting it twice, so
+    every request below carries the source name and empty means "your only/primary one".
+
     A source is also a *client* of IngestService: StartCapture below opens a session
     (OpenSession) and streams into it (UploadCapture / PushFlows), then returns its id.
     """
@@ -92,7 +100,7 @@ class CaptureSourceServiceServicer(object):
     def StartCapture(self, request, context):
         """Start a capture with resolved params; the source opens a session and returns its id
         while capture continues in the background. Reuses ControlService's StartCaptureRequest
-        (its `source` field is ignored here — the source is known by the connection).
+        (its `source` field picks among the sources this connection serves).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -101,7 +109,8 @@ class CaptureSourceServiceServicer(object):
     def StopCapture(self, request, context):
         """End the given session; a source that keeps a warm resource stays up (see keep_warm in
         ADR-0010) and returns to READY. Returns Empty — the source closes the session
-        (CloseSession) but doesn't hold the Session; the gateway owns session state.
+        (CloseSession) but doesn't hold the Session; the gateway owns session state. Routed by
+        session id, so it needs no source name.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -110,7 +119,8 @@ class CaptureSourceServiceServicer(object):
     def ReleaseSource(self, request, context):
         """Drop any warm resource (e.g. shut an emulator this source booted). A source with
         nothing to hold treats it as a no-op. Teardown follows provisioning ownership: a
-        resource the source only attached to must be left running.
+        resource the source only attached to must be left running — and a resource *shared*
+        with another source on this connection outlives a release of either one alone.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -165,6 +175,10 @@ class CaptureSourceService(object):
     built-in's `serve` mode (or reaches a module's manifest process) and dials in to
     enumerate options and drive capture. Chrome, Android and a third-party module all look
     identical to the gateway — an address speaking this service. See ADR-0010.
+
+    One connection may serve *several* named sources: a module that owns one expensive
+    resource (an emulator) can offer it as more than one tool without booting it twice, so
+    every request below carries the source name and empty means "your only/primary one".
 
     A source is also a *client* of IngestService: StartCapture below opens a session
     (OpenSession) and streams into it (UploadCapture / PushFlows), then returns its id.

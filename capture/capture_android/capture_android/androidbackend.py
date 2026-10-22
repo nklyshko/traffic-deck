@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Mapping
 
 from capture_android import frida_versions
+from capture_android import chromeproxy
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices
 
@@ -88,12 +89,20 @@ class RealAndroidBackend:
     def list_packages(self) -> list[str]:
         return AdbClient(serial=self._serial).list_packages()
 
+    def list_browsers(self) -> list[str]:
+        return chromeproxy.installed_browsers(AdbClient(serial=self._serial))
+
     def start(self, package: str, label: str, params: Mapping[str, str],
               on_session, stop_event: threading.Event) -> None:
-        fver = params.get("frida") or self.frida_versions()[1]
-        cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
-               "python", "-m", "capture_android.headless",
-               "--package", package, "--gateway", self._gateway]
+        method = params.get("method") or "frida"
+        cmd = ["uv", "run", "--project", _PROJECT]
+        if method != "proxy":
+            # Client and frida-server versions must match, so the capture runs under the
+            # version chosen for this device. The proxy method loads no frida at all, and
+            # pinning one there would only make `uv run` resolve a package nothing imports.
+            cmd += ["--with", f"frida=={params.get('frida') or self.frida_versions()[1]}"]
+        cmd += ["python", "-m", "capture_android.headless", "--method", method,
+                "--package", package, "--gateway", self._gateway]
         if self._serial:
             cmd += ["--serial", self._serial]
         if label:

@@ -42,6 +42,13 @@ type Spec struct {
 	Module   string // owning module, whose processes are started before this source is dialed
 	Label    string
 	KeepWarm bool
+	// ServedBy names another source whose connection this one is reached over, for a tool
+	// that offers several sources from one process: Android serves per-app and browser
+	// capture over one emulator, and booting a second one to answer the second source would
+	// be absurd. Such a spec needs no Argv/Addr of its own — the named source's is used, the
+	// process is started once, and every request carries the source name so the module knows
+	// which of its sources is being addressed. Empty = reached over its own connection.
+	ServedBy string
 	// External marks a dial-only source with nothing for the gateway to start: its module
 	// declares no processes, so whatever serves Addr is the user's to run (ApplyManifests).
 	// Such a source is offered only while it is actually listening — see Available.
@@ -79,14 +86,21 @@ type Manager struct {
 // builtinSources are the sources the gateway registers by default, no configuration
 // needed. A source appears here once it has a `serve` mode; android (keep_warm, for its
 // emulator) and mitmproxy join as those land.
+//
+// servedBy names a source served over another one's connection: the android tool offers
+// two — per-app capture and browser capture — over one emulator, so the second is reached
+// through the first's process rather than booting a device of its own. Its launcher is
+// never resolved separately; it rides the owner's.
 var builtinSources = []struct {
 	name     string
 	label    string
 	keepWarm bool
+	servedBy string
 }{
 	{name: "chrome", label: "Chrome", keepWarm: false},
 	{name: "firefox", label: "Firefox", keepWarm: false},
 	{name: "android", label: "Android", keepWarm: true},
+	{name: "android-browser", label: "Android browser", keepWarm: true, servedBy: "android"},
 	{name: "mitmproxy", label: "mitmproxy", keepWarm: false},
 }
 
@@ -98,6 +112,12 @@ func DefaultSpecs() map[string]Spec {
 	capDir := findCaptureDir()
 	specs := map[string]Spec{}
 	for _, b := range builtinSources {
+		// A shared source has no launcher of its own; it is only offerable if the source
+		// serving it was found, which (map iteration being unordered) is checked after.
+		if b.servedBy != "" {
+			specs[b.name] = Spec{ServedBy: b.servedBy, Label: b.label, KeepWarm: b.keepWarm}
+			continue
+		}
 		argv := resolveLauncher(b.name, capDir)
 		if argv == nil {
 			log.Printf("capture source %q: tool not found — set TRAFFICDECK_SOURCE_%s to enable",
@@ -106,6 +126,17 @@ func DefaultSpecs() map[string]Spec {
 		}
 		specs[b.name] = Spec{Argv: append(argv, "serve"), Label: b.label, KeepWarm: b.keepWarm}
 		log.Printf("capture source %q: %s", b.name, strings.Join(argv, " "))
+	}
+	// Drop any source whose server was not found, so the registry never offers a tool that
+	// cannot be reached — the same promise a missing launcher already gets.
+	for name, spec := range specs {
+		if spec.ServedBy == "" {
+			continue
+		}
+		if _, ok := specs[spec.ServedBy]; !ok {
+			log.Printf("capture source %q: served by %q, which was not found", name, spec.ServedBy)
+			delete(specs, name)
+		}
 	}
 	return specs
 }
@@ -229,6 +260,11 @@ func (m *Manager) Available(ctx context.Context) []SourceInfo {
 	m.mu.Lock()
 	ext := map[string]string{}
 	for name, spec := range m.specs {
+		// Availability is a property of the *connection*, so a source served over another's
+		// answers for whatever serves that one.
+		if spec.ServedBy != "" {
+			spec = m.specs[spec.ServedBy]
+		}
 		if spec.External && spec.Addr != "" {
 			ext[name] = spec.Addr
 		}
@@ -280,17 +316,32 @@ func listening(ctx context.Context, addr string) bool {
 	return true
 }
 
+// ensure returns the connection a source is reached over, starting it if needed. Several
+// sources can share one connection (Spec.ServedBy), so conns are keyed by the *connection*
+// owner, not by the source: the second source to be used finds the first one's process.
 func (m *Manager) ensure(ctx context.Context, name string) (*conn, error) {
 	m.mu.Lock()
-	if c := m.conns[name]; c != nil {
+	spec, ok := m.specs[name]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("unknown capture source %q", name)
+	}
+	key := name
+	if spec.ServedBy != "" {
+		key = spec.ServedBy
+		owner, ok := m.specs[key]
+		if !ok {
+			m.mu.Unlock()
+			return nil, fmt.Errorf("capture source %q is served by %q, which is not registered",
+				name, key)
+		}
+		spec = owner // launch/dial what the owner says; `key` is what we cache it under
+	}
+	if c := m.conns[key]; c != nil {
 		m.mu.Unlock()
 		return c, nil
 	}
-	spec, ok := m.specs[name]
 	m.mu.Unlock()
-	if !ok {
-		return nil, fmt.Errorf("unknown capture source %q", name)
-	}
 	// Bring the module's processes up first: the adapter that serves spec.Addr is one of
 	// them, so it must be running before we dial. Idempotent, so racing callers are fine.
 	if spec.Module != "" && m.startModule != nil {
@@ -298,18 +349,18 @@ func (m *Manager) ensure(ctx context.Context, name string) (*conn, error) {
 			return nil, fmt.Errorf("start module %q for source %q: %w", spec.Module, name, err)
 		}
 	}
-	c, err := m.spawn(ctx, name, spec)
+	c, err := m.spawn(ctx, key, spec)
 	if err != nil {
 		return nil, fmt.Errorf("start source %q: %w", name, err)
 	}
 	m.mu.Lock()
 	// Another caller may have raced us; keep theirs and drop ours.
-	if existing := m.conns[name]; existing != nil {
+	if existing := m.conns[key]; existing != nil {
 		m.mu.Unlock()
 		c.close()
 		return existing, nil
 	}
-	m.conns[name] = c
+	m.conns[key] = c
 	m.mu.Unlock()
 	return c, nil
 }
@@ -320,7 +371,8 @@ func (m *Manager) Describe(ctx context.Context, name string, params map[string]s
 	if err != nil {
 		return nil, err
 	}
-	return c.client.Describe(ctx, &trafficv1.DescribeRequest{Params: params})
+	// Name the source: one connection may serve several, and the module picks by this.
+	return c.client.Describe(ctx, &trafficv1.DescribeRequest{Params: params, Source: name})
 }
 
 // StartCapture asks the source to begin a capture and records which source owns the

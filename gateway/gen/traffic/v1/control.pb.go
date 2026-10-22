@@ -891,8 +891,8 @@ func (x *CaptureSourceInfo) GetKeepWarm() bool {
 }
 
 // Viewer-facing describe: which source, plus the partial selection so far. Re-sent as
-// fields fill in, for cascading. (The source-facing DescribeRequest omits `source` — the
-// source is known by the connection.)
+// fields fill in, for cascading. (The source-facing DescribeRequest names the source too,
+// since one module may serve several — see ADR-0010.)
 type DescribeCaptureSourceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
@@ -947,8 +947,13 @@ func (x *DescribeCaptureSourceRequest) GetParams() map[string]string {
 
 // Partial selection so far; empty on the first call.
 type DescribeRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Params        map[string]string      `protobuf:"bytes,1,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Params map[string]string      `protobuf:"bytes,1,rep,name=params,proto3" json:"params,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Which of the module's sources to describe. A module may serve several named sources
+	// over one connection — one warm resource, several tools (ADR-0010) — so the connection
+	// alone no longer identifies the source. Empty addresses the module's only (or primary)
+	// source, so a single-source module and an older gateway both keep working.
+	Source        string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -988,6 +993,13 @@ func (x *DescribeRequest) GetParams() map[string]string {
 		return x.Params
 	}
 	return nil
+}
+
+func (x *DescribeRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
 }
 
 // The form a viewer renders for a source: ordered parameters plus readiness. A source that
@@ -1191,8 +1203,11 @@ func (x *Choice) GetLabel() string {
 	return ""
 }
 
+// Both name a source for the same reason DescribeRequest does: a module may serve several
+// over one connection. Empty addresses its only (or primary) source.
 type ReleaseSourceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1227,8 +1242,16 @@ func (*ReleaseSourceRequest) Descriptor() ([]byte, []int) {
 	return file_traffic_v1_control_proto_rawDescGZIP(), []int{18}
 }
 
+func (x *ReleaseSourceRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
 type StatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Source        string                 `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1261,6 +1284,13 @@ func (x *StatusRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use StatusRequest.ProtoReflect.Descriptor instead.
 func (*StatusRequest) Descriptor() ([]byte, []int) {
 	return file_traffic_v1_control_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *StatusRequest) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
 }
 
 type SourceStatus struct {
@@ -1330,7 +1360,8 @@ type StartCaptureRequest struct {
 	// Source name — a built-in ("chrome", "android", …) or a module's declared name.
 	// A closed enum cannot name a third-party module (see ADR-0010). The viewer-facing
 	// ControlService.StartCapture uses this to dispatch; the source-facing
-	// CaptureSourceService.StartCapture ignores it (the source is known by the connection).
+	// CaptureSourceService.StartCapture uses it to pick among the sources that module serves
+	// (empty = its only/primary one).
 	Source        string `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3085,9 +3116,10 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\x06params\x18\x02 \x03(\v24.traffic.v1.DescribeCaptureSourceRequest.ParamsEntryR\x06params\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa5\x01\n" +
 	"\x0fDescribeRequest\x12?\n" +
-	"\x06params\x18\x01 \x03(\v2'.traffic.v1.DescribeRequest.ParamsEntryR\x06params\x1a9\n" +
+	"\x06params\x18\x01 \x03(\v2'.traffic.v1.DescribeRequest.ParamsEntryR\x06params\x12\x16\n" +
+	"\x06source\x18\x02 \x01(\tR\x06source\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8c\x01\n" +
@@ -3104,9 +3136,11 @@ const file_traffic_v1_control_proto_rawDesc = "" +
 	"\brequired\x18\x06 \x01(\bR\brequired\"4\n" +
 	"\x06Choice\x12\x14\n" +
 	"\x05value\x18\x01 \x01(\tR\x05value\x12\x14\n" +
-	"\x05label\x18\x02 \x01(\tR\x05label\"\x16\n" +
-	"\x14ReleaseSourceRequest\"\x0f\n" +
-	"\rStatusRequest\"~\n" +
+	"\x05label\x18\x02 \x01(\tR\x05label\".\n" +
+	"\x14ReleaseSourceRequest\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\"'\n" +
+	"\rStatusRequest\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\tR\x06source\"~\n" +
 	"\fSourceStatus\x12-\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x17.traffic.v1.SourceStateR\x05state\x12'\n" +
 	"\x0factive_sessions\x18\x02 \x03(\tR\x0eactiveSessions\x12\x16\n" +

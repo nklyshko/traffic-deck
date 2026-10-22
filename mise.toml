@@ -55,3 +55,13 @@ run = "uv run --group dev pytest"
 description = "Run the trafficdeck-mcp tests"
 dir = "mcp"
 run = "uv run --group dev python -m pytest"
+
+[tasks."capture-android:test"]
+description = "Run the Android capture module's tests (no device needed)"
+dir = "capture/capture_android"
+run = "uv run --group dev python -m pytest"
+
+[tasks."capture-mitmproxy:test"]
+description = "Run the mitmproxy capture module's tests"
+dir = "capture/capture_mitmproxy"
+run = "uv run --group dev python -m pytest"

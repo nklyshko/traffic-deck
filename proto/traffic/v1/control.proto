@@ -192,8 +192,8 @@ message CaptureSourceInfo {
 }
 
 // Viewer-facing describe: which source, plus the partial selection so far. Re-sent as
-// fields fill in, for cascading. (The source-facing DescribeRequest omits `source` — the
-// source is known by the connection.)
+// fields fill in, for cascading. (The source-facing DescribeRequest names the source too,
+// since one module may serve several — see ADR-0010.)
 message DescribeCaptureSourceRequest {
   string source = 1;
   map<string, string> params = 2;
@@ -202,6 +202,11 @@ message DescribeCaptureSourceRequest {
 // Partial selection so far; empty on the first call.
 message DescribeRequest {
   map<string, string> params = 1;
+  // Which of the module's sources to describe. A module may serve several named sources
+  // over one connection — one warm resource, several tools (ADR-0010) — so the connection
+  // alone no longer identifies the source. Empty addresses the module's only (or primary)
+  // source, so a single-source module and an older gateway both keep working.
+  string source = 2;
 }
 
 // The form a viewer renders for a source: ordered parameters plus readiness. A source that
@@ -244,9 +249,15 @@ message Choice {
   string label = 2; // shown to the user
 }
 
-message ReleaseSourceRequest {}
+// Both name a source for the same reason DescribeRequest does: a module may serve several
+// over one connection. Empty addresses its only (or primary) source.
+message ReleaseSourceRequest {
+  string source = 1;
+}
 
-message StatusRequest {}
+message StatusRequest {
+  string source = 1;
+}
 
 message SourceStatus {
   SourceState state = 1;
@@ -269,7 +280,8 @@ message StartCaptureRequest {
   // Source name — a built-in ("chrome", "android", …) or a module's declared name.
   // A closed enum cannot name a third-party module (see ADR-0010). The viewer-facing
   // ControlService.StartCapture uses this to dispatch; the source-facing
-  // CaptureSourceService.StartCapture ignores it (the source is known by the connection).
+  // CaptureSourceService.StartCapture uses it to pick among the sources that module serves
+  // (empty = its only/primary one).
   string source = 4;
 }
 

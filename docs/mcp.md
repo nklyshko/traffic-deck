@@ -57,7 +57,9 @@ list_capture_sources → start_capture → (produce the traffic) → wait_for_fl
 `list_capture_sources` is what will actually work, not what is configured: a source the
 user has to start by hand (macOS per-process capture) is left out while its daemon is not
 running — see [modules.md](modules.md). `keep_warm` marks a source holding a resource
-across captures (an Android emulator), whose first start is slow.
+across captures (an Android emulator), whose first start is slow. Two sources can share one
+such resource — `android` and `android-browser` are one emulator, booted once — so having
+used either, the other is already warm.
 
 `start_capture(source)` needs nothing else. Every source defaults every option — a browser
 source opens a fresh temporary profile — so the parameters are for choosing something
@@ -74,6 +76,8 @@ attach to, and the profile is a throwaway. Two things do work: a browser source 
 `url`, which is the simplest way to make a capture produce traffic from this server alone;
 or use the `mitmproxy` source and point the agent's own browser at the proxy, accepting
 that a terminating proxy costs the real client fingerprint and the `conn`/`stream` columns.
+The `android-browser` source is the same bargain aimed at a phone or emulator, and is the
+only way to read a Chromium browser's traffic there at all.
 See [ADR-0015](adr/0015-agents-drive-capture-over-mcp.md).
 
 ```python

@@ -8,11 +8,12 @@ no key.log (the supplied RECORD path).
 WireGuard mode is just `--mode wireguard`: same addon, the device routes traffic
 through mitmproxy's WireGuard server instead of a system proxy.
 
-Config via env (set by the launcher): GATEWAY_ADDR, CAPTURE_LABEL.
+Config via env (set by the launcher): GATEWAY_ADDR, CAPTURE_LABEL, CAPTURE_METADATA.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 
@@ -195,6 +196,19 @@ def _message(flow_id: str, from_client: bool, opcode: str, content: bytes, ts: f
     )
 
 
+def _extra_metadata(raw: str) -> dict[str, str]:
+    """Parse CAPTURE_METADATA (a JSON object) into session metadata. Unparseable input is
+    dropped rather than raised: a launcher's typo must not cost the capture."""
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+        return {str(k): str(v) for k, v in obj.items()}
+    except (ValueError, AttributeError) as exc:
+        print(f"ignoring CAPTURE_METADATA: {exc}", flush=True)
+        return {}
+
+
 class GatewayPusher:
     """Pushes completed flows to the gateway; opens the session on startup."""
 
@@ -204,6 +218,11 @@ class GatewayPusher:
         # Metadata keys this source stashes on flows that the viewer should show as table
         # columns by default (comma-separated); declared to the gateway at OpenSession.
         self.viewer_columns = os.environ.get("VIEWER_COLUMNS", "")
+        # Extra session metadata (a JSON object) from whoever launched us. Another module
+        # driving this proxy — the Android browser capture — records what the capture
+        # actually was that way, since a bundle read back a week later otherwise says
+        # nothing beyond "mitmproxy".
+        self.extra_metadata = os.environ.get("CAPTURE_METADATA", "")
         self._channel: grpc.aio.Channel | None = None
         self._stub: ig.IngestServiceStub | None = None
         self.session_id: str | None = None
@@ -231,6 +250,7 @@ class GatewayPusher:
             metadata["mitmproxy.listen_host"] = ctx.options.listen_host
         if self.viewer_columns:
             metadata["viewer.columns"] = self.viewer_columns
+        metadata.update(_extra_metadata(self.extra_metadata))
         handle = await self._stub.OpenSession(
             ip.OpenSessionRequest(label=self.label, source="mitmproxy",
                                   shape=cp.SOURCE_SHAPE_FLOWS, metadata=metadata)
