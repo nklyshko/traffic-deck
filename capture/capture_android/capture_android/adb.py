@@ -173,11 +173,25 @@ class AdbClient:
         return parse_app_uid(self._pm("list", "packages", "-U"), package)
 
     def list_packages(self, third_party: bool = True) -> list[str]:
-        """Installed package names (third-party only by default), sorted."""
+        """Installed package names, sorted: third-party by default, everything if there are
+        none of those.
+
+        `-3` is the right list to *offer* — someone wants their app, not 200 system packages
+        — but a stock emulator has no third-party apps at all, and an empty list is worse
+        than a long one: it leaves a picker with nothing in it, so the viewer asks for a
+        package name typed from memory instead. Hence the fallback, which is what the
+        interactive picker always did; the serve-mode source did not, and that is why a
+        fresh AVD offered a text box where a phone offered a list.
+        """
+        pkgs = self._packages(third_party)
+        if not pkgs and third_party:
+            return self._packages(False)
+        return pkgs
+
+    def _packages(self, third_party: bool) -> list[str]:
         args = ["list", "packages"] + (["-3"] if third_party else [])
-        pkgs = [l.strip()[8:] for l in self._pm(*args).splitlines()
-                if l.strip().startswith("package:")]
-        return sorted(pkgs)
+        return sorted(l.strip()[8:] for l in self._pm(*args).splitlines()
+                      if l.strip().startswith("package:"))
 
     def push(self, local: str, remote: str) -> None:
         self.run("push", local, remote, capture=False)

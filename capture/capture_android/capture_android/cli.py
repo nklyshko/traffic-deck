@@ -183,11 +183,7 @@ def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str,
         _run_proxy_capture(adb, store, serial, args)
         return
 
-    tp = not args.all_apps
-    pkgs = adb.list_packages(third_party=tp)
-    if not pkgs:
-        tp = False
-        pkgs = adb.list_packages(third_party=tp)
+    pkgs = adb.list_packages(third_party=not args.all_apps)
     names: dict[str, str] = {}
     if not args.no_app_names:
         print(f"resolving app names ({len(pkgs)} apps)…")

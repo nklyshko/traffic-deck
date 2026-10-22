@@ -20,9 +20,52 @@ def test_start_root_held_detaches_stdin(monkeypatch):
     assert "shell" in captured["argv"]
 
 
+def _listing_client(monkeypatch, listings):
+    """An AdbClient whose `pm list packages` answers from `listings` — {with_-3: output} —
+    recording the calls it was asked to make."""
+    client = AdbClient(serial="emulator-5554", adb="adb")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_pm(*args, retries=5):
+        calls.append(args)
+        return listings["-3" in args]
+
+    monkeypatch.setattr(client, "_pm", fake_pm)
+    return client, calls
+
+
+def test_package_list_prefers_third_party(monkeypatch):
+    client, calls = _listing_client(monkeypatch, {
+        True: "package:com.b\npackage:com.a\n",
+        False: "package:android\npackage:com.b\n",
+    })
+    # Sorted, and the system packages are left out while the user has apps of their own.
+    assert client.list_packages() == ["com.a", "com.b"]
+    assert len(calls) == 1
+
+
+def test_package_list_falls_back_when_no_app_is_installed(monkeypatch):
+    """A stock emulator has no third-party apps, and an empty list is worse than a long
+    one: it leaves the picker with nothing in it, so the viewer asks for a package name
+    typed from memory instead of offering a choice."""
+    client, calls = _listing_client(monkeypatch, {
+        True: "",  # `pm list packages -3` on a fresh AVD
+        False: "package:com.android.chrome\npackage:android\n",
+    })
+    assert client.list_packages() == ["android", "com.android.chrome"]
+    assert [("-3" in c) for c in calls] == [True, False], "it must try third-party first"
+
+
+def test_asking_for_all_packages_does_not_double_list(monkeypatch):
+    client, calls = _listing_client(monkeypatch, {True: "", False: ""})
+    assert client.list_packages(third_party=False) == []
+    assert len(calls) == 1  # already the full list — nothing to fall back to
+
+
 def test_frida_arch():
     assert frida_arch("arm64-v8a") == "arm64"
     assert frida_arch("armeabi-v7a") == "arm"
+
     assert frida_arch("x86_64") == "x86_64"
     assert frida_arch("x86") == "x86"
     with pytest.raises(RuntimeError):
