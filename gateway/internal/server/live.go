@@ -11,6 +11,7 @@ import (
 
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/filter"
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
@@ -343,6 +344,31 @@ func (ls *liveSession) bodyBytes(flowID string, response bool) (data []byte, tru
 	// went to the store, which the caller has already missed). Nothing to hand over —
 	// report it as a truncated body of zero bytes rather than as a body-less flow.
 	return nil, true, true
+}
+
+// searchBody is a body as a filter term sees it. It reads the decoder's bytes rather
+// than the proto, whose inline copy stops at store.InlineBlobMax — a large page would
+// otherwise read as empty while its flow waits to be written.
+func (ls *liveSession) searchBody(flowID string, d filter.Direction) string {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if df := ls.dflows[flowID]; df != nil {
+		b := df.RequestBody
+		if d == filter.Response {
+			b = df.ResponseBody
+		}
+		if len(b) > 0 {
+			return string(b)
+		}
+	}
+	f := ls.flows[flowID]
+	if f == nil {
+		return ""
+	}
+	if d == filter.Response {
+		return string(f.GetResponseBody().GetInline())
+	}
+	return string(f.GetRequestBody().GetInline())
 }
 
 // messageBody returns a live message's decoded payload (or its original undecoded bytes

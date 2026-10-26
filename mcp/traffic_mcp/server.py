@@ -465,13 +465,6 @@ def _matches(f, *, domain: str, method: str, content_type: str, status: int,
     return True
 
 
-# Content search (headers/bodies) is a second fetch per candidate flow, so it is bounded:
-# only `max_scan` candidates are examined, each body is matched over its first
-# _SCAN_BYTES, and a stored body bigger than _SCAN_FETCH_MAX is skipped rather than pulled
-# over the wire. _SCAN_CONCURRENCY fetches are in flight at once.
-_SCAN_BYTES = 128 * 1024
-_SCAN_FETCH_MAX = 2 * 1024 * 1024
-_SCAN_CONCURRENCY = 8
 _LIMIT_MAX = 500
 
 
@@ -563,8 +556,14 @@ async def _match_previews(sid: str, flow_id: str, req_header: str, resp_header: 
                 data, _ = await client().get_body(sid, flow_id, response)
             except grpc.aio.AioRpcError:
                 continue
-        if hit := _snippet(data[:_SCAN_BYTES].decode("utf-8", "replace"), needle):
+        # The whole body, as the gateway matched it: a marker deep in a large page is
+        # the common case, not an edge one.
+        if hit := _snippet(data.decode("utf-8", "replace"), needle):
             out[field] = hit
+            # A byte offset, which is what get_body's `offset` takes. ASCII-only folding,
+            # so a non-ASCII needle may find no offset even though the snippet did.
+            if (at := data.lower().find(needle.encode().lower())) >= 0:
+                out[f"{field}_at"] = at
     return out
 
 
@@ -1032,16 +1031,21 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
     Content criteria — `request_header_contains`, `response_header_contains`,
     `request_body_contains`, `response_body_contains` — are case-insensitive substrings
-    over the headers ("name: value" lines) and the first 128 KiB of the body, so a
-    Set-Cookie name, a script URL in HTML or a JSON key can be found directly instead of
-    paging through get_flow/get_body. They cost one fetch per candidate flow, so narrow
-    with the metadata criteria first: only `max_scan` candidates (default 400) are
-    examined and the result reports `scanned`/`scan_limited`. Scanning stops as soon as
-    the requested page is full, so a later page re-scans from the start — prefer one
-    query with a bigger `limit` over walking many pages.
+    over the headers ("name: value" lines) and the whole body (decompressed, however
+    large), so a Set-Cookie name, a script URL in HTML or a JSON key can be found
+    directly instead of paging through get_flow/get_body. Each one reads every candidate
+    it reaches, so narrow with the metadata criteria first: only `max_scan` candidates
+    (default 400) are examined and the result reports `scanned`/`scan_limited`. Scanning
+    stops as soon as the requested page is full, so a later page re-scans from the start
+    — prefer one query with a bigger `limit` over walking many pages.
+
+    These criteria only say "contains". For "does NOT contain" — which loads of a page
+    lack a marker — use search_flows with a negated term, e.g.
+    `~d ok.ru ~u /video/ !~bs autoplay_layer`.
 
     Every hit carries `match_preview` — {field: matched substring in context} for the
-    substring criteria — so you can see *why* it matched without a get_flow.
+    substring criteria — so you can see *why* it matched without a get_flow. A body hit
+    also carries `<field>_at`, the byte offset of the match, for get_body(offset=…).
 
     Leave `session_id` empty to search across every session (each result carries its
     `session_id`/`session_label`). Returns time-ordered flow summaries (no headers/bodies
@@ -1345,6 +1349,104 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
 
 
 @mcp.tool()
+async def grep_bodies(session_id: str, pattern: str, filter: str = "",
+                      response: bool = True, max_hits: int = 3, context: int = 80,
+                      limit: int = 50, cursor: str = "") -> dict:
+    """Run a regex over the bodies of the flows a filter selects and report, for EVERY
+    one of them, how often it occurs — including the flows where it does not. That is the
+    question search cannot answer in one call: "which of these 40 page loads lack the
+    marker", "how many times does the token appear in each response", "where in this
+    1 MB page is it".
+
+    `pattern` is a case-insensitive regex over the raw (decompressed) body bytes.
+    `filter` is the search_flows expression choosing the flows — narrow it with
+    metadata (`~d ok.ru ~u /video/ ~t html`), since each selected body is read in full.
+    `response=False` greps request bodies instead.
+
+    Returns {count, with_hits, without_hits:[ids], flows:[…]}; each flow is
+    {id, url, status, size, count, hits:[{at, text}]}, where `at` is the byte offset
+    get_body(offset=…) takes and `text` is up to `context` bytes either side. Only the
+    first `max_hits` hits are listed; `count` is always the full number. Paged by cursor
+    like search_flows (limit default 50, max 500).
+
+    Fails as a whole, naming the flow, when a selected body cannot be read — a damaged
+    session, a gateway gone mid-call — rather than reporting that flow as a miss."""
+    sid = await _resolve_session(session_id)
+    try:
+        rx = re.compile(pattern.encode(), re.I)
+    except re.error as e:
+        raise ValueError(f"bad pattern {pattern!r}: {e}") from None
+    limit = max(1, min(limit, _LIMIT_MAX))
+    max_hits, context = max(0, min(max_hits, 50)), max(0, min(context, 2000))
+    try:
+        page = await client().query_flows(sid, filter, limit, after=_parse_cursor(cursor))
+    except grpc.aio.AioRpcError as e:
+        if e.code() is grpc.StatusCode.INVALID_ARGUMENT:
+            raise ValueError(f"{e.details()}\n\n{FILTER_SYNTAX}") from None
+        raise
+
+    # Bounded: a page of multi-megabyte bodies is a lot to hold at once.
+    gate = asyncio.Semaphore(8)
+
+    async def grep(f) -> dict:
+        # Fetched unconditionally: a stored page's summaries carry no body metadata, so
+        # "no size" there says nothing about whether the flow has a body.
+        row = {"id": f.id, "url": flow_url(f), "status": f.status, "size": 0, "count": 0}
+        async with gate:
+            try:
+                data, _ = await client().get_body(sid, f.id, response)
+            except grpc.aio.AioRpcError as e:
+                if e.code() is grpc.StatusCode.NOT_FOUND:
+                    return row  # no body
+                raise ValueError(f"cannot read the body of flow {f.id}: "
+                                 f"{e.details() or e.code().name}") from None
+        row["size"] = len(data)
+        hits = list(rx.finditer(data))
+        row["count"] = len(hits)
+        row["hits"] = [{"at": m.start(),
+                        "text": re.sub(r"\s+", " ", data[max(0, m.start() - context):
+                                                          m.end() + context]
+                                       .decode("utf-8", "replace"))}
+                       for m in hits[:max_hits]]
+        return row
+
+    rows = await asyncio.gather(*(grep(f) for f in page.flows))
+    out = {"session_id": sid, "pattern": pattern, "count": len(rows),
+           "with_hits": sum(1 for r in rows if r["count"]),
+           "without_hits": [r["id"] for r in rows if not r["count"]], "flows": rows}
+    if page.HasField("next"):
+        out["next_cursor"] = _cursor_str(page.next)
+    # Bodies still held compressed read as noise to the regex, so a miss there is unknown
+    # too — the same caveat a body search carries.
+    return out | await _body_search_caveat(sid)
+
+
+@mcp.tool()
+async def save_body(session_id: str, flow_id: str, response: bool = True) -> dict:
+    """Write a whole request or response body to a file and return its path — for a body
+    you want to hand to another program (a parser under test, diff, a fixture) rather than
+    read: get_body pages it 256 KiB at a time through the conversation.
+
+    The file goes into a new temporary directory created for this call, so nothing
+    existing is overwritten; move it where it belongs. The path is on the machine this
+    MCP server runs on. Returns {path, size}."""
+    import tempfile
+
+    try:
+        data, _ = await client().get_body(
+            await _resolve_session(session_id), flow_id, response)
+    except grpc.aio.AioRpcError as e:
+        if e.code() == grpc.StatusCode.NOT_FOUND:
+            return {"size": 0, "note": "no body"}
+        raise
+    path = os.path.join(tempfile.mkdtemp(prefix="trafficdeck-body-"),
+                        f"{flow_id}.{'response' if response else 'request'}")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return {"path": path, "size": len(data)}
+
+
+@mcp.tool()
 async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
                            offset: int = 0, filter: str = "") -> dict:
     """WebSocket message timeline for an Upgrade flow: directional frames in order
@@ -1536,7 +1638,7 @@ async def sqlite_query(sql: str, session_id: str = "", params: list[str] | None 
         # INVALID_ARGUMENT carries SQLite's own message (bad syntax, unknown column); it
         # names the token, so it is the whole answer to "why did that fail".
         raise ValueError(e.details()) from None
-    return {
+    out = {
         "session_id": sid or None,
         "database": "catalog" if not sid else "session bundle",
         "columns": list(res.columns),
@@ -1545,6 +1647,34 @@ async def sqlite_query(sql: str, session_id: str = "", params: list[str] | None 
         "elapsed_ms": round(res.elapsed_micros / 1000, 1),
         "rows": [json.loads(r) for r in res.rows_json],
     }
+    if sid and _READS_BLOB_BYTES.search(sql):
+        out |= await _files_caveat(sid)
+    return out
+
+
+#: A statement that reads blob content. Loose on purpose — a false positive costs one
+#: COUNT and a footnote, a false negative a silent wrong answer.
+_READS_BLOB_BYTES = re.compile(r"\bbytes\b", re.I)
+
+
+async def _files_caveat(sid: str) -> dict:
+    """Bodies over the inline limit live in files with `blobs.bytes` NULL, so SQL over
+    bytes cannot see them — and those are the large pages a content question is usually
+    about. Best-effort: a diagnostic must never be why a query fails."""
+    try:
+        res = await client().query_sql(
+            sid, "SELECT COUNT(*) AS n FROM blobs WHERE bytes IS NULL", [], limit=1)
+        n = int(json.loads(res.rows_json[0])["n"]) if res.rows_json else 0
+    except grpc.aio.AioRpcError:
+        return {}
+    if not n:
+        return {}
+    return {"bodies_stored_as_files": n,
+            "bodies_stored_as_files_note":
+                f"{n} blob(s) in this session are stored as files, with blobs.bytes NULL, "
+                f"so this query cannot see their content — a miss on them is 'unknown', "
+                f"not 'absent'. For content use search(response_body_contains=…) or "
+                f"search_flows with ~bs / !~bs, which read every body."}
 
 
 @mcp.tool()

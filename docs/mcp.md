@@ -31,7 +31,9 @@ MCP_TRANSPORT=stdio mcp/run.sh
 `list_session_groups`, `network_timeline` (the request sequence, like
 the DevTools Network tab), `search` (structured, combined domain/method/content-type/
 status/… in one query), `search_flows` (the [filter DSL](filters.md)), `get_flow`,
-`get_body` (text/base64/`as_hex`), `compare_flows` (diff two requests, across sessions),
+`get_body` (text/base64/`as_hex`), `grep_bodies` (a regex over the bodies a filter
+selects: per-flow counts, hits with byte offsets, and which flows have none),
+`save_body` (a whole body to a fresh temp file, for another program), `compare_flows` (diff two requests, across sessions),
 `export_request` (request+response headers, no bodies), `export_client_hellos` (a flow's
 raw TLS ClientHello bytes), `list_ws_messages` + `get_ws_message_body` (WebSocket frames;
 `filter` takes the [message dialect](filters.md#filtering-a-message-timeline), `as_hex`
@@ -149,7 +151,10 @@ capture, and nothing in the statement is pattern-matched to decide that.
 Two caveats, both from reading the bundle as it sits on disk: a session still **capturing**
 is missing its unflushed tail (flows are persisted incrementally, so a count here runs
 slightly behind `search`), and a body is only inline in `blobs` when it was small — a NULL
-`blobs.bytes` means it spilled to a file, so bodies come from `get_body`. Prefer
+`blobs.bytes` means it spilled to a file, so bodies come from `get_body`. A statement
+that reads `bytes` gets `bodies_stored_as_files` with the count it could not see — a
+`LIKE` over `bytes` misses precisely the large pages, and zero rows must not read as
+"absent". For content questions use `search`, `search_flows` or `grep_bodies`. Prefer
 `search`/`search_flows` for "which flows match": they page by cursor and return bodies,
 annotations and the live tail.
 
@@ -179,7 +184,12 @@ The one to reach for on a large capture. Criteria are ANDed in a single query:
 
 Leave `session_id` empty to search **every session** at once; each hit carries its
 `session_id`/`session_label`. Every hit also carries a `match_preview` showing the matched
-substring in context.
+substring in context; a body hit adds `<field>_at`, its byte offset, for
+`get_body(offset=…)`. Body criteria read the whole body, however large.
+
+`search` only says "contains". For "lacks" use `search_flows` with a negated term
+(`!~bs marker`), or `grep_bodies`, which lists every selected flow with its hit count —
+zero included — so "which of these page loads lack the marker" is one call.
 
 Criteria are compiled into one filter expression and evaluated in the gateway, which orders
 the work by cost — columns, then headers, then bodies — so narrowing with the metadata
@@ -224,3 +234,7 @@ served from the live decode until the session closes and they are persisted. Und
 record-live (the default) bodies come back whole at any size; with `GATEWAY_RECORD_LIVE=off`
 the live decode keeps only the first 256 KiB of a body, and `get_body` marks what it
 returns `partial` — fetch it again once the session closes for all of it.
+
+A body search on a live session reads the same bodies, whether a flow is still only in
+memory or already written with its body held back for a flush cycle — a page searched for
+right after it loaded is found.

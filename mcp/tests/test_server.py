@@ -930,6 +930,20 @@ def test_search_fetches_an_out_of_line_body_to_match_it(monkeypatch):
     assert fake.get_body_calls == [("f0", True)]
 
 
+def test_search_preview_finds_a_match_deep_in_a_large_body(monkeypatch):
+    """The gateway matches the whole body, so the preview must look there too: a page's
+    marker past the first 128 KiB used to come back with no body preview at all."""
+    body = b"x" * (200 * 1024) + b"autoplay_layer_movie_author_link" + b"y" * 100
+    fake = _SearchClient({"s1": _seq(1, status=200)},
+                         {"f0": _detail("f0", body=b"placeholder", body_ref=True)},
+                         {("f0", True): body})
+    out = _run_search(monkeypatch, fake, response_body_contains="author_link")
+    prev = out["flows"][0]["match_preview"]
+    assert "autoplay_layer_movie_author_link" in prev["response_body"]
+    # Where it is, so get_body(offset=…) can read around it without paging from 0.
+    assert prev["response_body_at"] == 200 * 1024 + len("autoplay_layer_movie_")
+
+
 def test_search_content_scan_is_bounded_by_max_scan(monkeypatch):
     """max_scan now bounds how much the search asks for, not how much it fetches itself:
     content matching happens in the gateway, so `scanned` is rows the gateway examined and
@@ -1018,6 +1032,120 @@ def test_search_flows_pages_and_reports_total(monkeypatch):
 
 
 # --- filter syntax diagnostics -------------------------------------------
+
+# --- grep_bodies ------------------------------------------------------------
+
+def _pages(bodies: dict[str, bytes]):
+    """Summaries as a stored session's page has them — with no body metadata at all, so
+    nothing can be inferred from one — plus the bodies get_body serves."""
+    flows = [_flow(id=fid, authority="ok.ru", path="/video/1", scheme="https", status=200,
+                   ts_unix_micros=(i + 1) * 1_000_000) for i, fid in enumerate(bodies)]
+    return _SearchClient({"s1": flows}, bodies={(k, True): v for k, v in bodies.items()})
+
+
+def _run_grep(monkeypatch, fake, **kw):
+    import asyncio
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    monkeypatch.setattr(S, "_body_search_caveat", lambda sid: asyncio.sleep(0, {}))
+    return asyncio.run(S.grep_bodies(session_id="s1", **kw))
+
+
+def test_grep_bodies_counts_every_flow_including_the_ones_without_a_hit(monkeypatch):
+    """The question it exists for: which of these page loads lack the marker. A flow with
+    no hit is part of the answer, not filtered away."""
+    page = b"x" * 140_000 + b'<a class="autoplay_layer_movie_author_link" href="/eremin">'
+    fake = _pages({"f0": page, "f1": b"<html>client-rendered</html>", "f2": page + page})
+    out = _run_grep(monkeypatch, fake, pattern="author_link")
+
+    by_id = {r["id"]: r for r in out["flows"]}
+    assert [by_id[k]["count"] for k in ("f0", "f1", "f2")] == [1, 0, 2]
+    assert out["with_hits"] == 2 and out["without_hits"] == ["f1"]
+    hit = by_id["f0"]["hits"][0]
+    # A byte offset get_body(offset=…) takes, and the text around it.
+    assert hit["at"] == page.index(b"author_link")
+    assert "eremin" in hit["text"]
+    assert by_id["f0"]["size"] == len(page)
+
+
+def test_grep_bodies_caps_hits_but_not_the_count(monkeypatch):
+    fake = _pages({"f0": b"ab " * 10})
+    out = _run_grep(monkeypatch, fake, pattern="ab", max_hits=2, context=1)
+    row = out["flows"][0]
+    assert row["count"] == 10 and len(row["hits"]) == 2
+
+
+def test_grep_bodies_fails_on_an_unreadable_body(monkeypatch):
+    """A body file gone from a damaged session is not "no hit"; a flow with no body is."""
+    fake = _pages({"f0": b"<html>author_link", "f1": b"", "f2": b"x"})
+
+    async def get_body(sid, fid, response):
+        if fid == "f1":
+            raise grpc.aio.AioRpcError(grpc.StatusCode.NOT_FOUND, None, None, details="no")
+        if fid == "f2":
+            raise grpc.aio.AioRpcError(grpc.StatusCode.INTERNAL, None, None,
+                                       details="get body: open blobs/ab12: no such file")
+        return b"<html>author_link", False
+
+    fake.get_body = get_body
+    with pytest.raises(ValueError, match="flow f2.*no such file"):
+        _run_grep(monkeypatch, fake, pattern="author_link")
+
+    del fake.bodies[("f2", True)]
+    fake.flows["s1"] = fake.flows["s1"][:2]
+    out = _run_grep(monkeypatch, fake, pattern="author_link")
+    assert out["without_hits"] == ["f1"]
+
+
+def test_grep_bodies_rejects_a_bad_regex(monkeypatch):
+    with pytest.raises(ValueError, match="pattern"):
+        _run_grep(monkeypatch, _pages({"f0": b"x"}), pattern="(")
+
+
+def test_save_body_writes_the_whole_body_to_a_fresh_file(monkeypatch):
+    import asyncio
+    import os
+
+    body = b"<html>" + b"x" * (2 << 20) + b"</html>"
+    fake = _pages({"f0": body})
+    monkeypatch.setattr(S, "client", lambda: fake)
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    out = asyncio.run(S.save_body("s1", "f0"))
+    try:
+        with open(out["path"], "rb") as fh:
+            assert fh.read() == body
+        assert out["size"] == len(body)
+        # Each call gets its own directory: nothing existing can be overwritten.
+        again = asyncio.run(S.save_body("s1", "f0"))
+        assert os.path.dirname(again["path"]) != os.path.dirname(out["path"])
+    finally:
+        for p in (out["path"], again["path"]):
+            os.remove(p)
+            os.rmdir(os.path.dirname(p))
+
+
+def test_save_body_without_a_body_writes_nothing(monkeypatch):
+    import asyncio
+
+    class Fake:
+        async def get_body(self, sid, fid, response):
+            raise grpc.aio.AioRpcError(grpc.StatusCode.NOT_FOUND, None, None, details="x")
+
+    async def _resolve(sid):
+        return sid
+
+    monkeypatch.setattr(S, "client", lambda: Fake())
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    assert asyncio.run(S.save_body("s1", "f0")) == {"size": 0, "note": "no body"}
+
 
 def _run_search_flows(monkeypatch, flows, expr):
     import asyncio
@@ -1346,6 +1474,40 @@ def test_sqlite_query_surfaces_sqlites_own_error(monkeypatch):
                                details='no such column: authorityy')
     with pytest.raises(ValueError, match="no such column: authorityy"):
         _run_sql(monkeypatch, err, sql="SELECT authorityy FROM flows")
+
+
+def test_sqlite_query_over_blob_bytes_names_the_bodies_it_cannot_see(monkeypatch):
+    """A body over the inline limit is a file, and `blobs.bytes` is NULL for it — so a
+    LIKE over bytes misses exactly the large pages. Zero rows must not read as "absent"."""
+    import asyncio
+
+    class Fake:
+        def __init__(self):
+            self.sqls = []
+
+        async def query_sql(self, sid, sql, params, limit=0, timeout_millis=0):
+            self.sqls.append(sql)
+            if "bytes IS NULL" in sql:
+                return vp.QuerySQLResponse(columns=["n"], rows_json=['{"n":46}'])
+            return vp.QuerySQLResponse(columns=["id"], rows_json=[])
+
+    async def _resolve(sid):
+        return "s1"
+
+    fake = Fake()
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    out = asyncio.run(S.sqlite_query(
+        "SELECT f.id FROM flows f JOIN blobs b ON b.sha256=f.resp_body_ref "
+        "WHERE CAST(b.bytes AS TEXT) LIKE '%eremin%'", "s1"))
+    assert out["rows"] == []
+    assert out["bodies_stored_as_files"] == 46
+    assert "search" in out["bodies_stored_as_files_note"]
+
+    # A query that never touches blob bytes pays nothing for the check.
+    fake.sqls.clear()
+    out = asyncio.run(S.sqlite_query("SELECT authority FROM flows", "s1"))
+    assert "bodies_stored_as_files" not in out and len(fake.sqls) == 1
 
 
 def test_sqlite_schema_asks_sqlite_master(monkeypatch):

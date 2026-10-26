@@ -48,6 +48,10 @@ type FlowQuery struct {
 	// so bounding a window costs the scan nothing instead of a test per row.
 	SinceMicros int64
 	UntilMicros int64
+	// HeldBody reads a body the bundle row does not reference yet: an open session's flow
+	// written before its body settled (ADR-0011 §3b), whose bytes are still in the hub.
+	// Nil for a closed session, where an empty ref simply means no body.
+	HeldBody func(flowID string, d filter.Direction) string
 }
 
 // FlowPage is one page plus what a viewer needs to navigate and describe it.
@@ -134,7 +138,7 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 			r.f.Headers = headerLoader(ctx, db, r.id)
 		}
 		if q.Filter.ReadsBodies() {
-			r.f.Body = s.bodyLoader(ctx, db, r.reqBodyRef, r.respRef)
+			r.f.Body = s.bodyLoader(ctx, db, r, q.HeldBody)
 		}
 		if !q.Filter.Match(&r.f) {
 			continue
@@ -244,14 +248,19 @@ func scanQueryRow(rows *sql.Rows) (*scanRow, error) {
 
 // bodyLoader returns a lazy reader for a row's bodies. Body terms sort last in the
 // predicate, so this is only called for a row that already passed every cheaper term.
-func (s *Store) bodyLoader(ctx context.Context, db *sql.DB, reqRef, respRef string) func(filter.Direction) string {
+// A row with no ref yet is asked of held.
+func (s *Store) bodyLoader(ctx context.Context, db *sql.DB, r *scanRow,
+	held func(string, filter.Direction) string) func(filter.Direction) string {
 	return func(d filter.Direction) string {
-		ref := reqRef
+		ref := r.reqBodyRef
 		if d == filter.Response {
-			ref = respRef
+			ref = r.respRef
 		}
 		if ref == "" {
-			return ""
+			if held == nil {
+				return ""
+			}
+			return held(r.id, d)
 		}
 		if b := s.loadBlobBytes(ctx, db, ref); b != nil {
 			return string(b)

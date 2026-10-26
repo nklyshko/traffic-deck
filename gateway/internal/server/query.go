@@ -59,7 +59,7 @@ func (v *Viewer) QueryFlows(ctx context.Context, req *trafficv1.QueryFlowsReques
 		return nil, err
 	}
 	limit := int(req.GetLimit())
-	page, err := v.st.QueryFlows(ctx, sid, store.FlowQuery{
+	q := store.FlowQuery{
 		Filter: pred,
 		Limit:  limit,
 		After:  cursorFromProto(req.GetAfter()),
@@ -68,7 +68,11 @@ func (v *Viewer) QueryFlows(ctx context.Context, req *trafficv1.QueryFlowsReques
 
 		SinceMicros: req.GetSinceMicros(),
 		UntilMicros: req.GetUntilMicros(),
-	})
+	}
+	if ls := v.hub.get(sid); ls != nil {
+		q.HeldBody = ls.searchBody
+	}
+	page, err := v.st.QueryFlows(ctx, sid, q)
 	if err != nil {
 		return nil, storeStatus(err, "query flows")
 	}
@@ -120,6 +124,7 @@ func (v *Viewer) mergeUnflushed(ctx context.Context, sid string, pred *filter.Pr
 			continue
 		}
 		ff := filterFlowFromProto(f, tags, groups)
+		ff.Body = func(d filter.Direction) string { return ls.searchBody(f.GetId(), d) }
 		if !pred.Match(&ff) {
 			continue
 		}
