@@ -35,7 +35,7 @@ func TestOpenSessionRegistersLiveSessionForPushedShape(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(st.Close)
-			hub := newLiveHub(false)
+			hub := newLiveHub()
 			ing := &Ingest{st: st, hub: hub}
 
 			handle, err := ing.OpenSession(ctx, &trafficv1.OpenSessionRequest{
@@ -60,7 +60,7 @@ func TestOpenSessionRecordsSourceName(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(st.Close)
-	ing := &Ingest{st: st, hub: newLiveHub(false)}
+	ing := &Ingest{st: st, hub: newLiveHub()}
 
 	handle, err := ing.OpenSession(ctx, &trafficv1.OpenSessionRequest{
 		Label: "s", Source: "acme-module", Shape: trafficv1.SourceShape_SOURCE_SHAPE_FLOWS,

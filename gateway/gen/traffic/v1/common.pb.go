@@ -494,10 +494,11 @@ type Body struct {
 	//	*Body_Inline
 	//	*Body_ObjectRef
 	Content isBody_Content `protobuf_oneof:"content"`
-	// Set when `size`/`inline` hold only the leading bytes the live decode kept, because
-	// the body ran past its preview cap while the session was still capturing. The whole
-	// body is decoded from the capture when the session closes. Never set on a stored
-	// body, or on a live one under record-live (which keeps bodies whole).
+	// Never set. It marked a body the live decode kept only the start of, when the live
+	// decode capped bodies; it keeps them whole now (ADR-0009). Kept so older readers and
+	// writers stay wire-compatible.
+	//
+	// Deprecated: Marked as deprecated in traffic/v1/common.proto.
 	Truncated bool `protobuf:"varint,5,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	// Transport encoding the body bytes had on the wire ("gzip", "br"…). Stored bytes are
 	// decoded from it when supported; empty = none. Records what the decoder saw on the
@@ -577,6 +578,7 @@ func (x *Body) GetObjectRef() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in traffic/v1/common.proto.
 func (x *Body) GetTruncated() bool {
 	if x != nil {
 		return x.Truncated
@@ -1626,14 +1628,14 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\amax_age\x18\x06 \x01(\x03R\x06maxAge\x12\x16\n" +
 	"\x06secure\x18\a \x01(\bR\x06secure\x12\x1b\n" +
 	"\thttp_only\x18\b \x01(\bR\bhttpOnly\x12\x1b\n" +
-	"\tsame_site\x18\t \x01(\tR\bsameSite\"\xcc\x01\n" +
+	"\tsame_site\x18\t \x01(\tR\bsameSite\"\xd0\x01\n" +
 	"\x04Body\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x04R\x04size\x12!\n" +
 	"\fcontent_type\x18\x02 \x01(\tR\vcontentType\x12\x18\n" +
 	"\x06inline\x18\x03 \x01(\fH\x00R\x06inline\x12\x1f\n" +
 	"\n" +
-	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRef\x12\x1c\n" +
-	"\ttruncated\x18\x05 \x01(\bR\ttruncated\x12)\n" +
+	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRef\x12 \n" +
+	"\ttruncated\x18\x05 \x01(\bB\x02\x18\x01R\ttruncated\x12)\n" +
 	"\x10content_encoding\x18\x06 \x01(\tR\x0fcontentEncodingB\t\n" +
 	"\acontent\"\xb9\r\n" +
 	"\x04Flow\x12\x0e\n" +

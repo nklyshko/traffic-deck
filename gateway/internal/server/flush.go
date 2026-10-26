@@ -1,6 +1,6 @@
 package server
 
-// Incremental persistence for a record-live session (ADR-0011). Flows and WebSocket
+// Incremental persistence for a live-decoded session (ADR-0011). Flows and WebSocket
 // frames are written to the session bundle *during* capture and released from memory,
 // rather than accumulating in the hub until CloseSession writes them in one transaction.
 //
@@ -39,7 +39,7 @@ type flushSink interface {
 type storedBody struct{ req, resp string }
 
 // startFlusher runs the flush loop until stopFlusher. A session without a sink (the
-// pushed path, or record-live off) keeps everything until close, as before.
+// pushed path) keeps everything until close, as before.
 func (ls *liveSession) startFlusher() {
 	if ls.sink == nil {
 		return

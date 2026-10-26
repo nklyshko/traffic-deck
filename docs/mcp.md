@@ -230,10 +230,8 @@ one that still has its pcap.
 ## Live sessions
 
 Sessions still being captured are readable too: flows, WebSocket frames and bodies are
-served from the live decode until the session closes and they are persisted. Under
-record-live (the default) bodies come back whole at any size; with `GATEWAY_RECORD_LIVE=off`
-the live decode keeps only the first 256 KiB of a body, and `get_body` marks what it
-returns `partial` — fetch it again once the session closes for all of it.
+served from the live decode until they are persisted, and bodies come back whole at any
+size.
 
 A body search on a live session reads the same bodies, whether a flow is still only in
 memory or already written with its body held back for a flush cycle — a page searched for

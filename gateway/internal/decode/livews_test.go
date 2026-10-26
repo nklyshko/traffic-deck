@@ -1,6 +1,8 @@
 package decode
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"sync"
 	"testing"
@@ -107,5 +109,31 @@ func TestLiveWebSocketUpgradeAndFrames(t *testing.T) {
 	}
 	if c != nil && c.FlowID != flow.ID || srv != nil && srv.FlowID != flow.ID {
 		t.Errorf("ws message flow ids don't match the flow")
+	}
+}
+
+// readWSFrames keeps whole payloads, read as they arrive: a frame's declared length is 64
+// bits off the wire, and one that is garbage (a stream picked up mid-frame, a hostile
+// peer) must cost only the bytes that are really there — never an allocation of what it
+// claims, which used to be one make() away from taking the gateway down.
+func TestWSFramesReadWholeAndDistrustTheLength(t *testing.T) {
+	big := bytes.Repeat([]byte("x"), 300<<10) // past the old 256 KiB live cap
+	var in bytes.Buffer
+	in.Write([]byte{0x82, 127}) // binary, unmasked, 64-bit length
+	_ = binary.Write(&in, binary.BigEndian, uint64(len(big)))
+	in.Write(big)
+	// A header claiming 2^60 bytes followed by a handful: not a frame anyone can deliver.
+	in.Write([]byte{0x82, 127})
+	_ = binary.Write(&in, binary.BigEndian, uint64(1)<<60)
+	in.WriteString("short")
+
+	var got [][]byte
+	readWSFrames(bufio.NewReader(&in), false, func(_ string, _ bool, p []byte) { got = append(got, p) })
+
+	if len(got) != 1 {
+		t.Fatalf("emitted %d frames, want only the whole one", len(got))
+	}
+	if !bytes.Equal(got[0], big) {
+		t.Fatalf("payload = %d bytes, want all %d", len(got[0]), len(big))
 	}
 }

@@ -23,10 +23,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// noBodyLimit tells decodeBody not to cap its output — the batch paths keep whole
-// bodies, unlike the live ones, which decode into a capped preview.
-const noBodyLimit = -1
-
 // bodyEncoding returns the transport encoding a message's headers name, lower-cased
 // ("" = none). "identity" is spelled-out absence, so it folds to none.
 func bodyEncoding(headers []Header) string {
@@ -104,15 +100,14 @@ func decoderFor(enc string) func(io.Reader) (io.ReadCloser, error) {
 	return nil
 }
 
-// decodeBody undoes enc, returning the plain bytes; limit caps the output
-// (noBodyLimit = uncapped). Anything we can't undo comes back untouched — the caller
+// decodeBody undoes enc, returning the plain bytes. Anything we can't undo comes back untouched — the caller
 // still records the encoding, so a consumer is told what these bytes are rather than
 // handed compressed bytes labelled plain.
 //
-// A body cut short (a live preview cap, a capture that ended mid-response) decompresses to
+// A body cut short (a capture that ended mid-response) decompresses to
 // as much as it has rather than to nothing, which is why a truncated read with output still
 // counts as a success.
-func decodeBody(enc string, b []byte, limit int64) []byte {
+func decodeBody(enc string, b []byte) []byte {
 	if len(b) == 0 {
 		return b
 	}
@@ -121,11 +116,7 @@ func decodeBody(enc string, b []byte, limit int64) []byte {
 		if err != nil {
 			continue // its header says these are not those bytes
 		}
-		var r io.Reader = zr
-		if limit >= 0 {
-			r = io.LimitReader(zr, limit)
-		}
-		out, rerr := io.ReadAll(r)
+		out, rerr := io.ReadAll(zr)
 		_ = zr.Close()
 		if len(out) == 0 {
 			continue

@@ -35,7 +35,7 @@ func TestQuerySQL(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	resp, err := v.QuerySQL(ctx, &trafficv1.QuerySQLRequest{
 		SessionId: sid, Sql: `SELECT status FROM flows WHERE status >= ? ORDER BY status`,

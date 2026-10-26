@@ -17,10 +17,11 @@ Two paths produce the decrypted bytes:
   arrive — no `tshark` re-run. So MAX frames stream into the `M` timeline in real time.
   **Verified end-to-end** on the Android `ru.oneme` (MAX) app: live TLS decryption +
   decoding of MAX frames during capture.
-- **Batch** (session close): `tshark -z follow,tls,raw` over each matched stream. Runs
-  only with `GATEWAY_RECORD_LIVE=off` (or on import/verify), and is what can still
-  recover a connection the live decryptor had to skip — one negotiating a version or
-  cipher suite it doesn't implement, or whose key-log secret never arrived.
+- **Batch**: `tshark -z follow,tls,raw` over each matched stream. Runs on pcap import,
+  `trafficdeck redecode --engine tshark`, `GATEWAY_TSHARK_VERIFY`, and on close when live
+  decode is off. A redecode is the way to recover a connection the live decryptor had to
+  skip — one negotiating a version or cipher suite it doesn't implement
+  ([ADR-0009](adr/0009-native-live-decode-default.md#removing-the-batch-alternative)).
 
 ## Writing one
 

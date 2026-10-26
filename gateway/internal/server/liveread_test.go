@@ -32,19 +32,14 @@ func (f *fakeFlowStream) SetTrailer(metadata.MD)       {}
 func (f *fakeFlowStream) SendMsg(any) error            { return nil }
 func (f *fakeFlowStream) RecvMsg(any) error            { return nil }
 
-// fakeBodyStream is a minimal grpc.ServerStreamingServer[BodyChunk] accumulating payloads
-// and the truncated flag the chunks carry.
+// fakeBodyStream is a minimal grpc.ServerStreamingServer[BodyChunk] accumulating payloads.
 type fakeBodyStream struct {
-	ctx       context.Context
-	data      []byte
-	chunks    int
-	truncated bool
+	ctx  context.Context
+	data []byte
 }
 
 func (f *fakeBodyStream) Send(c *trafficv1.BodyChunk) error {
 	f.data = append(f.data, c.GetPayload()...)
-	f.chunks++
-	f.truncated = f.truncated || c.GetTruncated()
 	return nil
 }
 func (f *fakeBodyStream) Context() context.Context     { return f.ctx }
@@ -65,7 +60,7 @@ func addedFlows(evs []*trafficv1.FlowEvent) []*trafficv1.Flow {
 	return out
 }
 
-// liveFixture opens a store with one OPEN session registered in a record-live hub.
+// liveFixture opens a store with one OPEN session registered in a live hub.
 func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -83,13 +78,12 @@ func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
 		t.Fatal(err)
 	}
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := &liveSession{
-		recordLive: true,
-		flows:      map[string]*trafficv1.Flow{},
-		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]*flowSub{},
-		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+		flows:   map[string]*trafficv1.Flow{},
+		dflows:  map[string]*decode.Flow{},
+		subs:    map[int]*flowSub{},
+		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 	hub.sessions[sid] = ls
 	return st, hub, ls, sid
@@ -131,28 +125,20 @@ func TestListMessagesLive(t *testing.T) {
 	}
 }
 
-// TestGetBodyLive covers the live-body outcomes: a body record-live retained is served
-// whole and unflagged; a capped preview is served but flagged truncated so it can't pass
-// for the whole body; a flow that carries none of its body streams the flag alone; and a
-// flow with no body at all is still NotFound.
+// TestGetBodyLive covers the live-body outcomes: a body the hub retained is served
+// whole; a flow that carries none of its body, and one with no body at all, are NotFound.
 func TestGetBodyLive(t *testing.T) {
 	ctx := context.Background()
 	st, hub, ls, sid := liveFixture(t)
 
-	// Record-live retains the full decode flow, so even a body past the inline cap is
-	// served — and it is the whole body, so nothing is flagged.
+	// The hub retains the full decode flow, so even a body past the inline cap is
+	// served whole.
 	big := bytes.Repeat([]byte("A"), 2<<20)
 	recorded := uuid.NewString()
 	ls.onFlow(&decode.Flow{ID: recorded, Authority: "example.com", Method: "GET", ResponseBody: big}, true)
 
-	// Without record-live the decoder caps the body: the preview is all there is, and the
-	// decode flow says so.
-	preview := bytes.Repeat([]byte("B"), 256<<10)
-	capped := uuid.NewString()
-	ls.onFlow(&decode.Flow{ID: capped, Authority: "example.com", Method: "GET",
-		ResponseBody: preview, ResponseBodyTruncated: true}, true)
-
-	// A flow that knows its body's size but carries none of the bytes.
+	// A flow that knows its body's size but carries none of the bytes: there is nothing
+	// to serve, and an empty stream would read as a body that is empty.
 	none := uuid.NewString()
 	ls.publish(&trafficv1.Flow{
 		Id: none, Authority: "example.com", Method: "GET",
@@ -173,29 +159,12 @@ func TestGetBodyLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBody (live, retained): %v", err)
 	}
-	if !bytes.Equal(srv.data, big) || srv.truncated {
-		t.Fatalf("retained body = %d bytes truncated=%v, want %d whole and unflagged",
-			len(srv.data), srv.truncated, len(big))
+	if !bytes.Equal(srv.data, big) {
+		t.Fatalf("retained body = %d bytes, want %d whole", len(srv.data), len(big))
 	}
 
-	srv, err = get(capped)
-	if err != nil {
-		t.Fatalf("GetBody (live, capped): %v", err)
-	}
-	if !bytes.Equal(srv.data, preview) || !srv.truncated {
-		t.Fatalf("capped body = %d bytes truncated=%v, want the %d-byte preview flagged",
-			len(srv.data), srv.truncated, len(preview))
-	}
-
-	// No bytes to send, but the flag still has to reach the caller — otherwise an empty
-	// stream reads as "this flow has no body".
-	srv, err = get(none)
-	if err != nil {
-		t.Fatalf("GetBody (live, no bytes held): %v", err)
-	}
-	if len(srv.data) != 0 || !srv.truncated || srv.chunks != 1 {
-		t.Fatalf("body-less-but-known = %d bytes in %d chunks truncated=%v, want one empty flagged chunk",
-			len(srv.data), srv.chunks, srv.truncated)
+	if _, err := get(none); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetBody (live, no bytes held) = %v, want NotFound", err)
 	}
 
 	if _, err := get(empty); status.Code(err) != codes.NotFound {

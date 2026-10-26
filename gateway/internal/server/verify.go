@@ -11,9 +11,9 @@ import (
 )
 
 // verifyRecordedLive tshark-decodes the session's pcap (without persisting the result)
-// and compares the just-recorded live flows against it, logging any differences — the
-// verification pass for record-live mode, where the authoritative tshark decode on close
-// is otherwise skipped. Failures are logged rather than returned: the session is already
+// and compares the just-recorded live flows against it, logging any differences — a
+// diagnostic cross-check of the live decoder, which is authoritative and never re-decoded
+// on close. Failures are logged rather than returned: the session is already
 // persisted and closed, and a broken verification must not fail the close.
 func (i *Ingest) verifyRecordedLive(ctx context.Context, sid string, ls *liveSession, keylogPath string) {
 	pcapLocal, ok := i.obj.LocalPath(pcapKey(sid))

@@ -113,7 +113,7 @@ func TestStreamFlowsWithoutFollowYieldsNothing(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 	s := &collectStream{ctx: ctx}
 	if err := v.StreamFlows(&trafficv1.StreamFlowsRequest{SessionId: sid}, s); err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestStreamFlowsRetractsOnUpdate(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	v := NewViewer(st, hub)
 
@@ -173,7 +173,7 @@ func TestStreamFlowsAddsWhenAnUpdateBringsAFlowIn(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	v := NewViewer(st, hub)
 
@@ -202,7 +202,7 @@ func TestStreamFlowsRejectsBadFilter(t *testing.T) {
 	ctx := context.Background()
 	st, sid := queryTestStore(t)
 	defer st.Close()
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 	err := v.StreamFlows(&trafficv1.StreamFlowsRequest{SessionId: sid, Filter: "~u (?=x)"},
 		&collectStream{ctx: ctx})
 	if err == nil {
@@ -223,7 +223,7 @@ func TestQueryFlowsMergesUnflushedTail(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	ls.publish(&trafficv1.Flow{Id: "tail", Method: "GET", Authority: "api.example.com",
 		Path: "/new", Status: 200, TsUnixMicros: 2}, true)
@@ -263,7 +263,7 @@ func TestQueryFlowsTailNextCursorOnlyWhenTruncated(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	for i := 0; i < 5; i++ {
 		ls.publish(&trafficv1.Flow{
@@ -300,7 +300,7 @@ func TestQueryFlowsFiltersTheTailToo(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	ls.publish(&trafficv1.Flow{Id: "a", Method: "GET", Authority: "api.example.com", TsUnixMicros: 1}, true)
 	ls.publish(&trafficv1.Flow{Id: "b", Method: "POST", Authority: "api.example.com", TsUnixMicros: 2}, true)
@@ -332,7 +332,7 @@ func TestQueryFlowsTailNextCursorHonoursFilter(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	// Ten flows alternating GET/POST: five match "~m GET".
 	for i := 0; i < 10; i++ {
@@ -380,7 +380,7 @@ func TestStreamFlowsMarksSubscriptionLive(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	v := NewViewer(st, hub)
 
@@ -414,7 +414,7 @@ func TestQueryFlowsTailCarriesNoBodies(t *testing.T) {
 	st, sid := queryTestStore(t)
 	defer st.Close()
 
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := hub.startPassive(sid)
 	live := &trafficv1.Flow{
 		Id: "tail", Method: "GET", Authority: "api.example.com", Path: "/x",

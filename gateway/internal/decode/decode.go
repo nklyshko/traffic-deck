@@ -56,13 +56,6 @@ type Flow struct {
 	RequestBody  []byte
 	ResponseBody []byte
 
-	// RequestBodyTruncated / ResponseBodyTruncated mark a body the live decode kept only
-	// the start of, having hit maxLiveBody. The batch pass on close (and record-live,
-	// which lifts the cap) leave them false, so they say exactly one thing: what is in
-	// the field above is a prefix, not the body.
-	RequestBodyTruncated  bool
-	ResponseBodyTruncated bool
-
 	// RequestBodyEncoding / ResponseBodyEncoding name the transport encoding the body
 	// bytes carried on the wire ("gzip", "br", …), set whenever the decoder saw one —
 	// whether or not it could undo it (see contentencoding.go). The bytes above are
@@ -347,8 +340,7 @@ func DecodeNative(ctx context.Context, pcapPath, keylogPath string) (*Dataset, e
 		ds.Messages = append(ds.Messages, m)
 		mu.Unlock()
 	}
-	// recordLive=true: this is the authoritative decode (it only tunes skip diagnostics).
-	if err := LiveTCPDecode(f, keylogPath, onFlow, onMsg, true); err != nil {
+	if err := LiveTCPDecode(f, keylogPath, onFlow, onMsg); err != nil {
 		return nil, err
 	}
 	return ds, nil

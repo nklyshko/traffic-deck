@@ -12,7 +12,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
-// newFlushSession builds a live session wired to st, as hub.start does for a record-live
+// newFlushSession builds a live session wired to st, as hub.start does for a live-decoded
 // capture, but without a decode goroutine — the tests drive onFlow directly.
 func newFlushSession(t *testing.T, st *store.Store, sid string) *liveSession {
 	t.Helper()
@@ -24,12 +24,11 @@ func newFlushSession(t *testing.T, st *store.Store, sid string) *liveSession {
 		t.Fatalf("create analysis: %v", err)
 	}
 	return &liveSession{
-		recordLive: true,
-		flows:      map[string]*trafficv1.Flow{},
-		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]*flowSub{},
-		msgSubs:    map[int]chan *trafficv1.WsMessage{},
-		sessionID:  sid, analysisID: "a1", sink: st,
+		flows:     map[string]*trafficv1.Flow{},
+		dflows:    map[string]*decode.Flow{},
+		subs:      map[int]*flowSub{},
+		msgSubs:   map[int]chan *trafficv1.WsMessage{},
+		sessionID: sid, analysisID: "a1", sink: st,
 		dirty: map[string]struct{}{}, pending: map[string]struct{}{},
 		stored:    map[string]storedBody{},
 		wake:      make(chan struct{}, 1),

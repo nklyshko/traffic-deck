@@ -19,8 +19,8 @@ import (
 type Config struct {
 	GRPCAddr string // listen address for the gRPC server
 	DataRoot string // root for session bundles + catalog.sqlite
-	// TsharkPath is the tshark binary, used only for the optional batch decode: pcap
-	// import (--decoder tshark), and (record-live off) the authoritative batch pass /
+	// TsharkPath is the tshark binary, used only for the batch decode: pcap import
+	// (--decoder tshark), redecode --engine tshark, a capture with live decode off, and
 	// tshark-verify on close. The live decode needs no tshark.
 	TsharkPath string
 	// LiveDecode toggles the live pipeline. When true (default) a streaming session
@@ -29,17 +29,10 @@ type Config struct {
 	// raw-TCP framing — plaintext or TLS. When false, no live decode runs and the capture
 	// is decoded only by the batch tshark pass on session close (the pre-live behavior).
 	LiveDecode bool
-	// RecordLive persists the live-decoded flows on close and skips the batch tshark
-	// re-decode. Only takes effect when LiveDecode is on and the session has a live decode
-	// running. Default true: the in-process live decode is authoritative and no batch
-	// tshark pass runs on close. Set GATEWAY_RECORD_LIVE=off to instead run the batch pass
-	// on close (authoritative, full bodies) — useful for verifying the live decoder.
-	RecordLive bool
 	// TsharkVerify, on session close, compares the live-decoded flows against a tshark
-	// batch decode and logs any differences. Requires LiveDecode on. With RecordLive
-	// off it compares against the authoritative tshark pass that runs anyway; with
-	// RecordLive on it runs an extra diagnostic tshark decode (not persisted) just for
-	// the comparison. Default false. (Env: GATEWAY_TSHARK_VERIFY.)
+	// batch decode and logs any differences. Requires LiveDecode on. The tshark decode is
+	// diagnostic only, never persisted: the live decode is authoritative (ADR-0009).
+	// Default false. (Env: GATEWAY_TSHARK_VERIFY.)
 	TsharkVerify bool
 	// StartMCP auto-starts the MCP server on launch (GATEWAY_MCP), so an agent can attach
 	// without a viewer having to toggle it. Default true; set GATEWAY_MCP=off to keep it
@@ -174,12 +167,18 @@ func (s source) integer(key string, def int) int {
 func Load() Config {
 	s := loadFile()
 	dataRoot := s.str("DATA_ROOT", "./data")
+	if !s.boolean("GATEWAY_RECORD_LIVE", true) {
+		// Said once rather than silently ignored: someone who set it expects tshark to
+		// re-decode every capture on close, and that no longer happens (ADR-0009).
+		log.Printf("config: GATEWAY_RECORD_LIVE=off is no longer supported and is ignored — " +
+			"the live decode is authoritative; re-decode a closed session with " +
+			"`trafficdeck redecode --engine tshark`")
+	}
 	return Config{
 		GRPCAddr:        s.str("GATEWAY_ADDR", "127.0.0.1:7331"),
 		DataRoot:        dataRoot,
 		TsharkPath:      s.str("TSHARK_PATH", "tshark"),
 		LiveDecode:      s.boolean("GATEWAY_LIVE_DECODE", true),
-		RecordLive:      s.boolean("GATEWAY_RECORD_LIVE", true),
 		TsharkVerify:    s.boolean("GATEWAY_TSHARK_VERIFY", false),
 		StartMCP:        s.boolean("GATEWAY_MCP", true),
 		Viewer:          s.str("GATEWAY_VIEWER", "tui"),

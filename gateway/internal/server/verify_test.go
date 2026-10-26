@@ -45,7 +45,7 @@ func TestVerifyLiveVsTshark(t *testing.T) {
 	}
 }
 
-// TestVerifyRecordedLiveLogsDecodeFailure checks the record-live verification pass:
+// TestVerifyRecordedLiveLogsDecodeFailure checks the tshark verification pass:
 // a failing batch decode is logged and swallowed — it must never fail the close, since
 // the live flows are already persisted by then.
 func TestVerifyRecordedLiveLogsDecodeFailure(t *testing.T) {

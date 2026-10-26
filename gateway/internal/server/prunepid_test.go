@@ -26,7 +26,7 @@ func pruneTestIngest(t *testing.T) *Ingest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewIngest(st, obj, "", newLiveHub(false), false, false, false)
+	return NewIngest(st, obj, "", newLiveHub(), false, false)
 }
 
 // TestPersistLiveDropsForeignFlows is the flow half of the per-process narrowing. Flows
@@ -48,11 +48,10 @@ func TestPersistLiveDropsForeignFlows(t *testing.T) {
 	}
 
 	ls := &liveSession{
-		recordLive: true,
-		flows:      map[string]*trafficv1.Flow{},
-		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]*flowSub{},
-		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+		flows:   map[string]*trafficv1.Flow{},
+		dflows:  map[string]*decode.Flow{},
+		subs:    map[int]*flowSub{},
+		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 	ls.onFlow(&decode.Flow{
 		ID: uuid.NewString(), Authority: "ours.example", Protocol: "HTTP/2",
@@ -106,11 +105,10 @@ func TestPersistLiveKeepsEverythingWithoutEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	ls := &liveSession{
-		recordLive: true,
-		flows:      map[string]*trafficv1.Flow{},
-		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]*flowSub{},
-		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+		flows:   map[string]*trafficv1.Flow{},
+		dflows:  map[string]*decode.Flow{},
+		subs:    map[int]*flowSub{},
+		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 	ls.onFlow(&decode.Flow{
 		ID: uuid.NewString(), Authority: "a.example", Protocol: "HTTP/2",

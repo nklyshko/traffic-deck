@@ -1,7 +1,9 @@
 # 0009 — The native in-process decoder is the default, authoritative path
 
 Status: accepted. Supersedes much of [0002](0002-tshark-for-dissection.md); generalizes
-[0006](0006-in-process-tls-decryption.md).
+[0006](0006-in-process-tls-decryption.md). Revised 2026-10-26: the
+`GATEWAY_RECORD_LIVE=off` alternative it first kept is gone — see
+[Removing the batch alternative](#removing-the-batch-alternative).
 
 ## Context
 
@@ -32,11 +34,13 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   (plus the Android NFLOG link type), decrypts TLS (SSL 3.0 – TLS 1.3) and QUIC from the
   key-log, and frames HTTP/1.1, HTTP/2, HTTP/3, WebSocket and custom raw-TCP —
   plaintext or TLS.
-- It is **authoritative by default**: `GATEWAY_LIVE_DECODE` and `GATEWAY_RECORD_LIVE`
-  both default on, so live-decoded flows are persisted on close and no batch pass runs.
-- `tshark` remains for pcap import, for `GATEWAY_RECORD_LIVE=off` (an authoritative
-  batch re-decode on close), and for `GATEWAY_TSHARK_VERIFY` (decode both ways on close
-  and log the differences).
+- It is **authoritative**: a capture decoded live is recorded as the live decode
+  produced it, and no batch pass re-decodes it on close.
+- `tshark` remains where the live decoder cannot be asked to do the job: pcap import,
+  `trafficdeck redecode --engine tshark` of a closed session, a capture with
+  `GATEWAY_LIVE_DECODE=false` (no live decode at all), and `GATEWAY_TSHARK_VERIFY`
+  (decode both ways on close and log the differences; the tshark side is never
+  persisted).
 
 ## Consequences
 
@@ -45,8 +49,8 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   protocol.
 - Fingerprint fields (`ja3`, `ja4`, `tls_client_hello`, `client_hellos`,
   `http2_fingerprint`) are produced **only** by the native decoder; the batch stitcher
-  reads the ClientHello just for SNI and the stream index. So `GATEWAY_RECORD_LIVE=off`
-  trades the fingerprints for tshark's dissectors and full-fidelity bodies.
+  reads the ClientHello just for SNI and the stream index. So a tshark redecode trades
+  the fingerprints for tshark's dissectors.
 - The cost [0002](0002-tshark-for-dissection.md) set out to avoid is now partly paid: a
   TLS/QUIC decryptor and HTTP/1.1, HTTP/2 and HTTP/3 framers to maintain. Scope grew
   well past [0006](0006-in-process-tls-decryption.md)'s TLS 1.3 — SSL 3.0 through TLS
@@ -56,3 +60,33 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   on a real capture, so the two can't silently diverge.
 - Wireshark is no longer required to decode a live capture — only to import a pcap or
   run the batch/verify passes (`dumpcap` is still what the Chrome tool captures with).
+- A connection the live decoder skips is missing from the session unless someone runs
+  `redecode --engine tshark`; the skip diagnostic names that command.
+
+## Removing the batch alternative
+
+This ADR first kept `GATEWAY_RECORD_LIVE=off` as a way back: run tshark over the
+finished pcap on close and persist *that*, with the live decode only a 256 KiB-per-body
+preview while the capture ran. It was the stated recovery for a connection the live
+decoder had to skip — an unsupported TLS version or cipher suite — and a way to check the
+decoder against Wireshark's dissectors.
+
+It was removed because nobody turned it on and it would not have recovered anything.
+Seven weeks of one gateway's log (2026-09-08 – 2026-10-26) hold 11,475 skip diagnostics:
+9,632 "no TLS key-log secret" and 1,839 "no QUIC key-log secret" — other processes on a
+system-wide capture, or connections that began before it, which tshark cannot decrypt
+from the same key-log either — and four HTTP/3 connections whose headers waited on QPACK
+inserts that never reached the capture. None was an unsupported version or suite.
+
+Meanwhile the mode was not free. Every reader of a live body had a preview case to
+handle and label — `truncated` on the wire, `partial` in MCP, "live preview" in the
+TUI — and a body search during capture could say nothing true about a preview, since
+neither "contains" nor "lacks" holds on a body's first 256 KiB.
+
+The setting is now ignored, with a log line naming `redecode --engine tshark`. The live
+body cap went with it: the live decoders keep every body whole, so nothing marks a body
+as a preview and no reader handles one. `Body.truncated` and `BodyChunk.truncated` stay
+in the proto as deprecated, never-set fields, so older readers and writers remain
+wire-compatible. A WebSocket frame's payload is read as it arrives rather than into a
+buffer of its declared length, since without the cap that 64-bit length off the wire
+was the only bound on the allocation.

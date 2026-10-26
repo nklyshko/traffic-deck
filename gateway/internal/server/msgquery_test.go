@@ -104,7 +104,7 @@ func listIDs(t *testing.T, v *Viewer, sid, fid, expr string) []string {
 // viewer gets the same one.
 func TestListMessagesFilters(t *testing.T) {
 	st, sid, fid := msgFixture(t)
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	for _, c := range []struct {
 		expr string
@@ -138,7 +138,7 @@ func TestListMessagesMatchesASpilledPayload(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	if got := listIDs(t, v, sid, fid, "~b needle"); !equalStrings(got, []string{"big"}) {
 		t.Fatalf("~b needle over a spilled payload = %v, want [big]", got)
@@ -153,7 +153,7 @@ func TestListMessagesFiltersOnAnnotations(t *testing.T) {
 	if _, err := st.AddComment(ctx, sid, "m2", "look here"); err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	if got := listIDs(t, v, sid, fid, "~comment 'look here'"); len(got) != 0 {
 		t.Errorf("quotes match literally, so this should find nothing; got %v", got)
@@ -168,7 +168,7 @@ func TestListMessagesFiltersOnAnnotations(t *testing.T) {
 // avoid: `~m GET` would match nothing and look like an empty timeline.
 func TestMessageFilterRejectsFlowTerms(t *testing.T) {
 	st, sid, fid := msgFixture(t)
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	_, err := v.ListMessages(context.Background(), &trafficv1.ListMessagesRequest{
 		SessionId: sid, FlowId: fid, Filter: "~m GET"})
@@ -189,7 +189,7 @@ func TestMessageFilterRejectsFlowTerms(t *testing.T) {
 
 func TestListMessagesReturnsHints(t *testing.T) {
 	st, sid, fid := msgFixture(t)
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	resp, err := v.ListMessages(context.Background(), &trafficv1.ListMessagesRequest{
 		SessionId: sid, FlowId: fid, Filter: "~op text & ~from client"})
@@ -252,7 +252,7 @@ func TestStreamMessagesFiltersBackfillAndLiveFrames(t *testing.T) {
 // frame, since they describe the subscription a viewer is starting to draw.
 func TestStreamMessagesSendsHintsFirst(t *testing.T) {
 	st, sid, fid := msgFixture(t)
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	s := &collectMsgStream{ctx: context.Background()}
 	if err := v.StreamMessages(&trafficv1.StreamMessagesRequest{
@@ -298,7 +298,7 @@ func TestMessageMetadataRoundTripsAndFilters(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	v := NewViewer(st, newLiveHub(false))
+	v := NewViewer(st, newLiveHub())
 
 	resp, err := v.ListMessages(ctx, &trafficv1.ListMessagesRequest{
 		SessionId: sid, FlowId: fid, Filter: "~meta max.seq=^17$"})

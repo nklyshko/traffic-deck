@@ -46,12 +46,11 @@ type Ingest struct {
 	tshark       string
 	hub          *liveHub
 	liveDecode   bool // when false, streaming uploads are archived and decoded only on close
-	recordLive   bool // when true, persist the live-decoded flows on close instead of batch decode
 	tsharkVerify bool // when true, compare live flows vs a tshark decode on close and log differences
 
 	// pushAnalyses gives each pushed (mitmproxy) session a single analysis, shared across
 	// its many PushFlows streams — the addon opens one stream per flow/message.
-	// liveAnalyses is the record-live counterpart, created at session start because rows
+	// liveAnalyses is the live-decode counterpart, created at session start because rows
 	// reference it throughout the capture now, not only at close (ADR-0011 §7).
 	pushMu       sync.Mutex
 	pushAnalyses map[string]string // sessionID -> analysisID
@@ -75,16 +74,16 @@ type wsPushState struct {
 	sess    decoders.Session
 }
 
-func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, recordLive, tsharkVerify bool) *Ingest {
+func NewIngest(st *store.Store, obj objstore.Store, tshark string, hub *liveHub, liveDecode, tsharkVerify bool) *Ingest {
 	return &Ingest{
 		st: st, obj: obj, tshark: tshark, hub: hub,
-		liveDecode: liveDecode, recordLive: recordLive, tsharkVerify: tsharkVerify,
+		liveDecode: liveDecode, tsharkVerify: tsharkVerify,
 		pushAnalyses: map[string]string{},
 		liveAnalyses: map[string]string{},
 	}
 }
 
-// liveAnalysis returns a record-live session's analysis, creating it on first use. The
+// liveAnalysis returns a live-decoded session's analysis, creating it on first use. The
 // flusher needs it from the first written row, so unlike the old close-time path this
 // runs at session start (ADR-0011 §7).
 func (i *Ingest) liveAnalysis(sid string) (string, error) {
@@ -462,7 +461,7 @@ func (i *Ingest) ForceCloseSession(ctx context.Context, req *trafficv1.CloseSess
 }
 
 func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.SessionSummary, error) {
-	// Stop live decode (if any); ls holds the accumulated live flows for record-live mode.
+	// Stop live decode (if any); ls holds the live flows not yet persisted.
 	ls := i.hub.stop(sid)
 
 	// Narrow a per-process capture to the browser that was launched. This runs before the
@@ -470,8 +469,8 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 	// for it and the flows decoded from it all describe the same packets.
 	//
 	// foreign is the connections it proved belonged to another process. The batch path
-	// needs nothing further — tshark decodes the pruned pcap — but record-live decoded
-	// while the capture ran, so its flows are narrowed separately below.
+	// needs nothing further — tshark decodes the pruned pcap — but the live decode ran
+	// while the capture did, so its flows are narrowed separately below.
 	foreign := i.pruneToCapturePIDs(ctx, sid)
 
 	var pcapBytes, keylogBytes int64
@@ -488,9 +487,9 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 	}
 
 	switch {
-	case i.recordLive && ls != nil && pcapBytes > 0:
-		// RECORD-LIVE: persist the flows the live decoder already produced; skip the batch
-		// tshark re-decode. Bodies are the live previews (capped at maxLiveBody).
+	case ls != nil && pcapBytes > 0:
+		// LIVE: persist the flows the live decoder already produced; it is authoritative,
+		// so no batch re-decode runs (ADR-0009).
 		if err := i.persistLive(ctx, sid, ls, foreign); err != nil {
 			return nil, status.Errorf(codes.Internal, "persist live: %v", err)
 		}
@@ -499,18 +498,11 @@ func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.Se
 			i.verifyRecordedLive(ctx, sid, ls, keylogLocal)
 		}
 	case pcapBytes > 0:
-		// PACKET source: authoritative batch decode over the finalized pcap.
+		// PACKET source with live decode off (GATEWAY_LIVE_DECODE=false): the batch decode
+		// over the finalized pcap is the only one.
 		pcapLocal, _ := i.obj.LocalPath(pcapKey(sid))
 		if _, err := importer.Finalize(ctx, i.st, decode.EngineTshark, i.tshark, sid, pcapLocal, keylogLocal); err != nil {
 			return nil, status.Errorf(codes.Internal, "finalize: %v", err)
-		}
-		if i.tsharkVerify && ls != nil {
-			// Compare the live decode against the just-persisted tshark flows and log diffs.
-			if batch, err := i.st.ListFlows(ctx, sid); err == nil {
-				verifyLiveVsTshark(sid, ls.protoFlows(), batch)
-			} else {
-				log.Printf("verify %s: cannot list tshark flows: %v", sid, err)
-			}
 		}
 	default:
 		// Supplied/pushed source (PushFlows): flows were persisted incrementally;
@@ -603,8 +595,8 @@ func sortedPIDs(keep map[int32]bool) []int32 {
 }
 
 // persistLive records the flows + WebSocket messages produced by the live decoder as a
-// "live" analysis, then finishes the session — the record-live alternative to the batch
-// tshark pass. The flows are the live path's final state (bodies capped at maxLiveBody).
+// "live" analysis, then finishes the session. The flows are the live path's final state,
+// bodies whole.
 //
 // foreign names connections a per-process capture proved belonged to another process. The
 // live decoder saw them because the kernel filter could not exclude them, so they are

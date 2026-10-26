@@ -44,12 +44,11 @@ func (s *flowSub) send(ev *trafficv1.FlowEvent) {
 }
 
 // liveHub tracks in-progress streaming sessions and fans decoded flows out to
-// viewer subscribers. In record-live mode (the default) the live decode is
-// authoritative and persisted on close; otherwise an optional batch pass re-decodes.
+// viewer subscribers. The live decode is authoritative: what it produces is what the
+// session records (ADR-0009).
 type liveHub struct {
-	mu         sync.Mutex
-	sessions   map[string]*liveSession
-	recordLive bool // retain full decode flows so they can be persisted on close
+	mu       sync.Mutex
+	sessions map[string]*liveSession
 
 	// Incremental persistence wiring (ADR-0011), set by setPersistence once the owner
 	// that can reach the store exists. Unset means sessions accumulate until close.
@@ -58,8 +57,8 @@ type liveHub struct {
 	onFlushErr  func(sessionID string, err error)
 }
 
-func newLiveHub(recordLive bool) *liveHub {
-	return &liveHub{sessions: map[string]*liveSession{}, recordLive: recordLive}
+func newLiveHub() *liveHub {
+	return &liveHub{sessions: map[string]*liveSession{}}
 }
 
 // setPersistence gives the hub what its flushers need: somewhere to write, the session's
@@ -75,11 +74,9 @@ type liveSession struct {
 	pw   *io.PipeWriter // feeds the in-process Go decode pipeline (nil for a pushed session)
 	done chan struct{}  // closed when the decode goroutine exits
 
-	recordLive bool // retain full decode flows (dflows) for persistence on close
-
 	mu     sync.Mutex
 	flows  map[string]*trafficv1.Flow
-	dflows map[string]*decode.Flow // full-body decode flows, kept only in record-live mode
+	dflows map[string]*decode.Flow // full-body decode flows, for the flusher and body reads
 	order  []string
 	subs   map[int]*flowSub
 	nextID int
@@ -92,8 +89,7 @@ type liveSession struct {
 	msgSubs  map[int]chan *trafficv1.WsMessage
 
 	// Incremental persistence (ADR-0011), active only when sink is set. Without it the
-	// session accumulates until close — the pushed path, which persists itself, and
-	// record-live off, which re-decodes the pcap instead.
+	// session accumulates until close — the pushed path, which persists itself.
 	sink       flushSink
 	sessionID  string
 	analysisID string
@@ -132,34 +128,33 @@ func (h *liveHub) liveFlowCount(sessionID string) (int, bool) {
 // must already exist (it may be empty and grow). One in-process Go pipeline decodes the
 // whole capture — reassembling TCP/QUIC, decrypting TLS from the growing key-log, and
 // framing HTTP/1.1, HTTP/2, HTTP/3, WebSocket, and custom raw-TCP protocols, plaintext or
-// TLS — with no tshark. In record-live mode its flows are persisted on close.
+// TLS — with no tshark. Its flows are persisted as they settle and on close.
 func (h *liveHub) start(sessionID, keylogPath string) {
 	pr, pw := io.Pipe()
 	ls := &liveSession{
-		pw:         pw,
-		done:       make(chan struct{}),
-		recordLive: h.recordLive,
-		flows:      map[string]*trafficv1.Flow{},
-		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]*flowSub{},
-		msgSubs:    map[int]chan *trafficv1.WsMessage{},
-		sessionID:  sessionID,
-		dirty:      map[string]struct{}{},
-		pending:    map[string]struct{}{},
-		stored:     map[string]storedBody{},
-		wake:       make(chan struct{}, 1),
-		stopFlush:  make(chan struct{}),
-		flushDone:  make(chan struct{}),
+		pw:        pw,
+		done:      make(chan struct{}),
+		flows:     map[string]*trafficv1.Flow{},
+		dflows:    map[string]*decode.Flow{},
+		subs:      map[int]*flowSub{},
+		msgSubs:   map[int]chan *trafficv1.WsMessage{},
+		sessionID: sessionID,
+		dirty:     map[string]struct{}{},
+		pending:   map[string]struct{}{},
+		stored:    map[string]storedBody{},
+		wake:      make(chan struct{}, 1),
+		stopFlush: make(chan struct{}),
+		flushDone: make(chan struct{}),
 	}
 	h.mu.Lock()
 	sink, analysisFor, onFlushErr := h.sink, h.analysisFor, h.onFlushErr
 	h.sessions[sessionID] = ls
 	h.mu.Unlock()
 
-	// Record-live persists as it goes; the analysis those rows reference is created up
-	// front rather than at close, since they now reference it throughout the capture
-	// (ADR-0011 §7). Without one the session simply accumulates until close, as before.
-	if h.recordLive && sink != nil && analysisFor != nil {
+	// Flows are persisted as they go; the analysis those rows reference is created up
+	// front rather than at close, since they reference it throughout the capture
+	// (ADR-0011 §7). Without one the session simply accumulates until close.
+	if sink != nil && analysisFor != nil {
 		if aid, err := analysisFor(sessionID); err == nil {
 			ls.sink, ls.analysisID, ls.onFlushErr = sink, aid, onFlushErr
 			ls.startFlusher()
@@ -173,7 +168,7 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		// Close the read end when decode exits so write() can't block forever if the
 		// decoder returns early (writes get ErrClosedPipe instead).
 		defer pr.Close()
-		_ = decode.LiveTCPDecode(pr, keylogPath, ls.onFlow, ls.onMessage, h.recordLive)
+		_ = decode.LiveTCPDecode(pr, keylogPath, ls.onFlow, ls.onMessage)
 	}()
 }
 
@@ -203,8 +198,8 @@ func (h *liveHub) write(sessionID string, b []byte) {
 
 // stop ends a session's live decode: close the pipe (EOF tshark), wait for all
 // flows to be emitted, publish a closed session_event, and close subscribers. It
-// returns the finalized session (or nil) so the caller can persist its flows in
-// record-live mode; the accumulated flows/messages stay readable after close.
+// returns the finalized session (or nil) so the caller can persist its flows; the
+// accumulated flows/messages stay readable after close.
 func (h *liveHub) stop(sessionID string) *liveSession {
 	h.mu.Lock()
 	ls := h.sessions[sessionID]
@@ -240,8 +235,8 @@ func (h *liveHub) stop(sessionID string) *liveSession {
 }
 
 // snapshotForRecord returns the final full-body decode flows (in arrival order) and the
-// WebSocket messages, for persisting a record-live session on close. WS message payloads
-// are carried inline in the proto (uncapped once SetUnlimitedLiveBodies is set).
+// WebSocket messages, for persisting a live-decoded session on close. WS message payloads
+// are carried inline in the proto, uncapped.
 func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.WsMessage) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -307,43 +302,33 @@ func (ls *liveSession) messagesForFlow(flowID string) []*trafficv1.WsMessage {
 	return out
 }
 
-// bodyBytes serves a live flow's request or response body: the bytes held for it, and
-// whether those are a prefix (the live cap cut the body short) rather than the whole
-// thing. ok is false only when there is no such live flow, or that direction has no body.
+// bodyBytes serves a live flow's request or response body. ok is false when there is no
+// such live flow, that direction has no body, or the hub holds none of its bytes.
 //
-// Under record-live the retained decode flow carries whole bodies of any size, so it wins
-// over the proto's copy, which inlines only up to InlineBlobMax. Without it the flow's
-// preview is all there is until the batch decode on close.
-func (ls *liveSession) bodyBytes(flowID string, response bool) (data []byte, truncated, ok bool) {
+// The retained decode flow carries whole bodies of any size, so it wins over the proto's
+// copy, which inlines only up to InlineBlobMax.
+func (ls *liveSession) bodyBytes(flowID string, response bool) (data []byte, ok bool) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if df := ls.dflows[flowID]; df != nil {
-		b, cut := df.RequestBody, df.RequestBodyTruncated
+		b := df.RequestBody
 		if response {
-			b, cut = df.ResponseBody, df.ResponseBodyTruncated
+			b = df.ResponseBody
 		}
 		if len(b) > 0 {
-			return b, cut, true
+			return b, true
 		}
 	}
 	f := ls.flows[flowID]
 	if f == nil {
-		return nil, false, false
+		return nil, false
 	}
 	body := f.GetRequestBody()
 	if response {
 		body = f.GetResponseBody()
 	}
-	if body.GetSize() == 0 {
-		return nil, false, false
-	}
-	if inline := body.GetInline(); len(inline) > 0 {
-		return inline, body.GetTruncated(), true
-	}
-	// The flow says the body exists but carries none of it (a pushed flow whose bytes
-	// went to the store, which the caller has already missed). Nothing to hand over —
-	// report it as a truncated body of zero bytes rather than as a body-less flow.
-	return nil, true, true
+	inline := body.GetInline()
+	return inline, len(inline) > 0
 }
 
 // searchBody is a body as a filter term sees it. It reads the decoder's bytes rather
@@ -419,16 +404,14 @@ func (ls *liveSession) protoFlows() []*trafficv1.Flow {
 }
 
 func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
-	if ls.recordLive {
-		// Retain the full-body decode flow (the proto below is a capped preview for
-		// streaming). Snapshot rather than keep f: the decoder mutates one Flow in place
-		// across callbacks and holds no lock of ours while doing it, so only this
-		// callback is synchronous with it. Keeping the pointer would race with every
-		// later reader — the flusher, and a body read served from the hub.
-		ls.mu.Lock()
-		ls.dflows[f.ID] = copyFlow(f)
-		ls.mu.Unlock()
-	}
+	// Retain the full-body decode flow (the proto below inlines only up to
+	// InlineBlobMax). Snapshot rather than keep f: the decoder mutates one Flow in place
+	// across callbacks and holds no lock of ours while doing it, so only this callback is
+	// synchronous with it. Keeping the pointer would race with every later reader — the
+	// flusher, and a body read served from the hub.
+	ls.mu.Lock()
+	ls.dflows[f.ID] = copyFlow(f)
+	ls.mu.Unlock()
 	ls.publish(flowToProto(f), isNew)
 }
 
@@ -600,8 +583,8 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 	for _, h := range f.ResponseHeaders {
 		pf.ResponseHeaders = append(pf.ResponseHeaders, &trafficv1.Header{Name: h.Name, Value: h.Value})
 	}
-	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders), f.RequestBodyTruncated, f.RequestBodyEncoding)
-	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders), f.ResponseBodyTruncated, f.ResponseBodyEncoding)
+	pf.RequestBody = liveBody(f.RequestBody, contentType(f.RequestHeaders), f.RequestBodyEncoding)
+	pf.ResponseBody = liveBody(f.ResponseBody, contentType(f.ResponseHeaders), f.ResponseBodyEncoding)
 	return pf
 }
 
@@ -633,13 +616,11 @@ func wsMsgToProto(m *decode.WsMessage) *trafficv1.WsMessage {
 	return pm
 }
 
-func liveBody(b []byte, ct string, truncated bool, encoding string) *trafficv1.Body {
+func liveBody(b []byte, ct string, encoding string) *trafficv1.Body {
 	if len(b) == 0 {
 		return nil
 	}
-	body := &trafficv1.Body{
-		Size: uint64(len(b)), ContentType: ct, Truncated: truncated, ContentEncoding: encoding,
-	}
+	body := &trafficv1.Body{Size: uint64(len(b)), ContentType: ct, ContentEncoding: encoding}
 	if len(b) <= store.InlineBlobMax {
 		body.Content = &trafficv1.Body_Inline{Inline: b}
 	}

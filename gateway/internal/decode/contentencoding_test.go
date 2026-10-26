@@ -378,7 +378,7 @@ func TestLiveHTTP3GzipBody(t *testing.T) {
 func TestLiveHTTP3GzipEncodingLearntAfterData(t *testing.T) {
 	const page = "headers decoded after the body arrived"
 	st := &h3Stream{flow: &Flow{}}
-	st.flow.appendRespBody(gzipBytes(t, page))
+	st.flow.ResponseBody = append(st.flow.ResponseBody, gzipBytes(t, page)...)
 
 	st.setRespEnc("gzip")
 
@@ -442,10 +442,10 @@ func TestLiveHTTP1RecordsGzipEncoding(t *testing.T) {
 		Body:   io.NopCloser(bytes.NewReader(gzipBytes(t, page))),
 	}
 
-	body, truncated, enc := readRespBody(resp)
+	body, enc := readRespBody(resp)
 
-	if string(body) != page || truncated {
-		t.Errorf("body = %q truncated=%v, want %q whole", body, truncated, page)
+	if string(body) != page {
+		t.Errorf("body = %q, want %q whole", body, page)
 	}
 	if enc != "gzip" {
 		t.Errorf("encoding = %q, want %q", enc, "gzip")
@@ -459,7 +459,7 @@ func TestLiveHTTP1EncodingOmitted(t *testing.T) {
 		Header: http.Header{"Content-Encoding": {"identity"}},
 		Body:   io.NopCloser(strings.NewReader("plain")),
 	}
-	if _, _, enc := readRespBody(resp); enc != "" {
+	if _, enc := readRespBody(resp); enc != "" {
 		t.Errorf("identity encoding = %q, want none", enc)
 	}
 
@@ -467,16 +467,16 @@ func TestLiveHTTP1EncodingOmitted(t *testing.T) {
 		Header: http.Header{"Content-Encoding": {"gzip"}},
 		Body:   io.NopCloser(strings.NewReader("")),
 	}
-	if _, _, enc := readRespBody(empty); enc != "" {
+	if _, enc := readRespBody(empty); enc != "" {
 		t.Errorf("empty body encoding = %q, want none — there are no bytes to describe", enc)
 	}
 }
 
-// A stream cut short (the live preview cap, a capture that ended mid-response)
+// A stream cut short (a capture that ended mid-response)
 // decompresses to as much as it has: a partial page beats no page.
 func TestMaybeGunzipPartialStream(t *testing.T) {
 	raw := gzipBytes(t, strings.Repeat("searchable ", 2000))
-	got := decodeBody("gzip", raw[:len(raw)-20], noBodyLimit)
+	got := decodeBody("gzip", raw[:len(raw)-20])
 	if !strings.HasPrefix(string(got), "searchable searchable") {
 		t.Errorf("partial gunzip = %.40q…, want the decompressed prefix", got)
 	}
@@ -498,7 +498,7 @@ func TestDecodeBodyUndoesEveryEncodingWeClaim(t *testing.T) {
 		{"deflate", rawDeflateBytes(t, needle)}, // as some servers send it
 	} {
 		t.Run(tc.enc+"-"+strconv.Itoa(len(tc.body)), func(t *testing.T) {
-			if got := string(decodeBody(tc.enc, tc.body, noBodyLimit)); got != needle {
+			if got := string(decodeBody(tc.enc, tc.body)); got != needle {
 				t.Errorf("decodeBody(%q) = %.40q, want %q", tc.enc, got, needle)
 			}
 		})
@@ -513,7 +513,7 @@ func TestDecodeBodyUndoesEveryEncodingWeClaim(t *testing.T) {
 func TestDecodeBodyLeavesAMislabelledPlainBodyAlone(t *testing.T) {
 	plain := "{\"ok\":true,\"searchable\":\"needle\"}"
 	for _, enc := range []string{"gzip", "br", "zstd", "deflate"} {
-		if got := string(decodeBody(enc, []byte(plain), noBodyLimit)); got != plain {
+		if got := string(decodeBody(enc, []byte(plain))); got != plain {
 			t.Errorf("a plain body labelled %q came back as %.60q, want it untouched", enc, got)
 		}
 	}
@@ -524,16 +524,9 @@ func TestDecodeBodyLeavesAMislabelledPlainBodyAlone(t *testing.T) {
 func TestDecodeBodyLeavesWhatItCannotUndo(t *testing.T) {
 	raw := brBytes(t, "searchable needle")
 	for _, enc := range []string{"gzip, br", "br, gzip", "exi", "compress"} {
-		if got := decodeBody(enc, raw, noBodyLimit); !bytes.Equal(got, raw) {
+		if got := decodeBody(enc, raw); !bytes.Equal(got, raw) {
 			t.Errorf("decodeBody(%q) changed the bytes; an encoding we cannot undo must not be touched", enc)
 		}
-	}
-}
-
-func TestDecodeBodyHonoursTheLimit(t *testing.T) {
-	raw := brBytes(t, strings.Repeat("ab", 5000))
-	if got := decodeBody("br", raw, 64); len(got) != 64 {
-		t.Errorf("decoded %d bytes under a 64-byte cap", len(got))
 	}
 }
 
@@ -555,7 +548,7 @@ func TestLiveHTTP1DecodesEveryEncodingWeClaim(t *testing.T) {
 				Header:     http.Header{"Content-Encoding": {tc.enc}},
 				Body:       io.NopCloser(bytes.NewReader(tc.body)),
 			}
-			body, _, enc := readRespBody(resp)
+			body, enc := readRespBody(resp)
 			if string(body) != "searchable needle" {
 				t.Errorf("body = %.40q, want it decompressed", body)
 			}

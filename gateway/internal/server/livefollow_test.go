@@ -34,7 +34,7 @@ func openSession(t *testing.T, st2 trafficv1.SessionStatus) (*store.Store, *live
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return st, newLiveHub(false), sid
+	return st, newLiveHub(), sid
 }
 
 // sessionStatuses returns the status carried by each session event sent, in order.

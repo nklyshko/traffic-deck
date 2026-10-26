@@ -120,7 +120,7 @@ func (s *quicSession) close() {
 	if n := len(s.blocked); n > 0 {
 		log.Printf("live decode: HTTP/3 %s (%s): %d HEADERS section(s) still blocked on QPACK "+
 			"inserts that never arrived — %s",
-			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, n, s.lt.partialFate())
+			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, n, partialFate)
 		s.blocked = nil
 	}
 	// Never decrypted: the ClientHello (and so the SNI we log) rides the Initial packets,
@@ -128,7 +128,7 @@ func (s *quicSession) close() {
 	if !s.decrypted && !s.conn.Unsupported() {
 		log.Printf("live decode: HTTP/3 %s (%s) not decoded live: no QUIC key-log secret "+
 			"(or incomplete handshake) — %s",
-			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, s.lt.skippedFate())
+			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, skippedFate)
 	}
 }
 
@@ -139,7 +139,7 @@ func (s *quicSession) feed(fromClient bool, datagram []byte, ts time.Time) {
 		// Nothing on this connection decodes — whole-connection wording applies.
 		log.Printf("live decode: not decoding HTTP/3 %s (%s) live: %s — %s",
 			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, s.conn.UnsupportedReason(),
-			s.lt.skippedFate())
+			skippedFate)
 		s.loggedUnsup = true
 	}
 }
@@ -199,7 +199,7 @@ func (s *quicSession) onUni(streamID uint64, fromClient bool, data []byte) {
 		if !s.loggedEnc {
 			log.Printf("live decode: HTTP/3 %s (%s): QPACK encoder stream failed (%v) — "+
 				"dynamic-table header decoding is broken for this direction from here on; %s",
-				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err, s.lt.partialFate())
+				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err, partialFate)
 			s.loggedEnc = true
 		}
 		return
@@ -249,7 +249,7 @@ func (s *quicSession) onHeaders(st *h3Stream, fromClient bool, payload []byte) {
 		// costs individual requests.
 		if !s.loggedQPACK {
 			log.Printf("live decode: HTTP/3 %s (%s): QPACK HEADERS decode failed (%v) — %s",
-				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err, s.lt.partialFate())
+				hostLabel(s.conn.SNI, s.serverHost), s.serverHost, err, partialFate)
 			s.loggedQPACK = true
 		}
 		return
@@ -327,27 +327,15 @@ func (s *quicSession) onData(st *h3Stream, fromClient bool, payload []byte) {
 	f := st.flow
 	switch {
 	case fromClient:
-		f.appendReqBody(payload)
+		f.RequestBody = append(f.RequestBody, payload...)
 		f.RequestBytes = uint64(len(f.RequestBody))
 	case st.respEnc == "":
-		f.appendRespBody(payload)
+		f.ResponseBody = append(f.ResponseBody, payload...)
 	default:
-		st.appendRespRaw(payload)
+		st.respRaw = append(st.respRaw, payload...)
 		st.decodeResp(false)
 	}
 	s.emit(st)
-}
-
-// appendRespRaw extends the accumulated wire-form response body, capped like the plain
-// path. The cap applies to the compressed bytes here, so on an encoded body the flow's
-// truncation flag says the *wire* body ran past the live preview — which is the honest
-// statement, since what was dropped is bytes we never saw decoded.
-func (st *h3Stream) appendRespRaw(data []byte) {
-	n := len(st.respRaw)
-	st.respRaw = appendCapped(st.respRaw, data)
-	if len(st.respRaw)-n < len(data) {
-		st.flow.ResponseBodyTruncated = true
-	}
 }
 
 // decodeResp refreshes the flow's plain body from the accumulated wire bytes.
@@ -367,7 +355,7 @@ func (st *h3Stream) decodeResp(final bool) {
 	}
 	st.respDecoded = len(st.respRaw)
 	st.flow.ResponseBodyEncoding = st.respEnc
-	st.flow.ResponseBody = decodeBody(st.respEnc, st.respRaw, int64(maxLiveBody))
+	st.flow.ResponseBody = decodeBody(st.respEnc, st.respRaw)
 }
 
 // setRespEnc records the response body's wire encoding, once its HEADERS are decoded.

@@ -12,7 +12,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
-// TestPersistLiveFullBodies checks that record-live persists the live decoder's flows —
+// TestPersistLiveFullBodies checks that close persists the live decoder's flows —
 // including a response body larger than the live preview cap — in full, plus WS messages,
 // as a "live" analysis on close.
 func TestPersistLiveFullBodies(t *testing.T) {
@@ -32,14 +32,13 @@ func TestPersistLiveFullBodies(t *testing.T) {
 	}
 
 	ls := &liveSession{
-		recordLive: true,
-		flows:      map[string]*trafficv1.Flow{},
-		dflows:     map[string]*decode.Flow{},
-		subs:       map[int]*flowSub{},
-		msgSubs:    map[int]chan *trafficv1.WsMessage{},
+		flows:   map[string]*trafficv1.Flow{},
+		dflows:  map[string]*decode.Flow{},
+		subs:    map[int]*flowSub{},
+		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 
-	// A response body well past the 256 KiB live preview cap — record-live must keep it all.
+	// A response body well past the 256 KiB live preview cap — the live record must keep it all.
 	bigBody := bytes.Repeat([]byte("A"), 700<<10)
 	f1 := uuid.NewString()
 	flow := &decode.Flow{ID: f1, Authority: "example.com", Method: "GET", Protocol: "HTTP/2"}
@@ -55,7 +54,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 		Payload: &trafficv1.Body{Size: 2, Content: &trafficv1.Body_Inline{Inline: []byte("hi")}},
 	})
 
-	ing := &Ingest{st: st, recordLive: true}
+	ing := &Ingest{st: st}
 	if err := ing.persistLive(ctx, sid, ls, nil); err != nil {
 		t.Fatalf("persistLive: %v", err)
 	}

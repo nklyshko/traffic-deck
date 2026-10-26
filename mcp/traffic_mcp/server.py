@@ -242,17 +242,7 @@ def _body_ref(body) -> dict | None:
     d = {"content_type": body.content_type or None, "size": body.size}
     if body.content_encoding:
         d["content_encoding"] = body.content_encoding
-    if body.truncated:
-        d |= _PARTIAL
     return d
-
-
-# What a live decode reports for a body it only kept the start of: `size` counts the bytes
-# it has, not the body's own length, and the rest arrives when the session is decoded on
-# close. Only sessions captured with record-live off can produce this.
-_PARTIAL = {"partial": True,
-            "note": "live preview — only the start of the body was kept while capturing; "
-                    "the whole body is readable once the session closes"}
 
 
 def _cursor_str(c) -> str:
@@ -285,8 +275,6 @@ def _body_meta(body) -> dict | None:
         # on one that reads as binary (brotli, which the gateway does not decode) it is
         # the reason. `size` always counts the stored bytes.
         meta["content_encoding"] = body.content_encoding
-    if body.truncated:
-        meta |= _PARTIAL
     if body.WhichOneof("content") != "inline":
         meta["note"] = "large body — fetch with get_body"
         return meta
@@ -553,7 +541,7 @@ async def _match_previews(sid: str, flow_id: str, req_header: str, resp_header: 
         data = bytes(body.inline)
         if not data and body.size:
             try:
-                data, _ = await client().get_body(sid, flow_id, response)
+                data = await client().get_body(sid, flow_id, response)
             except grpc.aio.AioRpcError:
                 continue
         # The whole body, as the gateway matched it: a marker deep in a large page is
@@ -1324,17 +1312,14 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
     """Fetch a request or response body. Returns UTF-8 text when decodable, else base64;
     pass `as_hex=True` for a hex dump (byte inspection). A window of up to 256 KiB from
     `offset` is returned (page large bodies with `offset`). Bodies are stored
-    decompressed. `response=False` for the request body.
-
-    Works on a session that is still capturing. There a body can come back `partial` —
-    its leading bytes, with a `note` — when the capture kept only a preview of it; fetch
-    it again once the session closes to get all of it.
+    decompressed and whole, on a session still capturing too. `response=False` for the
+    request body.
 
     For a custom-protocol flow (a decoded raw-TCP connection), this returns the original
     *undecoded* bytes: `response=False` = the raw client->server stream, `response=True` =
     the raw server->client stream — the bytes that were fed to the decoder."""
     try:
-        data, partial = await client().get_body(
+        data = await client().get_body(
             await _resolve_session(session_id), flow_id, response)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
@@ -1344,8 +1329,7 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
             # gateway's own reason instead of an empty body that reads as "no body".
             return {"size": 0, "note": e.details() or "body not available"}
         raise
-    out = _bytes_payload(data, as_hex=as_hex, start=offset)
-    return out | _PARTIAL if partial else out
+    return _bytes_payload(data, as_hex=as_hex, start=offset)
 
 
 @mcp.tool()
@@ -1394,7 +1378,7 @@ async def grep_bodies(session_id: str, pattern: str, filter: str = "",
         row = {"id": f.id, "url": flow_url(f), "status": f.status, "size": 0, "count": 0}
         async with gate:
             try:
-                data, _ = await client().get_body(sid, f.id, response)
+                data = await client().get_body(sid, f.id, response)
             except grpc.aio.AioRpcError as e:
                 if e.code() is grpc.StatusCode.NOT_FOUND:
                     return row  # no body
@@ -1433,7 +1417,7 @@ async def save_body(session_id: str, flow_id: str, response: bool = True) -> dic
     import tempfile
 
     try:
-        data, _ = await client().get_body(
+        data = await client().get_body(
             await _resolve_session(session_id), flow_id, response)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:

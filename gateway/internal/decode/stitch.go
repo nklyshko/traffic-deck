@@ -165,13 +165,13 @@ func (s *stitcher) finish() {
 		if enc := bodyEncoding(f.RequestHeaders); enc != "" && len(f.RequestBody) > 0 {
 			f.RequestBodyEncoding = enc
 			if !f.reqBodyFinal {
-				f.RequestBody = decodeBody(enc, f.RequestBody, noBodyLimit)
+				f.RequestBody = decodeBody(enc, f.RequestBody)
 			}
 		}
 		if enc := bodyEncoding(f.ResponseHeaders); enc != "" && len(f.ResponseBody) > 0 {
 			f.ResponseBodyEncoding = enc
 			if !f.respBodyFinal {
-				f.ResponseBody = decodeBody(enc, f.ResponseBody, noBodyLimit)
+				f.ResponseBody = decodeBody(enc, f.ResponseBody)
 			}
 		}
 	}

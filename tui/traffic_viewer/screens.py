@@ -2060,15 +2060,9 @@ class FlowDetailScreen(Screen):
 
     async def _full_body(self, response: bool) -> bytes:
         try:
-            data, partial = await self.app.client.get_body(
-                self.session_id, self.flow_id, response)
+            return await self.app.client.get_body(self.session_id, self.flow_id, response)
         except Exception:  # noqa: BLE001 (no body)
             return b""
-        if partial:
-            # An export carrying a preview would look like the real exchange, so say it isn't.
-            self.notify(f"{'response' if response else 'request'} body is a live preview — "
-                        "export holds its first bytes only", severity="warning")
-        return data
 
     @work(exclusive=True)
     async def action_export_curl(self) -> None:
@@ -2173,16 +2167,14 @@ class FlowDetailScreen(Screen):
 
     async def _save_body(self, response: bool, label: str) -> None:
         try:
-            data, partial = await self.app.client.get_body(
-                self.session_id, self.flow_id, response)
+            data = await self.app.client.get_body(self.session_id, self.flow_id, response)
         except Exception as exc:  # noqa: BLE001
             self.notify(f"no {label} body to save ({exc})", severity="warning")
             return
         path = os.path.abspath(f"{self.flow_id[:8]}-{label}.bin")
         with open(path, "wb") as fp:
             fp.write(data)
-        note = " (live preview — first bytes only)" if partial else ""
-        self.notify(f"saved {len(data)} bytes{note} → {path}")
+        self.notify(f"saved {len(data)} bytes → {path}")
 
     # Cap body rendering so a large body doesn't choke the TUI.
     _BODY_RENDER_LIMIT = 20000
@@ -2342,11 +2334,10 @@ class _PayloadView(Screen):
     def __init__(self) -> None:
         super().__init__()
         self._data = b""
-        self._partial = False
 
     # --- subclass hooks -------------------------------------------------------
-    async def _fetch(self) -> tuple[bytes, bool]:
-        """The payload's bytes, and whether they are only its start (a live preview)."""
+    async def _fetch(self) -> bytes:
+        """The payload's bytes."""
         raise NotImplementedError
 
     @property
@@ -2387,16 +2378,7 @@ class _PayloadView(Screen):
 
     @work(exclusive=True)
     async def load(self) -> None:
-        self._data, self._partial = await self._fetch()
-        if self._partial:
-            # Say it up front: what follows is the start of the body, not the body. (Only
-            # a body view can be partial, and it has no other meta block to displace.)
-            meta = self.query_one("#pmeta", Static)
-            meta.display = True
-            meta.update(Content.from_markup(
-                "[yellow]live preview — first $n bytes of a longer $what; "
-                "the whole of it is decoded when the session closes[/yellow]",
-                n=str(len(self._data)), what=self._what))
+        self._data = await self._fetch()
         body = self.query_one("#pbody", Static)
         if not self._data:
             body.update(Content.from_markup("[dim]empty $what[/dim]", what=self._what))
@@ -2449,8 +2431,7 @@ class _PayloadView(Screen):
         path = os.path.abspath(f"{self._file_stem}.bin")
         with open(path, "wb") as fp:
             fp.write(self._data)
-        note = " (live preview — first bytes only)" if self._partial else ""
-        self.notify(f"saved {len(self._data)} bytes{note} → {path}")
+        self.notify(f"saved {len(self._data)} bytes → {path}")
 
 
 class BodyScreen(_PayloadView):
@@ -2466,12 +2447,12 @@ class BodyScreen(_PayloadView):
         self._id_prefix = id_prefix
         self._label = "response" if response else "request"
 
-    async def _fetch(self) -> tuple[bytes, bool]:
+    async def _fetch(self) -> bytes:
         try:
             return await self.app.client.get_body(
                 self.session_id, self.flow_id, self._response)
         except Exception:  # noqa: BLE001 (no body / unpersisted)
-            return b"", False
+            return b""
 
     @property
     def _what(self) -> str:
@@ -2779,12 +2760,11 @@ class WsPayloadScreen(_PayloadView):
         lines = annotation_lines(self.msg, self._tagnames, self._groupnames)
         return Content("\n").join(lines) if lines else None
 
-    async def _fetch(self) -> tuple[bytes, bool]:
-        # Frames are kept whole even live, so a message payload is never a preview.
+    async def _fetch(self) -> bytes:
         try:
-            return await self.app.client.get_message_body(self.session_id, self.msg.id), False
+            return await self.app.client.get_message_body(self.session_id, self.msg.id)
         except Exception:  # noqa: BLE001 (empty payload — e.g. a bare close/ping frame)
-            return (self.msg.payload.inline if self.msg.payload else b""), False
+            return self.msg.payload.inline if self.msg.payload else b""
 
     @property
     def _content_type(self) -> str:
@@ -2883,8 +2863,7 @@ class CompareScreen(Screen):
         if not f.request_body.size:
             return b""
         try:
-            data, _ = await self.app.client.get_body(*ref, False)
-            return data
+            return await self.app.client.get_body(*ref, False)
         except Exception:  # noqa: BLE001 — unreadable is reported, not fatal
             return None
 

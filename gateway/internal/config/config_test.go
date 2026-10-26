@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +13,7 @@ import (
 // clears the env vars under test so a developer who exports them doesn't see a false failure.
 func writeConfig(t *testing.T, body string) {
 	t.Helper()
-	for _, key := range []string{"GATEWAY_VIEWER", "GATEWAY_ADDR", "GATEWAY_MCP", "GATEWAY_LOG_MAX_BACKUPS", "GATEWAY_LIVE_DECODE", "GATEWAY_UPDATE_HINT"} {
+	for _, key := range []string{"GATEWAY_VIEWER", "GATEWAY_ADDR", "GATEWAY_MCP", "GATEWAY_LOG_MAX_BACKUPS", "GATEWAY_LIVE_DECODE", "GATEWAY_UPDATE_HINT", "GATEWAY_RECORD_LIVE"} {
 		t.Setenv(key, "")
 	}
 	home := t.TempDir()
@@ -60,6 +63,27 @@ func TestMalformedFileFallsBackToDefaults(t *testing.T) {
 	writeConfig(t, "this is not toml = = =")
 	if got := Load().Viewer; got != "tui" {
 		t.Errorf("Viewer = %q, want the default after an unparseable file", got)
+	}
+}
+
+// The removed setting is named rather than silently ignored: whoever set it expects a
+// tshark re-decode on close that no longer happens.
+func TestRecordLiveOffIsReportedAsIgnored(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	writeConfig(t, "")
+	Load()
+	if buf.Len() != 0 {
+		t.Fatalf("unset: logged %q, want nothing", buf.String())
+	}
+	t.Setenv("GATEWAY_RECORD_LIVE", "off")
+	Load()
+	if out := buf.String(); !strings.Contains(out, "GATEWAY_RECORD_LIVE=off is no longer supported") ||
+		!strings.Contains(out, "redecode --engine tshark") {
+		t.Fatalf("off: logged %q, want the removal and its replacement named", out)
 	}
 }
 

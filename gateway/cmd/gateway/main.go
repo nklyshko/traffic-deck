@@ -202,7 +202,7 @@ func serve() {
 	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
 	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
 	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify, cfg.UpdateCheck)
+	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
 	startMCP(cfg, svcs)
 	// Reap spawned capture-source and service processes (and their groups) on shutdown, so a
 	// browser, emulator, or MCP server they started doesn't linger after the gateway stops.
@@ -215,8 +215,8 @@ func serve() {
 		svcs.Close()
 		s.GracefulStop()
 	}()
-	log.Printf("gateway listening on %s (live decode: %v, record live: %v, tshark verify: %v, update check: %v)",
-		cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify, cfg.UpdateCheck)
+	log.Printf("gateway listening on %s (live decode: %v, tshark verify: %v, update check: %v)",
+		cfg.GRPCAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
@@ -262,11 +262,10 @@ func runFused() {
 		obj, st := openDeps(ctx, cfg)
 		stClose = st.Close
 		s = grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive, cfg.TsharkVerify, cfg.UpdateCheck)
+		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
 		startMCP(cfg, svcs)
 		go func() { _ = s.Serve(lis) }()
-		log.Printf("gateway listening on %s (live decode: %v, record live: %v)",
-			cfg.GRPCAddr, cfg.LiveDecode, cfg.RecordLive)
+		log.Printf("gateway listening on %s (live decode: %v)", cfg.GRPCAddr, cfg.LiveDecode)
 		if v == nil {
 			warnNoViewer(svcs.List())
 		}

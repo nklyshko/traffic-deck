@@ -32,7 +32,7 @@ func TestGetLiveRecordAnnotations(t *testing.T) {
 	}
 
 	// A live session whose flow + message exist only in the hub (not yet persisted).
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	ls := &liveSession{
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},

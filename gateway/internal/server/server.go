@@ -13,7 +13,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
-	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"github.com/nklyshko/traffic-deck/gateway/internal/filter"
 	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
@@ -289,12 +288,10 @@ func (v *Viewer) waitForLive(ctx context.Context, sessionID string) *liveSession
 func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
 	body, _, err := v.st.GetBodyBytes(srv.Context(), req.GetSessionId(), req.GetFlowId(), req.GetResponse())
 	if errors.Is(err, store.ErrNotFound) {
-		// Like GetFlow: an unpersisted live flow's body is served from the hub. Whatever
-		// the live decode kept is streamed, flagged truncated when that is only the start
-		// of the body — so a caller can't read a prefix as if it were the whole thing.
+		// Like GetFlow: an unpersisted live flow's body is served from the hub.
 		if ls := v.hub.get(req.GetSessionId()); ls != nil {
-			if data, truncated, ok := ls.bodyBytes(req.GetFlowId(), req.GetResponse()); ok {
-				return streamBytes(srv, data, truncated)
+			if data, ok := ls.bodyBytes(req.GetFlowId(), req.GetResponse()); ok {
+				return streamBytes(srv, data)
 			}
 		}
 		return status.Error(codes.NotFound, "body not found")
@@ -302,7 +299,7 @@ func (v *Viewer) GetBody(req *trafficv1.GetBodyRequest, srv grpc.ServerStreaming
 	if err != nil {
 		return storeStatus(err, "get body")
 	}
-	return streamBytes(srv, body, false)
+	return streamBytes(srv, body)
 }
 
 func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRequest) (*trafficv1.MessageList, error) {
@@ -472,7 +469,7 @@ func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.S
 		// are small and kept whole, so nothing here is ever a prefix.
 		if ls := v.hub.get(req.GetSessionId()); ls != nil {
 			if data, ok := ls.messageBody(req.GetMessageId(), req.GetRaw()); ok {
-				return streamBytes(srv, data, false)
+				return streamBytes(srv, data)
 			}
 		}
 		return status.Error(codes.NotFound, "message body not found")
@@ -480,20 +477,15 @@ func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.S
 	if err != nil {
 		return storeStatus(err, "get message body")
 	}
-	return streamBytes(srv, body, false)
+	return streamBytes(srv, body)
 }
 
-// streamBytes sends a byte slice as BodyChunks over a server stream. truncated marks the
-// bytes as a prefix of a longer body; it rides on every chunk, and forces one empty chunk
-// when there are no bytes at all, so the flag can't be lost to an empty stream.
-func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byte, truncated bool) error {
+// streamBytes sends a byte slice as BodyChunks over a server stream.
+func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byte) error {
 	const chunk = 64 << 10
-	if len(body) == 0 && truncated {
-		return srv.Send(&trafficv1.BodyChunk{Truncated: true})
-	}
 	for off := 0; off < len(body); off += chunk {
 		end := min(off+chunk, len(body))
-		if err := srv.Send(&trafficv1.BodyChunk{Payload: body[off:end], Truncated: truncated}); err != nil {
+		if err := srv.Send(&trafficv1.BodyChunk{Payload: body[off:end]}); err != nil {
 			return err
 		}
 	}
@@ -503,12 +495,8 @@ func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byt
 // Register attaches all implemented services to s, sharing one live hub between the ingest
 // (producer) and viewer (subscriber) sides. gatewayAddr is where spawned capture sources
 // connect back for ingest. Returns the source manager so the caller can reap it on shutdown.
-func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, recordLive, tsharkVerify, updateCheck bool) (*sourcemgr.Manager, *sourcemgr.Services) {
-	if recordLive {
-		// The persisted record is the live decode, so keep full bodies (not previews).
-		decode.SetUnlimitedLiveBodies()
-	}
-	hub := newLiveHub(recordLive)
+func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatewayAddr string, liveDecode, tsharkVerify, updateCheck bool) (*sourcemgr.Manager, *sourcemgr.Services) {
+	hub := newLiveHub()
 	dataRoot, _ := obj.LocalPath("") // FSStore root; session bundles live here
 	// Built-in registries, then merge in any third-party modules from plugins/ (their
 	// processes become auto-start services; a [control] block a dial-only capture source).
@@ -521,7 +509,7 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	// now; only services with no owning capture type auto-start at launch.
 	mgr.SetModuleStarter(svcs.StartModule)
 	svcs.StartAuto()
-	ingest := NewIngest(st, obj, tshark, hub, liveDecode, recordLive, tsharkVerify)
+	ingest := NewIngest(st, obj, tshark, hub, liveDecode, tsharkVerify)
 	// Incremental persistence (ADR-0011): the hub's flushers write through the store,
 	// take their analysis from the ingest side, and end the capture if a write fails.
 	ingest.stopCapture = mgr.StopCapture

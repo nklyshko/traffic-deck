@@ -49,11 +49,10 @@ func captureLog(t *testing.T) func() string {
 }
 
 // quicTestSession builds a QUIC session with no key-log, as an unkeyed capture would.
-func quicTestSession(recordLive bool) *quicSession {
+func quicTestSession() *quicSession {
 	lt := &liveTCP{
-		keylog:     tlsdecrypt.NewKeylog(""),
-		onFlow:     func(*Flow, bool) {},
-		recordLive: recordLive,
+		keylog: tlsdecrypt.NewKeylog(""),
+		onFlow: func(*Flow, bool) {},
 	}
 	return newQUICSession(lt, "quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 }
@@ -61,7 +60,7 @@ func quicTestSession(recordLive bool) *quicSession {
 // TestQUICFlowTimedFromDatagram: an HTTP/3 flow is timed from the datagram's capture time
 // (set on each feed), not decode wall-clock — the QUIC analog of the H1/H2 fix.
 func TestQUICFlowTimedFromDatagram(t *testing.T) {
-	s := quicTestSession(false)
+	s := quicTestSession()
 	base := time.Unix(1_700_000_000, 0)
 	s.curTS = base
 	if f := s.newFlow(0); f.TSUnixMicros != base.UnixMicro() {
@@ -74,7 +73,7 @@ func TestQUICFlowTimedFromDatagram(t *testing.T) {
 // become flows, so ending the capture has to say so instead of dropping them quietly.
 func TestQUICCloseReportsBlockedHeaders(t *testing.T) {
 	logged := captureLog(t)
-	s := quicTestSession(true)
+	s := quicTestSession()
 	s.decrypted = true // decoding fine; only these sections are stuck
 	s.blocked = []blockedSection{
 		{fromClient: true, payload: []byte{0x01}},
@@ -88,7 +87,7 @@ func TestQUICCloseReportsBlockedHeaders(t *testing.T) {
 		t.Errorf("close() log = %q, want the count of blocked sections", out)
 	}
 	if !strings.Contains(out, "missing from the session") {
-		t.Errorf("close() log = %q, want the record-live fate of the lost requests", out)
+		t.Errorf("close() log = %q, want the fate of the lost requests", out)
 	}
 	if s.blocked != nil {
 		t.Errorf("blocked = %v, want cleared once reported", s.blocked)
@@ -99,7 +98,7 @@ func TestQUICCloseReportsBlockedHeaders(t *testing.T) {
 // secret" diagnostic, which QUIC had no close hook to emit.
 func TestQUICCloseReportsNeverDecrypted(t *testing.T) {
 	logged := captureLog(t)
-	s := quicTestSession(true) // nothing fed: no stream bytes ever came out
+	s := quicTestSession() // nothing fed: no stream bytes ever came out
 
 	s.close()
 
@@ -108,7 +107,7 @@ func TestQUICCloseReportsNeverDecrypted(t *testing.T) {
 		t.Errorf("close() log = %q, want the never-decrypted diagnostic", out)
 	}
 	if !strings.Contains(out, "dropped from the session") {
-		t.Errorf("close() log = %q, want the record-live fate of the connection", out)
+		t.Errorf("close() log = %q, want the fate of the connection", out)
 	}
 }
 
@@ -116,7 +115,7 @@ func TestQUICCloseReportsNeverDecrypted(t *testing.T) {
 // diagnostics above are only worth anything if they don't cry wolf.
 func TestQUICCloseSilentWhenHealthy(t *testing.T) {
 	logged := captureLog(t)
-	s := quicTestSession(true)
+	s := quicTestSession()
 	s.decrypted = true
 
 	s.close()

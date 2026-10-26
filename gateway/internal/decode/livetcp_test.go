@@ -100,7 +100,7 @@ func TestLiveTCPDecodeEndToEnd(t *testing.T) {
 			}
 			got = append(got, [2]string{d, string(m.Payload)})
 			mu.Unlock()
-		}, true)
+		})
 	if err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 				d = "C"
 			}
 			got = append(got, [2]string{d, string(m.Payload)})
-		}, true)
+		})
 	if err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 	latest := map[string]*Flow{}
 	err := LiveTCPDecode(bytes.NewReader(pcap), "",
 		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
-		func(*WsMessage) {}, true)
+		func(*WsMessage) {})
 	if err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}
@@ -268,25 +268,20 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 	}
 }
 
-// TestSkippedFateMatchesWhetherABatchPassRuns covers the diagnostic promise: a batch
-// tshark pass only runs on close when the live decode isn't authoritative, so under
-// record-live (the default) a skipped connection is gone and must not be reported as
-// deferred to a pass that will never run.
-func TestSkippedFateMatchesWhetherABatchPassRuns(t *testing.T) {
-	recordLive := (&liveTCP{recordLive: true}).skippedFate()
-	if !strings.Contains(recordLive, "dropped") {
-		t.Errorf("record-live fate = %q, want it to say the connection is dropped", recordLive)
-	}
-	if strings.Contains(recordLive, "batch tshark pass on close") {
-		t.Errorf("record-live fate = %q, must not promise a batch pass that won't run", recordLive)
-	}
-	if !strings.Contains(recordLive, "GATEWAY_RECORD_LIVE") {
-		t.Errorf("record-live fate = %q, want the knob that would recover it", recordLive)
-	}
-
-	batch := (&liveTCP{recordLive: false}).skippedFate()
-	if !strings.Contains(batch, "batch tshark pass on close") {
-		t.Errorf("non-record-live fate = %q, want it to defer to the batch pass", batch)
+// TestSkippedFateNamesTheWayBack covers the diagnostic promise: nothing re-decodes a
+// skipped connection on close, so the message must say it is gone — not defer it to a
+// pass that will never run — and name the manual recovery.
+func TestSkippedFateNamesTheWayBack(t *testing.T) {
+	for _, fate := range []string{skippedFate, partialFate} {
+		if !strings.Contains(fate, "missing") && !strings.Contains(fate, "dropped") {
+			t.Errorf("fate = %q, want it to say what is lost", fate)
+		}
+		if strings.Contains(fate, "on close") {
+			t.Errorf("fate = %q, must not promise a pass on close that won't run", fate)
+		}
+		if !strings.Contains(fate, "redecode --engine tshark") {
+			t.Errorf("fate = %q, want the manual recovery", fate)
+		}
 	}
 }
 
@@ -339,7 +334,7 @@ func TestLiveTCPDecodePlaintextHTTPReset(t *testing.T) {
 	latest := map[string]*Flow{}
 	if err := LiveTCPDecode(bytes.NewReader(out.Bytes()), "",
 		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
-		func(*WsMessage) {}, true); err != nil {
+		func(*WsMessage) {}); err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}
 
@@ -497,7 +492,7 @@ func TestLiveTCPDecodePKTAP(t *testing.T) {
 				d = "C"
 			}
 			got = append(got, [2]string{d, string(m.Payload)})
-		}, true)
+		})
 	if err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}
@@ -597,7 +592,7 @@ func TestLiveTCPDecodePKTAPNg(t *testing.T) {
 				d = "C"
 			}
 			got = append(got, [2]string{d, string(m.Payload)})
-		}, true)
+		})
 	if err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}

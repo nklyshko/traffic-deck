@@ -27,7 +27,7 @@ func liveBodySearch(t *testing.T) (context.Context, *liveSession, *Viewer) {
 	}
 	t.Cleanup(func() { st.Close() })
 	ls := newFlushSession(t, st, "s1")
-	hub := newLiveHub(true)
+	hub := newLiveHub()
 	hub.sessions["s1"] = ls
 	return ctx, ls, NewViewer(st, hub)
 }

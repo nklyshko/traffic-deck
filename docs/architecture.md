@@ -80,7 +80,7 @@ flowchart TD
   classify --> nws["WebSocket frames\n(message records)"]
   classify --> ndec["decoder session\n→ custom-protocol frames"]
 
-  which -- "batch (import, RECORD_LIVE=off, verify)" --> tshark["tshark -T pdml"]
+  which -- "batch (import, redecode, verify)" --> tshark["tshark -T pdml"]
   tshark --> stitch[stitcher]
   stitch --> http["HTTP/1.1 · HTTP/2 · HTTP/3 flows"]
   stitch --> ws["WebSocket frames\n(message records)"]
@@ -109,13 +109,12 @@ record, so multiplexed HTTP/2 frames in a single packet keep their own stream id
 
 ## Live vs. batch decode
 
-A streaming capture is decoded **live** so flows appear while the user browses. By
-default the live decode is authoritative — its flows are persisted on close and no
-`tshark` batch pass runs (`GATEWAY_RECORD_LIVE`, on by default). Set
-`GATEWAY_RECORD_LIVE=off` to instead run an authoritative **batch** tshark pass that
-re-decodes the finalized capture on close (e.g. to verify the live decoder, or for
-full-fidelity bodies). The live pipeline itself is toggleable (`GATEWAY_LIVE_DECODE`);
-when off, captures are archived and decoded only by the batch pass on close.
+A streaming capture is decoded **live** so flows appear while the user browses. The live
+decode is authoritative — its flows are persisted as they settle and on close, and no
+`tshark` batch pass re-decodes them
+([ADR-0009](adr/0009-native-live-decode-default.md#removing-the-batch-alternative)). The live pipeline itself is
+toggleable (`GATEWAY_LIVE_DECODE`); when off, captures are archived and decoded only by
+the batch pass on close.
 
 ```mermaid
 flowchart TD
@@ -124,8 +123,8 @@ flowchart TD
   tee --> pipe["Go decode pipeline"]
   pipe --> hub[live hub]
   hub -- "StreamFlows / StreamMessages" --> client[viewer / mcp]
-  hub -. "on close (record-live, default)" .-> sqlite[(flows.sqlite)]
-  archive -. "on close (GATEWAY_RECORD_LIVE=off)" .-> batch["batch tshark decode"]
+  hub -. "as flows settle, and on close" .-> sqlite[(flows.sqlite)]
+  archive -. "on close (GATEWAY_LIVE_DECODE=false)" .-> batch["batch tshark decode"]
   batch --> sqlite
 ```
 
@@ -135,13 +134,13 @@ flowchart TD
   WebSocket and custom raw-TCP protocols — plaintext or TLS. See
   [ADR-0009](adr/0009-native-live-decode-default.md), which grew out of
   [ADR-0006](adr/0006-in-process-tls-decryption.md).
-- `tshark` is used only for the **optional batch decode** on close (`GATEWAY_RECORD_LIVE=off`,
-  or `GATEWAY_TSHARK_VERIFY`) and for pcap import with `--decoder tshark` — never for the
-  default live capture path. Import can also run the native Go decoder (`--decoder native`).
-- In record-live mode (default) the live decode is authoritative and persisted on close.
+- `tshark` is used only for the **batch decode**: pcap import with `--decoder tshark`,
+  `redecode --engine tshark` of a closed session, `GATEWAY_TSHARK_VERIFY` (diagnostic,
+  never persisted), and captures with live decode off — never for the default live
+  capture path. Import can also run the native Go decoder (`--decoder native`).
 - Only the native decoder produces the TLS/HTTP2 fingerprints (`ja3`, `ja4`,
-  `client_hellos`, `http2_fingerprint`), so a batch re-decode trades those for tshark's
-  dissectors and full-fidelity bodies.
+  `client_hellos`, `http2_fingerprint`), so a tshark redecode trades those for tshark's
+  dissectors.
 
 ## Capture sources
 

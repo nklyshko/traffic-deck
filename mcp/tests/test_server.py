@@ -604,7 +604,7 @@ def _rpc_error(code, details):
 
 
 def _with_body(monkeypatch, result):
-    """Point the tools at a client whose get_body returns (bytes, partial) — or raises."""
+    """Point the tools at a client whose get_body returns bytes — or raises."""
     class FakeClient:
         async def get_body(self, sid, fid, response):
             if isinstance(result, Exception):
@@ -618,20 +618,12 @@ def _with_body(monkeypatch, result):
     monkeypatch.setattr(S, "_resolve_session", _resolve)
 
 
-def test_get_body_marks_a_live_preview_as_partial(monkeypatch):
-    """A whole body reads as itself; the leading bytes of one still being captured must
-    carry `partial` + a note, or the model reads a prefix as the entire body."""
+def test_get_body_returns_the_whole_body(monkeypatch):
     import asyncio
 
-    _with_body(monkeypatch, (b'{"k":1}', False))
+    _with_body(monkeypatch, b'{"k":1}')
     whole = asyncio.run(S.get_body("s", "f"))
-    assert whole["text"] == '{"k":1}' and whole["size"] == 7
-    assert "partial" not in whole and "note" not in whole
-
-    _with_body(monkeypatch, (b'{"k":1', True))
-    part = asyncio.run(S.get_body("s", "f"))
-    assert part["text"] == '{"k":1' and part["partial"] is True
-    assert "once the session closes" in part["note"]
+    assert whole["text"] == '{"k":1}' and whole["size"] == 7 and "note" not in whole
 
 
 def test_get_body_error_mapping(monkeypatch):
@@ -655,17 +647,6 @@ def test_get_body_error_mapping(monkeypatch):
         pass
     else:
         raise AssertionError("INTERNAL should propagate")
-
-
-def test_flow_detail_marks_a_partial_body(monkeypatch):
-    """The flow detail's body metadata carries the same signal, so `size` there isn't
-    mistaken for the body's own length."""
-    f = _flow(id="f1")
-    f.response_body.CopyFrom(cp.Body(size=6, content_type="application/json",
-                                     inline=b'{"k":1', truncated=True))
-    d = S._flow_detail(f, {}, {})
-    assert d["response_body"]["partial"] is True
-    assert d["response_body"]["text"] == '{"k":1'
 
 
 # --- search tool: paging + content search ---------------------------------
@@ -808,7 +789,7 @@ class _SearchClient:
 
     async def get_body(self, sid, fid, response):
         self.get_body_calls.append((fid, response))
-        return self.bodies.get((fid, response), b""), False
+        return self.bodies.get((fid, response), b"")
 
 
 def _run_search(monkeypatch, fake, **kw):
@@ -1089,7 +1070,7 @@ def test_grep_bodies_fails_on_an_unreadable_body(monkeypatch):
         if fid == "f2":
             raise grpc.aio.AioRpcError(grpc.StatusCode.INTERNAL, None, None,
                                        details="get body: open blobs/ab12: no such file")
-        return b"<html>author_link", False
+        return b"<html>author_link"
 
     fake.get_body = get_body
     with pytest.raises(ValueError, match="flow f2.*no such file"):

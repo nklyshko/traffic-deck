@@ -95,18 +95,11 @@ class GatewayClient:
                 limit=limit, timeout_millis=timeout_millis)
         )
 
-    async def get_body(self, session_id: str, flow_id: str, response: bool) -> tuple[bytes, bool]:
-        """The body's bytes, and whether they are only its start — which a live decode
-        yields for a body that ran past its preview cap while the session is capturing."""
+    async def get_body(self, session_id: str, flow_id: str, response: bool) -> bytes:
         call = self._v().GetBody(
             viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=response)
         )
-        chunks: list[bytes] = []
-        truncated = False
-        async for c in call:
-            chunks.append(c.payload)
-            truncated = truncated or c.truncated
-        return b"".join(chunks), truncated
+        return b"".join([c.payload async for c in call])
 
     async def list_messages(self, session_id: str, flow_id: str, filter_expr: str = ""):
         """A flow's frames, filtered by the gateway. Returns (messages, hints)."""

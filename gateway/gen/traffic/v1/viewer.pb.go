@@ -744,10 +744,9 @@ func (x *GetBodyRequest) GetResponse() bool {
 type BodyChunk struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Payload []byte                 `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
-	// Set on every chunk of a body the live decode only kept the start of (see
-	// Body.truncated): the payloads add up to a prefix, not the whole body. A caller that
-	// needs all of it has to wait for the session to close and re-fetch. A truncated body
-	// always sends at least one chunk, so the flag is never lost to an empty stream.
+	// Never set, like Body.truncated: a body is always streamed whole.
+	//
+	// Deprecated: Marked as deprecated in traffic/v1/viewer.proto.
 	Truncated     bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -790,6 +789,7 @@ func (x *BodyChunk) GetPayload() []byte {
 	return nil
 }
 
+// Deprecated: Marked as deprecated in traffic/v1/viewer.proto.
 func (x *BodyChunk) GetTruncated() bool {
 	if x != nil {
 		return x.Truncated
@@ -1456,10 +1456,10 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
 	"\aflow_id\x18\x02 \x01(\tR\x06flowId\x12\x1a\n" +
-	"\bresponse\x18\x03 \x01(\bR\bresponse\"C\n" +
+	"\bresponse\x18\x03 \x01(\bR\bresponse\"G\n" +
 	"\tBodyChunk\x12\x18\n" +
-	"\apayload\x18\x01 \x01(\fR\apayload\x12\x1c\n" +
-	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"e\n" +
+	"\apayload\x18\x01 \x01(\fR\apayload\x12 \n" +
+	"\ttruncated\x18\x02 \x01(\bB\x02\x18\x01R\ttruncated\"e\n" +
 	"\x13ListMessagesRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +

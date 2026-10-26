@@ -154,7 +154,7 @@ func TestLiveTCPDecodeSocks5EndToEnd(t *testing.T) {
 	latest := map[string]*Flow{}
 	if err := LiveTCPDecode(bytes.NewReader(pcap), "",
 		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
-		func(*WsMessage) {}, true); err != nil {
+		func(*WsMessage) {}); err != nil {
 		t.Fatalf("LiveTCPDecode: %v", err)
 	}
 

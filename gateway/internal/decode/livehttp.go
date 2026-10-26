@@ -21,16 +21,6 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/decoders"
 )
 
-// maxLiveBody caps body bytes kept per live message; the batch decode on close has the
-// full bodies. Live is a preview, so this also bounds memory under heavy traffic. It's a
-// process-wide setting (SetUnlimitedLiveBodies) rather than a const so record-live mode —
-// which persists the live flows as the authoritative record — can keep full bodies.
-var maxLiveBody = 256 << 10
-
-// SetUnlimitedLiveBodies removes the live body cap so the live decoders keep full bodies
-// (for record-live mode). Call once at startup, before any decode runs.
-func SetUnlimitedLiveBodies() { maxLiveBody = 1 << 62 }
-
 // byteStream is an unbounded buffer whose Write never blocks and whose Read blocks until
 // data or Close. The single reassembly loop Writes into it, so a stalled HTTP parse on
 // one connection can't block decoding of the others (which a plain io.Pipe would).
@@ -176,7 +166,7 @@ func (h *httpStream) run() {
 		if err != nil {
 			return
 		}
-		reqBody, reqTruncated := drainBody(req.Body)
+		reqBody := readBody(req.Body)
 		f := h.owner.newHTTPFlow()
 		// Time the request from the packet that carried its last byte, not wall-clock at
 		// parse time — the parser reads already-buffered bytes, so wall-clock is meaningless.
@@ -190,7 +180,6 @@ func (h *httpStream) run() {
 		f.RequestHeaders = headersOf(req.Header)
 		f.UserAgent = req.Header.Get("User-Agent")
 		f.RequestBody = reqBody
-		f.RequestBodyTruncated = reqTruncated
 		f.RequestBytes = uint64(len(reqBody))
 		h.onFlow(f, true)
 
@@ -222,7 +211,7 @@ func (h *httpStream) run() {
 			return
 		}
 
-		f.ResponseBody, f.ResponseBodyTruncated, f.ResponseBodyEncoding = readRespBody(resp)
+		f.ResponseBody, f.ResponseBodyEncoding = readRespBody(resp)
 		h.onFlow(f, false)
 	}
 }
@@ -293,28 +282,23 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 	h.owner.lt.goParse(func() { readWSFrames(respBr, false, emit) })
 }
 
-// drainBody reads up to maxLiveBody bytes, then drains the rest so the next message on a
-// kept-alive connection stays byte-aligned. Reports whether that drain threw anything
-// away — i.e. whether the returned bytes are a prefix rather than the body. (chunked
-// transfer-encoding is undone by the stdlib body reader; gzip Content-Encoding is not —
-// see readRespBody.)
-func drainBody(rc io.ReadCloser) ([]byte, bool) {
+// readBody reads a whole request body, which also leaves the next message on a
+// kept-alive connection byte-aligned. (chunked transfer-encoding is undone by the stdlib
+// body reader; gzip Content-Encoding is not — see readRespBody.)
+func readBody(rc io.ReadCloser) []byte {
 	if rc == nil {
-		return nil, false
+		return nil
 	}
 	defer rc.Close()
-	data, _ := io.ReadAll(io.LimitReader(rc, int64(maxLiveBody)))
-	dropped, _ := io.Copy(io.Discard, rc)
-	return data, dropped > 0
+	data, _ := io.ReadAll(rc)
+	return data
 }
 
-// readRespBody captures the response body, undoing its Content-Encoding so the preview is
+// readRespBody captures the response body, undoing its Content-Encoding so it is
 // readable, and always drains the underlying body for keep-alive alignment. It also reports
-// whether the cap cut the body short, and the encoding the bytes had on the wire ("" when
-// they arrived plain, or when there are no bytes to describe). The overflow is drained
-// through the same (decoded) reader the capture used, so on a compressed body the
-// truncation flag describes the decompressed bytes the viewer shows, not the wire ones.
-func readRespBody(resp *http.Response) (body []byte, truncated bool, encoding string) {
+// the encoding the bytes had on the wire ("" when they arrived plain, or when there are no
+// bytes to describe).
+func readRespBody(resp *http.Response) (body []byte, encoding string) {
 	defer resp.Body.Close()
 	enc := normalizeEncoding(resp.Header.Get("Content-Encoding"))
 	var r io.Reader = resp.Body
@@ -326,13 +310,12 @@ func readRespBody(resp *http.Response) (body []byte, truncated bool, encoding st
 			r = dr
 		}
 	}
-	data, _ := io.ReadAll(io.LimitReader(r, int64(maxLiveBody)))
-	dropped, _ := io.Copy(io.Discard, r)
-	_, _ = io.Copy(io.Discard, resp.Body) // drain remaining compressed/raw bytes
+	data, _ := io.ReadAll(r)
+	_, _ = io.Copy(io.Discard, resp.Body) // drain what a failed decode left unread
 	if len(data) == 0 {
 		enc = "" // the field describes body bytes; there are none
 	}
-	return data, dropped > 0, enc
+	return data, enc
 }
 
 func headersOf(h http.Header) []Header {

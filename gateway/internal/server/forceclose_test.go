@@ -71,7 +71,7 @@ func TestForceCloseSessionToleratesOldBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ing := &Ingest{st: st2, obj: obj, hub: newLiveHub(false)}
+	ing := &Ingest{st: st2, obj: obj, hub: newLiveHub()}
 
 	if _, err := ing.ForceCloseSession(ctx, &trafficv1.CloseSessionRequest{SessionId: sid}); err != nil {
 		t.Fatalf("force close should tolerate an outdated bundle, got: %v", err)

@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
+	"math"
 )
 
 // wsFrameOpName maps an RFC 6455 opcode byte to the short label the viewer uses (the
@@ -34,8 +35,10 @@ func wsFrameOpName(op byte) string {
 
 // readWSFrames parses RFC 6455 frames from one direction of an upgraded connection and
 // calls emit per frame until r hits EOF (the connection's byte stream is closed). It
-// unmasks frames that carry the mask bit (client→server frames are masked), and caps the
-// kept payload at maxLiveBody while still consuming the whole frame to stay aligned.
+// unmasks frames that carry the mask bit (client→server frames are masked). The payload
+// is read through a LimitReader rather than into a buffer of the declared length: that
+// length is 64 bits off the wire, and a garbage one must cost only the bytes that arrive,
+// not an allocation of whatever it claims.
 func readWSFrames(r *bufio.Reader, fromClient bool, emit func(opcode string, fromClient bool, payload []byte)) {
 	for {
 		var hdr [2]byte
@@ -65,18 +68,12 @@ func readWSFrames(r *bufio.Reader, fromClient bool, emit func(opcode string, fro
 				return
 			}
 		}
-		keep := ln
-		if keep > uint64(maxLiveBody) {
-			keep = uint64(maxLiveBody)
+		if ln > math.MaxInt64 {
+			return // no stream is that long: this is not a frame header
 		}
-		payload := make([]byte, keep)
-		if _, err := io.ReadFull(r, payload); err != nil {
+		payload, err := io.ReadAll(io.LimitReader(r, int64(ln)))
+		if err != nil || uint64(len(payload)) < ln {
 			return
-		}
-		if rest := ln - keep; rest > 0 {
-			if _, err := io.CopyN(io.Discard, r, int64(rest)); err != nil {
-				return
-			}
 		}
 		if masked {
 			for i := range payload {

@@ -1,7 +1,10 @@
 # 0011 — Live-decoded flows persist incrementally, not on close
 
 Status: proposed. Amends [0009](0009-native-live-decode-default.md), which made
-record-live authoritative but left *when* it writes unstated.
+record-live authoritative but left *when* it writes unstated. Its mentions of
+`GATEWAY_RECORD_LIVE=off` and `SetUnlimitedLiveBodies` predate the removal of that mode
+and of the live body cap (see
+[0009](0009-native-live-decode-default.md#removing-the-batch-alternative)).
 
 ## Context
 

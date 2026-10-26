@@ -88,11 +88,10 @@ message Body {
     bytes inline = 3;
     string object_ref = 4; // sha256 key; fetch full bytes via GetBody
   }
-  // Set when `size`/`inline` hold only the leading bytes the live decode kept, because
-  // the body ran past its preview cap while the session was still capturing. The whole
-  // body is decoded from the capture when the session closes. Never set on a stored
-  // body, or on a live one under record-live (which keeps bodies whole).
-  bool truncated = 5;
+  // Never set. It marked a body the live decode kept only the start of, when the live
+  // decode capped bodies; it keeps them whole now (ADR-0009). Kept so older readers and
+  // writers stay wire-compatible.
+  bool truncated = 5 [deprecated = true];
   // Transport encoding the body bytes had on the wire ("gzip", "br"…). Stored bytes are
   // decoded from it when supported; empty = none. Records what the decoder saw on the
   // wire, not what the content-encoding header claimed — so a header that lies (encoding

@@ -339,52 +339,21 @@ func (h *h2Stream) onData(df *http2.DataFrame, fromClient bool, ts time.Time) {
 		if f.TSUnixMicros == 0 { // DATA before HEADERS (unusual) — time it from this frame
 			f.TSUnixMicros = tsMicros(ts)
 		}
-		f.appendReqBody(df.Data())
+		f.RequestBody = append(f.RequestBody, df.Data()...)
 		f.RequestBytes = uint64(len(f.RequestBody))
 	} else {
 		hf.respTS = ts
 		// An encoded body accumulates in its wire form until end-of-stream (gzip can only
 		// be read whole), then is decoded in place below, so the flow ends up holding
-		// plain bytes. Capped either way to bound memory.
-		f.appendRespBody(df.Data())
+		// plain bytes.
+		f.ResponseBody = append(f.ResponseBody, df.Data()...)
 		f.ResponseBodyEncoding = hf.respEnc
 	}
 	if df.StreamEnded() {
 		if !fromClient && hf.respEnc != "" {
-			f.ResponseBody = decodeBody(hf.respEnc, f.ResponseBody, int64(maxLiveBody))
+			f.ResponseBody = decodeBody(hf.respEnc, f.ResponseBody)
 			hf.respEnc = ""
 		}
 		h.emitLocked(hf)
 	}
-}
-
-// appendReqBody / appendRespBody extend a live flow's body preview, recording when the
-// cap dropped bytes. Every streaming append goes through these rather than appendCapped
-// directly, so a prefix can't reach a reader looking like a whole body.
-func (f *Flow) appendReqBody(data []byte) {
-	n := len(f.RequestBody)
-	f.RequestBody = appendCapped(f.RequestBody, data)
-	if len(f.RequestBody)-n < len(data) {
-		f.RequestBodyTruncated = true
-	}
-}
-
-func (f *Flow) appendRespBody(data []byte) {
-	n := len(f.ResponseBody)
-	f.ResponseBody = appendCapped(f.ResponseBody, data)
-	if len(f.ResponseBody)-n < len(data) {
-		f.ResponseBodyTruncated = true
-	}
-}
-
-// appendCapped appends data to b, stopping at maxLiveBody (live is a preview; the batch
-// pass on close has full bodies).
-func appendCapped(b, data []byte) []byte {
-	if len(b) >= maxLiveBody {
-		return b
-	}
-	if room := maxLiveBody - len(b); len(data) > room {
-		data = data[:room]
-	}
-	return append(b, data...)
 }
