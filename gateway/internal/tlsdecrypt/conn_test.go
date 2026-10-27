@@ -92,3 +92,34 @@ func feedByteAtATime(c *Conn, fromClient bool, b []byte) {
 		c.Feed(fromClient, b[i:i+1])
 	}
 }
+
+// TestKeyedTellsMissingSecretFromNothingSent separates the three reasons a connection
+// can end with no application bytes: no ServerHello in the capture, a handshake whose
+// secret the key-log lacks, and a keyed handshake the client simply never used.
+func TestKeyedTellsMissingSecretFromNothingSent(t *testing.T) {
+	c2s, s2c, keylog := tlstest.Exchange(t, "web.example", []byte("x"), []byte("y"))
+	klPath := filepath.Join(t.TempDir(), "key.log")
+	if err := os.WriteFile(klPath, keylog, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	half := NewConn(NewKeylog(klPath), nil)
+	half.Feed(true, c2s)
+	if half.HelloSeen() || half.Keyed() {
+		t.Fatalf("client side only: HelloSeen %v Keyed %v, want neither", half.HelloSeen(), half.Keyed())
+	}
+
+	keyed := NewConn(NewKeylog(klPath), nil)
+	keyed.Feed(true, c2s)
+	keyed.Feed(false, s2c)
+	if !keyed.HelloSeen() || !keyed.Keyed() {
+		t.Fatalf("with its secret: HelloSeen %v Keyed %v, want both", keyed.HelloSeen(), keyed.Keyed())
+	}
+
+	unkeyed := NewConn(NewKeylog(filepath.Join(t.TempDir(), "empty.log")), nil)
+	unkeyed.Feed(true, c2s)
+	unkeyed.Feed(false, s2c)
+	if !unkeyed.HelloSeen() || unkeyed.Keyed() {
+		t.Fatalf("without its secret: HelloSeen %v Keyed %v, want hellos only", unkeyed.HelloSeen(), unkeyed.Keyed())
+	}
+}

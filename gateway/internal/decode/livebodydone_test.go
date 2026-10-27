@@ -205,6 +205,35 @@ func TestH1BodyIsDoneWithTheResponseOrTheConnection(t *testing.T) {
 	}
 }
 
+// A connection that ends before the framing says the body did — Chrome closing a media
+// range read — leaves part of a body. The flow must say so, with how much arrived, or it
+// reads as a whole 206; a body that ends where its framing says, or one delimited only by
+// the close, is whole.
+func TestH1ConnectionEndMidBodyMarksTheBodyCut(t *testing.T) {
+	for _, tc := range []struct {
+		name, resp, wantBody, wantErr string
+	}{
+		{"short of Content-Length", "HTTP/1.1 206 Partial Content\r\nContent-Length: 10\r\n\r\nfirst",
+			"first", "HTTP/1.1 connection closed mid-body after 5 of 10 bytes — response cut short"},
+		{"before the last chunk", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n",
+			"first", "HTTP/1.1 connection closed mid-body after 5 bytes — response cut short"},
+		{"whole", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nwhole", "whole", ""},
+		{"close-delimited", "HTTP/1.1 200 OK\r\n\r\nuntil close", "until close", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			flows := feedHTTP(t, []byte("GET /ringing.ogg HTTP/1.1\r\nHost: example.com\r\n\r\n"), []byte(tc.resp))
+			if len(flows) != 1 {
+				t.Fatalf("got %d flows, want 1", len(flows))
+			}
+			f := flows[0]
+			if !f.BodyDone || f.Error != tc.wantErr || string(f.ResponseBody) != tc.wantBody {
+				t.Fatalf("flow = done %v error %q body %q, want done, error %q body %q",
+					f.BodyDone, f.Error, f.ResponseBody, tc.wantErr, tc.wantBody)
+			}
+		})
+	}
+}
+
 // A stream reset after the response began leaves part of a body. The flow must say so,
 // or it reads as a whole 200 response; a reset after the response ended changes nothing.
 // The reset rides the server's byte stream right after the DATA, so the two are parsed in

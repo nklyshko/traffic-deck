@@ -161,6 +161,25 @@ func (c *Conn) Feed(fromClient bool, data []byte) {
 
 func (c *Conn) ready() bool { return c.clientRandom != nil && c.suite != nil }
 
+// HelloSeen reports whether the ClientHello and the ServerHello were both parsed — false
+// for a connection whose handshake predates the capture or never got its ServerHello.
+func (c *Conn) HelloSeen() bool { return c.haveCH && c.haveSH }
+
+// Keyed reports whether the key-log holds this connection's secret: the server traffic
+// secret for TLS 1.3, the master secret for SSL 3.0 – TLS 1.2. It tells a connection that
+// could not be decrypted from one that had nothing to decrypt.
+func (c *Conn) Keyed() bool {
+	if !c.HelloSeen() || c.clientRandom == nil {
+		return false
+	}
+	label := c.dir[dirIdx(false)].label
+	if isLegacyTLS(c.version) {
+		label = "CLIENT_RANDOM"
+	}
+	_, ok := c.keylog.Get(label, c.clientRandom)
+	return ok
+}
+
 // drain parses and processes complete records from one direction's buffer, stopping at
 // the first record it can't yet handle (an application record before keys are available).
 // It returns true if it consumed at least one record (so the caller can re-drain the

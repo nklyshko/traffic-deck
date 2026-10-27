@@ -565,14 +565,30 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 		s.flow.BodyDone = true
 		s.lt.onFlow(s.flow, false)
 	}
-	// A TLS connection we never managed to decrypt (no key-log secret arrived, or the
-	// handshake never completed in the capture) yields no live flow — flag it so the gap
-	// isn't silent, and say what becomes of it.
-	if s.sniffed && !s.dropped && !s.decided && !s.conn.Unsupported() {
-		log.Printf("live decode: %s (%s) not decoded live: no TLS key-log secret (or incomplete handshake) — %s",
-			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, skippedFate)
+	// A TLS connection that yielded no application bytes. Flag it when that is a gap —
+	// the handshake is missing from the capture, or the key-log never got its secret — and
+	// say what becomes of it. A completed, keyed handshake with nothing after it is no gap:
+	// the client never sent a request (a browser's preconnect, or one it closed unused), so
+	// it is not logged as a drop.
+	if s.sniffed && !s.plaintext && !s.dropped && !s.decided && !s.conn.Unsupported() {
+		if why := undecodedReason(s.conn); why != "" {
+			log.Printf("live decode: %s (%s) not decoded live: %s — %s",
+				hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, why, skippedFate)
+		}
 	}
 	return true
+}
+
+// undecodedReason says why a TLS connection produced no application bytes, or "" when it
+// had none to produce (a completed handshake whose secret is in the key-log).
+func undecodedReason(c *tlsdecrypt.Conn) string {
+	switch {
+	case !c.HelloSeen():
+		return "its TLS handshake did not complete in the capture"
+	case !c.Keyed():
+		return "no TLS key-log secret for its handshake"
+	}
+	return ""
 }
 
 // hostLabel prefers the SNI for identifying a connection, falling back to the server host.

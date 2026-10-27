@@ -10,6 +10,7 @@ package decode
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -213,7 +214,20 @@ func (h *httpStream) run() {
 			return
 		}
 
+		wire := &wireBody{ReadCloser: resp.Body}
+		resp.Body = wire
 		f.ResponseBody, f.ResponseBodyEncoding = readRespBody(resp)
+		if wire.err != nil {
+			// The connection ended before the framing (Content-Length or chunked) said the
+			// body did — e.g. Chrome dropping a media range read. Without this the flow reads
+			// as a whole 200/206 holding part of a body.
+			why := "connection closed"
+			if h.owner.reset.Load() {
+				why = "connection reset (TCP RST)"
+			}
+			f.Error = fmt.Sprintf("HTTP/1.1 %s mid-body after %s — response cut short",
+				why, cutBytes(wire.n, resp.ContentLength))
+		}
 		f.BodyDone = true // the parser read the whole response before reporting it
 		h.onFlow(f, false)
 	}
@@ -295,6 +309,34 @@ func readBody(rc io.ReadCloser) []byte {
 	defer rc.Close()
 	data, _ := io.ReadAll(rc)
 	return data
+}
+
+// wireBody counts the body bytes the framing delivered and keeps the first error other
+// than EOF — io.ErrUnexpectedEOF when the connection ended short of the Content-Length or
+// the last chunk. It sits under the Content-Encoding decoder, so a corrupt gzip stream (a
+// whole body that fails to inflate) is not mistaken for a cut one.
+type wireBody struct {
+	io.ReadCloser
+	n   int64
+	err error
+}
+
+func (b *wireBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.n += int64(n)
+	if err != nil && err != io.EOF && b.err == nil {
+		b.err = err
+	}
+	return n, err
+}
+
+// cutBytes says how much of a cut body arrived: "N of M bytes" when the length was
+// declared, "N bytes" for a chunked one.
+func cutBytes(got, declared int64) string {
+	if declared >= 0 {
+		return fmt.Sprintf("%d of %d bytes", got, declared)
+	}
+	return fmt.Sprintf("%d bytes", got)
 }
 
 // readRespBody captures the response body, undoing its Content-Encoding so it is
