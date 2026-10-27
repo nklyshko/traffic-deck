@@ -51,7 +51,7 @@ func queryIDs(t *testing.T, ctx context.Context, v *Viewer, filter string) []str
 func TestBodySearchSeesLiveBodiesInEveryState(t *testing.T) {
 	ctx, ls, v := liveBodySearch(t)
 	ls.onFlow(&decode.Flow{ID: "f1", Method: "GET", Authority: "ok.ru", Path: "/video/1",
-		Status: 200, ResponseBody: bigPage("author_link")}, true)
+		Status: 200, ResponseBody: bigPage("author_link"), BodyDone: true}, true)
 
 	check := func(state string) {
 		t.Helper()

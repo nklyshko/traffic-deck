@@ -67,6 +67,24 @@ func TestParseStreamFrame(t *testing.T) {
 	}
 }
 
+// RESET_STREAM ends a stream's sending side abruptly — how an HTTP/3 server cuts a
+// response off. It is kept, in order with the STREAM frames around it, rather than skipped.
+func TestParseResetStreamFrame(t *testing.T) {
+	// STREAM id=0 "ab", then RESET_STREAM id=0, code=0x10c (2-byte varint 0x41 0x0c),
+	// final size=2.
+	frame := []byte{0x0b, 0x00, 0x02, 'a', 'b', 0x04, 0x00, 0x41, 0x0c, 0x02}
+	_, streams, ok := parseFrames(frame)
+	if !ok || len(streams) != 2 {
+		t.Fatalf("parseFrames: ok=%v frames=%d", ok, len(streams))
+	}
+	if r := streams[1]; !r.reset || r.id != 0 || r.code != 0x10c || r.offset != 2 {
+		t.Errorf("reset = %+v, want id 0, code 0x10c, final size 2", r)
+	}
+	if streams[0].reset {
+		t.Error("the STREAM frame before it was taken for a reset")
+	}
+}
+
 func TestParseServerHelloSuite(t *testing.T) {
 	// Minimal ServerHello: type 2, body = legacy_version(0303) random(32x aa) session_id<1>=00
 	// cipher_suite(1301). bodyLen = 2+32+1+2 = 37 = 0x25.

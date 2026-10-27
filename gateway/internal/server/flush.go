@@ -35,8 +35,12 @@ type flushSink interface {
 }
 
 // storedBody remembers where a flow's released bodies went, so a later re-flush of that
-// flow quotes the refs back instead of nulling them (store.BodiesStored).
-type storedBody struct{ req, resp string }
+// flow quotes the refs back instead of nulling them (store.BodiesStored) — and how long
+// they were, so a body that changed since is written again rather than quoted stale.
+type storedBody struct {
+	req, resp       string
+	reqLen, respLen int
+}
 
 // startFlusher runs the flush loop until stopFlusher. A session without a sink (the
 // pushed path) keeps everything until close, as before.
@@ -90,13 +94,25 @@ func (ls *liveSession) markDirtyLocked(id string) {
 }
 
 // bodiesSettled reports whether a flow's bodies are final and can be written and
-// released. A response (or a failure) means nothing more is arriving; a WebSocket flow is
-// excluded because an upgraded connection goes on producing frames (ADR-0011 §3).
+// released: the decoder said so, or the flow failed. Not merely that a status arrived —
+// HTTP/2 reports a flow on its response HEADERS and stays silent through the DATA frames,
+// so a status plus a quiet flush cycle used to finalize an empty body, and the real one,
+// arriving later, was never stored. A WebSocket flow is excluded because an upgraded
+// connection goes on producing frames (ADR-0011 §3).
 func bodiesSettled(f *decode.Flow) bool {
 	if f.Websocket {
 		return false
 	}
-	return f.Status != 0 || f.Error != ""
+	return f.BodyDone || f.Error != ""
+}
+
+// changedSince reports whether a retained flow's bodies differ from what was stored. A
+// released flow (nil bodies, not re-reported since) has not changed: its bytes are on disk.
+func (sb storedBody) changedSince(df *decode.Flow) bool {
+	if df.RequestBody == nil && df.ResponseBody == nil {
+		return false
+	}
+	return len(df.RequestBody) != sb.reqLen || len(df.ResponseBody) != sb.respLen
 }
 
 // flush writes one batch: flows changed since the last flush (rows only — their bodies
@@ -130,8 +146,16 @@ func (ls *liveSession) flush(ctx context.Context, final bool) error {
 		}
 		w := store.FlowWrite{Flow: df, Bodies: store.BodiesPending}
 		switch sb, done := ls.stored[id]; {
-		case done:
+		case done && !sb.changedSince(df):
 			w.Bodies, w.ReqRef, w.RespRef = store.BodiesStored, sb.req, sb.resp
+		case done && (final || bodiesSettled(df)):
+			// Changed after it was stored, and finished now: store it again.
+			delete(ls.stored, id)
+			w.Bodies = store.BodiesFinal
+		case done:
+			// Changed and still changing: it is pending again — the NULL refs send readers
+			// to the hub's bytes until it settles, instead of to the stale stored ones.
+			delete(ls.stored, id)
 		case final:
 			w.Bodies = store.BodiesFinal
 		}
@@ -197,7 +221,8 @@ func (ls *liveSession) flush(ctx context.Context, final bool) error {
 			// body that might have grown.
 			continue
 		}
-		ls.stored[id] = storedBody{req: w.ReqRef, resp: w.RespRef}
+		ls.stored[id] = storedBody{req: w.ReqRef, resp: w.RespRef,
+			reqLen: len(w.Flow.RequestBody), respLen: len(w.Flow.ResponseBody)}
 		delete(ls.pending, id)
 		ls.releaseBodiesLocked(id)
 	}

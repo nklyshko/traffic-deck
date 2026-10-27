@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -65,7 +66,7 @@ func TestFlushDefersBodyUntilFinal(t *testing.T) {
 
 	// Body completes and the response arrives; a quiet cycle then settles it.
 	f.RequestBody = []byte("partial-then-complete")
-	f.Status = 200
+	f.Status, f.BodyDone = 200, true
 	ls.onFlow(f, false)
 	if err := ls.flush(ctx, false); err != nil { // writes the row, still pending
 		t.Fatalf("flush 2: %v", err)
@@ -95,7 +96,7 @@ func TestFlushReleasesBodies(t *testing.T) {
 	ls := newFlushSession(t, st, "s1")
 
 	f := &decode.Flow{ID: "f1", Method: "GET", Authority: "example.com", Path: "/x",
-		Status: 200, ResponseBody: []byte("hello world"),
+		Status: 200, ResponseBody: []byte("hello world"), BodyDone: true,
 		ResponseHeaders: []decode.Header{{Name: "content-type", Value: "text/plain"}}}
 	ls.onFlow(f, true)
 	for range 2 {
@@ -141,7 +142,7 @@ func TestFlushReleasedFlowSurvivesReflush(t *testing.T) {
 	ls := newFlushSession(t, st, "s1")
 
 	f := &decode.Flow{ID: "f1", Method: "GET", Authority: "example.com", Path: "/x",
-		Status: 200, ResponseBody: []byte("payload")}
+		Status: 200, ResponseBody: []byte("payload"), BodyDone: true}
 	ls.onFlow(f, true)
 	for range 2 {
 		if err := ls.flush(ctx, false); err != nil {
@@ -315,7 +316,7 @@ func TestFlusherConcurrentWithPublish(t *testing.T) {
 		f := &decode.Flow{ID: id, Method: "GET", Authority: "example.com",
 			Path: fmt.Sprintf("/r/%d", i), RequestBody: []byte("body")}
 		ls.onFlow(f, true)
-		f.Status = 200 // response arrives; the flow can now settle
+		f.Status, f.BodyDone = 200, true // response complete; the flow can now settle
 		ls.onFlow(f, false)
 	}
 	<-done
@@ -389,4 +390,89 @@ func TestFlushKeepsDecoderFields(t *testing.T) {
 		}
 	}
 
+}
+
+// TestFlushWaitsForTheDecoderToFinishTheBody is the HTTP/2 shape that lost bodies: the
+// decoder reports a flow when the response HEADERS arrive — status set, body empty — and
+// not again until END_STREAM, however long the DATA frames take. A status is not the end
+// of a body; only the decoder saying so is.
+func TestFlushWaitsForTheDecoderToFinishTheBody(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ls := newFlushSession(t, st, "s1")
+
+	f := &decode.Flow{ID: "f1", Method: "GET", Authority: "example.com", Path: "/big", Status: 200}
+	ls.onFlow(f, true)
+	for range 3 { // quiet flush cycles while DATA frames stream in unreported
+		if err := ls.flush(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, stored := ls.stored["f1"]; stored {
+		t.Fatal("a body the decoder has not finished was written as final")
+	}
+
+	body := bytes.Repeat([]byte("x"), 3<<20)
+	f.ResponseBody, f.BodyDone = body, true // END_STREAM
+	ls.onFlow(f, false)
+	for range 2 {
+		if err := ls.flush(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _, err := st.GetBodyBytes(ctx, "s1", "f1", true)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("stored body = %d bytes err=%v, want all %d", len(got), err, len(body))
+	}
+}
+
+// TestFlushRewritesABodyThatChangedAfterItWasStored is the net under the rule above: if a
+// body changes after it was written — a decoder that finished too early, a late re-decode
+// — the store follows it rather than quoting the old refs forever.
+func TestFlushRewritesABodyThatChangedAfterItWasStored(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ls := newFlushSession(t, st, "s1")
+
+	f := &decode.Flow{ID: "f1", Method: "GET", Authority: "example.com", Path: "/x",
+		Status: 200, ResponseBody: []byte("start"), BodyDone: true}
+	ls.onFlow(f, true)
+	for range 2 {
+		if err := ls.flush(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, stored := ls.stored["f1"]; !stored {
+		t.Fatal("setup: a finished body should be stored")
+	}
+
+	// Still growing: back to pending, so nothing reads the stale prefix as the body.
+	f.ResponseBody, f.BodyDone = []byte("start, and more"), false
+	ls.onFlow(f, false)
+	if err := ls.flush(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.GetBodyBytes(ctx, "s1", "f1", true); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a growing body should not be served from the store, got err=%v", err)
+	}
+
+	f.ResponseBody, f.BodyDone = []byte("start, and more, and the end"), true
+	ls.onFlow(f, false)
+	for range 2 {
+		if err := ls.flush(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _, err := st.GetBodyBytes(ctx, "s1", "f1", true)
+	if err != nil || string(got) != "start, and more, and the end" {
+		t.Fatalf("stored body = %q err=%v, want the final one", got, err)
+	}
 }

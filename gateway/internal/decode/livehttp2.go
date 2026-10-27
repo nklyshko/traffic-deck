@@ -120,6 +120,9 @@ func (h *h2Stream) read(src *byteStream, fromClient bool) {
 	fr.ReadMetaHeaders.SetAllowedMaxDynamicTableSize(maxHPACKDynamicTableSize)
 	fr.MaxHeaderListSize = 1 << 20
 	fr.SetMaxReadFrameSize(1 << 20)
+	if !fromClient {
+		defer h.serverEnded()
+	}
 	for {
 		f, err := fr.ReadFrame()
 		if err != nil {
@@ -212,15 +215,45 @@ func (h *h2Stream) akamaiFingerprint(mh *http2.MetaHeadersFrame) string {
 // response. Recorded even if the request HEADERS haven't been decoded yet (the directions
 // race); emitLocked applies it when the flow appears.
 func (h *h2Stream) onRSTStream(rf *http2.RSTStreamFrame) {
-	if rf.ErrCode == http2.ErrCodeNo {
-		return
-	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.pendingRST[rf.StreamID] = "HTTP/2 RST_STREAM: " + rf.ErrCode.String()
-	if hf := h.flows[rf.StreamID]; hf != nil {
-		h.emitLocked(hf)
+	if rf.ErrCode != http2.ErrCodeNo {
+		h.pendingRST[rf.StreamID] = "HTTP/2 RST_STREAM: " + rf.ErrCode.String()
 	}
+	hf := h.flows[rf.StreamID]
+	if hf == nil {
+		return // emitLocked applies the reason when the flow appears
+	}
+	// A reset after the response began cuts its body short. emitLocked only explains a
+	// reset on a flow with no status, so without this the flow would read as a whole 200
+	// holding part of a body — a browser cancelling image loads produces exactly that.
+	if rf.ErrCode != http2.ErrCodeNo && hf.flow.Status != 0 && !hf.flow.BodyDone && hf.flow.Error == "" {
+		hf.flow.Error = "HTTP/2 RST_STREAM: " + rf.ErrCode.String() + " — response cut short"
+	}
+	h.endLocked(hf) // a reset stream carries nothing more, whatever the code
+}
+
+// serverEnded runs when the server direction's byte stream ends: no response bytes can
+// follow, so every stream still open on the connection has all the body it will get.
+func (h *h2Stream) serverEnded() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, hf := range h.flows {
+		if !hf.flow.BodyDone {
+			h.endLocked(hf)
+		}
+	}
+}
+
+// endLocked closes a stream's response: decodes a body still held in its wire encoding,
+// marks the flow's bodies final, and reports it. Caller holds mu.
+func (h *h2Stream) endLocked(hf *h2flow) {
+	if hf.respEnc != "" {
+		hf.flow.ResponseBody = decodeBody(hf.respEnc, hf.flow.ResponseBody)
+		hf.respEnc = ""
+	}
+	hf.flow.BodyDone = true
+	h.emitLocked(hf)
 }
 
 // onGoAway records that the peer is shutting the connection down: any stream past
@@ -326,6 +359,12 @@ func (h *h2Stream) onHeaders(mh *http2.MetaHeadersFrame, fromClient bool, ts tim
 				hf.respEnc = normalizeEncoding(hd.Value)
 			}
 		}
+		if mh.StreamEnded() {
+			// A body-less response, or trailers after the last DATA frame: either way the
+			// response is over here, and a body still in its wire encoding is decoded now.
+			h.endLocked(hf)
+			return
+		}
 	}
 	h.emitLocked(hf)
 }
@@ -350,9 +389,9 @@ func (h *h2Stream) onData(df *http2.DataFrame, fromClient bool, ts time.Time) {
 		f.ResponseBodyEncoding = hf.respEnc
 	}
 	if df.StreamEnded() {
-		if !fromClient && hf.respEnc != "" {
-			f.ResponseBody = decodeBody(hf.respEnc, f.ResponseBody)
-			hf.respEnc = ""
+		if !fromClient {
+			h.endLocked(hf)
+			return
 		}
 		h.emitLocked(hf)
 	}

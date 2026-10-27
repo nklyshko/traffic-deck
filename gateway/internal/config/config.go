@@ -20,8 +20,8 @@ type Config struct {
 	GRPCAddr string // listen address for the gRPC server
 	DataRoot string // root for session bundles + catalog.sqlite
 	// TsharkPath is the tshark binary, used only for the batch decode: pcap import
-	// (--decoder tshark), redecode --engine tshark, a capture with live decode off, and
-	// tshark-verify on close. The live decode needs no tshark.
+	// (--decoder tshark), redecode --engine tshark (custom-protocol flows), a capture with
+	// live decode off, and tshark-verify on close. The live decode needs no tshark.
 	TsharkPath string
 	// LiveDecode toggles the live pipeline. When true (default) a streaming session
 	// decodes flows live, fully in-process in Go (no tshark): TCP/QUIC reassembly, TLS
@@ -171,8 +171,8 @@ func Load() Config {
 		// Said once rather than silently ignored: someone who set it expects tshark to
 		// re-decode every capture on close, and that no longer happens (ADR-0009).
 		log.Printf("config: GATEWAY_RECORD_LIVE=off is no longer supported and is ignored — " +
-			"the live decode is authoritative; re-decode a closed session with " +
-			"`trafficdeck redecode --engine tshark`")
+			"the live decode is authoritative; to decode a capture with tshark, import its " +
+			"capture.pcap and key.log as a new session with `trafficdeck import --decoder tshark`")
 	}
 	return Config{
 		GRPCAddr:        s.str("GATEWAY_ADDR", "127.0.0.1:7331"),

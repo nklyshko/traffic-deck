@@ -155,7 +155,7 @@ func TestConnRoundTrip(t *testing.T) {
 		data string
 	}
 	var got []delivery
-	c := NewConn(tlsdecrypt.NewKeylog(klPath), func(id uint64, fromClient bool, data []byte) {
+	c := NewConn(tlsdecrypt.NewKeylog(klPath), func(id uint64, fromClient bool, data []byte, _ bool) {
 		got = append(got, delivery{id, fromClient, string(data)})
 	})
 
@@ -223,7 +223,7 @@ func TestConn0RTT(t *testing.T) {
 	}
 
 	var got []string
-	c := NewConn(tlsdecrypt.NewKeylog(klPath), func(id uint64, fromClient bool, data []byte) {
+	c := NewConn(tlsdecrypt.NewKeylog(klPath), func(id uint64, fromClient bool, data []byte, _ bool) {
 		if fromClient {
 			got = append(got, string(data))
 		}
@@ -295,7 +295,7 @@ func newBufFixture(t *testing.T) *bufFixture {
 	if err := os.WriteFile(f.klPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f.c = NewConn(tlsdecrypt.NewKeylog(f.klPath), func(_ uint64, _ bool, data []byte) {
+	f.c = NewConn(tlsdecrypt.NewKeylog(f.klPath), func(_ uint64, _ bool, data []byte, _ bool) {
 		f.got = append(f.got, string(data))
 	})
 

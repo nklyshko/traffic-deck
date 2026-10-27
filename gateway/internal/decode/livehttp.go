@@ -186,11 +186,13 @@ func (h *httpStream) run() {
 		resp, err := http.ReadResponse(respBr, req)
 		if err != nil {
 			// Request seen but no parseable response. A TCP reset explains the failure;
-			// a clean close / capture end leaves it blank (may just be pending).
+			// a clean close / capture end leaves it blank (may just be pending). Either
+			// way this connection has nothing more to say about the flow.
 			if h.owner.reset.Load() {
 				f.Error = "connection reset (TCP RST)"
-				h.onFlow(f, false)
 			}
+			f.BodyDone = true
+			h.onFlow(f, false)
 			return // no response
 		}
 		f.Status = uint32(resp.StatusCode)
@@ -212,6 +214,7 @@ func (h *httpStream) run() {
 		}
 
 		f.ResponseBody, f.ResponseBodyEncoding = readRespBody(resp)
+		f.BodyDone = true // the parser read the whole response before reporting it
 		h.onFlow(f, false)
 	}
 }

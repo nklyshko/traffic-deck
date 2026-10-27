@@ -8,8 +8,9 @@ package decode
 // emitting flows and frames through the onFlow/onMsg callbacks.
 //
 // A connection this decoder can't handle (an unsupported version/suite or link type, or
-// one whose key-log secret never arrived) is dropped: nothing re-decodes it on close, and
-// only a manual tshark redecode of the closed session can recover it — see skippedFate.
+// one whose key-log secret never arrived) is dropped: nothing re-decodes it on close. Only
+// importing the session's capture into a new session with tshark can recover it, and only
+// the first kind — see skippedFate.
 
 import (
 	"bufio"
@@ -247,16 +248,19 @@ func (f *liveTCP) goParse(fn func()) {
 }
 
 // skippedFate says what becomes of a connection the live decoder can't handle: nothing
-// else decodes it on close (ADR-0009), so the diagnostic names the manual way back rather
-// than promising a recovery that won't happen. partialFate is the same for a loss
-// *inside* a connection that is otherwise decoding — an HTTP/3 QPACK failure costs
-// individual requests, not the whole connection, so skippedFate's wording would
-// overstate it.
+// else decodes it on close (ADR-0009). The way back is a new session imported from the
+// capture with tshark — which helps only where tshark can do what the live decoder could
+// not (a version, suite or link type), never for a missing key-log secret, which tshark
+// needs just the same; so it is offered conditionally. `redecode` is not it: that re-runs
+// only the custom-protocol decoders. partialFate is for a loss *inside* a connection that
+// is otherwise decoding — an HTTP/3 QPACK failure costs individual requests, and the
+// inserts it waits on never reached the capture, so there is no way back to offer.
 const (
-	skippedFate = "dropped from the session (the live decode is authoritative; " +
-		"`trafficdeck redecode --engine tshark` re-decodes a closed session with tshark)"
+	skippedFate = "dropped from the session (the live decode is authoritative and nothing " +
+		"re-decodes it; if tshark can decode it, `trafficdeck import --decoder tshark` of the " +
+		"session's capture.pcap and key.log makes a new session from it)"
 	partialFate = "the affected requests are missing from the session (the live decode is " +
-		"authoritative; `trafficdeck redecode --engine tshark` re-decodes a closed session with tshark)"
+		"authoritative and nothing re-decodes them)"
 )
 
 // connID assigns the next connection identifier, numbering in first-seen order the
@@ -503,6 +507,7 @@ func (s *tcpStream) feedConnect(fromClient bool, data []byte) {
 		cf.RequestHeaders = headers
 		cf.UserAgent = ua
 		cf.Status = uint32(status)
+		cf.BodyDone = true // a CONNECT exchange carries no body
 		s.lt.onFlow(cf, true)
 		s.lt.onFlow(cf, false)
 
@@ -550,10 +555,14 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 	if s.h2Sess != nil {
 		s.h2Sess.close()
 	}
-	// A reset on a custom-protocol connection (its flow lives on the stream) is a hard
-	// drop — record it. HTTP/1.1 is annotated in its own parser; h2 uses RST_STREAM/GOAWAY.
-	if s.reset.Load() && s.flowEmitted && s.flow != nil && s.flow.Error == "" {
-		s.flow.Error = "connection reset (TCP RST)"
+	// A custom-protocol connection's flow carries the raw streams as its bodies, so they
+	// are done when the connection is. A reset is a hard drop — record it too. HTTP/1.1 is
+	// annotated in its own parser; h2 uses RST_STREAM/GOAWAY.
+	if s.flowEmitted && s.flow != nil {
+		if s.reset.Load() && s.flow.Error == "" {
+			s.flow.Error = "connection reset (TCP RST)"
+		}
+		s.flow.BodyDone = true
 		s.lt.onFlow(s.flow, false)
 	}
 	// A TLS connection we never managed to decrypt (no key-log secret arrived, or the

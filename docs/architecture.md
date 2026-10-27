@@ -134,12 +134,14 @@ flowchart TD
   WebSocket and custom raw-TCP protocols — plaintext or TLS. See
   [ADR-0009](adr/0009-native-live-decode-default.md), which grew out of
   [ADR-0006](adr/0006-in-process-tls-decryption.md).
-- `tshark` is used only for the **batch decode**: pcap import with `--decoder tshark`,
-  `redecode --engine tshark` of a closed session, `GATEWAY_TSHARK_VERIFY` (diagnostic,
-  never persisted), and captures with live decode off — never for the default live
-  capture path. Import can also run the native Go decoder (`--decoder native`).
+- `tshark` is used only for the **batch decode**: pcap import with `--decoder tshark`
+  (which also makes a new session from a closed session's capture, the way to recover a
+  connection the live decoder skipped), `redecode --engine tshark` of a session's
+  custom-protocol flows, `GATEWAY_TSHARK_VERIFY` (diagnostic, never persisted), and
+  captures with live decode off — never for the default live capture path. Import can
+  also run the native Go decoder (`--decoder native`).
 - Only the native decoder produces the TLS/HTTP2 fingerprints (`ja3`, `ja4`,
-  `client_hellos`, `http2_fingerprint`), so a tshark redecode trades those for tshark's
+  `client_hellos`, `http2_fingerprint`), so a tshark import trades those for tshark's
   dissectors.
 
 ## Capture sources

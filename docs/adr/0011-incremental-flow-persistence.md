@@ -79,16 +79,27 @@ serves them from the blob store instead. This is the change that reclaims the 20
 the one with a real failure mode: a response body still streaming accumulates into
 `f.ResponseBody`, so nulling it mid-stream would make the next flush write a truncated
 body. Bodies are therefore released only for a flow that has gone a full flush cycle
-without being dirtied, *and* has a status or an error, *and* is not a WebSocket flow.
-Anything still moving keeps its buffer.
+without being dirtied, *and* whose decoder has said its bodies are done (`BodyDone`) or
+that has failed, *and* is not a WebSocket flow. Anything still moving keeps its buffer.
 
-The quiet cycle is not belt-and-braces; it is what makes the rule correct. Implementation
-showed that "has a status" alone is *false* as a completion test on HTTP/2: `emitLocked`
-sets the status when the HEADERS frame lands and then emits again for every DATA frame,
-so a flow can carry a status with most of its body still to come. Only a flow that has
-also gone a whole cycle unchanged is actually done — on HTTP/1.1 the two coincide, because
-the body is fully read before the flow is ever emitted with its status, but the rule may
-not be simplified to the status check that path would suggest.
+*Revised 2026-10-26.* The rule first read "has a status or an error" plus the quiet
+cycle, on the belief that HTTP/2 re-emits a flow on every DATA frame, so a quiet cycle
+meant the body was complete. It does not: `emitLocked` runs when the response HEADERS
+land and next at END_STREAM, silent through the DATA frames in between. A body that took
+longer than a flush cycle to arrive — and flushes run back-to-back once 128 flows are
+dirty, so on a busy page that is milliseconds — was written as final with whatever the
+HEADERS report held, usually nothing, and the real body arriving later was never stored:
+the flow, now marked stored, was only ever re-written with its old refs. About 2% of
+HTTP/2 and HTTP/3 responses with a declared length had lost their bodies this way.
+Completion is now the decoder's to state, at the point it knows: HTTP/1.1 once the
+response body is read, HTTP/2 at END_STREAM (on DATA or trailing HEADERS), RST_STREAM or
+the end of the server's byte stream, HTTP/3 at the server's FIN, RESET_STREAM or the
+connection's end,
+a custom-protocol flow when its connection closes. A reset that cuts a response short
+after its status arrived also sets the flow's error ("— response cut short"), so a partial
+body does not pass for a whole 200. And a stored flow whose bodies change
+afterwards is written again (or returned to pending while it still changes) rather than
+quoted stale.
 
 Releasing a body also clears the `inline` bytes from the flow's proto, and that carries a
 hard invariant: **clear `Body.inline`; never clear `Body.size` or `Body.content_type`.**

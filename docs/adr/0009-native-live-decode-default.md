@@ -36,8 +36,9 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   plaintext or TLS.
 - It is **authoritative**: a capture decoded live is recorded as the live decode
   produced it, and no batch pass re-decodes it on close.
-- `tshark` remains where the live decoder cannot be asked to do the job: pcap import,
-  `trafficdeck redecode --engine tshark` of a closed session, a capture with
+- `tshark` remains where the live decoder cannot be asked to do the job: pcap import
+  (including a closed session's own capture, imported as a new session), `trafficdeck
+  redecode --engine tshark` of a session's custom-protocol flows, a capture with
   `GATEWAY_LIVE_DECODE=false` (no live decode at all), and `GATEWAY_TSHARK_VERIFY`
   (decode both ways on close and log the differences; the tshark side is never
   persisted).
@@ -49,7 +50,7 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   protocol.
 - Fingerprint fields (`ja3`, `ja4`, `tls_client_hello`, `client_hellos`,
   `http2_fingerprint`) are produced **only** by the native decoder; the batch stitcher
-  reads the ClientHello just for SNI and the stream index. So a tshark redecode trades
+  reads the ClientHello just for SNI and the stream index. So a tshark import trades
   the fingerprints for tshark's dissectors.
 - The cost [0002](0002-tshark-for-dissection.md) set out to avoid is now partly paid: a
   TLS/QUIC decryptor and HTTP/1.1, HTTP/2 and HTTP/3 framers to maintain. Scope grew
@@ -60,8 +61,11 @@ Decode natively in Go, in-process, for everything; keep tshark as a secondary pa
   on a real capture, so the two can't silently diverge.
 - Wireshark is no longer required to decode a live capture — only to import a pcap or
   run the batch/verify passes (`dumpcap` is still what the Chrome tool captures with).
-- A connection the live decoder skips is missing from the session unless someone runs
-  `redecode --engine tshark`; the skip diagnostic names that command.
+- A connection the live decoder skips is missing from the session. If tshark can decode
+  it — an unsupported version, suite or link type, not a missing key-log secret, which
+  tshark needs as much — importing the session's `capture.pcap` and `key.log` with
+  `trafficdeck import --decoder tshark` recovers it into a new session; the skip
+  diagnostic says so. `redecode` does not: it replaces only custom-protocol flows.
 
 ## Removing the batch alternative
 
@@ -83,7 +87,8 @@ handle and label — `truncated` on the wire, `partial` in MCP, "live preview" i
 TUI — and a body search during capture could say nothing true about a preview, since
 neither "contains" nor "lacks" holds on a body's first 256 KiB.
 
-The setting is now ignored, with a log line naming `redecode --engine tshark`. The live
+The setting is now ignored, with a log line naming `trafficdeck import --decoder tshark`
+as the way to decode a capture with tshark. The live
 body cap went with it: the live decoders keep every body whole, so nothing marks a body
 as a preview and no reader handles one. `Body.truncated` and `BodyChunk.truncated` stay
 in the proto as deprecated, never-set fields, so older readers and writers remain

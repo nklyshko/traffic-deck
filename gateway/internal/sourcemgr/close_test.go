@@ -12,14 +12,22 @@ import (
 // startGroupProc launches a shell in its own process group (as realSpawn does), running
 // `body` after it has installed its signal traps and touched a readiness file. It returns
 // once that file appears, so a test can signal the group without racing the trap install.
+//
+// body runs in the background under `wait`, and readiness is signalled after it starts.
+// With body in the foreground, a SIGTERM landing while the shell was still forking and
+// exec'ing it could miss the child, and a shell runs its trap only once its foreground
+// command finishes — so `sleep 30` outlived the grace and the test failed now and then. A
+// trapped signal interrupts `wait` at once, wherever the child is.
 func startGroupProc(t *testing.T, traps, body string) *exec.Cmd {
 	t.Helper()
 	ready := filepath.Join(t.TempDir(), "ready")
-	cmd := exec.Command("sh", "-c", traps+"; : > "+ready+"; "+body)
+	cmd := exec.Command("sh", "-c", traps+"; "+body+" & : > "+ready+"; wait")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	// The shell exiting on its trap can leave body running; take the group down with it.
+	t.Cleanup(func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(ready); err == nil {

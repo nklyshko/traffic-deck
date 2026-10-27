@@ -19,9 +19,11 @@ Two paths produce the decrypted bytes:
   decoding of MAX frames during capture.
 - **Batch**: `tshark -z follow,tls,raw` over each matched stream. Runs on pcap import,
   `trafficdeck redecode --engine tshark`, `GATEWAY_TSHARK_VERIFY`, and on close when live
-  decode is off. A redecode is the way to recover a connection the live decryptor had to
-  skip — one negotiating a version or cipher suite it doesn't implement
+  decode is off. A connection the live decryptor had to skip — one negotiating a version
+  or cipher suite it doesn't implement — is recovered by importing the session's
+  `capture.pcap` and `key.log` as a new session with `trafficdeck import --decoder tshark`
   ([ADR-0009](adr/0009-native-live-decode-default.md#removing-the-batch-alternative)).
+  `redecode` replaces only a session's custom-protocol flows.
 
 ## Writing one
 

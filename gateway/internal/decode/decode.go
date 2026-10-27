@@ -65,6 +65,12 @@ type Flow struct {
 	RequestBodyEncoding  string
 	ResponseBodyEncoding string
 
+	// BodyDone is the decoder's word that it will not change this flow's bodies again —
+	// the response (or the stream, or the connection) has ended. A status alone does not
+	// say that: HTTP/2 reports a flow on its response HEADERS and is silent until
+	// END_STREAM. Persistence writes a live flow's bodies as final only once this is set.
+	BodyDone bool
+
 	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
 	// frames; the frames themselves are WsMessages keyed by this flow's ID.
 	Websocket bool

@@ -224,8 +224,9 @@ criteria read a body:
 ```
 
 Match on headers or the URL for those, or re-capture. Decoding happens when a body is
-stored, so a session recorded by an older gateway keeps whatever it kept — `redecode` fixes
-one that still has its pcap.
+stored, so a session recorded by an older gateway keeps whatever it kept. If it still has
+its pcap, `trafficdeck import --pcap … --keylog …` decodes it again into a new session;
+`redecode` will not, as it replaces only custom-protocol flows.
 
 ## Live sessions
 

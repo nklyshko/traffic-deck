@@ -270,18 +270,23 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 
 // TestSkippedFateNamesTheWayBack covers the diagnostic promise: nothing re-decodes a
 // skipped connection on close, so the message must say it is gone — not defer it to a
-// pass that will never run — and name the manual recovery.
+// pass that will never run, nor to `redecode`, which re-runs only the custom-protocol
+// decoders. A dropped connection names the import that can recover it; a partial loss,
+// which nothing can recover, names nothing.
 func TestSkippedFateNamesTheWayBack(t *testing.T) {
 	for _, fate := range []string{skippedFate, partialFate} {
 		if !strings.Contains(fate, "missing") && !strings.Contains(fate, "dropped") {
 			t.Errorf("fate = %q, want it to say what is lost", fate)
 		}
-		if strings.Contains(fate, "on close") {
-			t.Errorf("fate = %q, must not promise a pass on close that won't run", fate)
+		if strings.Contains(fate, "on close") || strings.Contains(fate, "redecode") {
+			t.Errorf("fate = %q, must not promise a recovery that won't happen", fate)
 		}
-		if !strings.Contains(fate, "redecode --engine tshark") {
-			t.Errorf("fate = %q, want the manual recovery", fate)
-		}
+	}
+	if !strings.Contains(skippedFate, "import --decoder tshark") {
+		t.Errorf("skippedFate = %q, want the import that can recover it", skippedFate)
+	}
+	if strings.Contains(partialFate, "import") {
+		t.Errorf("partialFate = %q offers a recovery for bytes the capture never had", partialFate)
 	}
 }
 

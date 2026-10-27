@@ -347,16 +347,16 @@ func TestLiveHTTP3GzipBody(t *testing.T) {
 	s.onStream(0, true, h3Frame(h3FrameHeaders, qpackSection(
 		qpack.HeaderField{Name: ":method", Value: "GET"},
 		qpack.HeaderField{Name: ":path", Value: "/"},
-	)))
+	)), false)
 	s.onStream(0, false, h3Frame(h3FrameHeaders, qpackSection(
 		qpack.HeaderField{Name: ":status", Value: "200"},
 		qpack.HeaderField{Name: "content-type", Value: "text/html"},
 		qpack.HeaderField{Name: "content-encoding", Value: "gzip"},
-	)))
+	)), false)
 	raw := gzipBytes(t, page)
 	half := len(raw) / 2
-	s.onStream(0, false, h3Frame(h3FrameData, raw[:half]))
-	s.onStream(0, false, h3Frame(h3FrameData, raw[half:]))
+	s.onStream(0, false, h3Frame(h3FrameData, raw[:half]), false)
+	s.onStream(0, false, h3Frame(h3FrameData, raw[half:]), false)
 	s.close() // QUIC has no end-of-stream callback; teardown is the last word
 
 	mu.Lock()

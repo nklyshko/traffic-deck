@@ -12,6 +12,7 @@ package decode
 // up incomplete.
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"strings"
@@ -89,6 +90,7 @@ func newQUICSession(lt *liveTCP, connID, serverHost, serverPort, clientAddr stri
 		qpack:   [2]*qpackdec.Decoder{qpackdec.New(), qpackdec.New()},
 	}
 	s.conn = quicdecrypt.NewConn(lt.keylog, s.onStream)
+	s.conn.OnReset = s.onReset
 	return s
 }
 
@@ -108,13 +110,11 @@ func qdir(fromClient bool) int {
 func (s *quicSession) close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Last word on every encoded response body: the connection is over, so what each
-	// stream accumulated is all there will ever be (see decodeResp).
+	// Last word on every stream still open: the connection is over, so what each
+	// accumulated is all there will ever be (see decodeResp), and its bodies are final.
 	for _, st := range s.streams {
-		before := len(st.flow.ResponseBody)
-		st.decodeResp(true)
-		if len(st.flow.ResponseBody) != before {
-			s.emit(st) // the body changed under readers that already saw the flow
+		if !st.flow.BodyDone {
+			s.end(st)
 		}
 	}
 	if n := len(s.blocked); n > 0 {
@@ -147,8 +147,9 @@ func (s *quicSession) feed(fromClient bool, datagram []byte, ts time.Time) {
 // onStream receives in-order bytes for a QUIC stream. Client-initiated bidirectional
 // streams (id&0x03==0) carry HTTP/3 requests/responses; unidirectional streams (bit 1 set)
 // carry control / QPACK / push — we track only the QPACK encoder stream. Frames may span
-// calls, so we buffer per direction and parse what's whole.
-func (s *quicSession) onStream(streamID uint64, fromClient bool, data []byte) {
+// calls, so we buffer per direction and parse what's whole. ended marks the stream's FIN:
+// on the server's half of a request stream, the response is complete.
+func (s *quicSession) onStream(streamID uint64, fromClient bool, data []byte, ended bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.decrypted = true // stream bytes at all means the key-log secrets were there
@@ -167,6 +168,55 @@ func (s *quicSession) onStream(streamID uint64, fromClient bool, data []byte) {
 	d := qdir(fromClient)
 	st.buf[d] = append(st.buf[d], data...)
 	st.buf[d] = s.parseFrames(st, fromClient, st.buf[d])
+	if ended && !fromClient && !st.flow.BodyDone {
+		s.end(st)
+	}
+}
+
+// h3NoError is H3_NO_ERROR (RFC 9114 §8.1): a reset that is not a failure.
+const h3NoError = 0x100
+
+// h3ErrorNames are the HTTP/3 error codes (RFC 9114 §8.1) a reset can carry.
+var h3ErrorNames = map[uint64]string{
+	0x100: "H3_NO_ERROR", 0x101: "H3_GENERAL_PROTOCOL_ERROR", 0x102: "H3_INTERNAL_ERROR",
+	0x103: "H3_STREAM_CREATION_ERROR", 0x104: "H3_CLOSED_CRITICAL_STREAM",
+	0x105: "H3_FRAME_UNEXPECTED", 0x106: "H3_FRAME_ERROR", 0x107: "H3_EXCESSIVE_LOAD",
+	0x108: "H3_ID_ERROR", 0x109: "H3_SETTINGS_ERROR", 0x10a: "H3_MISSING_SETTINGS",
+	0x10b: "H3_REQUEST_REJECTED", 0x10c: "H3_REQUEST_CANCELLED", 0x10d: "H3_REQUEST_INCOMPLETE",
+	0x10e: "H3_MESSAGE_ERROR", 0x10f: "H3_CONNECT_ERROR", 0x110: "H3_VERSION_FALLBACK",
+}
+
+// onReset handles a RESET_STREAM. Only the server's matters here: it abandons the
+// response, which is how HTTP/3 cancels one (the client asks with STOP_SENDING, the server
+// answers with this) — so the response is over, and unless the code says no error, the
+// flow says why. A client reset abandons just the request body; the response may still
+// come, so it ends nothing.
+func (s *quicSession) onReset(streamID uint64, fromClient bool, code uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.streams[streamID]
+	if fromClient || st == nil || st.flow.BodyDone {
+		return
+	}
+	if code != h3NoError && st.flow.Error == "" {
+		name := h3ErrorNames[code]
+		if name == "" {
+			name = fmt.Sprintf("0x%x", code)
+		}
+		st.flow.Error = "HTTP/3 RESET_STREAM: " + name
+		if st.flow.Status != 0 {
+			st.flow.Error += " — response cut short"
+		}
+	}
+	s.end(st)
+}
+
+// end closes a stream's response: decodes what an encoded body accumulated, marks the
+// flow's bodies final and reports it. Caller holds mu.
+func (s *quicSession) end(st *h3Stream) {
+	st.decodeResp(true)
+	st.flow.BodyDone = true
+	s.emit(st)
 }
 
 // onUni handles a unidirectional stream: read the leading stream-type varint, then feed a

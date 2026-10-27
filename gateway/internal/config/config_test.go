@@ -82,7 +82,7 @@ func TestRecordLiveOffIsReportedAsIgnored(t *testing.T) {
 	t.Setenv("GATEWAY_RECORD_LIVE", "off")
 	Load()
 	if out := buf.String(); !strings.Contains(out, "GATEWAY_RECORD_LIVE=off is no longer supported") ||
-		!strings.Contains(out, "redecode --engine tshark") {
+		!strings.Contains(out, "import --decoder tshark") {
 		t.Fatalf("off: logged %q, want the removal and its replacement named", out)
 	}
 }

@@ -140,7 +140,7 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 		qpack.HeaderField{Name: ":path", Value: "/h3?q=1"},
 		qpack.HeaderField{Name: "user-agent", Value: "probe/3"},
 	))
-	s.onStream(0, true, reqHdr)
+	s.onStream(0, true, reqHdr, false)
 
 	time.Sleep(2 * time.Millisecond) // ensure a measurable request→response gap for DurationMicros
 
@@ -148,8 +148,8 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 		qpack.HeaderField{Name: ":status", Value: "200"},
 		qpack.HeaderField{Name: "content-type", Value: "application/json"},
 	))
-	s.onStream(0, false, respHdr)
-	s.onStream(0, false, h3Frame(h3FrameData, []byte(`{"ok":true}`)))
+	s.onStream(0, false, respHdr, false)
+	s.onStream(0, false, h3Frame(h3FrameData, []byte(`{"ok":true}`)), false)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -200,7 +200,7 @@ func TestLiveHTTP3DynamicTable(t *testing.T) {
 	// Request field section: prefix (Required Insert Count=2, Base=0), :method GET (static
 	// 17), :scheme https (static 23), then post-base dynamic :authority (0) and :path (1).
 	section := mustDecodeHex(t, "0381d1d71011")
-	s.onStream(0, true, h3Frame(h3FrameHeaders, section))
+	s.onStream(0, true, h3Frame(h3FrameHeaders, section), false)
 
 	mu.Lock()
 	blockedFlow := flow
@@ -216,7 +216,7 @@ func TestLiveHTTP3DynamicTable(t *testing.T) {
 	enc = append(enc, "www.example.com"...)
 	enc = append(enc, mustDecodeHex(t, "c10c")...)
 	enc = append(enc, "/sample/path"...)
-	s.onStream(2, true, enc)
+	s.onStream(2, true, enc, false)
 
 	mu.Lock()
 	defer mu.Unlock()

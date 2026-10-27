@@ -126,9 +126,11 @@ type cryptoFrame struct {
 
 type streamFrame struct {
 	id     uint64
-	offset uint64
+	offset uint64 // for a reset, the stream's final size
 	data   []byte
 	fin    bool
+	reset  bool   // a RESET_STREAM, not data: the sender abandoned the stream
+	code   uint64 // its application error code
 }
 
 // parseFrames walks a decrypted packet payload, collecting CRYPTO and STREAM frames. All
@@ -199,14 +201,22 @@ func parseFrames(p []byte) (crypto []cryptoFrame, streams []streamFrame, ok bool
 			if i+int(ln) > len(p) {
 				return nil, nil, false
 			}
-			streams = append(streams, streamFrame{id, off, p[i : i+int(ln)], t&0x01 != 0})
+			streams = append(streams, streamFrame{id: id, offset: off, data: p[i : i+int(ln)], fin: t&0x01 != 0})
 			i += int(ln)
 		case t == 0x10 || t == 0x12 || t == 0x13 || t == 0x14 || t == 0x16 || t == 0x17 || t == 0x19:
 			i = skipVarints(p, i, 1) // MAX_DATA, MAX_STREAMS, DATA_BLOCKED, STREAMS_BLOCKED, RETIRE_CONNECTION_ID
 		case t == 0x11 || t == 0x15: // MAX_STREAM_DATA, STREAM_DATA_BLOCKED
 			i = skipVarints(p, i, 2)
-		case t == 0x04: // RESET_STREAM
-			i = skipVarints(p, i, 3)
+		case t == 0x04: // RESET_STREAM: id, application error code, final size
+			var v [3]uint64
+			for k := range v {
+				n := 0
+				if v[k], n = readVarint(p[i:]); n == 0 {
+					return nil, nil, false
+				}
+				i += n
+			}
+			streams = append(streams, streamFrame{id: v[0], code: v[1], offset: v[2], reset: true})
 		case t == 0x05: // STOP_SENDING
 			i = skipVarints(p, i, 2)
 		case t == 0x18: // NEW_CONNECTION_ID: seq, retire (varints), len(1), cid, 16-byte token

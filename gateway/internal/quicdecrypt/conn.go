@@ -14,7 +14,11 @@ import (
 // taken from the capture (first datagram's sender is the client), like the TCP path.
 type Conn struct {
 	keylog   *tlsdecrypt.Keylog
-	onStream func(streamID uint64, fromClient bool, data []byte)
+	onStream func(streamID uint64, fromClient bool, data []byte, ended bool)
+
+	// OnReset, when set, is told of a RESET_STREAM: the sender abandoned its side of the
+	// stream with an application error code, and nothing more will arrive on it.
+	OnReset func(streamID uint64, fromClient bool, code uint64)
 
 	origDCID    []byte // client's first DCID — seeds the Initial secrets for both sides
 	clientSCID  []byte // from the client long header (DCID of server→client short packets)
@@ -57,8 +61,10 @@ func (c *Conn) Unsupported() bool         { return c.unsupp }
 func (c *Conn) UnsupportedReason() string { return c.unsupReason }
 
 // NewConn returns a decryptor that calls onStream with newly-available, in-order bytes
-// for a stream (direction + stream id).
-func NewConn(keylog *tlsdecrypt.Keylog, onStream func(streamID uint64, fromClient bool, data []byte)) *Conn {
+// for a stream (direction + stream id). ended is set, once, on the call that completes
+// the stream: its FIN has been seen and every byte before it delivered (possibly with
+// data empty, when the FIN came after the last bytes or out of order).
+func NewConn(keylog *tlsdecrypt.Keylog, onStream func(streamID uint64, fromClient bool, data []byte, ended bool)) *Conn {
 	return &Conn{keylog: keylog, onStream: onStream, streams: map[streamKey]*streamReasm{}}
 }
 
@@ -334,14 +340,20 @@ func (c *Conn) handleShortWith(k *keys, fromClient bool, pkt []byte) {
 }
 
 func (c *Conn) deliverStream(fromClient bool, fr streamFrame) {
+	if fr.reset {
+		if c.OnReset != nil {
+			c.OnReset(fr.id, fromClient, fr.code)
+		}
+		return
+	}
 	key := streamKey{fr.id, fromClient}
 	r := c.streams[key]
 	if r == nil {
 		r = &streamReasm{}
 		c.streams[key] = r
 	}
-	if data := r.add(fr.offset, fr.data); len(data) > 0 {
-		c.onStream(fr.id, fromClient, data)
+	if data, ended := r.add(fr.offset, fr.data, fr.fin); len(data) > 0 || ended {
+		c.onStream(fr.id, fromClient, data, ended)
 	}
 }
 
@@ -385,18 +397,27 @@ func (r *cryptoReasm) add(offset uint64, data []byte) []byte {
 	return nil
 }
 
-// streamReasm reassembles one QUIC stream's bytes, returning newly contiguous bytes.
+// streamReasm reassembles one QUIC stream's bytes, returning newly contiguous bytes and
+// whether they complete the stream. The FIN fixes the stream's final size (RFC 9000
+// §4.5); the stream has ended once everything up to it is contiguous, which can be on a
+// later frame than the FIN's own when frames arrive out of order.
 type streamReasm struct {
 	have    uint64
 	pending map[uint64][]byte
+	end     uint64 // final size, once a FIN has been seen
+	hasEnd  bool
+	ended   bool // already reported
 }
 
-func (r *streamReasm) add(offset uint64, data []byte) []byte {
+func (r *streamReasm) add(offset uint64, data []byte, fin bool) ([]byte, bool) {
 	if r.pending == nil {
 		r.pending = map[uint64][]byte{}
 	}
+	if fin && !r.hasEnd {
+		r.end, r.hasEnd = offset+uint64(len(data)), true
+	}
 	if offset+uint64(len(data)) <= r.have {
-		return nil // fully old
+		return nil, r.endNow() // fully old — but a retransmitted FIN can still close it
 	}
 	if offset < r.have { // partial overlap: trim already-delivered prefix
 		data = data[r.have-offset:]
@@ -413,5 +434,14 @@ func (r *streamReasm) add(offset uint64, data []byte) []byte {
 		out = append(out, next...)
 		r.have += uint64(len(next))
 	}
-	return out
+	return out, r.endNow()
+}
+
+// endNow reports the stream's end the first time everything up to its FIN is in.
+func (r *streamReasm) endNow() bool {
+	if r.ended || !r.hasEnd || r.have < r.end {
+		return false
+	}
+	r.ended = true
+	return true
 }
