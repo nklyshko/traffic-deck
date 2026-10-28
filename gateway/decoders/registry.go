@@ -13,6 +13,10 @@ type StreamMeta struct {
 	ServerHost string // server IP (or resolved host)
 	ServerPort string
 	SNI        string // TLS ClientHello server name, if any
+	// Host is the best name a capture source knows for the server when it is neither the
+	// SNI nor ServerHost — a Host header, or a name inferred from the device's DNS answer
+	// for the IP it connected to. "" when nothing names the server.
+	Host string
 }
 
 // Turn is one directional chunk of a connection's (decrypted) byte stream, in time

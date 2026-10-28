@@ -67,6 +67,9 @@ func (decoder) Name() string { return "max" }
 func (decoder) Matches(m decoders.StreamMeta) bool {
 	host := m.SNI
 	if host == "" {
+		host = m.Host
+	}
+	if host == "" {
 		host = m.ServerHost
 	}
 	return isMaxHost(host) || strings.HasPrefix(m.ServerHost, "155.212")

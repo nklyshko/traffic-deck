@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"path"
 	"slices"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/decoders"
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/filter"
 	"github.com/nklyshko/traffic-deck/gateway/internal/importer"
 	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
@@ -64,6 +66,18 @@ type Ingest struct {
 	// bypasses the tshark/Go decoders), keyed by the parent flow id.
 	wsDecMu  sync.Mutex
 	wsStates map[string]*wsPushState
+
+	// tcpStates is the raw-TCP counterpart: a pushed connection a custom decoder claims
+	// (MAX's mobile transport through mitmproxy) is framed as on the pcap path, keyed by
+	// the flow id.
+	tcpDecMu  sync.Mutex
+	tcpStates map[string]*tcpPushState
+}
+
+// tcpPushState is one pushed raw-TCP flow's decoder, chosen at its first push.
+type tcpPushState struct {
+	dec  decoders.Decoder // nil if none claims the connection
+	sess decoders.Session
 }
 
 // wsPushState is one pushed WebSocket flow's decoder framing state.
@@ -156,8 +170,78 @@ func (i *Ingest) recordWSMeta(pf *trafficv1.Flow) {
 		i.wsStates = map[string]*wsPushState{}
 	}
 	if _, ok := i.wsStates[pf.GetId()]; !ok {
-		i.wsStates[pf.GetId()] = &wsPushState{meta: decoders.WSMeta{Host: pf.GetAuthority(), Path: pf.GetPath()}}
+		i.wsStates[pf.GetId()] = &wsPushState{meta: decoders.WSMeta{
+			Host: pf.GetAuthority(), Path: pf.GetPath(), SNI: pf.GetMetadata()[tlsSNIKey]}}
 	}
+}
+
+// Keys a capture source sets on a pushed flow's metadata (capture/capture_mitmproxy):
+// the TLS SNI the client sent, where the flow's authority came from, and — for a
+// connection nothing decoded — why.
+const (
+	tlsSNIKey         = "tls.sni"
+	hostnameSourceKey = "hostname.source"
+	connOutcomeKey    = filter.ConnOutcomeKey
+)
+
+// claimPushedTCP lets a custom decoder claim a pushed raw-TCP connection, as the pcap path
+// does for one it decrypted: matched on the SNI, the best name the source had for the
+// server, and the address dialled. The decision is made on the connection's first push
+// and re-applied to every later one (the source re-pushes it when it closes), so the flow
+// keeps the protocol's name and loses its "undecoded" outcome for good.
+func (i *Ingest) claimPushedTCP(pf *trafficv1.Flow) {
+	if pf.GetProtocol() != "TCP" {
+		return
+	}
+	i.tcpDecMu.Lock()
+	defer i.tcpDecMu.Unlock()
+	if i.tcpStates == nil {
+		i.tcpStates = map[string]*tcpPushState{}
+	}
+	st, ok := i.tcpStates[pf.GetId()]
+	if !ok {
+		st = &tcpPushState{}
+		if m := decoders.Match(pushedStreamMeta(pf)); len(m) > 0 {
+			st.dec, st.sess = m[0], m[0].NewSession()
+		}
+		i.tcpStates[pf.GetId()] = st
+	}
+	if st.dec == nil {
+		return
+	}
+	pf.Protocol = strings.ToUpper(st.dec.Name())
+	delete(pf.Metadata, connOutcomeKey)
+}
+
+// pushedStreamMeta describes a pushed raw-TCP flow to the decoder registry. Its authority
+// is a name only when the source says one named it; a bare address is ServerHost alone.
+func pushedStreamMeta(pf *trafficv1.Flow) decoders.StreamMeta {
+	m := decoders.StreamMeta{TCPStream: pf.GetTcpStream(), SNI: pf.GetMetadata()[tlsSNIKey]}
+	if host, port, err := net.SplitHostPort(pf.GetDstAddr()); err == nil {
+		m.ServerHost, m.ServerPort = host, port
+	}
+	if src := pf.GetMetadata()[hostnameSourceKey]; src != "" && src != "ip" {
+		host := pf.GetAuthority()
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		m.Host = host
+	}
+	return m
+}
+
+// decodePushedTCP frames a pushed raw-TCP chunk through the decoder that claimed its flow,
+// returning the decoder's name for the messages' opcode (as the pcap path records them).
+// ok=false means no decoder handles the flow (store the chunk as-is). The source awaits
+// each push, so a flow's chunks arrive in order and the session's framing stays in sync.
+func (i *Ingest) decodePushedTCP(flowID string, fromClient bool, payload []byte) ([]decoders.Message, string, bool) {
+	i.tcpDecMu.Lock()
+	defer i.tcpDecMu.Unlock()
+	st := i.tcpStates[flowID]
+	if st == nil || st.dec == nil {
+		return nil, "", false
+	}
+	return st.sess.Feed(fromClient, payload), st.dec.Name(), true
 }
 
 // decodePushedWSBinary frames a pushed binary WebSocket payload through the WSDecoder that
@@ -294,6 +378,7 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 			if pf.GetId() == "" {
 				pf.Id = uuid.NewString() // keep persisted + live ids in sync
 			}
+			i.claimPushedTCP(pf) // before it is stored: a claimed stream is stored as its protocol
 			dflows = append(dflows, protoToDecodeFlow(pf))
 		}
 		if _, err := i.st.InsertFlows(ctx, sid, aid, dflows); err != nil {
@@ -317,6 +402,21 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 			}
 			payload := pm.GetPayload().GetInline()
 			if pm.GetOpcode() == "binary" {
+				if frames, name, ok := i.decodePushedTCP(pm.GetFlowId(), pm.GetFromClient(), payload); ok {
+					for _, fr := range frames {
+						dm := &decode.WsMessage{
+							ID: uuid.NewString(), FlowID: pm.GetFlowId(),
+							// A raw stream has no frame types of its own, so the transport's
+							// opcode is the decoder's name — as the pcap path records it.
+							FromClient: fr.FromClient, Opcode: name,
+							TSUnixMicros: pm.GetTsUnixMicros(), Payload: fr.Payload, Raw: payload,
+							Metadata: fr.Fields,
+						}
+						store = append(store, dm)
+						pub = append(pub, wsMsgToProto(dm))
+					}
+					continue
+				}
 				if frames, ok := i.decodePushedWSBinary(pm.GetFlowId(), pm.GetFromClient(), payload); ok {
 					for _, fr := range frames {
 						dm := &decode.WsMessage{
