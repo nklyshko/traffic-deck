@@ -37,6 +37,7 @@ from .render import (
     body_for_editor,
     bytes_preview,
     curl,
+    display_authority,
     editor_command,
     editor_suffix,
     duration_cell,
@@ -1687,7 +1688,7 @@ class SessionPane(AnnotatableTable, Vertical):
             status_cell(f),
             duration_cell(f, self._live),
             f.protocol or "",
-            f.authority or "",
+            display_authority(f.authority or ""),
             (f.path or "")[:80],
             *(self._extra_value(f, c) for c in self._extra_cols),
         )
@@ -2215,10 +2216,13 @@ class FlowDetailScreen(Screen):
         # sequence in a header or body must not raise MarkupError).
         cls = type(self)
         lines: list[Content] = []
-        url = f"{f.scheme or 'https'}://{f.authority}{f.path}"
+        host = display_authority(f.authority or "")
+        url = f"{f.scheme or 'https'}://{host}{f.path}"
         if f.query:
             url += f"?{f.query}"
         lines.append(Content.from_markup("[b]$v[/b]", v=f.method + " " + url))
+        if host != f.authority:
+            lines.append(Content.from_markup("[dim]on the wire: $v[/dim]", v=f.authority))
         # Connection identity, appended to the transport line: which connection carried this
         # request and — for HTTP/2/3 — which multiplexed stream on it. Omitted per-part when
         # unknown (a pushed proxy flow has no tcp_stream; HTTP/1.1 has no stream id).

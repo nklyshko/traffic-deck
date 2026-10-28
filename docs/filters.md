@@ -33,7 +33,7 @@ Taking a regex argument:
 | Term | Matches |
 |---|---|
 | `~m <re>` | request method |
-| `~d <re>` | domain (the authority alone — no scheme, no path) |
+| `~d <re>` | domain (the authority alone — no scheme, no path). An internationalized host matches in either form: `~d судебныерешения` and `~d xn--90afdbaav0bd1afy6eub5d` both find `xn--90afdbaav0bd1afy6eub5d.xn--p1ai`, as do `~u` and a bare regex |
 | `~u <re>` | full URL |
 | `~c <re>` | response status code |
 | `~t <re>` | content type |

@@ -37,6 +37,20 @@ def fmt_time(ts_micros: int) -> str:
     return dt.strftime("%H:%M:%S.%f")[:-3]
 
 
+def display_authority(authority: str) -> str:
+    """The authority with a punycode host (xn--…) in the Unicode form a browser shows, for
+    reading only: the wire form stays what a copied request sends."""
+    if "xn--" not in authority.lower():
+        return authority
+    host, sep, port = authority.rpartition(":")
+    if not sep or not port.isdigit():
+        host, sep, port = authority, "", ""
+    try:
+        return host.encode("ascii").decode("idna") + sep + port
+    except UnicodeError:
+        return authority
+
+
 def url(f) -> str:
     u = f"{f.scheme or 'https'}://{f.authority}{f.path}"
     if f.query:

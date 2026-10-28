@@ -328,3 +328,11 @@ def test_update_notice_reports_behind_and_unreachable_together():
                    "trafficdeck bcd → ef5\n"
                    "could not check webui (cannot reach origin: no such host)")
     assert severity == "warning"
+
+
+def test_display_authority_shows_a_punycode_host_as_it_reads():
+    d = render.display_authority
+    assert d("xn--90afdbaav0bd1afy6eub5d.xn--p1ai") == "судебныерешения.рф"
+    assert d("xn--90afdbaav0bd1afy6eub5d.xn--p1ai:8443") == "судебныерешения.рф:8443"
+    assert d("api.example.com:443") == "api.example.com:443"
+    assert d("xn--zz") == "xn--zz"  # not valid punycode: shown as it came

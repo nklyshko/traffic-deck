@@ -12,11 +12,14 @@ package filter
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/idna"
 )
 
 // Direction selects which body a body term reads.
@@ -61,12 +64,14 @@ type Flow struct {
 
 // URL is the haystack for `~u` and for a bare regex, composed the way the viewers
 // compose it for display so a filter matches what the user sees.
-func (f *Flow) URL() string {
+func (f *Flow) URL() string { return f.url(f.Authority) }
+
+func (f *Flow) url(authority string) string {
 	scheme := f.Scheme
 	if scheme == "" {
 		scheme = "https"
 	}
-	u := scheme + "://" + f.Authority + f.Path
+	u := scheme + "://" + authority + f.Path
 	if f.Query != "" {
 		u += "?" + f.Query
 	}
@@ -318,7 +323,26 @@ func Compile(expr string, tagNames, groupNames map[string]string) (*Predicate, e
 				return nil, err
 			}
 			get := fieldGetter(t.term, tagNames, groupNames)
-			trm.eval = func(f *Flow) bool { return rx.MatchString(get(f)) }
+			if t.term != "~d" && t.term != "~u" && t.term != "" {
+				trm.eval = func(f *Flow) bool { return rx.MatchString(get(f)) }
+				break
+			}
+			// An internationalized host is on the wire, and so in Authority, as punycode
+			// (xn--…), but a reader types it as it reads: both forms match, tried apart so
+			// an anchor or a `!` means the same against either.
+			trm.eval = func(f *Flow) bool {
+				if rx.MatchString(get(f)) {
+					return true
+				}
+				u, ok := f.unicodeAuthority()
+				if !ok {
+					return false
+				}
+				if t.term == "~d" {
+					return rx.MatchString(u)
+				}
+				return rx.MatchString(f.url(u))
+			}
 		}
 		p.terms = append(p.terms, trm)
 	}
@@ -362,6 +386,26 @@ func fieldGetter(name string, tagNames, groupNames map[string]string) func(*Flow
 	default: // "~u" and a bare regex
 		return func(f *Flow) string { return f.URL() }
 	}
+}
+
+// unicodeAuthority is Authority with a punycode host in the Unicode form a browser shows,
+// and false when there is nothing to convert.
+func (f *Flow) unicodeAuthority() (string, bool) {
+	if !strings.Contains(strings.ToLower(f.Authority), "xn--") {
+		return "", false
+	}
+	host, port, err := net.SplitHostPort(f.Authority)
+	if err != nil {
+		host, port = f.Authority, ""
+	}
+	u, err := idna.Display.ToUnicode(host)
+	if err != nil || u == host {
+		return "", false
+	}
+	if port != "" {
+		u = net.JoinHostPort(u, port)
+	}
+	return u, true
 }
 
 // resolve maps ids to names, leaving an id in place when it has no name — the viewers do

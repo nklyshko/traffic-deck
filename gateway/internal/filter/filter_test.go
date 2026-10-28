@@ -283,3 +283,27 @@ func TestTermsAreOrderedByCost(t *testing.T) {
 		t.Fatal("ReadsHeaders/ReadsBodies should both report true")
 	}
 }
+
+// A host typed as it reads must find the punycode the wire carried, and the punycode still
+// matches; a negation excludes the flow by either form.
+func TestInternationalizedHostMatchesEitherForm(t *testing.T) {
+	f := &Flow{Scheme: "https", Authority: "xn--90afdbaav0bd1afy6eub5d.xn--p1ai:443", Path: "/search"}
+	for expr, want := range map[string]bool{
+		`~d судебныерешения\.рф`:               true,
+		`~d ^судебныерешения`:                  true,
+		`~d ^xn--90afdbaav0bd1af`:              true,
+		`~u ://судебныерешения\.рф:443/search`: true,
+		`судебныерешения`:                      true,
+		`!~d судебныерешения`:                  false,
+		`~d другойсайт`:                        false,
+		`~m судебныерешения`:                   false,
+	} {
+		p, err := Compile(expr, nil, nil)
+		if err != nil {
+			t.Fatalf("compile %q: %v", expr, err)
+		}
+		if got := p.Match(f); got != want {
+			t.Errorf("%s: matched %v, want %v", expr, got, want)
+		}
+	}
+}
