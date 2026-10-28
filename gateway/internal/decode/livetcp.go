@@ -443,6 +443,7 @@ type tcpStream struct {
 	conn                               *tlsdecrypt.Conn
 	tally                              connTally     // for its UndecodedConn, should it need one
 	httpFlows                          *atomic.Int32 // requests its HTTP parsers produced
+	midstreamTLS                       bool          // its first client bytes were TLS records past the handshake
 
 	reset       atomic.Bool // a TCP RST was seen (set on the packet loop, read by the HTTP parser)
 	sniffed     bool        // checked the first client bytes look like TLS
@@ -530,6 +531,10 @@ func (s *tcpStream) reassembled(fromClient bool, data []byte, ts time.Time) {
 	if fromClient && !s.sniffed {
 		s.sniffed = true
 		s.plaintext = len(data) < 2 || data[0] != 0x16 || data[1] != 0x03
+		// TLS records that are not a handshake: the connection began before the capture
+		// did, so its keys and SNI are out of reach — not "a protocol nothing parses".
+		s.midstreamTLS = s.plaintext && len(data) >= 2 && data[1] == 0x03 &&
+			(data[0] == 0x14 || data[0] == 0x15 || data[0] == 0x17)
 		if s.plaintext && s.proxy == nil {
 			if looksLikeConnect(data) {
 				s.inConnect = true
@@ -698,7 +703,11 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 		// HTTP/1.1 is the fallback for bytes nothing else claimed; whether any request came
 		// out is known only once its parser drains (see LiveDecode).
 		if s.httpFlows != nil {
-			s.lt.unparsed = append(s.lt.unparsed, pendingUnparsed{s.undecodedRecord(UndecodedUnparsed, ""), s.httpFlows})
+			rec := s.undecodedRecord(UndecodedUnparsed, "")
+			if s.midstreamTLS {
+				rec.Reason, rec.Detail = UndecodedHandshake, "TLS records with no handshake: the connection began before the capture"
+			}
+			s.lt.unparsed = append(s.lt.unparsed, pendingUnparsed{rec, s.httpFlows})
 		}
 	}
 	return true

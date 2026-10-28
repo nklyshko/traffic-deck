@@ -87,6 +87,11 @@ func TestUndecodedConnectionsAreIndexed(t *testing.T) {
 	p.tcp(cli, srv, 40003, 80, 1000, []byte("GET / HTTP/1.1\r\nHost: plain.example\r\n\r\n"))
 	p.tcp(srv, cli, 80, 40003, 9000, []byte("HTTP/1.1 204 No Content\r\n\r\n"))
 
+	// A TLS connection already under way when the capture began: application-data records,
+	// no handshake. Its handshake is missing from the capture, not an unknown protocol.
+	p.tcp(cli, srv, 40004, 443, 1000, []byte{0x17, 0x03, 0x03, 0x00, 0x05, 1, 2, 3, 4, 5})
+	p.tcp(srv, cli, 443, 40004, 9000, []byte{0x17, 0x03, 0x03, 0x00, 0x02, 9, 9})
+
 	p.udp(cli, other, 50000, 3478, []byte("stun-binding-request"))
 	p.udp(other, cli, 3478, 50000, []byte("stun-reply"))
 	pcap := p.out.Bytes()
@@ -104,6 +109,7 @@ func TestUndecodedConnectionsAreIndexed(t *testing.T) {
 	want := []struct{ reason, transport, server, sni string }{
 		{UndecodedNoKey, "tcp", "10.0.0.2:443", "pinned.example"},
 		{UndecodedUnparsed, "tcp", "10.0.0.3:7000", ""},
+		{UndecodedHandshake, "tcp", "10.0.0.2:443", ""},
 		{UndecodedNotQUIC, "udp", "10.0.0.3:3478", ""},
 	}
 	if len(got) != len(want) {
@@ -159,7 +165,7 @@ func TestUndecodedConnectionsAreIndexed(t *testing.T) {
 			t.Fatalf("described as:\n%s", desc)
 		}
 	}
-	b, err := ReadConnection(path, got[2], 1<<20)
+	b, err := ReadConnection(path, got[3], 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +174,7 @@ func TestUndecodedConnectionsAreIndexed(t *testing.T) {
 	}
 	// A moved capture (the offset now pointing elsewhere) is noticed, and scanned instead.
 	moved := *got[0]
-	moved.PcapOffset = got[2].PcapOffset
+	moved.PcapOffset = got[3].PcapOffset
 	if b, err := ReadConnection(path, &moved, 1<<20); err != nil || !b.Scanned || !bytes.Equal(b.Up, c2s) {
 		t.Fatalf("a stale offset read %d bytes, scanned=%v, err=%v", len(b.Up), b.Scanned, err)
 	}
