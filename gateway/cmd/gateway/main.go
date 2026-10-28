@@ -147,7 +147,6 @@ func usage() {
 	os.Exit(2)
 }
 
-// openDeps opens the object store (session bundles) and the SQLite store.
 // configureFingerprints points the TLS-fingerprint classifier at the user's directory
 // (default ~/.traffic-deck/fingerprints) on top of the compiled-in builtin set, and
 // routes load errors (malformed rows/files) to the gateway log instead of failing.
@@ -163,6 +162,7 @@ func configureFingerprints(cfg config.Config) {
 	}
 }
 
+// openDeps opens the object store (session bundles) and the SQLite store.
 func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.Store) {
 	obj, err := objstore.NewFSStore(cfg.DataRoot)
 	if err != nil {

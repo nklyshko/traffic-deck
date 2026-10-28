@@ -143,10 +143,11 @@ def _env_flag(name: str, default: bool) -> bool:
     return v.strip().lower() not in ("0", "false", "no", "off", "")
 
 
-# Read-only by default: the mutating tools (rename_session, set_session_group) are only
+# Read-only by default: the mutating tools (rename_session, set_session_group) and the
+# capture-control tools (start_capture, stop_capture, which launch processes) are only
 # exposed when MCP_READONLY is explicitly disabled (e.g. MCP_READONLY=0), so an agent
-# can inspect recorded traffic but can't rename or regroup sessions unless the operator
-# opts in.
+# can inspect recorded traffic but can't rename, regroup or drive captures unless the
+# operator opts in.
 READONLY = _env_flag("MCP_READONLY", True)
 
 

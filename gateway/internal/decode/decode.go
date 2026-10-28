@@ -1,7 +1,9 @@
-// Package decode turns a captured pcap + TLS key.log into HTTP flows by orchestrating
-// tshark. tshark does the heavy lifting (TCP reassembly, TLS decryption, HPACK); we
-// parse its per-frame PDML and stitch the records into flows. PDML (not flat `-T ek`)
-// so multiplexed HTTP/2 frames in one packet each keep their own stream id + fields.
+// Package decode turns a captured pcap + TLS key.log into HTTP flows. It holds two
+// engines: the native in-process Go pipeline (LiveDecode / EngineNative), which is the
+// default and the only one used for live capture (ADR-0009), and a batch tshark engine
+// used for pcap import, redecode and verify. The tshark path parses per-frame PDML (not
+// flat `-T ek`) and stitches the records into flows, so multiplexed HTTP/2 frames in one
+// packet each keep their own stream id + fields.
 package decode
 
 import (

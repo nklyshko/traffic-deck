@@ -1,6 +1,7 @@
 // Package importer implements the "import a pre-captured pcap + key.log" flow:
-// copy the artifacts into the session bundle, batch-decode them with tshark, and
-// persist the session/analysis/flows to the per-session SQLite DB.
+// copy the artifacts into the session bundle, batch-decode them (tshark by default, or
+// the native in-process Go engine via Options.Engine), and persist the
+// session/analysis/flows to the per-session SQLite DB.
 package importer
 
 import (

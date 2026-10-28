@@ -464,7 +464,7 @@ func (c *conn) closeWithGrace(grace time.Duration) {
 
 // realSpawn reaches a source. A module (Addr set) is already running — just dial it. A
 // built-in is launched: run its `serve` command, read the ready line for its address, and
-// dial that. The process gets its own group (Setpgid) so Close can group-kill it.
+// dial that. The process gets its own session (Setsid; pgid == pid) so Close can group-kill it.
 func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn, error) {
 	if spec.Addr != "" {
 		cc, err := grpc.NewClient(spec.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))

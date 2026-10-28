@@ -346,7 +346,7 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 			uploadID = m.Begin.GetUploadId()
 			if m.Begin.GetMode() == trafficv1.CaptureMode_CAPTURE_MODE_STREAMING_LIVE && i.liveDecode {
 				live = true
-				// Ensure the key.log exists so tshark can watch it, then start live decode.
+				// Ensure the key.log exists so the in-process decoder can tail it, then start live decode.
 				_ = i.obj.WriteAt(keylogKey(sid), nil, 0)
 				keylogLocal, _ := i.obj.LocalPath(keylogKey(sid))
 				i.hub.start(sid, keylogLocal)

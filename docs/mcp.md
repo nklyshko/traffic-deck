@@ -38,8 +38,11 @@ selects: per-flow counts, hits with byte offsets, and which flows have none),
 raw TLS ClientHello bytes), `list_ws_messages` + `get_ws_message_body` (WebSocket frames;
 `filter` takes the [message dialect](filters.md#filtering-a-message-timeline), `as_hex`
 for byte inspection), `wait_for_flows` (block until a live capture decodes new requests),
-and `sqlite_query` + `sqlite_schema` (read-only SQL over a session bundle). Session args
-accept an id prefix.
+`sqlite_query` + `sqlite_schema` (read-only SQL over a session bundle),
+`session_overview` (a session's hosts, protocols and counts at a glance),
+`list_undecoded_connections` (connections the live decoder could not decode, with the
+reason) and `get_connection_bytes` (the raw bytes of one such connection, for inspecting a
+protocol no decoder handled). Session args accept an id prefix.
 
 It runs **read-only by default**: only the inspection tools above are exposed. Set
 `MCP_READONLY=0` to additionally expose the mutating tools — `rename_session` and
