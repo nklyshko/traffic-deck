@@ -77,10 +77,13 @@ type liveSession struct {
 	mu     sync.Mutex
 	flows  map[string]*trafficv1.Flow
 	dflows map[string]*decode.Flow // full-body decode flows, for the flusher and body reads
-	order  []string
-	subs   map[int]*flowSub
-	nextID int
-	closed bool
+	// undecoded is the index of connections that ended without a flow, held until close
+	// (and readable meanwhile): a few small records per connection, nothing worth a flush.
+	undecoded []*decode.UndecodedConn
+	order     []string
+	subs      map[int]*flowSub
+	nextID    int
+	closed    bool
 
 	// WebSocket frames decoded so far and not yet written, plus their subscribers. Frames
 	// are immutable once decoded, so this is append-only until the flusher trims what it
@@ -168,7 +171,8 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		// Close the read end when decode exits so write() can't block forever if the
 		// decoder returns early (writes get ErrClosedPipe instead).
 		defer pr.Close()
-		_ = decode.LiveTCPDecode(pr, keylogPath, ls.onFlow, ls.onMessage)
+		_ = decode.LiveDecode(pr, keylogPath, decode.Sinks{
+			OnFlow: ls.onFlow, OnMsg: ls.onMessage, OnUndecoded: ls.onUndecoded})
 	}()
 }
 
@@ -413,6 +417,26 @@ func (ls *liveSession) onFlow(f *decode.Flow, isNew bool) {
 	ls.dflows[f.ID] = copyFlow(f)
 	ls.mu.Unlock()
 	ls.publish(flowToProto(f), isNew)
+}
+
+func (ls *liveSession) onUndecoded(u *decode.UndecodedConn) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.undecoded = append(ls.undecoded, u)
+}
+
+// undecodedSnapshot is the undecoded index so far, less the connections a per-process
+// prune proved belonged to another process.
+func (ls *liveSession) undecodedSnapshot(foreign map[decode.ConnKey]bool) []*decode.UndecodedConn {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	out := make([]*decode.UndecodedConn, 0, len(ls.undecoded))
+	for _, u := range ls.undecoded {
+		if !foreign[decode.NewConnKey(u.Client, u.Server)] {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 func (ls *liveSession) onMessage(m *decode.WsMessage) {

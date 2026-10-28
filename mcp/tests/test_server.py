@@ -1621,3 +1621,94 @@ def test_include_hidden_returns_them_with_their_outcome(monkeypatch):
     assert [f["id"] for f in out["flows"]] == ["h1", "d1", "p1"]
     assert "hidden_matched" not in out
     assert out["flows"][2]["outcome"] == "tls_rejected"
+
+
+# --- undecoded connections (pcap sessions) -----------------------------------
+
+def _undecoded_fixture():
+    return [
+        vp.UndecodedConnection(conn_id="7", transport="tcp", client="10.0.0.1:40001",
+                               server="155.212.204.68:443", sni="api.oneme.ru", ja4="t13d_app",
+                               reason="no_key", bytes_up=4000, bytes_down=90000,
+                               first_ts_micros=1_000_000, last_ts_micros=3_500_000),
+        vp.UndecodedConnection(conn_id="9", transport="tcp", client="10.0.0.1:40002",
+                               server="155.212.204.68:443", sni="api.oneme.ru", reason="handshake_incomplete",
+                               bytes_up=500, first_ts_micros=4_000_000, last_ts_micros=4_100_000),
+        vp.UndecodedConnection(conn_id="udp:0", transport="udp", client="10.0.0.1:50000",
+                               server="10.0.0.3:3478", reason="udp", bytes_up=20, bytes_down=10,
+                               first_ts_micros=5_000_000, last_ts_micros=5_000_100),
+    ]
+
+
+class _UndecodedClient:
+    def __init__(self):
+        self.reads = []
+
+    async def list_undecoded(self, sid, reason="", host="", limit=100, offset=0):
+        conns = [c for c in _undecoded_fixture() if not reason or c.reason == reason]
+        resp = vp.UndecodedList(total=len(conns), indexed=True,
+                                connections=conns[offset:offset + limit])
+        for c in _undecoded_fixture():
+            resp.by_reason[c.reason] += 1
+        return resp
+
+    async def get_connection_bytes(self, sid, conn_id, from_client, offset=0, limit=0):
+        self.reads.append((conn_id, from_client, offset))
+        data = b"\x16\x03\x01" + b"x" * 97
+        return vp.ConnectionBytes(data=data[offset:], offset=offset, total=len(data),
+                                  tls=['ClientHello: sni="api.oneme.ru" version=TLS1.3'])
+
+    async def query_flows(self, sid, filter_expr="", limit=100, **kw):
+        return vp.FlowPage(matched=12)
+
+
+def _undecoded_tools(monkeypatch):
+    fake = _UndecodedClient()
+
+    async def _resolve(sid):
+        return sid
+
+    async def _row(sid):
+        return cp.Session(id=sid, label="chrome", metadata={"undecoded.no_key": "1",
+                                                              "undecoded.udp": "1",
+                                                              "undecoded.unparsed": "0"})
+
+    monkeypatch.setattr(S, "client", lambda: fake)
+    monkeypatch.setattr(S, "_resolve_session", _resolve)
+    monkeypatch.setattr(S, "_resolve_session_row", _row)
+    return fake
+
+
+def test_list_undecoded_connections_rows_and_paging(monkeypatch):
+    import asyncio
+    _undecoded_tools(monkeypatch)
+    out = asyncio.run(S.list_undecoded_connections("s1", limit=2))
+    assert out["indexed"] and out["total"] == 3 and out["next_offset"] == 2
+    row = out["connections"][0]
+    assert (row["conn_id"], row["reason"], row["sni"], row["ja4"]) == ("7", "no_key", "api.oneme.ru", "t13d_app")
+    assert row["duration_ms"] == 2500.0
+    assert out["by_reason"] == {"no_key": 1, "handshake_incomplete": 1, "udp": 1}
+    assert "pinned" in out["note"]
+
+
+def test_get_connection_bytes_pages_and_carries_the_handshake(monkeypatch):
+    import asyncio
+    fake = _undecoded_tools(monkeypatch)
+    out = asyncio.run(S.get_connection_bytes("s1", "7", from_client=True, offset=3, as_hex=True))
+    assert fake.reads == [("7", True, 3)]
+    assert out["size"] == 100 and out["offset"] == 3 and out["hex"] == ("78" * 97)
+    assert out["tls"] and "api.oneme.ru" in out["tls"][0]
+    assert out["direction"] == "client→server"
+
+
+def test_session_overview_names_what_went_undecoded(monkeypatch):
+    import asyncio
+    _undecoded_tools(monkeypatch)
+    out = asyncio.run(S.session_overview("s1"))
+    assert out["flows"] == 12
+    assert out["session"]["undecoded"] == {"no_key": 1, "udp": 1}  # zero counts left out
+    und = out["undecoded"]
+    assert und["total"] == 3
+    top = und["top_hosts"][0]
+    assert top == {"host": "api.oneme.ru", "connections": 2, "bytes": 94500,
+                   "reasons": ["handshake_incomplete", "no_key"]}

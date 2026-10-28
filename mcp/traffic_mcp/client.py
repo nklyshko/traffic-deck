@@ -105,6 +105,19 @@ class GatewayClient:
         )
         return b"".join([c.payload async for c in call])
 
+    async def list_undecoded(self, session_id: str, reason: str = "", host: str = "",
+                             limit: int = 100, offset: int = 0):
+        """A session's undecoded-connection index (pcap sessions), largest first."""
+        return await self._v().ListUndecodedConnections(viewer_pb2.ListUndecodedRequest(
+            session_id=session_id, reason=reason, host=host, limit=limit, offset=offset))
+
+    async def get_connection_bytes(self, session_id: str, conn_id: str, from_client: bool,
+                                   offset: int = 0, limit: int = 0):
+        """One undecoded connection's bytes, read back from the session's capture."""
+        return await self._v().GetConnectionBytes(viewer_pb2.GetConnectionBytesRequest(
+            session_id=session_id, conn_id=conn_id, from_client=from_client,
+            offset=offset, limit=limit))
+
     async def list_messages(self, session_id: str, flow_id: str, filter_expr: str = ""):
         """A flow's frames, filtered by the gateway. Returns (messages, hints)."""
         resp = await self._v().ListMessages(

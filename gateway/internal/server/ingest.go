@@ -703,6 +703,11 @@ func sortedPIDs(keep map[int32]bool) []int32 {
 // dropped here — after everything is in the bundle and before the count is taken, so the
 // session's flow count describes what the session actually holds.
 func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession, foreign map[decode.ConnKey]bool) error {
+	// The undecoded index is evidence, not the record: a failure to keep it is logged and
+	// the session still closes.
+	if err := i.st.RecordUndecoded(ctx, sid, ls.undecodedSnapshot(foreign)); err != nil {
+		log.Printf("session %s: undecoded connections not recorded: %v", sid, err)
+	}
 	if ls.sink != nil {
 		// The flusher has been writing throughout the capture, so closing is a final
 		// flush of the unwritten tail rather than a transaction over the whole session

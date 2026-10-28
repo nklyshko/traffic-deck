@@ -339,3 +339,7 @@ func maxCHVersion(d []byte) uint16 {
 	}
 	return best
 }
+
+// ParseClientHelloInfo parses a TLS-over-TCP ClientHello body (starting at legacy_version)
+// and computes JA3/JA4. Returns nil on a malformed structure.
+func ParseClientHelloInfo(b []byte) *ClientHelloInfo { return parseClientHelloInfo(b) }

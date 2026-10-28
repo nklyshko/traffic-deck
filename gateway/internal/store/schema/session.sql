@@ -166,3 +166,22 @@ CREATE TABLE IF NOT EXISTS group_members (
 CREATE INDEX IF NOT EXISTS record_tags_rec_idx   ON record_tags (record_id);
 CREATE INDEX IF NOT EXISTS comments_rec_idx      ON comments (record_id);
 CREATE INDEX IF NOT EXISTS group_members_rec_idx ON group_members (record_id);
+
+-- Connections a packet capture carried that produced no flow (decode.UndecodedConn): an
+-- index, not a copy — the bytes stay in capture.pcap, found again from pcap_offset. Kept
+-- out of `flows` because on an interface-wide capture most of them are other programs'.
+CREATE TABLE IF NOT EXISTS undecoded_conns (
+    conn_id     TEXT PRIMARY KEY,
+    transport   TEXT NOT NULL,          -- tcp | udp
+    client      TEXT NOT NULL,          -- host:port that opened it
+    server      TEXT NOT NULL,          -- host:port it went to
+    sni         TEXT NOT NULL DEFAULT '',
+    ja4         TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL,          -- no_key | handshake_incomplete | unsupported | unparsed | udp
+    detail      TEXT NOT NULL DEFAULT '',
+    bytes_up    INTEGER NOT NULL DEFAULT 0,
+    bytes_down  INTEGER NOT NULL DEFAULT 0,
+    first_ts    INTEGER NOT NULL,       -- unix micros
+    last_ts     INTEGER NOT NULL,
+    pcap_offset INTEGER NOT NULL DEFAULT -1  -- first packet's record; -1 unknown
+);

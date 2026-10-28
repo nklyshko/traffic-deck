@@ -14,6 +14,7 @@ package decode
 import (
 	"fmt"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,7 @@ type quicSession struct {
 	loggedUnsup bool                  // logged the unsupported-suite diagnostic once
 	loggedQPACK bool                  // logged a QPACK HEADERS decode failure once
 	loggedEnc   bool                  // logged a QPACK encoder-stream failure once
+	tally       connTally             // for its UndecodedConn, should it need one
 }
 
 // uniStream tracks one unidirectional QUIC stream until its type is known, then whether it
@@ -129,7 +131,19 @@ func (s *quicSession) close() {
 		log.Printf("live decode: HTTP/3 %s (%s) not decoded live: no QUIC key-log secret "+
 			"(or incomplete handshake) — %s",
 			hostLabel(s.conn.SNI, s.serverHost), s.serverHost, skippedFate)
+		s.undecoded(UndecodedNoKey, "")
 	}
+	if s.conn.Unsupported() {
+		s.undecoded(UndecodedUnsupported, s.conn.UnsupportedReason())
+	}
+}
+
+// undecoded reports this QUIC connection to the undecoded index. QUIC cannot tell a
+// missing secret from a handshake that never finished, so both read as no_key.
+func (s *quicSession) undecoded(reason, detail string) {
+	u := s.tally.record(s.connID, "udp", s.clientAddr, net.JoinHostPort(s.serverHost, s.serverPort), reason)
+	u.Detail, u.SNI = detail, s.conn.SNI
+	s.lt.reportUndecoded(u)
 }
 
 func (s *quicSession) feed(fromClient bool, datagram []byte, ts time.Time) {

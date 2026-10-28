@@ -377,6 +377,9 @@ func headersOf(h http.Header) []Header {
 // fills request/response specifics. A cleartext connection has no SNI/TLS, so it is
 // http:// and not marked decrypted (the Host header, filled by the caller, is authoritative).
 func (s *tcpStream) newHTTPFlow() *Flow {
+	if s.httpFlows != nil { // nil on a stream a test built by hand
+		s.httpFlows.Add(1)
+	}
 	scheme, host := "https", s.conn.SNI()
 	if s.plaintext {
 		scheme, host = "http", ""

@@ -19,16 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ViewerService_ListSessions_FullMethodName   = "/traffic.v1.ViewerService/ListSessions"
-	ViewerService_QueryFlows_FullMethodName     = "/traffic.v1.ViewerService/QueryFlows"
-	ViewerService_StreamFlows_FullMethodName    = "/traffic.v1.ViewerService/StreamFlows"
-	ViewerService_GetFlow_FullMethodName        = "/traffic.v1.ViewerService/GetFlow"
-	ViewerService_GetBody_FullMethodName        = "/traffic.v1.ViewerService/GetBody"
-	ViewerService_ListMessages_FullMethodName   = "/traffic.v1.ViewerService/ListMessages"
-	ViewerService_GetMessage_FullMethodName     = "/traffic.v1.ViewerService/GetMessage"
-	ViewerService_StreamMessages_FullMethodName = "/traffic.v1.ViewerService/StreamMessages"
-	ViewerService_GetMessageBody_FullMethodName = "/traffic.v1.ViewerService/GetMessageBody"
-	ViewerService_QuerySQL_FullMethodName       = "/traffic.v1.ViewerService/QuerySQL"
+	ViewerService_ListSessions_FullMethodName             = "/traffic.v1.ViewerService/ListSessions"
+	ViewerService_QueryFlows_FullMethodName               = "/traffic.v1.ViewerService/QueryFlows"
+	ViewerService_StreamFlows_FullMethodName              = "/traffic.v1.ViewerService/StreamFlows"
+	ViewerService_GetFlow_FullMethodName                  = "/traffic.v1.ViewerService/GetFlow"
+	ViewerService_GetBody_FullMethodName                  = "/traffic.v1.ViewerService/GetBody"
+	ViewerService_ListMessages_FullMethodName             = "/traffic.v1.ViewerService/ListMessages"
+	ViewerService_GetMessage_FullMethodName               = "/traffic.v1.ViewerService/GetMessage"
+	ViewerService_StreamMessages_FullMethodName           = "/traffic.v1.ViewerService/StreamMessages"
+	ViewerService_GetMessageBody_FullMethodName           = "/traffic.v1.ViewerService/GetMessageBody"
+	ViewerService_QuerySQL_FullMethodName                 = "/traffic.v1.ViewerService/QuerySQL"
+	ViewerService_ListUndecodedConnections_FullMethodName = "/traffic.v1.ViewerService/ListUndecodedConnections"
+	ViewerService_GetConnectionBytes_FullMethodName       = "/traffic.v1.ViewerService/GetConnectionBytes"
 )
 
 // ViewerServiceClient is the client API for ViewerService service.
@@ -66,6 +68,13 @@ type ViewerServiceClient interface {
 	// query_only and no attachable databases, on which every write fails — not by
 	// inspecting the statement.
 	QuerySQL(ctx context.Context, in *QuerySQLRequest, opts ...grpc.CallOption) (*QuerySQLResponse, error)
+	// The connections a packet capture carried that produced no flow — kept out of the flow
+	// list because on an interface-wide capture most are other programs', but indexed so a
+	// reader can tell (SNI, fingerprint, volume, time) and read one back.
+	ListUndecodedConnections(ctx context.Context, in *ListUndecodedRequest, opts ...grpc.CallOption) (*UndecodedList, error)
+	// One of those connections' bytes, reassembled from the session's capture on demand
+	// (nothing is copied at capture time), with what its TLS handshake shows in the clear.
+	GetConnectionBytes(ctx context.Context, in *GetConnectionBytesRequest, opts ...grpc.CallOption) (*ConnectionBytes, error)
 }
 
 type viewerServiceClient struct {
@@ -212,6 +221,26 @@ func (c *viewerServiceClient) QuerySQL(ctx context.Context, in *QuerySQLRequest,
 	return out, nil
 }
 
+func (c *viewerServiceClient) ListUndecodedConnections(ctx context.Context, in *ListUndecodedRequest, opts ...grpc.CallOption) (*UndecodedList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UndecodedList)
+	err := c.cc.Invoke(ctx, ViewerService_ListUndecodedConnections_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *viewerServiceClient) GetConnectionBytes(ctx context.Context, in *GetConnectionBytesRequest, opts ...grpc.CallOption) (*ConnectionBytes, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConnectionBytes)
+	err := c.cc.Invoke(ctx, ViewerService_GetConnectionBytes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ViewerServiceServer is the server API for ViewerService service.
 // All implementations must embed UnimplementedViewerServiceServer
 // for forward compatibility.
@@ -247,6 +276,13 @@ type ViewerServiceServer interface {
 	// query_only and no attachable databases, on which every write fails — not by
 	// inspecting the statement.
 	QuerySQL(context.Context, *QuerySQLRequest) (*QuerySQLResponse, error)
+	// The connections a packet capture carried that produced no flow — kept out of the flow
+	// list because on an interface-wide capture most are other programs', but indexed so a
+	// reader can tell (SNI, fingerprint, volume, time) and read one back.
+	ListUndecodedConnections(context.Context, *ListUndecodedRequest) (*UndecodedList, error)
+	// One of those connections' bytes, reassembled from the session's capture on demand
+	// (nothing is copied at capture time), with what its TLS handshake shows in the clear.
+	GetConnectionBytes(context.Context, *GetConnectionBytesRequest) (*ConnectionBytes, error)
 	mustEmbedUnimplementedViewerServiceServer()
 }
 
@@ -286,6 +322,12 @@ func (UnimplementedViewerServiceServer) GetMessageBody(*GetMessageBodyRequest, g
 }
 func (UnimplementedViewerServiceServer) QuerySQL(context.Context, *QuerySQLRequest) (*QuerySQLResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QuerySQL not implemented")
+}
+func (UnimplementedViewerServiceServer) ListUndecodedConnections(context.Context, *ListUndecodedRequest) (*UndecodedList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUndecodedConnections not implemented")
+}
+func (UnimplementedViewerServiceServer) GetConnectionBytes(context.Context, *GetConnectionBytesRequest) (*ConnectionBytes, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetConnectionBytes not implemented")
 }
 func (UnimplementedViewerServiceServer) mustEmbedUnimplementedViewerServiceServer() {}
 func (UnimplementedViewerServiceServer) testEmbeddedByValue()                       {}
@@ -460,6 +502,42 @@ func _ViewerService_QuerySQL_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ViewerService_ListUndecodedConnections_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUndecodedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ViewerServiceServer).ListUndecodedConnections(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ViewerService_ListUndecodedConnections_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ViewerServiceServer).ListUndecodedConnections(ctx, req.(*ListUndecodedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ViewerService_GetConnectionBytes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConnectionBytesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ViewerServiceServer).GetConnectionBytes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ViewerService_GetConnectionBytes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ViewerServiceServer).GetConnectionBytes(ctx, req.(*GetConnectionBytesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ViewerService_ServiceDesc is the grpc.ServiceDesc for ViewerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -490,6 +568,14 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QuerySQL",
 			Handler:    _ViewerService_QuerySQL_Handler,
+		},
+		{
+			MethodName: "ListUndecodedConnections",
+			Handler:    _ViewerService_ListUndecodedConnections_Handler,
+		},
+		{
+			MethodName: "GetConnectionBytes",
+			Handler:    _ViewerService_GetConnectionBytes_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

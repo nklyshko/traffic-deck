@@ -37,6 +37,13 @@ service ViewerService {
   // query_only and no attachable databases, on which every write fails — not by
   // inspecting the statement.
   rpc QuerySQL(QuerySQLRequest) returns (QuerySQLResponse);
+  // The connections a packet capture carried that produced no flow — kept out of the flow
+  // list because on an interface-wide capture most are other programs', but indexed so a
+  // reader can tell (SNI, fingerprint, volume, time) and read one back.
+  rpc ListUndecodedConnections(ListUndecodedRequest) returns (UndecodedList);
+  // One of those connections' bytes, reassembled from the session's capture on demand
+  // (nothing is copied at capture time), with what its TLS handshake shows in the clear.
+  rpc GetConnectionBytes(GetConnectionBytesRequest) returns (ConnectionBytes);
 }
 
 message ListSessionsRequest {
@@ -228,4 +235,58 @@ message QuerySQLResponse {
   // More rows matched than were returned — raise limit or aggregate in SQL.
   bool truncated = 3;
   uint64 elapsed_micros = 4;
+}
+
+message UndecodedConnection {
+  string conn_id = 1;
+  string transport = 2;      // tcp | udp
+  string client = 3;         // host:port that opened it
+  string server = 4;         // host:port it went to
+  string sni = 5;
+  string ja4 = 6;            // ClientHello fingerprint: compare with the app's own flows
+  // no_key (handshake complete, no key-log secret), handshake_incomplete, unsupported,
+  // unparsed (bytes in hand, no parser recognised them), udp (not QUIC)
+  string reason = 7;
+  string detail = 8;
+  uint64 bytes_up = 9;
+  uint64 bytes_down = 10;
+  int64 first_ts_micros = 11;
+  int64 last_ts_micros = 12;
+}
+
+message ListUndecodedRequest {
+  string session_id = 1;
+  string reason = 2;         // only this reason; empty = all
+  string host = 3;           // case-insensitive substring of the SNI or server; empty = all
+  uint32 limit = 4;          // default 100
+  uint32 offset = 5;
+}
+
+message UndecodedList {
+  // Largest first: volume is what tells an app's own traffic from a stray probe.
+  repeated UndecodedConnection connections = 1;
+  uint64 total = 2;                       // matching the request's reason/host, before paging
+  map<string, uint64> by_reason = 3;      // the whole session's index, by reason
+  // False for a session decoded without the index (a tshark import, or one recorded
+  // before it existed): an empty list there means "not indexed", not "nothing undecoded".
+  bool indexed = 4;
+}
+
+message GetConnectionBytesRequest {
+  string session_id = 1;
+  string conn_id = 2;
+  bool from_client = 3;      // which direction's bytes
+  uint64 offset = 4;         // into that direction's stream
+  uint32 limit = 5;          // default and max 256 KiB
+}
+
+message ConnectionBytes {
+  bytes data = 1;
+  uint64 offset = 2;
+  uint64 total = 3;          // that direction's length as read (see truncated)
+  bool truncated = 4;        // the read stopped at its cap; total is a floor
+  uint32 gaps = 5;           // holes the capture left in the TCP stream
+  // What the TLS handshake says in the clear — ClientHello SNI/ALPN/JA4, ServerHello
+  // version and cipher, a TLS 1.2 server's certificate subjects — when it is TLS.
+  repeated string tls = 6;
 }

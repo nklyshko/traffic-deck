@@ -105,6 +105,13 @@ func Finalize(ctx context.Context, st *store.Store, engine, tsharkPath, sessionI
 		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
 		return nil, fmt.Errorf("insert ws messages: %w", err)
 	}
+	// Evidence, not the record: an index that could not be kept costs the import nothing.
+	// Only the native engine builds one; tshark's absence of an index is not zero counts.
+	if ds.Engine == decode.EngineNative {
+		if err := st.RecordUndecoded(ctx, sessionID, ds.Undecoded); err != nil {
+			log.Printf("session %s: undecoded connections not recorded: %v", sessionID, err)
+		}
+	}
 
 	if err := st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, n); err != nil {
 		return nil, err

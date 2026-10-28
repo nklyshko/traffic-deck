@@ -86,6 +86,16 @@ class ViewerServiceStub(object):
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLRequest.SerializeToString,
                 response_deserializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLResponse.FromString,
                 _registered_method=True)
+        self.ListUndecodedConnections = channel.unary_unary(
+                '/traffic.v1.ViewerService/ListUndecodedConnections',
+                request_serializer=traffic_dot_v1_dot_viewer__pb2.ListUndecodedRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_viewer__pb2.UndecodedList.FromString,
+                _registered_method=True)
+        self.GetConnectionBytes = channel.unary_unary(
+                '/traffic.v1.ViewerService/GetConnectionBytes',
+                request_serializer=traffic_dot_v1_dot_viewer__pb2.GetConnectionBytesRequest.SerializeToString,
+                response_deserializer=traffic_dot_v1_dot_viewer__pb2.ConnectionBytes.FromString,
+                _registered_method=True)
 
 
 class ViewerServiceServicer(object):
@@ -171,6 +181,23 @@ class ViewerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListUndecodedConnections(self, request, context):
+        """The connections a packet capture carried that produced no flow — kept out of the flow
+        list because on an interface-wide capture most are other programs', but indexed so a
+        reader can tell (SNI, fingerprint, volume, time) and read one back.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetConnectionBytes(self, request, context):
+        """One of those connections' bytes, reassembled from the session's capture on demand
+        (nothing is copied at capture time), with what its TLS handshake shows in the clear.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ViewerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -223,6 +250,16 @@ def add_ViewerServiceServicer_to_server(servicer, server):
                     servicer.QuerySQL,
                     request_deserializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLRequest.FromString,
                     response_serializer=traffic_dot_v1_dot_viewer__pb2.QuerySQLResponse.SerializeToString,
+            ),
+            'ListUndecodedConnections': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListUndecodedConnections,
+                    request_deserializer=traffic_dot_v1_dot_viewer__pb2.ListUndecodedRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_viewer__pb2.UndecodedList.SerializeToString,
+            ),
+            'GetConnectionBytes': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetConnectionBytes,
+                    request_deserializer=traffic_dot_v1_dot_viewer__pb2.GetConnectionBytesRequest.FromString,
+                    response_serializer=traffic_dot_v1_dot_viewer__pb2.ConnectionBytes.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -496,6 +533,60 @@ class ViewerService(object):
             '/traffic.v1.ViewerService/QuerySQL',
             traffic_dot_v1_dot_viewer__pb2.QuerySQLRequest.SerializeToString,
             traffic_dot_v1_dot_viewer__pb2.QuerySQLResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListUndecodedConnections(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ViewerService/ListUndecodedConnections',
+            traffic_dot_v1_dot_viewer__pb2.ListUndecodedRequest.SerializeToString,
+            traffic_dot_v1_dot_viewer__pb2.UndecodedList.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetConnectionBytes(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/traffic.v1.ViewerService/GetConnectionBytes',
+            traffic_dot_v1_dot_viewer__pb2.GetConnectionBytesRequest.SerializeToString,
+            traffic_dot_v1_dot_viewer__pb2.ConnectionBytes.FromString,
             options,
             channel_credentials,
             insecure,

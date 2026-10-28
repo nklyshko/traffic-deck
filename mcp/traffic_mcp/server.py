@@ -163,7 +163,20 @@ def _session_dict(s) -> dict:
         # the viewer hints — whatever the source declared. Omitted when a session has none,
         # which is every session recorded before the sources reported their options.
         "metadata": dict(s.metadata) or None,
+        # What the capture saw but could not decode, when it counted: undecoded.<reason>
+        # from a packet capture, conn.undecoded.<reason> from mitmproxy. Only the nonzero
+        # reasons; `session_overview` and `list_undecoded_connections` say more.
+        "undecoded": _undecoded_counts(s.metadata),
     }
+
+
+def _undecoded_counts(md) -> dict | None:
+    counts = {}
+    for k, v in md.items():
+        for prefix in ("undecoded.", "conn.undecoded."):
+            if k.startswith(prefix) and v.isdigit() and int(v):
+                counts[k[len(prefix):]] = int(v)
+    return counts or None
 
 
 def _annotations(rec, tagnames: dict, groupnames: dict) -> dict:
@@ -1287,6 +1300,142 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
     # matched: a partial hit is as misleading as none.
     if _BODY_TERM.search(filter):
         out |= await _body_search_caveat(sid)
+    return out
+
+
+# --- what a capture saw but could not decode -------------------------------
+#
+# A packet capture (Chrome, Android, any interface-wide pcap) keeps connections that
+# produced no flow out of the flow list — most are other programs' — but indexes them, so
+# a missing request can be told apart from one that went somewhere the decoder could not
+# follow: certificate pinning, a key-log secret that never arrived, a protocol nothing
+# parses. A mitmproxy capture records its own as hidden flows instead (search_flows
+# include_hidden=true).
+
+_UNDECODED_NOTE = (
+    "Connections the capture carried that produced no flow. On an interface-wide capture "
+    "most belong to other programs; one can still be the app under test — pinned TLS (no "
+    "key-log secret, or a handshake that did not complete), or a protocol nothing parses "
+    "(unparsed). Compare its sni and ja4 with the app's own flows (search_flows returns "
+    "their ja4), and read it with get_connection_bytes.")
+
+
+def _undecoded_row(c) -> dict:
+    return {
+        "conn_id": c.conn_id, "transport": c.transport, "reason": c.reason,
+        "detail": c.detail or None, "sni": c.sni or None, "server": c.server,
+        "client": c.client, "ja4": c.ja4 or None,
+        "bytes_up": c.bytes_up, "bytes_down": c.bytes_down,
+        "first_ts_unix_micros": c.first_ts_micros,
+        "duration_ms": round((c.last_ts_micros - c.first_ts_micros) / 1000, 1),
+    }
+
+
+@mcp.tool()
+async def list_undecoded_connections(session_id: str, reason: str = "", host: str = "",
+                                     limit: int = 50, offset: int = 0) -> dict:
+    """The connections a packet capture carried that produced no flow, largest first.
+
+    Each row: conn_id (for get_connection_bytes), transport, reason — no_key (TLS handshake
+    complete but no key-log secret: certificate pinning, or a program that does not write
+    the key log), handshake_incomplete, unsupported (detail names the version/suite),
+    unparsed (bytes in hand, no parser recognised them), udp (not QUIC) — plus sni, server,
+    client, ja4 (the ClientHello fingerprint), bytes each way, start and duration.
+
+    `reason` keeps one reason; `host` a case-insensitive substring of the SNI or server.
+    Paged by offset (limit default 50). `by_reason` counts the whole session. `indexed`
+    false means the session was decoded without this index (a tshark import, or recorded
+    before it existed) — an empty list there is not "nothing went undecoded".
+
+    For a mitmproxy capture, undecoded connections are flows instead: search_flows with
+    include_hidden=true and `~meta conn.outcome=.`."""
+    sid = await _resolve_session(session_id)
+    resp = await client().list_undecoded(sid, reason, host, max(1, min(limit, _LIMIT_MAX)),
+                                         max(0, offset))
+    out = {"session_id": sid, "indexed": resp.indexed, "total": resp.total,
+           "count": len(resp.connections), "by_reason": dict(resp.by_reason),
+           "connections": [_undecoded_row(c) for c in resp.connections]}
+    if resp.total > offset + len(resp.connections):
+        out["next_offset"] = offset + len(resp.connections)
+    if resp.connections:
+        out["note"] = _UNDECODED_NOTE
+    return out
+
+
+@mcp.tool()
+async def get_connection_bytes(session_id: str, conn_id: str, from_client: bool = False,
+                               offset: int = 0, as_hex: bool = False) -> dict:
+    """One undecoded connection's bytes, read back from the session's capture.pcap on
+    demand — TCP reassembled by sequence number, UDP datagrams back to back.
+    `from_client=True` for client→server, else server→client. A window of up to 256 KiB
+    from `offset` comes back as text, base64, or hex with `as_hex`; `size` is that
+    direction's length.
+
+    `tls` is what the handshake says in the clear: the ClientHello's SNI, ALPN and JA4,
+    the ServerHello's version and cipher, and — TLS 1.2 only — the server certificate's
+    subject and names. Past the handshake a TLS connection without its secret is
+    ciphertext; readable payload comes from plaintext protocols (reason `unparsed`).
+    `gaps` counts holes the capture left in the stream."""
+    sid = await _resolve_session(session_id)
+    try:
+        resp = await client().get_connection_bytes(sid, conn_id, from_client, max(0, offset), _BODY_MAX)
+    except grpc.aio.AioRpcError as e:
+        if e.code() in (grpc.StatusCode.NOT_FOUND, grpc.StatusCode.FAILED_PRECONDITION):
+            raise ValueError(e.details()) from None
+        raise
+    out = _bytes_payload(bytes(resp.data), as_hex=as_hex)
+    out["size"], out["offset"] = resp.total, resp.offset
+    out["truncated"] = resp.offset + len(resp.data) < resp.total or resp.truncated
+    out |= {"session_id": sid, "conn_id": conn_id,
+            "direction": "client→server" if from_client else "server→client"}
+    if resp.truncated:
+        out["note"] = "the read stopped at its cap: size is a floor"
+    if resp.gaps:
+        out["gaps"] = resp.gaps
+    if resp.tls:
+        out["tls"] = list(resp.tls)
+    return out
+
+
+@mcp.tool()
+async def session_overview(session_id: str) -> dict:
+    """One session at a glance, including what it saw but could not decode — the first
+    call before concluding a request is "not in the capture".
+
+    Returns the session row, how many flows it holds, how many are hidden by default (DNS
+    lookups and undecoded connections from a mitmproxy capture), and — for a packet
+    capture — an `undecoded` section: counts by reason and the top hosts by bytes, with a
+    note on what they may be. Drill in with list_undecoded_connections /
+    get_connection_bytes, or search_flows include_hidden=true for a mitmproxy capture."""
+    session = await _resolve_session_row(session_id)
+    sid = session.id
+    out = {"session": _session_dict(session)}
+    page = await client().query_flows(sid, "", 1)
+    out["flows"] = page.matched
+    if page.hidden_matched:
+        out["hidden_flows"] = page.hidden_matched
+        out["hidden_note"] = _HIDDEN_NOTE
+    try:
+        resp = await client().list_undecoded(sid, limit=2000)
+    except grpc.aio.AioRpcError as e:
+        if e.code() is not grpc.StatusCode.UNIMPLEMENTED:
+            raise
+        return out  # a gateway older than the index
+    if resp.indexed:
+        hosts: dict[str, dict] = {}
+        for c in resp.connections:
+            h = hosts.setdefault(c.sni or c.server, {"host": c.sni or c.server, "connections": 0,
+                                                     "bytes": 0, "reasons": set()})
+            h["connections"] += 1
+            h["bytes"] += c.bytes_up + c.bytes_down
+            h["reasons"].add(c.reason)
+        top = sorted(hosts.values(), key=lambda h: -h["bytes"])[:15]
+        out["undecoded"] = {
+            "total": resp.total, "by_reason": dict(resp.by_reason),
+            "top_hosts": [h | {"reasons": sorted(h["reasons"])} for h in top],
+        }
+        if resp.total:
+            out["undecoded"]["note"] = _UNDECODED_NOTE
     return out
 
 

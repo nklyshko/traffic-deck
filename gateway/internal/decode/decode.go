@@ -154,6 +154,8 @@ type Dataset struct {
 	Flows         []*Flow
 	Messages      []*WsMessage
 	Warnings      []string
+	// Undecoded indexes the connections that produced no flow (native engine only).
+	Undecoded []*UndecodedConn
 }
 
 // metaProtos contribute packet-level fields (merged into every PDU of the packet).
@@ -346,7 +348,12 @@ func DecodeNative(ctx context.Context, pcapPath, keylogPath string) (*Dataset, e
 		ds.Messages = append(ds.Messages, m)
 		mu.Unlock()
 	}
-	if err := LiveTCPDecode(f, keylogPath, onFlow, onMsg); err != nil {
+	onUndecoded := func(u *UndecodedConn) {
+		mu.Lock()
+		ds.Undecoded = append(ds.Undecoded, u)
+		mu.Unlock()
+	}
+	if err := LiveDecode(f, keylogPath, Sinks{OnFlow: onFlow, OnMsg: onMsg, OnUndecoded: onUndecoded}); err != nil {
 		return nil, err
 	}
 	return ds, nil

@@ -74,11 +74,11 @@ type packetReader interface {
 // (layers.LinkType) in both readers, and any DLT above 255 — DLT_PKTAP, which the macOS
 // per-process capture writes — would arrive silently wrapped (258 & 0xFF = 2). 0 when it
 // can't be determined, which just means "trust the reader".
-func newPacketReader(r io.Reader) (packetReader, uint32, error) {
+func newPacketReader(r io.Reader) (packetReader, uint32, bool, error) {
 	br := bufio.NewReader(r)
 	magic, err := br.Peek(4)
 	if err != nil {
-		return nil, 0, err // includes EOF if the session sent no pcap
+		return nil, 0, false, err // includes EOF if the session sent no pcap
 	}
 	// pcapng starts with a Section Header Block whose type is 0x0A0D0D0A (chosen to be
 	// byte-order independent); classic pcap starts with 0xA1B2C3D4 / 0xD4C3B2A1.
@@ -87,7 +87,7 @@ func newPacketReader(r io.Reader) (packetReader, uint32, error) {
 		opts.SkipUnknownVersion = true // tolerate newer sections rather than erroring out
 		lt := pcapngLinkType(br)
 		rd, err := pcapgo.NewNgReader(br, opts)
-		return rd, lt, err
+		return rd, lt, false, err
 	}
 	// Classic header: the link type is a uint32 at offset 20, in the file's own byte order
 	// — which the magic identifies (0xA1 first = written big-endian).
@@ -100,7 +100,7 @@ func newPacketReader(r io.Reader) (packetReader, uint32, error) {
 		}
 	}
 	rd, err := pcapgo.NewReader(br)
-	return rd, rawLinkType, err
+	return rd, rawLinkType, true, err
 }
 
 // pcapngLinkType peeks the first Interface Description Block's LinkType without consuming
@@ -154,45 +154,63 @@ func mustPeekAtMost(br *bufio.Reader, n int) []byte {
 // using the (growing) key-log at keylogPath, and emits decoded flows and frames via
 // onFlow/onMsg. Returns when r reaches EOF (the capture's pipe is closed).
 func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage)) error {
-	reader, rawLinkType, err := newPacketReader(r)
+	return LiveDecode(r, keylogPath, Sinks{OnFlow: onFlow, OnMsg: onMsg})
+}
+
+// Sinks receive what a live decode produces. OnUndecoded is called once per connection
+// that ended without a flow (see UndecodedConn) — from the packet loop, or after it for
+// what is only known once every parser has drained; nil discards them.
+type Sinks struct {
+	OnFlow      func(*Flow, bool)
+	OnMsg       func(*WsMessage)
+	OnUndecoded func(*UndecodedConn)
+}
+
+// LiveDecode is LiveTCPDecode with every sink, including the undecoded-connection index.
+func LiveDecode(r io.Reader, keylogPath string, sinks Sinks) error {
+	reader, rawLinkType, classic, err := newPacketReader(r)
 	if err != nil {
 		return err // includes EOF if the session sent no pcap
 	}
+	onMsg, onUndecoded := sinks.OnMsg, sinks.OnUndecoded
 	if onMsg == nil {
 		onMsg = func(*WsMessage) {} // the WebSocket/custom paths call it unconditionally
 	}
+	if onUndecoded == nil {
+		onUndecoded = func(*UndecodedConn) {}
+	}
 	lt := &liveTCP{
-		keylog: tlsdecrypt.NewKeylog(keylogPath),
-		onFlow: onFlow,
-		onMsg:  onMsg,
-		quic:   map[string]*quicConnState{},
+		keylog:      tlsdecrypt.NewKeylog(keylogPath),
+		onFlow:      sinks.OnFlow,
+		onMsg:       onMsg,
+		onUndecoded: onUndecoded,
+		quic:        map[string]*quicConnState{},
+		udp:         map[string]*udpConv{},
 	}
 	asm := reassembly.NewAssembler(reassembly.NewStreamPool(lt))
 	linkType := reader.LinkType()
+	// A classic pcap's records sit back to back after its 24-byte header, each a 16-byte
+	// header and the captured bytes, so the offset of each is the sum of those before it.
+	// A pcapng block's size is not visible through the reader: there, -1 says "unknown",
+	// and reading a connection back scans from the start.
+	next := int64(24)
 	for {
+		lt.curOffset = -1
+		if classic && next >= 0 {
+			lt.curOffset = next
+		}
 		data, ci, err := reader.ReadPacketData()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			continue // truncated trailing packet while the file grows — skip, keep going
+			next = -1 << 62 // a record skipped: every offset after it is unknown
+			continue        // truncated trailing packet while the file grows — skip, keep going
 		}
-		var pkt gopacket.Packet
-		switch {
-		case rawLinkType == linkTypePKTAP:
-			innerLT, frame, ok := pktapPayload(data)
-			if !ok {
-				continue
-			}
-			pkt = gopacket.NewPacket(frame, innerLT, gopacket.Lazy)
-		case linkType == linkTypeNFLOG:
-			ipType, ip, ok := nflogIPPayload(data)
-			if !ok {
-				continue
-			}
-			pkt = gopacket.NewPacket(ip, ipType, gopacket.Lazy)
-		default:
-			pkt = gopacket.NewPacket(data, linkType, gopacket.Lazy)
+		next += 16 + int64(ci.CaptureLength)
+		pkt := packetOf(data, linkType, rawLinkType)
+		if pkt == nil {
+			continue
 		}
 		netLayer := pkt.NetworkLayer()
 		if netLayer == nil {
@@ -215,15 +233,84 @@ func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onM
 	// A finite-capture caller (persistence on close, DecodeNative batch import)
 	// relies on this — without it the last exchange can still be in flight at return.
 	lt.wg.Wait()
+	// Only now is it known which HTTP-classified connections never yielded a request: their
+	// parsers ran on until the byte streams closed.
+	for _, p := range lt.unparsed {
+		if p.flows.Load() == 0 {
+			lt.reportUndecoded(p.conn)
+		}
+	}
+	for _, c := range lt.udp {
+		lt.reportUndecoded(c.record(c.id, "udp", c.client, c.server, UndecodedNotQUIC))
+	}
 	return nil
+}
+
+// undecoded reports a TCP connection that ended without a flow.
+func (f *liveTCP) undecoded(s *tcpStream, reason, detail string) {
+	f.reportUndecoded(s.undecodedRecord(reason, detail))
+}
+
+func (s *tcpStream) undecodedRecord(reason, detail string) *UndecodedConn {
+	u := s.tally.record(s.connID, "tcp", s.clientAddr, net.JoinHostPort(s.serverHost, s.serverPort), reason)
+	u.Detail = detail
+	u.SNI = s.conn.SNI()
+	if ch := s.conn.ClientHello(); ch != nil {
+		u.JA4 = ch.JA4
+	}
+	return u
+}
+
+// pendingUnparsed is an HTTP-classified connection awaiting the verdict of its parsers:
+// its record, ready to report, and the count of requests they produced. Held instead of
+// the stream itself, which would keep every connection's buffers alive to the end.
+type pendingUnparsed struct {
+	conn  *UndecodedConn
+	flows *atomic.Int32
+}
+
+// udpConv is a non-QUIC UDP conversation, tallied for the undecoded index.
+type udpConv struct {
+	connTally
+	id, client, server string
+}
+
+// packetOf decodes one captured record by the capture's link type — unwrapping PKTAP and
+// NFLOG, which gopacket does not — or returns nil for one it cannot.
+func packetOf(data []byte, linkType gplayers.LinkType, rawLinkType uint32) gopacket.Packet {
+	switch {
+	case rawLinkType == linkTypePKTAP:
+		innerLT, frame, ok := pktapPayload(data)
+		if !ok {
+			return nil
+		}
+		return gopacket.NewPacket(frame, innerLT, gopacket.Lazy)
+	case linkType == linkTypeNFLOG:
+		ipType, ip, ok := nflogIPPayload(data)
+		if !ok {
+			return nil
+		}
+		return gopacket.NewPacket(ip, ipType, gopacket.Lazy)
+	default:
+		return gopacket.NewPacket(data, linkType, gopacket.Lazy)
+	}
 }
 
 // liveTCP is the gopacket StreamFactory: shared key-log + sinks for all connections.
 type liveTCP struct {
-	keylog *tlsdecrypt.Keylog
-	onFlow func(*Flow, bool)
-	onMsg  func(*WsMessage)
-	quic   map[string]*quicConnState // QUIC connections keyed by canonical UDP 4-tuple
+	keylog      *tlsdecrypt.Keylog
+	onFlow      func(*Flow, bool)
+	onMsg       func(*WsMessage)
+	onUndecoded func(*UndecodedConn)
+	quic        map[string]*quicConnState // QUIC connections keyed by canonical UDP 4-tuple
+	udp         map[string]*udpConv       // non-QUIC UDP conversations, same key
+
+	// curOffset is the capture offset of the packet being processed, which a connection
+	// first seen on it keeps as where to read it back from. Packet loop only.
+	curOffset int64
+	// unparsed are the connections classified as HTTP, to be checked once the parsers
+	// drain for whether any request ever came out of them.
+	unparsed []pendingUnparsed
 
 	// Connection counter handed out by connID, in first-seen order. Needs no lock: New
 	// and handleUDP both run on the single packet loop in LiveTCPDecode (as the unlocked
@@ -288,7 +375,7 @@ type quicConnState struct {
 func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP, ts time.Time) {
 	payload := udp.Payload
 	if len(payload) < 5 {
-		return
+		return // too short for QUIC; tallied by nothing — a keepalive at most
 	}
 	src := net.JoinHostPort(netFlow.Src().String(), strconv.Itoa(int(udp.SrcPort)))
 	dst := net.JoinHostPort(netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)))
@@ -299,7 +386,8 @@ func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP, ts time.Ti
 	st := f.quic[key]
 	if st == nil {
 		if !quicdecrypt.IsClientInitial(payload) {
-			return // not (the start of) an HTTP/3 connection
+			f.tallyUDP(key, src, dst, len(payload), ts) // not (the start of) an HTTP/3 connection
+			return
 		}
 		st = &quicConnState{
 			// "quic:" prefix as the PDML decode path uses, so a QUIC connection id can't be
@@ -308,9 +396,26 @@ func (f *liveTCP) handleUDP(netFlow gopacket.Flow, udp *gplayers.UDP, ts time.Ti
 				netFlow.Dst().String(), strconv.Itoa(int(udp.DstPort)), src),
 			client: src,
 		}
+		st.sess.tally.start(f.curOffset, ts)
 		f.quic[key] = st
 	}
+	st.sess.tally.add(src == st.client, len(payload), ts)
 	st.sess.feed(src == st.client, payload, ts)
+}
+
+// tallyUDP counts a datagram of a non-QUIC UDP conversation for the undecoded index. The
+// side that sent the first datagram seen is taken for the client.
+func (f *liveTCP) tallyUDP(key, src, dst string, n int, ts time.Time) {
+	c := f.udp[key]
+	if c == nil {
+		if len(f.udp) >= maxUDPTracked {
+			return
+		}
+		c = &udpConv{id: "udp:" + strconv.Itoa(len(f.udp)), client: src, server: dst}
+		c.start(f.curOffset, ts)
+		f.udp[key] = c
+	}
+	c.add(src == c.client, n, ts)
 }
 
 func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassembly.AssemblerContext) reassembly.Stream {
@@ -324,6 +429,8 @@ func (f *liveTCP) New(netFlow, tcpFlow gopacket.Flow, _ *gplayers.TCP, _ reassem
 		clientAddr: net.JoinHostPort(netFlow.Src().String(), tcpFlow.Src().String()),
 	}
 	s.conn = tlsdecrypt.NewConn(f.keylog, s.onApp)
+	s.httpFlows = new(atomic.Int32)
+	s.tally.start(f.curOffset, time.Time{})
 	return s
 }
 
@@ -334,6 +441,8 @@ type tcpStream struct {
 	connID                             string // this connection's id; goes on every flow it carries
 	serverHost, serverPort, clientAddr string
 	conn                               *tlsdecrypt.Conn
+	tally                              connTally     // for its UndecodedConn, should it need one
+	httpFlows                          *atomic.Int32 // requests its HTTP parsers produced
 
 	reset       atomic.Bool // a TCP RST was seen (set on the packet loop, read by the HTTP parser)
 	sniffed     bool        // checked the first client bytes look like TLS
@@ -398,6 +507,7 @@ func (s *tcpStream) ReassembledSG(sg reassembly.ScatterGather, ac reassembly.Ass
 	if n == 0 {
 		return
 	}
+	s.tally.add(dir == reassembly.TCPDirClientToServer, n, ac.GetCaptureInfo().Timestamp)
 	s.reassembled(dir == reassembly.TCPDirClientToServer, sg.Fetch(n), ac.GetCaptureInfo().Timestamp)
 }
 
@@ -574,6 +684,21 @@ func (s *tcpStream) ReassemblyComplete(_ reassembly.AssemblerContext) bool {
 		if why := undecodedReason(s.conn); why != "" {
 			log.Printf("live decode: %s (%s) not decoded live: %s — %s",
 				hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, why, skippedFate)
+			reason := UndecodedNoKey
+			if !s.conn.HelloSeen() {
+				reason = UndecodedHandshake
+			}
+			s.lt.undecoded(s, reason, "")
+		}
+	}
+	if s.dropped && s.conn.Unsupported() {
+		s.lt.undecoded(s, UndecodedUnsupported, s.conn.UnsupportedReason())
+	}
+	if s.isHTTP && !s.isH2 && !s.matched {
+		// HTTP/1.1 is the fallback for bytes nothing else claimed; whether any request came
+		// out is known only once its parser drains (see LiveDecode).
+		if s.httpFlows != nil {
+			s.lt.unparsed = append(s.lt.unparsed, pendingUnparsed{s.undecodedRecord(UndecodedUnparsed, ""), s.httpFlows})
 		}
 	}
 	return true

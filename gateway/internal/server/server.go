@@ -25,6 +25,7 @@ type Viewer struct {
 	trafficv1.UnimplementedViewerServiceServer
 	st  *store.Store
 	hub *liveHub
+	obj objstore.Store // where a session's capture is read back from; nil in tests
 }
 
 func NewViewer(st *store.Store, hub *liveHub) *Viewer { return &Viewer{st: st, hub: hub} }
@@ -514,7 +515,9 @@ func Register(s *grpc.Server, st *store.Store, obj objstore.Store, tshark, gatew
 	// take their analysis from the ingest side, and end the capture if a write fails.
 	ingest.stopCapture = mgr.StopCapture
 	hub.setPersistence(st, ingest.liveAnalysis, ingest.onFlushError)
-	trafficv1.RegisterViewerServiceServer(s, NewViewer(st, hub))
+	viewer := NewViewer(st, hub)
+	viewer.obj = obj
+	trafficv1.RegisterViewerServiceServer(s, viewer)
 	trafficv1.RegisterIngestServiceServer(s, ingest)
 	trafficv1.RegisterControlServiceServer(s, NewControl(st, obj, dataRoot, tshark, mgr, svcs, newUpdateChecker(updateCheck)))
 	return mgr, svcs
