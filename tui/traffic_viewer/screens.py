@@ -29,6 +29,7 @@ from textual.widgets.option_list import Option
 from rich.text import Text
 
 from . import prefs
+from .metadata import cell as meta_cell, pretty as meta_pretty
 from .filters import FILTER_HELP, MSG_FILTER_HELP, with_meta_keys
 from .render import (
     MARK_COLORS,
@@ -1284,7 +1285,8 @@ class SessionPane(AnnotatableTable, Vertical):
         """This flow's value for an extra column: a source-metadata lookup, or a field
         column read off the Flow itself."""
         if cid.startswith("meta:"):
-            val = f.metadata.get(cid[len("meta:"):], "") or ""
+            key = cid[len("meta:"):]
+            val = meta_cell(key, f.metadata.get(key, "") or "")
         else:
             val = _FIELD_COLUMNS[cid][1](f)
         return val[:_EXTRA_CELL_MAX]
@@ -2248,8 +2250,14 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup("[blue]↩ redirected from flow[/blue] $v",
                                              v=f.redirected_from_id[:8]))
         for k, v in f.metadata.items():
-            lines.append(Content.from_markup(
-                "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
+            if p := meta_pretty(k, v):
+                # The readable form, then the raw entry a ~meta filter matches.
+                lines.append(Content.from_markup(
+                    "[magenta]◆ $label:[/magenta] $v  [dim]$k=$raw[/dim]",
+                    label=p.label, v=p.value, k=k, raw=v))
+            else:
+                lines.append(Content.from_markup(
+                    "[magenta]◆ $k:[/magenta] $v", k=k, v=v))
         self._append_annotations(lines, f)
         if f.ja3 or f.ja4:
             lines.append(Content(""))

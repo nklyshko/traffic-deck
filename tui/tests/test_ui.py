@@ -880,6 +880,23 @@ async def test_detail_view_omits_stream_for_non_multiplexed_flow():
         assert "stream=" not in rendered
 
 
+async def test_detail_view_says_what_metadata_means_and_keeps_the_raw_entry():
+    # A known key reads as what it means, with the raw key=value beside it — that is what
+    # a ~meta filter matches. A key the viewer does not know is shown as it is.
+    app = make_app()
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        f = _flow("h1", "GET", 200, tcp_stream="7")
+        f.metadata["hostname.source"] = "dns"
+        f.metadata["max.cmd"] = "Request(0)"
+        app.push_screen(FlowDetailScreen(SESSION_ID, "h1", f, {}, {}))
+        await settle(pilot)
+        rendered = app.screen.query_one("#body", Static).render().plain
+        assert "Hostname from: the device's DNS answer for the IP (inferred)" in rendered
+        assert "hostname.source=dns" in rendered
+        assert "max.cmd: Request(0)" in rendered
+
+
 async def test_detail_view_request_body_opens_body_screen():
     app = make_app()
     async with app.run_test() as pilot:
