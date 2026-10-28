@@ -97,3 +97,18 @@ def test_regular_proxy_target_is_a_connect_name_not_an_ip():
     f.server_conn.sni = None
     pf = build_stream_flow(f)
     assert (pf.authority, pf.metadata["hostname.source"]) == ("mtalk.google.com:5228", "connect")
+
+
+def test_mitmdump_can_load_the_addon_as_a_script():
+    """mitmdump loads addon.py as a script, under a module name it never registers in
+    sys.modules — not as the package module the other tests import. Anything that looks
+    its module up there (a dataclass does) fails only this way, before any capture opens."""
+    from pathlib import Path
+
+    from mitmproxy.addons.script import load_script
+
+    import capture_mitmproxy.addon as addon
+
+    m = load_script(str(Path(addon.__file__)))
+    assert m is not None, "mitmdump could not load the addon (see the traceback above)"
+    assert any(type(a).__name__ == "GatewayPusher" for a in m.addons)
