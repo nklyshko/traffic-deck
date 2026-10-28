@@ -13,6 +13,7 @@ Config via env (set by the launcher): GATEWAY_ADDR, CAPTURE_LABEL, CAPTURE_METAD
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import uuid
@@ -68,6 +69,61 @@ def _wire_encoding(msg) -> str:
     return "" if enc == "identity" else enc
 
 
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+def _sni(flow) -> str:
+    """The TLS SNI the client sent: on the client connection when mitmproxy terminated TLS,
+    on the server connection's when it only forwarded it."""
+    for conn in (flow.client_conn, flow.server_conn):
+        if sni := getattr(conn, "sni", None):
+            return _s(sni)
+    return ""
+
+
+def _address_hostname(addr) -> tuple[str, str]:
+    """The name a connection's address gives, and where it came from: "ip" for the address
+    a transparent or WireGuard capture connected to, "connect" for the target a regular
+    proxy's CONNECT or absolute URL named."""
+    host = _s(addr[0]) if addr else ""
+    return host, ("ip" if not host or _is_ip(host) else "connect")
+
+
+def http_hostname(flow: http.HTTPFlow) -> tuple[str, str]:
+    """The best name for an HTTP flow's server, and its source (hostname.source).
+
+    In WireGuard and transparent mode `request.host` is only the IP connected to, so the
+    name the client asked for comes first: the Host header (HTTP/1.x) or :authority
+    (HTTP/2, HTTP/3), then the TLS SNI, then the address itself.
+    """
+    req = flow.request
+    if req.host_header:
+        return req.pretty_host, ("authority" if req.is_http2 or req.is_http3 else "host")
+    if sni := _sni(flow):
+        return sni, "sni"
+    return _address_hostname((req.host, req.port))
+
+
+def tcp_hostname(flow: tcp.TCPFlow) -> tuple[str, str]:
+    """The best name for a raw TCP connection's server: its TLS SNI, else its address."""
+    if sni := _sni(flow):
+        return sni, "sni"
+    return _address_hostname(flow.server_conn.address)
+
+
+def _hostname_metadata(pf: cp.Flow, source: str, flow) -> None:
+    pf.metadata["hostname.source"] = source
+    if sni := _sni(flow):
+        # Recorded even when the Host header won: a Host that disagrees with the SNI (a
+        # fronted domain) is worth seeing.
+        pf.metadata["tls.sni"] = sni
+
+
 def _is_ws_upgrade(resp) -> bool:
     return bool(resp and resp.status_code == 101 and
                 resp.headers.get("upgrade", "").lower() == "websocket")
@@ -97,12 +153,13 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     """Translate a mitmproxy HTTPFlow into the gateway's proto Flow."""
     req, resp = flow.request, flow.response
     path, _, query = (req.path or "/").partition("?")
+    hostname, hostname_source = http_hostname(flow)
 
     pf = cp.Flow(
         id=flow.id,
         method=req.method or "",
         scheme=req.scheme or "",
-        authority=req.host or "",
+        authority=hostname,
         path=path,
         query=query,
         protocol=_norm_proto(req.http_version),
@@ -139,6 +196,7 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     # flow.metadata; we pass it through verbatim for the viewer to display.
     for k, v in (flow.metadata or {}).items():
         pf.metadata[_s(k)] = _s(v)
+    _hostname_metadata(pf, hostname_source, flow)
 
     # Attach proxy metadata when the flow rode a SOCKS5 tunnel intercepted by
     # SocksUpstreamLayer (set on the flow's server connection context).
@@ -164,10 +222,11 @@ def build_tcp_flow(flow: tcp.TCPFlow) -> cp.Flow:
     stream is surfaced as directional messages (like WebSocket), so websocket=True reuses
     the message-timeline UI."""
     addr = flow.server_conn.address
-    host = addr[0] if addr else ""
-    sni = getattr(flow.server_conn, "sni", "") or ""
-    authority = sni or (f"{host}:{addr[1]}" if addr else "")
-    return cp.Flow(
+    hostname, hostname_source = tcp_hostname(flow)
+    # A connection with no name keeps its port: "ip:port" says more than a bare IP does
+    # about what a raw stream might be.
+    authority = f"{hostname}:{addr[1]}" if hostname_source in ("ip", "connect") and addr else hostname
+    pf = cp.Flow(
         id=flow.id,
         protocol="TCP",
         authority=authority,
@@ -177,6 +236,8 @@ def build_tcp_flow(flow: tcp.TCPFlow) -> cp.Flow:
         tls_decrypted=bool(getattr(flow.server_conn, "tls_established", False)),
         websocket=True,
     )
+    _hostname_metadata(pf, hostname_source, flow)
+    return pf
 
 
 def _ws_opcode(msg) -> str:
