@@ -16,10 +16,15 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
+import time
 import uuid
+from collections import Counter
+from dataclasses import dataclass
 
 import grpc
-from mitmproxy import ctx, http, tcp
+from mitmproxy import connection, ctx, dns, http, tcp, udp
+from mitmproxy.net.dns import response_codes as dns_rcodes
+from mitmproxy.net.dns import types as dns_types
 
 from mitmproxy.proxy import layer as proxy_layer
 
@@ -86,39 +91,100 @@ def _sni(flow) -> str:
     return ""
 
 
-def _address_hostname(addr) -> tuple[str, str]:
-    """The name a connection's address gives, and where it came from: "ip" for the address
-    a transparent or WireGuard capture connected to, "connect" for the target a regular
-    proxy's CONNECT or absolute URL named."""
+def _conn_id(client) -> str:
+    """The connection id a flow is grouped by (tcp_stream, the viewer's conn column):
+    mitmproxy's client connection, which every request, stream or lookup on it shares."""
+    return (getattr(client, "id", "") or "")[:8]
+
+
+@dataclass(frozen=True)
+class Hostname:
+    """The best name a capture holds for a server, and where it came from."""
+    name: str
+    source: str              # hostname.source: host, authority, sni, dns, ip or connect
+    dns_flow: str = ""       # the lookup that named it, when source is "dns"
+    candidates: tuple[str, ...] = ()  # the other names that lookup's IP had
+
+
+class DnsNames:
+    """What the device's own DNS answers said each IP is, for naming a connection that
+    carries no name of its own (no Host, no SNI). Only A/AAAA answers count, keyed to the
+    name the client asked for — not the CNAME target it resolved through."""
+
+    _KEEP = 16  # answers remembered per IP; a CDN address can stand for many names
+
+    def __init__(self) -> None:
+        self._by_ip: dict[str, list[tuple[float, str, str]]] = {}
+
+    def learn(self, flow) -> None:
+        resp = flow.response
+        if not resp or not resp.questions:
+            return
+        name = resp.questions[0].name.rstrip(".")
+        ts = resp.timestamp or time.time()
+        for rr in resp.answers:
+            if rr.type not in (dns_types.A, dns_types.AAAA):
+                continue
+            try:
+                ip = str(rr.ipv4_address if rr.type == dns_types.A else rr.ipv6_address)
+            except ValueError:
+                continue
+            seen = self._by_ip.setdefault(ip, [])
+            seen.append((ts, name, flow.id))
+            del seen[:-self._KEEP]
+
+    def lookup(self, ip: str, before: float) -> Hostname | None:
+        """The name of the most recent answer for ip given before the connection opened,
+        with the other names that IP was given as candidates."""
+        answers = [a for a in self._by_ip.get(ip, ()) if not before or a[0] <= before]
+        if not answers:
+            return None
+        _, name, flow_id = max(answers, key=lambda a: a[0])
+        others = tuple(sorted({n for _, n, _ in answers} - {name}))
+        return Hostname(name, "dns", flow_id, others)
+
+
+def _address_hostname(addr, names: DnsNames | None = None, opened: float = 0) -> Hostname:
+    """The name a connection's address gives: the target a regular proxy's CONNECT or
+    absolute URL named ("connect"), else what the device's DNS said the IP is ("dns"),
+    else the IP itself."""
     host = _s(addr[0]) if addr else ""
-    return host, ("ip" if not host or _is_ip(host) else "connect")
+    if host and not _is_ip(host):
+        return Hostname(host, "connect")
+    if host and names and (named := names.lookup(host.strip("[]"), opened)):
+        return named
+    return Hostname(host, "ip")
 
 
-def http_hostname(flow: http.HTTPFlow) -> tuple[str, str]:
-    """The best name for an HTTP flow's server, and its source (hostname.source).
+def http_hostname(flow: http.HTTPFlow, names: DnsNames | None = None) -> Hostname:
+    """The best name for an HTTP flow's server.
 
     In WireGuard and transparent mode `request.host` is only the IP connected to, so the
     name the client asked for comes first: the Host header (HTTP/1.x) or :authority
-    (HTTP/2, HTTP/3), then the TLS SNI, then the address itself.
+    (HTTP/2, HTTP/3), then the TLS SNI, then the device's DNS answer for the IP.
     """
     req = flow.request
     if req.host_header:
-        return req.pretty_host, ("authority" if req.is_http2 or req.is_http3 else "host")
+        return Hostname(req.pretty_host, "authority" if req.is_http2 or req.is_http3 else "host")
     if sni := _sni(flow):
-        return sni, "sni"
-    return _address_hostname((req.host, req.port))
+        return Hostname(sni, "sni")
+    return _address_hostname((req.host, req.port), names, flow.client_conn.timestamp_start or 0)
 
 
-def tcp_hostname(flow: tcp.TCPFlow) -> tuple[str, str]:
-    """The best name for a raw TCP connection's server: its TLS SNI, else its address."""
+def stream_hostname(flow, names: DnsNames | None = None) -> Hostname:
+    """The best name for a raw TCP or UDP stream's server: its TLS SNI, else its address."""
     if sni := _sni(flow):
-        return sni, "sni"
-    return _address_hostname(flow.server_conn.address)
+        return Hostname(sni, "sni")
+    return _address_hostname(flow.server_conn.address, names, flow.client_conn.timestamp_start or 0)
 
 
-def _hostname_metadata(pf: cp.Flow, source: str, flow) -> None:
-    pf.metadata["hostname.source"] = source
-    if sni := _sni(flow):
+def _hostname_metadata(pf: cp.Flow, hostname: Hostname, sni: str) -> None:
+    pf.metadata["hostname.source"] = hostname.source
+    if hostname.source == "dns":
+        pf.metadata["hostname.dns_flow"] = hostname.dns_flow
+        if hostname.candidates:
+            pf.metadata["hostname.dns_candidates"] = ",".join(hostname.candidates)
+    if sni:
         # Recorded even when the Host header won: a Host that disagrees with the SNI (a
         # fronted domain) is worth seeing.
         pf.metadata["tls.sni"] = sni
@@ -149,17 +215,17 @@ def _socks_proxy(flow: http.HTTPFlow) -> cp.Proxy | None:
     )
 
 
-def build_flow(flow: http.HTTPFlow) -> cp.Flow:
+def build_flow(flow: http.HTTPFlow, names: DnsNames | None = None) -> cp.Flow:
     """Translate a mitmproxy HTTPFlow into the gateway's proto Flow."""
     req, resp = flow.request, flow.response
     path, _, query = (req.path or "/").partition("?")
-    hostname, hostname_source = http_hostname(flow)
+    hostname = http_hostname(flow, names)
 
     pf = cp.Flow(
         id=flow.id,
         method=req.method or "",
         scheme=req.scheme or "",
-        authority=hostname,
+        authority=hostname.name,
         path=path,
         query=query,
         protocol=_norm_proto(req.http_version),
@@ -170,6 +236,7 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
         tls_decrypted=(req.scheme == "https"),
         user_agent=req.headers.get("user-agent", ""),
         websocket=_is_ws_upgrade(resp),
+        tcp_stream=_conn_id(flow.client_conn),
     )
     for k, v in req.headers.fields:
         pf.request_headers.append(cp.Header(name=_s(k), value=_s(v)))
@@ -196,7 +263,7 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     # flow.metadata; we pass it through verbatim for the viewer to display.
     for k, v in (flow.metadata or {}).items():
         pf.metadata[_s(k)] = _s(v)
-    _hostname_metadata(pf, hostname_source, flow)
+    _hostname_metadata(pf, hostname, _sni(flow))
 
     # Attach proxy metadata when the flow rode a SOCKS5 tunnel intercepted by
     # SocksUpstreamLayer (set on the flow's server connection context).
@@ -217,26 +284,120 @@ def build_flow(flow: http.HTTPFlow) -> cp.Flow:
     return pf
 
 
-def build_tcp_flow(flow: tcp.TCPFlow) -> cp.Flow:
-    """Synthesize a Flow for a raw (non-HTTP) TCP connection mitmproxy tunneled. Its byte
-    stream is surfaced as directional messages (like WebSocket), so websocket=True reuses
-    the message-timeline UI."""
+# conn.outcome: why a connection is recorded without decoded traffic. The gateway hides
+# all but tcp_passthrough by default (filter.Hidden) and drops it once a decoder claims
+# the stream.
+TCP_PASSTHROUGH = "tcp_passthrough"  # a raw TCP stream, its bytes kept as messages
+UDP_UNDECODED = "udp_undecoded"      # UDP that is neither DNS nor HTTP/3
+TLS_REJECTED = "tls_rejected"        # the client refused mitmproxy's certificate
+NO_REQUEST = "no_request"            # closed before it carried anything
+
+
+def _named_authority(hostname: Hostname, addr) -> str:
+    # A stream with no name keeps its port: "ip:port" says more than a bare IP does about
+    # what a raw stream might be.
+    if hostname.source in ("ip", "connect") and addr:
+        return f"{hostname.name}:{addr[1]}"
+    return hostname.name
+
+
+def build_stream_flow(flow, names: DnsNames | None = None) -> cp.Flow:
+    """Synthesize a Flow for a raw TCP or UDP stream mitmproxy forwarded without decoding.
+    Its bytes are surfaced as directional messages (like WebSocket), so websocket=True
+    reuses the message-timeline UI."""
+    is_udp = isinstance(flow, udp.UDPFlow)
     addr = flow.server_conn.address
-    hostname, hostname_source = tcp_hostname(flow)
-    # A connection with no name keeps its port: "ip:port" says more than a bare IP does
-    # about what a raw stream might be.
-    authority = f"{hostname}:{addr[1]}" if hostname_source in ("ip", "connect") and addr else hostname
+    hostname = stream_hostname(flow, names)
     pf = cp.Flow(
         id=flow.id,
-        protocol="TCP",
-        authority=authority,
+        protocol="UDP" if is_udp else "TCP",
+        authority=_named_authority(hostname, addr),
         src_addr=_peer(flow.client_conn.peername),
         dst_addr=_peer(addr),
         ts_unix_micros=int((flow.client_conn.timestamp_start or 0) * 1_000_000),
         tls_decrypted=bool(getattr(flow.server_conn, "tls_established", False)),
         websocket=True,
+        tcp_stream=_conn_id(flow.client_conn),
     )
-    _hostname_metadata(pf, hostname_source, flow)
+    _hostname_metadata(pf, hostname, _sni(flow))
+    pf.metadata["conn.outcome"] = UDP_UNDECODED if is_udp else TCP_PASSTHROUGH
+    _byte_counts(pf, flow.messages)
+    return pf
+
+
+
+def _byte_counts(pf: cp.Flow, messages) -> None:
+    up = sum(len(m.content or b"") for m in messages if m.from_client)
+    down = sum(len(m.content or b"") for m in messages if not m.from_client)
+    pf.request_bytes = up
+    pf.metadata["conn.bytes_up"] = str(up)
+    pf.metadata["conn.bytes_down"] = str(down)
+
+
+def build_dns_flow(flow: dns.DNSFlow) -> cp.Flow:
+    """A DNS lookup the device made: the question as the authority and method, the
+    answers as a JSON response body, the response code in dns.rcode (and as the error
+    when it is not NOERROR)."""
+    req, resp = flow.request, flow.response
+    q = req.questions[0] if req.questions else None
+    pf = cp.Flow(
+        id=flow.id,
+        protocol="DNS",
+        method=dns_types.to_str(q.type) if q else "",
+        authority=q.name.rstrip(".") if q else "",
+        src_addr=_peer(flow.client_conn.peername),
+        dst_addr=_peer(flow.server_conn.address),
+        ts_unix_micros=int((req.timestamp or flow.client_conn.timestamp_start or 0) * 1_000_000),
+        tcp_stream=_conn_id(flow.client_conn),
+    )
+    if resp:
+        rcode = dns_rcodes.to_str(resp.response_code)
+        pf.metadata["dns.rcode"] = rcode
+        if rcode != "NOERROR":
+            pf.error = rcode
+        body = json.dumps([rr.to_json() for rr in resp.answers]).encode()
+        pf.response_body.CopyFrom(cp.Body(size=len(body), content_type="application/json", inline=body))
+        pf.content_type = "application/json"
+        if resp.timestamp and req.timestamp:
+            pf.duration_micros = max(round((resp.timestamp - req.timestamp) * 1_000_000), 0)
+    if flow.error and flow.error.msg:
+        pf.error = _s(flow.error.msg)
+    return pf
+
+
+def _client_dst(client: connection.Client):
+    """Where a client was going, when the mode says: in WireGuard, local and transparent
+    mode the client's sockname is its original destination; in a regular proxy it is only
+    mitmproxy's own listener, so there is no destination to give."""
+    mode = getattr(getattr(client, "proxy_mode", None), "type_name", "")
+    return client.sockname if mode in ("wireguard", "local", "transparent", "tun") else None
+
+
+def build_conn_flow(client: connection.Client, outcome: str, error: str,
+                    names: DnsNames | None = None, target=None) -> cp.Flow:
+    """A connection that carried nothing mitmproxy could decode — a client that refused
+    its certificate, or one that closed before its first request — recorded so a reader
+    knows the capture saw it. target is a regular proxy's CONNECT target, when there was
+    one: the only destination that mode knows."""
+    dst = _client_dst(client) or target
+    if client.sni:
+        hostname = Hostname(_s(client.sni), "sni")
+    else:
+        hostname = _address_hostname(dst, names, client.timestamp_start or 0)
+    end = client.timestamp_end or time.time()
+    pf = cp.Flow(
+        id=f"conn-{client.id}",
+        protocol="UDP" if client.transport_protocol == "udp" else "TCP",
+        authority=_named_authority(hostname, dst),
+        src_addr=_peer(client.peername),
+        dst_addr=_peer(dst),
+        ts_unix_micros=int((client.timestamp_start or 0) * 1_000_000),
+        duration_micros=max(int((end - (client.timestamp_start or end)) * 1_000_000), 0),
+        tcp_stream=_conn_id(client),
+        error=error,
+    )
+    _hostname_metadata(pf, hostname, _s(client.sni or ""))
+    pf.metadata["conn.outcome"] = outcome
     return pf
 
 
@@ -270,6 +431,15 @@ def _extra_metadata(raw: str) -> dict[str, str]:
         return {}
 
 
+def outcome_counts(outcomes: Counter[str]) -> dict[str, str]:
+    """Session metadata saying how many connections the capture saw but could not decode,
+    by reason — so "nothing else happened" can be told from "a lot went undecoded" without
+    listing them. Every reason is present, 0 included: an absent key would read as "not
+    counted"."""
+    return {f"conn.undecoded.{o}": str(outcomes.get(o, 0))
+            for o in (TLS_REJECTED, NO_REQUEST, UDP_UNDECODED)}
+
+
 class GatewayPusher:
     """Pushes completed flows to the gateway; opens the session on startup."""
 
@@ -287,8 +457,18 @@ class GatewayPusher:
         self._channel: grpc.aio.Channel | None = None
         self._stub: ig.IngestServiceStub | None = None
         self.session_id: str | None = None
-        # Track TCP flow start timestamps so tcp_end can compute duration.
+        # Track TCP/UDP flow start timestamps so the end hook can compute duration.
         self._tcp_started: dict[str, float] = {}
+        # What the device's DNS answers named each IP, for a connection with no name.
+        self.names = DnsNames()
+        # Client connections that produced a flow of any kind; one that closes without
+        # becoming one is recorded as no_request.
+        self._used: set[str] = set()
+        # Undecoded connections by conn.outcome, reported at close.
+        self.outcomes: Counter[str] = Counter()
+        # A regular proxy's CONNECT target per client: where a tunnel that then carried
+        # nothing (or failed TLS) was going.
+        self._targets: dict[str, tuple[str, int]] = {}
 
     async def running(self) -> None:
         if self.session_id is not None:
@@ -326,15 +506,88 @@ class GatewayPusher:
         # Push the flow as soon as the request is seen, so an in-flight request (no
         # response yet) shows up immediately with a live stopwatch. response()/error()
         # re-push the same flow id with the outcome (the gateway upserts by id).
-        await self._send(flows=[build_flow(flow)])
+        self._used.add(flow.client_conn.id)
+        await self._send(flows=[build_flow(flow, self.names)])
 
     async def response(self, flow: http.HTTPFlow) -> None:
-        await self._send(flows=[build_flow(flow)])
+        await self._send(flows=[build_flow(flow, self.names)])
 
     async def error(self, flow: http.HTTPFlow) -> None:
         # Push request-only flows too (connection reset, upstream error, …).
         if isinstance(flow, http.HTTPFlow):
-            await self._send(flows=[build_flow(flow)])
+            self._used.add(flow.client_conn.id)
+            await self._send(flows=[build_flow(flow, self.names)])
+
+    # --- DNS -------------------------------------------------------------------------
+    # In WireGuard mode the device's resolver is mitmproxy itself, so every lookup passes
+    # through here. Each is recorded (hidden by default), and its A/AAAA answers name the
+    # connections that follow to those IPs.
+
+    async def dns_response(self, flow: dns.DNSFlow) -> None:
+        self._used.add(flow.client_conn.id)
+        self.names.learn(flow)
+        await self._send(flows=[build_dns_flow(flow)])
+
+    async def dns_error(self, flow: dns.DNSFlow) -> None:
+        self._used.add(flow.client_conn.id)
+        await self._send(flows=[build_dns_flow(flow)])
+
+    # --- connections nothing decoded ---------------------------------------------------
+
+    async def tls_failed_client(self, data) -> None:
+        # The client refused the handshake — almost always mitmproxy's certificate: a
+        # pinned app, or one that does not trust the user CA store. No request will come.
+        client = data.context.client
+        self._used.add(client.id)
+        why = _s(data.conn.error or "handshake failed")
+        await self._push_conn(client, TLS_REJECTED,
+                              f"client rejected the TLS handshake (certificate pinned?): {why}")
+
+    def http_connect(self, flow: http.HTTPFlow) -> None:
+        # Not a request in itself: a tunnel that carries nothing is still a no_request.
+        self._targets[flow.client_conn.id] = (flow.request.host, flow.request.port)
+
+    async def client_disconnected(self, client: connection.Client) -> None:
+        target = self._targets.pop(client.id, None)
+        if client.id in self._used:
+            self._used.discard(client.id)
+            return
+        await self._push_conn(client, NO_REQUEST, "connection closed before any request", target)
+
+    async def _push_conn(self, client: connection.Client, outcome: str, error: str,
+                         target=None) -> None:
+        self.outcomes[outcome] += 1
+        target = target or self._targets.get(client.id)
+        await self._send(flows=[build_conn_flow(client, outcome, error, self.names, target)])
+
+    # --- UDP that is neither DNS nor HTTP/3 ----------------------------------------------
+
+    async def udp_start(self, flow: udp.UDPFlow) -> None:
+        await self._start_stream(flow, UDP_UNDECODED)
+
+    async def udp_message(self, flow: udp.UDPFlow) -> None:
+        await self._stream_message(flow)
+
+    async def udp_end(self, flow: udp.UDPFlow) -> None:
+        await self._close_tcp_flow(flow)
+
+    async def udp_error(self, flow: udp.UDPFlow) -> None:
+        await self._close_tcp_flow(flow)
+
+    async def _start_stream(self, flow, outcome: str) -> None:
+        self._used.add(flow.client_conn.id)
+        if outcome != TCP_PASSTHROUGH:
+            # A raw TCP stream is not counted: the gateway may yet decode it (MAX), which
+            # only it knows. Its flows say which, by protocol.
+            self.outcomes[outcome] += 1
+        self._tcp_started[flow.id] = flow.timestamp_start or 0
+        await self._send(flows=[build_stream_flow(flow, self.names)])
+
+    async def _stream_message(self, flow) -> None:
+        if not flow.messages:
+            return
+        m = flow.messages[-1]
+        await self._send(messages=[_message(flow.id, m.from_client, "binary", m.content, m.timestamp)])
 
     async def websocket_message(self, flow: http.HTTPFlow) -> None:
         # The parent Upgrade flow was pushed on `response` (101). Push each frame as it
@@ -346,15 +599,12 @@ class GatewayPusher:
 
     async def tcp_start(self, flow: tcp.TCPFlow) -> None:
         # Raw (non-HTTP) TCP connection: push the synthetic connection flow up front so its
-        # byte-stream messages have a parent.
-        self._tcp_started[flow.id] = flow.timestamp_start or 0
-        await self._send(flows=[build_tcp_flow(flow)])
+        # byte-stream messages have a parent. The gateway decodes it if a custom decoder
+        # (MAX) claims it; otherwise it stays a tcp_passthrough stream.
+        await self._start_stream(flow, TCP_PASSTHROUGH)
 
     async def tcp_message(self, flow: tcp.TCPFlow) -> None:
-        if not flow.messages:
-            return
-        m = flow.messages[-1]
-        await self._send(messages=[_message(flow.id, m.from_client, "binary", m.content, m.timestamp)])
+        await self._stream_message(flow)
 
     async def tcp_end(self, flow: tcp.TCPFlow) -> None:
         # The connection closed — re-push the flow with a duration so the viewer stops
@@ -369,13 +619,12 @@ class GatewayPusher:
     async def websocket_end(self, flow: http.HTTPFlow) -> None:
         # WebSocket closed — re-push the parent flow so the viewer reflects the final state.
         if flow.websocket:
-            await self._send(flows=[build_flow(flow)])
+            await self._send(flows=[build_flow(flow, self.names)])
 
-    async def _close_tcp_flow(self, flow: tcp.TCPFlow) -> None:
+    async def _close_tcp_flow(self, flow) -> None:
         start = self._tcp_started.pop(flow.id, None)
-        pf = build_tcp_flow(flow)
+        pf = build_stream_flow(flow, self.names)
         if start:
-            import time
             pf.duration_micros = max(int((time.time() - start) * 1_000_000), 0)
         if flow.error and flow.error.msg:
             pf.error = _s(flow.error.msg)
@@ -432,7 +681,8 @@ class GatewayPusher:
         try:
             with grpc.insecure_channel(self.addr) as ch:
                 ig.IngestServiceStub(ch).CloseSession(
-                    ip.CloseSessionRequest(session_id=self.session_id), timeout=10
+                    ip.CloseSessionRequest(session_id=self.session_id,
+                                           metadata=outcome_counts(self.outcomes)), timeout=10
                 )
         except Exception:  # noqa: BLE001
             pass

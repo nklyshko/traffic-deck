@@ -29,7 +29,7 @@ def test_bad_metadata_is_dropped_rather_than_raised():
 
 from mitmproxy.test import tflow
 
-from capture_mitmproxy.addon import build_flow, build_tcp_flow
+from capture_mitmproxy.addon import build_flow, build_stream_flow
 
 
 def _wireguard_flow(http_version="HTTP/1.1", host_header="api.example.com", sni="api.example.com"):
@@ -81,12 +81,12 @@ def test_tcp_flow_is_named_by_sni_else_ip_and_port():
     f = tflow.ttcpflow()
     f.server_conn.address = ("155.212.204.68", 443)
     f.client_conn.sni = "api.oneme.ru"
-    pf = build_tcp_flow(f)
+    pf = build_stream_flow(f)
     assert (pf.authority, pf.metadata["hostname.source"]) == ("api.oneme.ru", "sni")
 
     f.client_conn.sni = None
     f.server_conn.sni = None
-    pf = build_tcp_flow(f)
+    pf = build_stream_flow(f)
     assert (pf.authority, pf.metadata["hostname.source"]) == ("155.212.204.68:443", "ip")
 
 
@@ -95,5 +95,5 @@ def test_regular_proxy_target_is_a_connect_name_not_an_ip():
     f.server_conn.address = ("mtalk.google.com", 5228)
     f.client_conn.sni = None
     f.server_conn.sni = None
-    pf = build_tcp_flow(f)
+    pf = build_stream_flow(f)
     assert (pf.authority, pf.metadata["hostname.source"]) == ("mtalk.google.com:5228", "connect")
