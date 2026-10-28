@@ -189,8 +189,12 @@ type QueryFlowsRequest struct {
 	// (ts_micros, frame_number) — the paging key, which the index is already built for, so
 	// it costs the predicate nothing. Relative times ("-15m") resolve against the caller's
 	// clock and are sent absolute, so a filter means the same thing whenever it runs.
-	SinceMicros   int64 `protobuf:"varint,7,opt,name=since_micros,json=sinceMicros,proto3" json:"since_micros,omitempty"`
-	UntilMicros   int64 `protobuf:"varint,8,opt,name=until_micros,json=untilMicros,proto3" json:"until_micros,omitempty"`
+	SinceMicros int64 `protobuf:"varint,7,opt,name=since_micros,json=sinceMicros,proto3" json:"since_micros,omitempty"`
+	UntilMicros int64 `protobuf:"varint,8,opt,name=until_micros,json=untilMicros,proto3" json:"until_micros,omitempty"`
+	// Also return flows hidden by default: DNS lookups and connections nothing decoded
+	// (conn.outcome tls_rejected, no_request, udp_undecoded). Off, they are left out and
+	// counted in FlowPage.hidden_matched instead.
+	IncludeHidden bool `protobuf:"varint,9,opt,name=include_hidden,json=includeHidden,proto3" json:"include_hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -281,6 +285,13 @@ func (x *QueryFlowsRequest) GetUntilMicros() int64 {
 	return 0
 }
 
+func (x *QueryFlowsRequest) GetIncludeHidden() bool {
+	if x != nil {
+		return x.IncludeHidden
+	}
+	return false
+}
+
 type FlowPage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Flows []*Flow                `protobuf:"bytes,1,rep,name=flows,proto3" json:"flows,omitempty"`
@@ -297,7 +308,11 @@ type FlowPage struct {
 	// Advisory diagnostics for an expression that parses but does not mean what it looks
 	// like — `~d a & ~c 200` matches `&` as a URL regex rather than failing. Part of the
 	// language, so they come from whoever owns it (ADR-0012 §9).
-	Hints         []string `protobuf:"bytes,7,rep,name=hints,proto3" json:"hints,omitempty"`
+	Hints []string `protobuf:"bytes,7,rep,name=hints,proto3" json:"hints,omitempty"`
+	// Flows the filter matched but left out as hidden by default (see
+	// QueryFlowsRequest.include_hidden) — so a reader knows they exist without seeing them.
+	// Like matched, a lower bound when count_capped is set. 0 with include_hidden.
+	HiddenMatched uint64 `protobuf:"varint,8,opt,name=hidden_matched,json=hiddenMatched,proto3" json:"hidden_matched,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -381,13 +396,22 @@ func (x *FlowPage) GetHints() []string {
 	return nil
 }
 
+func (x *FlowPage) GetHiddenMatched() uint64 {
+	if x != nil {
+		return x.HiddenMatched
+	}
+	return 0
+}
+
 type StreamFlowsRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	Follow    bool                   `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"` // keep streaming live events
 	// Same DSL as QueryFlows: a following viewer receives only events for flows matching
 	// it, and a flow_unmatched when an update pushes one out of that set.
-	Filter        string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	Filter string `protobuf:"bytes,4,opt,name=filter,proto3" json:"filter,omitempty"`
+	// As QueryFlowsRequest.include_hidden: off, hidden-by-default flows are not streamed.
+	IncludeHidden bool `protobuf:"varint,5,opt,name=include_hidden,json=includeHidden,proto3" json:"include_hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -441,6 +465,13 @@ func (x *StreamFlowsRequest) GetFilter() string {
 		return x.Filter
 	}
 	return ""
+}
+
+func (x *StreamFlowsRequest) GetIncludeHidden() bool {
+	if x != nil {
+		return x.IncludeHidden
+	}
+	return false
 }
 
 type SessionEvent struct {
@@ -1412,7 +1443,7 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\n" +
 	"FlowCursor\x12\x1b\n" +
 	"\tts_micros\x18\x01 \x01(\x03R\btsMicros\x12!\n" +
-	"\fframe_number\x18\x02 \x01(\x04R\vframeNumber\"\x98\x02\n" +
+	"\fframe_number\x18\x02 \x01(\x04R\vframeNumber\"\xbf\x02\n" +
 	"\x11QueryFlowsRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
@@ -1422,7 +1453,8 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\x06before\x18\x05 \x01(\v2\x16.traffic.v1.FlowCursorR\x06before\x12\x12\n" +
 	"\x04last\x18\x06 \x01(\bR\x04last\x12!\n" +
 	"\fsince_micros\x18\a \x01(\x03R\vsinceMicros\x12!\n" +
-	"\funtil_micros\x18\b \x01(\x03R\vuntilMicros\"\xf7\x01\n" +
+	"\funtil_micros\x18\b \x01(\x03R\vuntilMicros\x12%\n" +
+	"\x0einclude_hidden\x18\t \x01(\bR\rincludeHidden\"\x9e\x02\n" +
 	"\bFlowPage\x12&\n" +
 	"\x05flows\x18\x01 \x03(\v2\x10.traffic.v1.FlowR\x05flows\x12*\n" +
 	"\x04next\x18\x02 \x01(\v2\x16.traffic.v1.FlowCursorR\x04next\x12*\n" +
@@ -1430,12 +1462,14 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\amatched\x18\x04 \x01(\x04R\amatched\x12!\n" +
 	"\fcount_capped\x18\x05 \x01(\bR\vcountCapped\x12\x18\n" +
 	"\ascanned\x18\x06 \x01(\x04R\ascanned\x12\x14\n" +
-	"\x05hints\x18\a \x03(\tR\x05hints\"{\n" +
+	"\x05hints\x18\a \x03(\tR\x05hints\x12%\n" +
+	"\x0ehidden_matched\x18\b \x01(\x04R\rhiddenMatched\"\xa2\x01\n" +
 	"\x12StreamFlowsRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
 	"\x06follow\x18\x03 \x01(\bR\x06follow\x12\x16\n" +
-	"\x06filter\x18\x04 \x01(\tR\x06filterJ\x04\b\x02\x10\x03R\x10include_backfill\"`\n" +
+	"\x06filter\x18\x04 \x01(\tR\x06filter\x12%\n" +
+	"\x0einclude_hidden\x18\x05 \x01(\bR\rincludeHiddenJ\x04\b\x02\x10\x03R\x10include_backfill\"`\n" +
 	"\fSessionEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x121\n" +

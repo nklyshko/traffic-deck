@@ -134,6 +134,7 @@ class FakeClient:
         self.force_closed = []
         self.marks = []     # recorded (record_ids, color|None) from set_mark/clear_mark
         self.comments = []  # recorded (record_id, body) from add_comment
+        self.include_hidden_seen = []  # include_hidden of each query_flows
         # Capture control.
         self.capture_sources = [cp2.CaptureSourceInfo(name="chrome", label="Chrome")]
         self.describe_calls = []  # (source, params) each DescribeCaptureSource
@@ -276,9 +277,15 @@ class FakeClient:
         return True
 
     async def query_flows(self, session_id, filter_expr="", limit=250,
-                          after=None, before=None, last=False):
+                          after=None, before=None, last=False, include_hidden=False):
         rows = [f for f in _BY_SESSION.get(session_id, _FLOWS)
                 if self._matches(f, filter_expr)]
+        # The gateway leaves DNS lookups (and undecoded connections) out unless asked,
+        # and counts what it left out.
+        hidden = 0 if include_hidden else sum(1 for f in rows if f.protocol == "DNS")
+        if not include_hidden:
+            rows = [f for f in rows if f.protocol != "DNS"]
+        self.include_hidden_seen.append(include_hidden)
         rows.sort(key=lambda f: (f.ts_unix_micros, f.frame_number))
         key = lambda f: (f.ts_unix_micros, f.frame_number)
         if after is not None:
@@ -287,13 +294,14 @@ class FakeClient:
             rows = [f for f in rows if key(f) < (before.ts_micros, before.frame_number)]
         matched = len(rows)
         window = rows[-limit:] if (last or before is not None) else rows[:limit]
-        page = vp.FlowPage(flows=window, matched=matched)
+        page = vp.FlowPage(flows=window, matched=matched, hidden_matched=hidden)
         if window:
             first, lastf = window[0], window[-1]
             # A cursor is offered only when there is something that way — being at an end
             # is not the same as the window merely being short.
             all_rows = [f for f in _BY_SESSION.get(session_id, _FLOWS)
-                        if self._matches(f, filter_expr)]
+                        if self._matches(f, filter_expr)
+                        and (include_hidden or f.protocol != "DNS")]
             all_rows.sort(key=key)
             if any(key(f) > key(lastf) for f in all_rows):
                 page.next.ts_micros, page.next.frame_number = lastf.ts_unix_micros, lastf.frame_number
@@ -301,7 +309,7 @@ class FakeClient:
                 page.prev.ts_micros, page.prev.frame_number = first.ts_unix_micros, first.frame_number
         return page
 
-    async def stream_flows(self, session_id, follow=False, filter_expr=""):
+    async def stream_flows(self, session_id, follow=False, filter_expr="", include_hidden=False):
         # A following subscription carries liveness only — query_flows serves the rows a
         # viewer displays, so replaying here would undo the paging.
         if not follow:
@@ -592,6 +600,46 @@ async def test_filter_reduces_rows():
         await pilot.press("enter")  # apply the filter
         await settle(pilot)
         assert app.screen.query_one("#flows", DataTable).row_count == 1  # only f2
+
+
+async def test_hidden_flows_are_counted_toggled_and_remembered():
+    """DNS lookups (and undecoded connections) are left out by default, with a count in the
+    status line so an emptier view does not read as "nothing captured"; `h` brings them
+    back, and the choice outlives the pane — the next one opens the same way."""
+    from traffic_viewer import prefs
+    dns_flow = cp.Flow(id="d1", method="A", authority="api.example.com", protocol="DNS",
+                       ts_unix_micros=1, frame_number=900)
+    _FLOWS.append(dns_flow)
+    try:
+        app = make_app()
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await focus(pilot, "#sessions")
+            await pilot.press("enter")
+            await settle(pilot)
+            pane = app.screen.query_one(SessionPane)
+            table = app.screen.query_one("#flows", DataTable)
+            status = lambda: pane.query_one("#pane-status", Label).render().plain
+            assert table.row_count == 3
+            assert "1 hidden" in status()
+
+            await pilot.press("h")
+            await settle(pilot)
+            assert table.row_count == 4
+            assert "showing hidden" in status()
+            assert app.client.include_hidden_seen[-1] is True
+            assert prefs.get("show_hidden") is True
+
+        app = make_app()
+        async with app.run_test() as pilot:
+            await settle(pilot)
+            await focus(pilot, "#sessions")
+            await pilot.press("enter")
+            await settle(pilot)
+            assert app.screen.query_one("#flows", DataTable).row_count == 4
+            assert app.client.include_hidden_seen[0] is True
+    finally:
+        _FLOWS.remove(dns_flow)
 
 
 async def test_filter_help_shown_only_while_filter_focused():

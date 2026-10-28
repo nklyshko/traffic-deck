@@ -66,8 +66,9 @@ func (v *Viewer) QueryFlows(ctx context.Context, req *trafficv1.QueryFlowsReques
 		Before: cursorFromProto(req.GetBefore()),
 		Last:   req.GetLast(),
 
-		SinceMicros: req.GetSinceMicros(),
-		UntilMicros: req.GetUntilMicros(),
+		SinceMicros:   req.GetSinceMicros(),
+		UntilMicros:   req.GetUntilMicros(),
+		IncludeHidden: req.GetIncludeHidden(),
 	}
 	if ls := v.hub.get(sid); ls != nil {
 		q.HeldBody = ls.searchBody
@@ -85,6 +86,8 @@ func (v *Viewer) QueryFlows(ctx context.Context, req *trafficv1.QueryFlowsReques
 		Matched:     page.Matched,
 		CountCapped: page.CountCapped,
 		Scanned:     page.Scanned,
+
+		HiddenMatched: page.HiddenMatched,
 	}
 	v.mergeUnflushed(ctx, sid, pred, req, out)
 	return out, nil
@@ -126,6 +129,10 @@ func (v *Viewer) mergeUnflushed(ctx context.Context, sid string, pred *filter.Pr
 		ff := filterFlowFromProto(f, tags, groups)
 		ff.Body = func(d filter.Direction) string { return ls.searchBody(f.GetId(), d) }
 		if !pred.Match(&ff) {
+			continue
+		}
+		if !req.GetIncludeHidden() && filter.Hidden(&ff) {
+			page.HiddenMatched++
 			continue
 		}
 		add = append(add, summarize(f))
@@ -217,8 +224,8 @@ func filterFlowFromProto(f *trafficv1.Flow, tagNames, groupNames map[string]stri
 		Scheme: f.GetScheme(), Method: f.GetMethod(), Authority: f.GetAuthority(),
 		Path: f.GetPath(), Query: f.GetQuery(), Status: f.GetStatus(),
 		ContentTyp: f.GetContentType(), TCPStream: f.GetTcpStream(),
-		H2StreamID: f.GetH2StreamId(),
-		MarkColor:  f.GetMarkColor(), Favorite: f.GetFavorite(),
+		H2StreamID: f.GetH2StreamId(), Protocol: f.GetProtocol(),
+		MarkColor: f.GetMarkColor(), Favorite: f.GetFavorite(),
 		TagNames: f.GetTagIds(), GroupNames: f.GetGroupIds(),
 		Metadata: f.GetMetadata(),
 		Body: func(d filter.Direction) string {

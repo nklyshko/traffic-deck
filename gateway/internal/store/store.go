@@ -26,6 +26,7 @@ import (
 
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/filter"
 	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
@@ -887,6 +888,23 @@ func (s *Store) CountFlows(ctx context.Context, sessionID string) (int, error) {
 	}
 	var n int
 	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flows`).Scan(&n)
+	return n, err
+}
+
+// CountHiddenFlows counts a session's flows hidden by default — filter.Hidden, said in SQL.
+func (s *Store) CountHiddenFlows(ctx context.Context, sessionID string) (int, error) {
+	db, err := s.sessionDB(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	args := []any{filter.HiddenProtocol, filter.ConnOutcomeKey}
+	for _, o := range filter.HiddenOutcomes {
+		args = append(args, o)
+	}
+	var n int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flows WHERE protocol = ? OR id IN (
+		SELECT flow_id FROM flow_metadata WHERE key = ? AND value IN (?`+
+		strings.Repeat(", ?", len(filter.HiddenOutcomes)-1)+`))`, args...).Scan(&n)
 	return n, err
 }
 

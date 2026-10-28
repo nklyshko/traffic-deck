@@ -28,6 +28,7 @@ from traffic_viewer.client import control_pb2 as cpb, viewer_pb2
 from textual.widgets.option_list import Option
 from rich.text import Text
 
+from . import prefs
 from .filters import FILTER_HELP, MSG_FILTER_HELP, with_meta_keys
 from .render import (
     MARK_COLORS,
@@ -1206,6 +1207,7 @@ class SessionPane(AnnotatableTable, Vertical):
         Binding("M", "messages", "WS msgs"),
         Binding("W", "wireshark", "Wireshark"),
         Binding("l", "follow", "Follow new"),
+        Binding("h", "toggle_hidden", "Hidden"),
     ]
 
     def __init__(self, session_id: str, label: str = "", source_columns=None,
@@ -1220,6 +1222,10 @@ class SessionPane(AnnotatableTable, Vertical):
         self._order: list[str] = []         # window ids, in timeline order
         self._window = _page_size()
         self._filter = ""                   # expression as typed; the gateway compiles it
+        # DNS lookups and connections nothing decoded are hidden unless asked for; the
+        # choice is remembered between runs, and the count the gateway left out is shown.
+        self._show_hidden = bool(prefs.get("show_hidden", False))
+        self._hidden = 0                    # matching flows left out as hidden
         self._next = None                   # cursor past the window's last row
         self._prev = None                   # cursor before its first
         self._matched = 0                   # rows matching, possibly a lower bound
@@ -1383,6 +1389,12 @@ class SessionPane(AnnotatableTable, Vertical):
             base += f" · showing {len(self._order)}"
         if self.query_one("#flows", NavDataTable).follow:
             base += " · ⇣ follow"
+        if self._show_hidden:
+            base += " · showing hidden"
+        elif self._hidden:
+            # Said even when nothing else matched: an empty view that is hiding the only
+            # matches (a DNS filter, a pinned host) must not read as "nothing captured".
+            base += f" · {self._hidden} hidden (h)"
         self.query_one("#pane-status", Label).update(base)
 
     # --- windowed view model ----------------------------------------------
@@ -1459,6 +1471,7 @@ class SessionPane(AnnotatableTable, Vertical):
         self._next = page.next if page.HasField("next") else None
         self._prev = page.prev if page.HasField("prev") else None
         self._matched, self._capped = page.matched, page.count_capped
+        self._hidden = page.hidden_matched
         self._at_end = self._next is None
         if not self._at_end:
             # The window no longer holds the end of the list, so nothing can be tailed:
@@ -1476,7 +1489,7 @@ class SessionPane(AnnotatableTable, Vertical):
         try:
             page = await self.app.client.query_flows(
                 self.session_id, self._filter, self._window,
-                after=after, before=before, last=last)
+                after=after, before=before, last=last, include_hidden=self._show_hidden)
         except Exception as exc:  # noqa: BLE001
             self._loading = False  # ...it is not still coming; the query failed
             self._update_subtitle()
@@ -1626,6 +1639,20 @@ class SessionPane(AnnotatableTable, Vertical):
             self._load_page(cursor="bottom", last=True)
         self._update_subtitle()
 
+    def action_toggle_hidden(self) -> None:
+        """Show or hide what is hidden by default — DNS lookups and connections nothing
+        decoded (a pinned app's rejected handshake, a connection with no request, UDP no
+        decoder reads). Remembered for every pane and the next run."""
+        self._show_hidden = not self._show_hidden
+        prefs.set("show_hidden", self._show_hidden)
+        self.notify("showing DNS and undecoded connections" if self._show_hidden
+                    else "hiding DNS and undecoded connections")
+        if self.query_one("#flows", NavDataTable).follow:
+            self._load_page(cursor="bottom", last=True)
+        else:
+            self._load_page(cursor="top")
+        self.restart_stream()
+
     def action_filter(self) -> None:
         self.query_one("#filter", Input).focus()
 
@@ -1724,7 +1751,8 @@ class SessionPane(AnnotatableTable, Vertical):
         next_flush = 0.0
         try:
             async for ev in self.app.client.stream_flows(
-                    self.session_id, follow=True, filter_expr=self._filter):
+                    self.session_id, follow=True, filter_expr=self._filter,
+                    include_hidden=self._show_hidden):
                 kind = ev.WhichOneof("event")
                 if kind == "flow_added":
                     self._ingest(ev.flow_added, added=True)

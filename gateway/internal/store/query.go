@@ -52,6 +52,9 @@ type FlowQuery struct {
 	// written before its body settled (ADR-0011 §3b), whose bytes are still in the hub.
 	// Nil for a closed session, where an empty ref simply means no body.
 	HeldBody func(flowID string, d filter.Direction) string
+	// IncludeHidden also returns flows hidden by default (filter.Hidden); off, they are
+	// counted in FlowPage.HiddenMatched instead.
+	IncludeHidden bool
 }
 
 // FlowPage is one page plus what a viewer needs to navigate and describe it.
@@ -61,12 +64,14 @@ type FlowPage struct {
 	Matched     uint64
 	CountCapped bool
 	Scanned     uint64
+	// HiddenMatched counts the flows the filter matched but left out as hidden.
+	HiddenMatched uint64
 }
 
 // queryCols are the columns the predicate can see. Deliberately narrow: this is the scan
 // that runs for every row, and hydrating a full flow happens only for the page.
 const queryCols = `id, ts_micros, frame_number, scheme, method, authority, path, query,
-	status, content_type, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref`
+	status, content_type, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref, protocol`
 
 type scanRow struct {
 	id                  string
@@ -143,6 +148,10 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 		if !q.Filter.Match(&r.f) {
 			continue
 		}
+		if !q.IncludeHidden && filter.Hidden(&r.f) {
+			page.HiddenMatched++
+			continue
+		}
 		page.Matched++
 		if len(ids) < q.Limit {
 			ids = append(ids, r.id)
@@ -168,6 +177,13 @@ func (s *Store) QueryFlows(ctx context.Context, sessionID string, q FlowQuery) (
 			return nil, err
 		}
 		page.Matched, page.CountCapped = uint64(n), false
+		if !q.IncludeHidden {
+			hidden, err := s.CountHiddenFlows(ctx, sessionID)
+			if err != nil {
+				return nil, err
+			}
+			page.Matched, page.HiddenMatched = uint64(n-hidden), uint64(hidden)
+		}
 	}
 
 	if backwards {
@@ -231,10 +247,10 @@ func whereClause(q FlowQuery) (string, []any) {
 func scanQueryRow(rows *sql.Rows) (*scanRow, error) {
 	var r scanRow
 	var scheme, method, authority, path, query, contentType, tcpStream, h2 sql.NullString
-	var reqRef, respRef sql.NullString
+	var reqRef, respRef, protocol sql.NullString
 	var status sql.NullInt64
 	if err := rows.Scan(&r.id, &r.ts, &r.frame, &scheme, &method, &authority, &path, &query,
-		&status, &contentType, &tcpStream, &h2, &reqRef, &respRef); err != nil {
+		&status, &contentType, &tcpStream, &h2, &reqRef, &respRef, &protocol); err != nil {
 		return nil, err
 	}
 	r.reqBodyRef, r.respRef = reqRef.String, respRef.String
@@ -242,6 +258,7 @@ func scanQueryRow(rows *sql.Rows) (*scanRow, error) {
 		Scheme: scheme.String, Method: method.String, Authority: authority.String,
 		Path: path.String, Query: query.String, Status: uint32(status.Int64),
 		ContentTyp: contentType.String, TCPStream: tcpStream.String, H2StreamID: h2.String,
+		Protocol: protocol.String,
 	}
 	return &r, nil
 }

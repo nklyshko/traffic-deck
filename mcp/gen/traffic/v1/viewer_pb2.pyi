@@ -30,7 +30,7 @@ class FlowCursor(_message.Message):
     def __init__(self, ts_micros: _Optional[int] = ..., frame_number: _Optional[int] = ...) -> None: ...
 
 class QueryFlowsRequest(_message.Message):
-    __slots__ = ("session_id", "filter", "limit", "after", "before", "last", "since_micros", "until_micros")
+    __slots__ = ("session_id", "filter", "limit", "after", "before", "last", "since_micros", "until_micros", "include_hidden")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FILTER_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
@@ -39,6 +39,7 @@ class QueryFlowsRequest(_message.Message):
     LAST_FIELD_NUMBER: _ClassVar[int]
     SINCE_MICROS_FIELD_NUMBER: _ClassVar[int]
     UNTIL_MICROS_FIELD_NUMBER: _ClassVar[int]
+    INCLUDE_HIDDEN_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     filter: str
     limit: int
@@ -47,10 +48,11 @@ class QueryFlowsRequest(_message.Message):
     last: bool
     since_micros: int
     until_micros: int
-    def __init__(self, session_id: _Optional[str] = ..., filter: _Optional[str] = ..., limit: _Optional[int] = ..., after: _Optional[_Union[FlowCursor, _Mapping]] = ..., before: _Optional[_Union[FlowCursor, _Mapping]] = ..., last: bool = ..., since_micros: _Optional[int] = ..., until_micros: _Optional[int] = ...) -> None: ...
+    include_hidden: bool
+    def __init__(self, session_id: _Optional[str] = ..., filter: _Optional[str] = ..., limit: _Optional[int] = ..., after: _Optional[_Union[FlowCursor, _Mapping]] = ..., before: _Optional[_Union[FlowCursor, _Mapping]] = ..., last: bool = ..., since_micros: _Optional[int] = ..., until_micros: _Optional[int] = ..., include_hidden: bool = ...) -> None: ...
 
 class FlowPage(_message.Message):
-    __slots__ = ("flows", "next", "prev", "matched", "count_capped", "scanned", "hints")
+    __slots__ = ("flows", "next", "prev", "matched", "count_capped", "scanned", "hints", "hidden_matched")
     FLOWS_FIELD_NUMBER: _ClassVar[int]
     NEXT_FIELD_NUMBER: _ClassVar[int]
     PREV_FIELD_NUMBER: _ClassVar[int]
@@ -58,6 +60,7 @@ class FlowPage(_message.Message):
     COUNT_CAPPED_FIELD_NUMBER: _ClassVar[int]
     SCANNED_FIELD_NUMBER: _ClassVar[int]
     HINTS_FIELD_NUMBER: _ClassVar[int]
+    HIDDEN_MATCHED_FIELD_NUMBER: _ClassVar[int]
     flows: _containers.RepeatedCompositeFieldContainer[_common_pb2.Flow]
     next: FlowCursor
     prev: FlowCursor
@@ -65,17 +68,20 @@ class FlowPage(_message.Message):
     count_capped: bool
     scanned: int
     hints: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., next: _Optional[_Union[FlowCursor, _Mapping]] = ..., prev: _Optional[_Union[FlowCursor, _Mapping]] = ..., matched: _Optional[int] = ..., count_capped: bool = ..., scanned: _Optional[int] = ..., hints: _Optional[_Iterable[str]] = ...) -> None: ...
+    hidden_matched: int
+    def __init__(self, flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., next: _Optional[_Union[FlowCursor, _Mapping]] = ..., prev: _Optional[_Union[FlowCursor, _Mapping]] = ..., matched: _Optional[int] = ..., count_capped: bool = ..., scanned: _Optional[int] = ..., hints: _Optional[_Iterable[str]] = ..., hidden_matched: _Optional[int] = ...) -> None: ...
 
 class StreamFlowsRequest(_message.Message):
-    __slots__ = ("session_id", "follow", "filter")
+    __slots__ = ("session_id", "follow", "filter", "include_hidden")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     FOLLOW_FIELD_NUMBER: _ClassVar[int]
     FILTER_FIELD_NUMBER: _ClassVar[int]
+    INCLUDE_HIDDEN_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     follow: bool
     filter: str
-    def __init__(self, session_id: _Optional[str] = ..., follow: bool = ..., filter: _Optional[str] = ...) -> None: ...
+    include_hidden: bool
+    def __init__(self, session_id: _Optional[str] = ..., follow: bool = ..., filter: _Optional[str] = ..., include_hidden: bool = ...) -> None: ...
 
 class SessionEvent(_message.Message):
     __slots__ = ("session_id", "status")

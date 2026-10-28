@@ -70,7 +70,8 @@ class GatewayClient:
         return list(resp.sessions)
 
     async def query_flows(self, session_id: str, filter_expr: str = "", limit: int = 250,
-                          after=None, before=None, last: bool = False):
+                          after=None, before=None, last: bool = False,
+                          include_hidden: bool = False):
         """One page of a session's flows, filtered by the gateway.
 
         Navigation is by cursor, never by an offset computed from a total: `last` starts
@@ -78,7 +79,8 @@ class GatewayClient:
         is what lets the match count stay approximate (ADR-0012).
         """
         req = viewer_pb2.QueryFlowsRequest(
-            session_id=session_id, filter=filter_expr, limit=limit, last=last)
+            session_id=session_id, filter=filter_expr, limit=limit, last=last,
+            include_hidden=include_hidden)
         if after is not None:
             req.after.CopyFrom(after)
         if before is not None:
@@ -86,7 +88,7 @@ class GatewayClient:
         return await self._ensure().QueryFlows(req)
 
     async def stream_flows(self, session_id: str, follow: bool = False,
-                           filter_expr: str = "") -> AsyncIterator:
+                           filter_expr: str = "", include_hidden: bool = False) -> AsyncIterator:
         """Yield FlowEvents for a session, filtered by the gateway.
 
         The same filter as query_flows, so following and filtering compose. Events include
@@ -95,7 +97,8 @@ class GatewayClient:
         """
         call = self._ensure().StreamFlows(
             viewer_pb2.StreamFlowsRequest(
-                session_id=session_id, follow=follow, filter=filter_expr
+                session_id=session_id, follow=follow, filter=filter_expr,
+                include_hidden=include_hidden,
             )
         )
         async for event in call:

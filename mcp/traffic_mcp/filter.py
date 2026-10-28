@@ -32,6 +32,7 @@ Terms taking a <regex> argument:
   ~t <re>        content-type
   ~conn <re>     transport connection id (tcp.stream index, or quic:<id>)
   ~stream <re>   HTTP/2 or HTTP/3 stream id within that connection
+  ~proto <re>    protocol: HTTP/1.1, HTTP/2, HTTP/3, TCP, UDP, DNS, or a decoder's (MAX)
   ~mark <re>     color mark      ~tag <re>      tag name
   ~group <re>    group name      ~comment <re>  comment body
   ~meta <key>=<re>   source metadata (~meta <key> alone matches presence)
@@ -51,6 +52,10 @@ body read. Narrowing terms in the same expression are what keep ~b/~h cheap.
 
 Terms taking NO argument:
   ~s   has a response      ~q   has no response      ~fav   favorited
+
+DNS lookups and connections nothing decoded (~meta conn.outcome=tls_rejected,
+no_request, udp_undecoded) are hidden unless the tool is called with
+include_hidden=true; results count them in hidden_matched.
 
 A bare regex with no ~term matches the URL, so `200` on its own matches URLs
 containing "200" — it does NOT filter by status. Use `~c 200` for that.

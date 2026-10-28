@@ -108,11 +108,11 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	// the publish path: a per-subscriber predicate on publish would put that work behind
 	// the mutex the decoder publishes through, which is the one place it must not go.
 	matches := func(f *trafficv1.Flow) bool {
-		if pred == nil {
-			return true
-		}
 		ff := filterFlowFromProto(f, tagNames, groupNames)
-		return pred.Match(&ff)
+		if !req.GetIncludeHidden() && filter.Hidden(&ff) {
+			return false
+		}
+		return pred == nil || pred.Match(&ff)
 	}
 	// shown tracks what this subscription has been told about, which is what makes a
 	// retraction possible: only the gateway can see that an update pushed a flow out of

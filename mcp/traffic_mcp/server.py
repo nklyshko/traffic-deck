@@ -178,6 +178,19 @@ def _annotations(rec, tagnames: dict, groupnames: dict) -> dict:
     }
 
 
+# What the gateway hides unless asked, said once for every tool that reports a count of it.
+_HIDDEN_NOTE = ("matching flows left out as hidden by default — DNS lookups and connections "
+                "nothing decoded: a client that rejected the TLS handshake (likely certificate "
+                "pinning), one closed before any request, UDP no decoder reads. Pass "
+                "include_hidden=true to see them; `outcome` on each says why it is undecoded")
+
+
+def _note_hidden(out: dict, hidden: int) -> None:
+    if hidden:
+        out["hidden_matched"] = hidden
+        out["hidden_note"] = _HIDDEN_NOTE
+
+
 def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
     return {
         "id": f.id,
@@ -193,6 +206,11 @@ def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
         "tls_decrypted": f.tls_decrypted,
         "websocket": f.websocket,
         "ws_message_count": f.ws_message_count,
+        "conn": f.tcp_stream or None,
+        # Why a connection is recorded without decoded traffic (tls_rejected — likely
+        # certificate pinning —, no_request, udp_undecoded, tcp_passthrough); None for a
+        # decoded flow. The rest of its metadata (hostname.source, tls.sni) is in get_flow.
+        "outcome": f.metadata.get("conn.outcome") or None,
         **_annotations(f, tagnames, groupnames),
         "http2_fingerprint": f.http2_fingerprint or None,
         "ja3": f.ja3 or None,
@@ -874,7 +892,8 @@ async def stop_capture(session_id: str) -> dict:
 
 
 @mcp.tool()
-async def network_timeline(session_id: str, limit: int = 200, cursor: str = "") -> dict:
+async def network_timeline(session_id: str, limit: int = 200, cursor: str = "",
+                           include_hidden: bool = False) -> dict:
     """The request sequence for a session, like the Chrome DevTools Network tab.
 
     One compact row per flow ordered by time: relative start (t_ms = ms from the first
@@ -885,15 +904,20 @@ async def network_timeline(session_id: str, limit: int = 200, cursor: str = "") 
     Paged by cursor, not offset: pass the returned `next_cursor` back to continue, or omit
     it to start at the beginning. `total` is the session's flow count. (t_ms is relative to
     the first request *on the current page*, since earlier pages are not fetched.)
+
+    DNS lookups and connections nothing decoded are left out unless `include_hidden`;
+    `hidden_matched` says how many there are.
     """
     sid = await _resolve_session(session_id)
     limit = max(1, min(limit, _LIMIT_MAX))
-    page = await client().query_flows(sid, "", limit, after=_parse_cursor(cursor))
+    page = await client().query_flows(sid, "", limit, after=_parse_cursor(cursor),
+                                      include_hidden=include_hidden)
     flows = list(page.flows)
     stamped = [f.ts_unix_micros for f in flows if f.ts_unix_micros > 0]
     t0 = min(stamped) if stamped else 0
     rows = [_timeline_row(i, f, t0) for i, f in enumerate(flows)]
     out = {"session_id": sid, "total": page.matched, "count": len(rows), "flows": rows}
+    _note_hidden(out, page.hidden_matched)
     if page.HasField("next"):
         out["next_cursor"] = _cursor_str(page.next)
     return out
@@ -901,7 +925,7 @@ async def network_timeline(session_id: str, limit: int = 200, cursor: str = "") 
 
 @mcp.tool()
 async def wait_for_flows(session_id: str, filter: str = "", count: int = 1,
-                         timeout_seconds: int = 30) -> dict:
+                         timeout_seconds: int = 30, include_hidden: bool = False) -> dict:
     """Block until new flows are decoded on a capturing session, then return them —
     how to drive a capture instead of polling it. Fire the traffic (open the page, hit
     the app), call this, and read what arrived.
@@ -922,6 +946,8 @@ async def wait_for_flows(session_id: str, filter: str = "", count: int = 1,
     arrives counts then — so `~c 200` waits for a success and `~u /api/login ~s` waits for
     that endpoint to answer. An expression the gateway rejects comes back with the syntax
     reference.
+
+    DNS lookups and connections nothing decoded do not count unless `include_hidden`.
 
     `session_closed` means the capture ended (before or during the wait) and nothing more
     will arrive. `missed_events` means the gateway had to drop events to keep up and the
@@ -950,7 +976,7 @@ async def wait_for_flows(session_id: str, filter: str = "", count: int = 1,
     closed = False
     live_events = 0  # a repeated "subscription live" event is the gateway's resync marker
     started = time.monotonic()
-    call = client().stream_flows(sid, filter)
+    call = client().stream_flows(sid, filter, include_hidden=include_hidden)
     try:
         async with asyncio.timeout(timeout):
             async for ev in call:
@@ -1002,7 +1028,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
                  request_body_contains: str = "", response_body_contains: str = "",
                  since: str = "", until: str = "", websocket: bool | None = None,
                  has_response: bool | None = None, limit: int = 100, cursor: str = "",
-                 max_scan: int = 400) -> dict:
+                 max_scan: int = 400, include_hidden: bool = False) -> dict:
     """Combined structured search over flows — every criterion you pass is ANDed in
     one query, e.g. domain="api.oneme.ru" + status_in="4xx" + response_body_contains="BanShadow".
 
@@ -1034,6 +1060,10 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     Every hit carries `match_preview` — {field: matched substring in context} for the
     substring criteria — so you can see *why* it matched without a get_flow. A body hit
     also carries `<field>_at`, the byte offset of the match, for get_body(offset=…).
+
+    DNS lookups and connections nothing decoded (rejected TLS — likely pinning —, no
+    request, undecoded UDP) are left out unless `include_hidden`; `hidden_matched` counts
+    the ones the criteria matched.
 
     Leave `session_id` empty to search across every session (each result carries its
     `session_id`/`session_label`). Returns time-ordered flow summaries (no headers/bodies
@@ -1078,6 +1108,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
     matched: list[tuple[str, str | None, object]] = []
     scanned = 0
+    hidden = 0
     complete = True
     for sid, label in sessions:
         page_at = resume_at if sid == resume_sid else None
@@ -1090,7 +1121,8 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
             try:
                 page = await client().query_flows(
                     sid, expr, min(limit * 2, _LIMIT_MAX), after=page_at,
-                    since_micros=since_us, until_micros=until_us)
+                    since_micros=since_us, until_micros=until_us,
+                    include_hidden=include_hidden)
             except grpc.aio.AioRpcError as e:
                 # For an explicit session_id, surface the error (incl. FAILED_PRECONDITION
                 # "re-import this session"). When scanning every session, skip outdated or
@@ -1101,6 +1133,10 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
                     raise
                 break
             scanned += page.scanned
+            if page_at is None:
+                # Each page counts every hidden match in the scan from its cursor on, so
+                # only a session's first page gives its count without overlap.
+                hidden += page.hidden_matched
             for f in page.flows:
                 if _matches_post(f, **post):
                     matched.append((sid, label, f))
@@ -1136,6 +1172,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
     out = {"count": len(rows), "total": len(matched), "complete": complete,
            "flows": rows, "scanned": scanned}
+    _note_hidden(out, hidden)
     if len(matched) > limit or not complete:
         if page_rows:
             last_sid, _, last_f = page_rows[-1]
@@ -1156,7 +1193,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
 @mcp.tool()
 async def search_flows(session_id: str, filter: str = "", limit: int = 100,
-                       cursor: str = "") -> dict:
+                       cursor: str = "", include_hidden: bool = False) -> dict:
     """Search a session's flows with a mitmproxy-style filter expression.
 
     SYNTAX: terms are separated by SPACES and ANDed automatically. There are NO boolean
@@ -1167,7 +1204,8 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
 
     Terms taking a <regex>: ~m method, ~d domain (the host alone, no scheme/path),
     ~u full URL (scheme://domain/path?query), ~c status code, ~t content-type,
-    ~conn connection, ~stream HTTP/2 stream, ~mark <color>, ~tag <name>, ~group <name>,
+    ~conn connection, ~stream HTTP/2 stream, ~proto protocol (HTTP/1.1, HTTP/2, HTTP/3,
+    TCP, UDP, DNS, or a decoder's, e.g. MAX), ~mark <color>, ~tag <name>, ~group <name>,
     ~comment <text>, ~meta <key>=<regex>, the header terms ~h (either direction),
     ~hq (request headers), ~hs (response headers) — matched against "name: value" lines
     — and the body terms ~b (either direction), ~bq (request body), ~bs (response body).
@@ -1191,12 +1229,20 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
     matches nothing comes back with `filter_syntax` and `session_flow_count`, and anything
     suspicious in the expression is reported in `hints` whether or not it matched.
     For status sets, time windows and header content prefer the structured `search` tool.
+
+    HIDDEN BY DEFAULT: DNS lookups and connections a capture saw but nothing decoded — a
+    client that rejected the TLS handshake (likely certificate pinning), one closed before
+    any request, UDP no decoder reads. They are left out unless `include_hidden`, and
+    `hidden_matched` counts the ones the filter matched, so an empty result can be told
+    from "the app talked, but nothing could be read". With include_hidden, find them by
+    `~meta conn.outcome=tls_rejected` (or no_request, udp_undecoded) or `~proto DNS`.
     """
     limit = max(1, min(limit, _LIMIT_MAX))
     sid = await _resolve_session(session_id)
     tagnames, groupnames = await _name_maps()
     try:
-        page = await client().query_flows(sid, filter, limit, after=_parse_cursor(cursor))
+        page = await client().query_flows(sid, filter, limit, after=_parse_cursor(cursor),
+                                          include_hidden=include_hidden)
     except grpc.aio.AioRpcError as e:
         if e.code() is grpc.StatusCode.INVALID_ARGUMENT:
             # A rejected filter is the one moment the caller is certain to re-read: hand
@@ -1206,6 +1252,7 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
 
     out = {"session_id": sid, "total": page.matched, "count": len(page.flows),
            "flows": [_flow_summary(f, tagnames, groupnames) for f in page.flows]}
+    _note_hidden(out, page.hidden_matched)
     if page.count_capped:
         # The count stopped at the scan budget, so `total` is a floor, not the answer.
         out["count_capped"] = True
@@ -1223,7 +1270,12 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
         empty = await client().query_flows(sid, "", 1)
         out["session_flow_count"] = empty.matched
         out["filter_syntax"] = FILTER_SYNTAX
-        if not empty.matched:
+        if page.hidden_matched and not include_hidden:
+            # Not a filter problem: what it matched is hidden. Said first, since the
+            # usual advice (widen the regex) would send the caller the wrong way.
+            out.setdefault("hints", []).insert(0, (
+                f"{page.hidden_matched} hidden flows match — pass include_hidden=true"))
+        elif not empty.matched:
             # An empty session is the answer, not a filter problem — say so first, ahead
             # of any advice about the expression.
             out.setdefault("hints", []).insert(0, "the session has no flows at all")
@@ -1335,7 +1387,7 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
 @mcp.tool()
 async def grep_bodies(session_id: str, pattern: str, filter: str = "",
                       response: bool = True, max_hits: int = 3, context: int = 80,
-                      limit: int = 50, cursor: str = "") -> dict:
+                      limit: int = 50, cursor: str = "", include_hidden: bool = False) -> dict:
     """Run a regex over the bodies of the flows a filter selects and report, for EVERY
     one of them, how often it occurs — including the flows where it does not. That is the
     question search cannot answer in one call: "which of these 40 page loads lack the
@@ -1363,7 +1415,8 @@ async def grep_bodies(session_id: str, pattern: str, filter: str = "",
     limit = max(1, min(limit, _LIMIT_MAX))
     max_hits, context = max(0, min(max_hits, 50)), max(0, min(context, 2000))
     try:
-        page = await client().query_flows(sid, filter, limit, after=_parse_cursor(cursor))
+        page = await client().query_flows(sid, filter, limit, after=_parse_cursor(cursor),
+                                          include_hidden=include_hidden)
     except grpc.aio.AioRpcError as e:
         if e.code() is grpc.StatusCode.INVALID_ARGUMENT:
             raise ValueError(f"{e.details()}\n\n{FILTER_SYNTAX}") from None

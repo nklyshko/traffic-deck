@@ -56,7 +56,8 @@ class GatewayClient:
 
     async def query_flows(self, session_id: str, filter_expr: str = "", limit: int = 100,
                           after=None, before=None, last: bool = False,
-                          since_micros: int = 0, until_micros: int = 0):
+                          since_micros: int = 0, until_micros: int = 0,
+                          include_hidden: bool = False):
         """One page of a session's flows, filtered and paged by the gateway.
 
         Paging is by cursor rather than offset: a live session grows while it is read, so
@@ -64,7 +65,8 @@ class GatewayClient:
         """
         req = viewer_pb2.QueryFlowsRequest(
             session_id=session_id, filter=filter_expr, limit=limit, last=last,
-            since_micros=since_micros or 0, until_micros=until_micros or 0)
+            since_micros=since_micros or 0, until_micros=until_micros or 0,
+            include_hidden=include_hidden)
         if after is not None:
             req.after.CopyFrom(after)
         if before is not None:
@@ -76,13 +78,15 @@ class GatewayClient:
             viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)
         )
 
-    def stream_flows(self, session_id: str, filter_expr: str = "", follow: bool = True):
+    def stream_flows(self, session_id: str, filter_expr: str = "", follow: bool = True,
+                     include_hidden: bool = False):
         """Live FlowEvents for a session. Delta-only by construction — backfill is
         query_flows' job — so everything this yields arrived after the call. Returns the
         streaming call itself (an async iterator); cancel it to stop following."""
         return self._v().StreamFlows(
             viewer_pb2.StreamFlowsRequest(
-                session_id=session_id, filter=filter_expr, follow=follow)
+                session_id=session_id, filter=filter_expr, follow=follow,
+                include_hidden=include_hidden)
         )
 
     async def query_sql(self, session_id: str, sql: str, params: list[str] | None = None,

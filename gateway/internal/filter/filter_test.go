@@ -9,7 +9,7 @@ func testFlow() *Flow {
 	return &Flow{
 		Scheme: "https", Method: "GET", Authority: "api.example.com",
 		Path: "/v1/things", Query: "page=2", Status: 200,
-		ContentTyp: "application/json", TCPStream: "12", H2StreamID: "3",
+		ContentTyp: "application/json", TCPStream: "12", H2StreamID: "3", Protocol: "HTTP/2",
 		MarkColor: "red", Favorite: true,
 		TagNames: []string{"t-auth"}, GroupNames: []string{"g-api"},
 		Comments: []string{"looks suspicious"},
@@ -48,6 +48,7 @@ func TestTermsMatchTheirField(t *testing.T) {
 		{"~t json", true}, {"~t html", false},
 		{"~conn '^12$'", false}, // quotes match literally — see the hint
 		{"~conn 12", true}, {"~stream 3", true},
+		{"~proto ^HTTP/2$", true}, {"!~proto DNS|TCP|UDP", true}, {"~proto DNS", false},
 		{"~mark red", true}, {"~mark blue", false},
 		{"~tag auth", true}, {"~tag other", false},
 		{"~group api", true},

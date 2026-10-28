@@ -74,6 +74,10 @@ message QueryFlowsRequest {
   // clock and are sent absolute, so a filter means the same thing whenever it runs.
   int64 since_micros = 7;
   int64 until_micros = 8;
+  // Also return flows hidden by default: DNS lookups and connections nothing decoded
+  // (conn.outcome tls_rejected, no_request, udp_undecoded). Off, they are left out and
+  // counted in FlowPage.hidden_matched instead.
+  bool include_hidden = 9;
 }
 
 message FlowPage {
@@ -92,6 +96,10 @@ message FlowPage {
   // like — `~d a & ~c 200` matches `&` as a URL regex rather than failing. Part of the
   // language, so they come from whoever owns it (ADR-0012 §9).
   repeated string hints = 7;
+  // Flows the filter matched but left out as hidden by default (see
+  // QueryFlowsRequest.include_hidden) — so a reader knows they exist without seeing them.
+  // Like matched, a lower bound when count_capped is set. 0 with include_hidden.
+  uint64 hidden_matched = 8;
 }
 
 message StreamFlowsRequest {
@@ -100,6 +108,8 @@ message StreamFlowsRequest {
   // Same DSL as QueryFlows: a following viewer receives only events for flows matching
   // it, and a flow_unmatched when an update pushes one out of that set.
   string filter = 4;
+  // As QueryFlowsRequest.include_hidden: off, hidden-by-default flows are not streamed.
+  bool include_hidden = 5;
 
   reserved 2;                    // was include_backfill: never read; backfill is QueryFlows'
   reserved "include_backfill";   // job now (ADR-0012 §4)

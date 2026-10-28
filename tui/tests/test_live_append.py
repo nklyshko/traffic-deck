@@ -39,11 +39,11 @@ class LiveFakeClient(FakeClient):
         self._inject: asyncio.Queue = asyncio.Queue()
 
     async def query_flows(self, session_id, filter_expr="", limit=250,
-                          after=None, before=None, last=False):
+                          after=None, before=None, last=False, include_hidden=False):
         # The whole (tiny) session fits one page: no cursors, so the pane is at the end.
         return vp.FlowPage(flows=list(self._rows), matched=len(self._rows))
 
-    async def stream_flows(self, session_id, follow=False, filter_expr=""):
+    async def stream_flows(self, session_id, follow=False, filter_expr="", include_hidden=False):
         if not follow:
             for f in self._rows:
                 yield vp.FlowEvent(flow_added=f)

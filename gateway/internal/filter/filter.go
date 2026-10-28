@@ -13,6 +13,7 @@ package filter
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type Flow struct {
 	ContentTyp string
 	TCPStream  string
 	H2StreamID string
+	Protocol   string // "HTTP/1.1", "HTTP/2", "HTTP/3", "TCP", "UDP", "DNS", or a decoder's ("MAX")
 
 	MarkColor  string
 	Favorite   bool
@@ -165,7 +167,7 @@ type grammar struct {
 var flowGrammar = grammar{
 	args: map[string]bool{
 		"~m": true, "~d": true, "~u": true, "~c": true, "~t": true,
-		"~conn": true, "~stream": true,
+		"~conn": true, "~stream": true, "~proto": true,
 		"~mark": true, "~tag": true, "~group": true, "~comment": true, "~meta": true,
 		"~h": true, "~hq": true, "~hs": true,
 		"~b": true, "~bq": true, "~bs": true,
@@ -347,6 +349,8 @@ func fieldGetter(name string, tagNames, groupNames map[string]string) func(*Flow
 		return func(f *Flow) string { return f.TCPStream }
 	case "~stream":
 		return func(f *Flow) string { return f.H2StreamID }
+	case "~proto":
+		return func(f *Flow) string { return f.Protocol }
 	case "~mark":
 		return func(f *Flow) string { return f.MarkColor }
 	case "~tag":
@@ -373,3 +377,22 @@ func resolve(ids []string, names map[string]string) []string {
 	}
 	return out
 }
+
+// Hidden reports whether a flow is left out of a view unless the caller asks for it: a
+// DNS lookup, or a connection a capture source recorded because nothing decoded it —
+// rejected TLS (a pinned app), closed before any request, UDP with no decoder. They are
+// kept so a reader can learn the capture saw them, but they are not traffic to read.
+// A raw TCP stream nothing claimed (tcp_passthrough) is not hidden: its payload is there.
+func Hidden(f *Flow) bool {
+	return f.Protocol == HiddenProtocol || slices.Contains(HiddenOutcomes, f.Metadata[ConnOutcomeKey])
+}
+
+// HiddenProtocol and HiddenOutcomes are what Hidden tests, exported for the store's exact
+// count of a session's hidden flows — which has to say the same thing in SQL.
+const HiddenProtocol = "DNS"
+
+var HiddenOutcomes = []string{"tls_rejected", "no_request", "udp_undecoded"}
+
+// ConnOutcomeKey is the flow metadata key a capture source sets on a connection nothing
+// decoded, naming why (capture/capture_mitmproxy).
+const ConnOutcomeKey = "conn.outcome"

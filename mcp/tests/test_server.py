@@ -672,7 +672,8 @@ class _SearchClient:
         return list(self.flows[sid])
 
     async def query_flows(self, sid, filter_expr="", limit=100, after=None,
-                          before=None, last=False, since_micros=0, until_micros=0):
+                          before=None, last=False, since_micros=0, until_micros=0,
+                          include_hidden=False):
         """Stands in for the gateway's filtering and paging with the handful of terms
         these tests exercise, so search_flows is driven the way the server drives it:
         cursors rather than offsets, and hints supplied by whoever owns the language."""
@@ -741,9 +742,16 @@ class _SearchClient:
         key = lambda f: (f.ts_unix_micros, f.frame_number)
         if after is not None:
             rows = [f for f in rows if key(f) > (after.ts_micros, after.frame_number)]
+        # The gateway hides DNS lookups and undecoded connections unless asked, counting
+        # them instead.
+        is_hidden = lambda f: (f.protocol == "DNS" or f.metadata.get("conn.outcome")
+                               in ("tls_rejected", "no_request", "udp_undecoded"))
+        hidden = 0 if include_hidden else sum(1 for f in rows if is_hidden(f))
+        if not include_hidden:
+            rows = [f for f in rows if not is_hidden(f)]
         matched = len(rows)
         window = rows[:limit]
-        page = vp.FlowPage(flows=window, matched=matched, scanned=examined)
+        page = vp.FlowPage(flows=window, matched=matched, scanned=examined, hidden_matched=hidden)
         if len(rows) > limit:
             last_row = window[-1]
             page.next.ts_micros = last_row.ts_unix_micros
@@ -1304,7 +1312,7 @@ def _run_wait(monkeypatch, events, *, status=1, **kw):
     call = _StreamCall(events)
 
     class Fake:
-        def stream_flows(self, sid, filter_expr="", follow=True):
+        def stream_flows(self, sid, filter_expr="", follow=True, include_hidden=False):
             self.sid, self.filter = sid, filter_expr
             return call
 
@@ -1576,3 +1584,40 @@ def test_unsearchable_bodies_survives_a_gateway_without_sql(monkeypatch):
 
     monkeypatch.setattr(S, "client", lambda: Fake())
     assert asyncio.run(S._unsearchable_bodies("s1")) == {}
+
+
+# --- hidden by default ------------------------------------------------------
+
+def _hidden_session():
+    return [
+        _flow(id="h1", method="GET", authority="api.example.com", path="/a", protocol="HTTP/2",
+              status=200, ts_unix_micros=1, frame_number=1),
+        _flow(id="d1", method="A", authority="api.example.com", protocol="DNS",
+              ts_unix_micros=2, frame_number=2),
+        _flow(id="p1", authority="api.example.com", protocol="TCP", ts_unix_micros=3,
+              frame_number=3, error="client rejected the TLS handshake (certificate pinned?)",
+              metadata={"conn.outcome": "tls_rejected"}),
+    ]
+
+
+def test_search_flows_counts_what_it_hid_and_says_how_to_see_it(monkeypatch):
+    out = _run_search_flows(monkeypatch, _hidden_session(), "~d api")
+    assert [f["id"] for f in out["flows"]] == ["h1"]
+    assert out["hidden_matched"] == 2
+    assert "include_hidden" in out["hidden_note"] and "pinning" in out["hidden_note"]
+
+
+def test_an_empty_result_that_is_only_hidden_says_so_first(monkeypatch):
+    flows = [f for f in _hidden_session() if f.id != "h1"]
+    out = _run_search_flows(monkeypatch, flows, "~d api")
+    assert out["total"] == 0
+    assert "include_hidden" in out["hints"][0]
+
+
+def test_include_hidden_returns_them_with_their_outcome(monkeypatch):
+    import asyncio
+    _run_search_flows(monkeypatch, _hidden_session(), "")  # installs the fakes
+    out = asyncio.run(S.search_flows("s1", "~d api", include_hidden=True))
+    assert [f["id"] for f in out["flows"]] == ["h1", "d1", "p1"]
+    assert "hidden_matched" not in out
+    assert out["flows"][2]["outcome"] == "tls_rejected"
