@@ -22,6 +22,10 @@ from capture_sdk.proto import control_pb2 as ctl
 _ADDON = str(Path(__file__).resolve().parent / "addon.py")
 
 
+def _echo(line: str) -> None:
+    print(line, end="" if line.endswith("\n") else "\n", flush=True)
+
+
 class MitmproxySource(source.CaptureSource):
     """A transient mitmproxy source: each StartCapture runs one mitmdump; StopCapture stops
     it (its addon closes the session)."""
@@ -45,7 +49,10 @@ class MitmproxySource(source.CaptureSource):
 
     def start_capture(self, label: str, params: Mapping[str, str]) -> str:
         mode = params.get("mode") or "regular"
-        cmd = ["mitmdump", "-s", _ADDON, "--mode", mode,
+        # flow_detail=0: the flows themselves reach the gateway, so mitmdump's log keeps only
+        # what nothing else records — failed client handshakes (a pinned app), upstream
+        # errors, warnings.
+        cmd = ["mitmdump", "-s", _ADDON, "--mode", mode, "--set", "flow_detail=0",
                "--listen-port", params.get("listen_port") or "8888"]
         if params.get("listen_host"):
             cmd += ["--listen-host", params["listen_host"]]
@@ -67,14 +74,17 @@ class MitmproxySource(source.CaptureSource):
     def _read_session(self, proc: subprocess.Popen) -> str:
         """Read mitmdump's output until the addon prints its session id (SESSION <id>)."""
         for line in proc.stdout:
+            _echo(line)
             if line.startswith("SESSION "):
                 return line[len("SESSION "):].strip()
         raise RuntimeError("mitmdump exited before opening a session (port in use? bad mode?)")
 
     def _watch(self, sid: str, proc: subprocess.Popen) -> None:
-        # Drain output so the pipe never fills; when mitmdump exits, drop the session.
-        for _ in proc.stdout:
-            pass
+        # Pass mitmdump's output on to ours, which the gateway writes to the source's log —
+        # it is the only record of a connection that never became a flow. Draining also keeps
+        # the pipe from filling. When mitmdump exits, drop the session.
+        for line in proc.stdout:
+            _echo(line)
         with self._lock:
             self._caps.pop(sid, None)
         self.session_ended(sid)

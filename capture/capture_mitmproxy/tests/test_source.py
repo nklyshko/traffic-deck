@@ -132,3 +132,34 @@ def test_start_capture_raises_if_mitmdump_never_opens_a_session(monkeypatch):
         assert "session" in str(e)
     else:
         raise AssertionError("expected a RuntimeError when no session opens")
+
+
+def test_mitmdump_output_reaches_the_source_log(monkeypatch, capsys):
+    """mitmdump's output is the only record of a connection that never became a flow (a
+    pinned app's failed handshake), so it is passed on to the source's own output, which
+    the gateway writes to mitmproxy.log — not drained to nowhere."""
+    class ChattyProc:
+        pid = 1
+        stdout = iter(["HTTP(S) proxy listening\n", "SESSION mm-9\n",
+                       "client TLS handshake failed: unknown ca\n"])
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(MitmproxySource, "_spawn", lambda self, cmd, env: ChattyProc())
+    src = MitmproxySource("gw")
+    ended = threading.Event()
+    monkeypatch.setattr(src, "session_ended", lambda sid: ended.set())
+    assert src.start_capture("x", {}) == "mm-9"
+    assert ended.wait(5)
+    out = capsys.readouterr().out
+    assert "HTTP(S) proxy listening" in out
+    assert "client TLS handshake failed: unknown ca" in out
+
+
+def test_mitmdump_runs_without_per_flow_output(monkeypatch):
+    cmds = []
+    monkeypatch.setattr(MitmproxySource, "_spawn",
+                        lambda self, cmd, env: cmds.append(cmd) or FakeProc())
+    src = MitmproxySource("gw")
+    src.start_capture("x", {})
+    assert "flow_detail=0" in cmds[0]
