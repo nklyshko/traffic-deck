@@ -41,6 +41,12 @@ class PktapSource(ChromeSource):
         self._run_as = run_as
         self._tcpdump = tcpdump
 
+    def describe(self, params: Mapping[str, str]):
+        # Listing saved profiles creates ~/.traffic-deck/chrome-profiles on first use: as
+        # root, it locks every later "new profile" out of it.
+        with privdrop.as_user(self._run_as):
+            return super().describe(params)
+
     def start_capture(self, label: str, params: Mapping[str, str]) -> str:
         return super().start_capture(label or "chrome-pktap", params)
 

@@ -304,3 +304,32 @@ def test_user_tempdir_falls_back_to_tmp(monkeypatch):
 
     monkeypatch.setattr(sp, "run", boom)
     assert privdrop.user_tempdir((501, 20)) == "/tmp"
+
+
+def test_describe_lists_profiles_as_the_user(monkeypatch):
+    # Describe creates ~/.traffic-deck/chrome-profiles on first use; done as root, no
+    # later "new profile" can be made in it.
+    import contextlib
+
+    from capture_chrome.source import ChromeSource
+    from capture_pktap.source import PktapSource
+
+    state = {"as_user": False, "seen": None}
+
+    @contextlib.contextmanager
+    def fake_as_user(run_as):
+        state["as_user"] = True
+        try:
+            yield
+        finally:
+            state["as_user"] = False
+
+    def fake_describe(self, params):
+        state["seen"] = state["as_user"]
+
+    monkeypatch.setattr(privdrop, "as_user", fake_as_user)
+    monkeypatch.setattr(ChromeSource, "describe", fake_describe)
+    src = PktapSource.__new__(PktapSource)
+    src._run_as = (501, 20)
+    src.describe({})
+    assert state["seen"] is True

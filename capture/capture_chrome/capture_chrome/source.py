@@ -91,9 +91,6 @@ class ChromeSource(source.CaptureSource):
 
     def start_capture(self, label: str, params: Mapping[str, str]) -> str:
         chrome = params.get("chrome") or platform.chrome_binary()
-        # Remember choices so the next Describe defaults to them, exactly as the CLI picker's
-        # Store does — keeping "defaults to your last run" in serve mode.
-        self._store.remember("chrome", chrome)
         profile = self._resolve_profile(chrome, params)
         duration = float(params["duration"]) if params.get("duration") else None
 
@@ -115,7 +112,9 @@ class ChromeSource(source.CaptureSource):
 
     def _resolve_profile(self, chrome: str, params: Mapping[str, str]):
         """Turn the chosen profile params into the launch form, mirroring the kinds Describe
-        offered, and remember each selection for next time."""
+        offered, and remember each selection for next time — the binary too, so the next
+        Describe defaults to your last run exactly as the CLI picker's Store does."""
+        self._store.remember("chrome", chrome)
         kind = params.get("profile_kind") or "temp"
         self._store.remember("profile_kind", kind)
         if kind == "default":
