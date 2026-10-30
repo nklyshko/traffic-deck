@@ -67,6 +67,14 @@ registered at all, so they never appear in the tool list.
   share it were multiplexed; `stream_id` (in `get_flow`) is the HTTP/2 or HTTP/3 stream.
 - `undecoded_reason` says why a connection recorded no decoded request; `message_count` is
   a flow's WebSocket frames or decoder messages.
+- `metadata` is every key the capture source recorded on the flow, unfiltered
+  ([metadata-keys.md](metadata-keys.md) lists them). `hostname.source` says where the
+  hostname in `url` came from: `host` / `authority` (the request named it), `sni` (the
+  request named no host; the TLS SNI did), `connect` (a proxy CONNECT target), `dns`
+  (**inferred** from the device's DNS answer for the IP; `hostname.dns_candidates` lists
+  the other names that IP had) or `ip` (no name at all). Only the mitmproxy source writes
+  it today; a flow without it from a pcap capture took its hostname from the request
+  headers, else the SNI, else the address.
 
 ## Driving a capture
 

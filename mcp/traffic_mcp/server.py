@@ -74,6 +74,7 @@ class FlowSummary(Annotations):
     message_count: int
     connection_id: str | None     # tcp stream number, or quic:<n> for HTTP/3
     undecoded_reason: str | None  # conn.outcome for an undecoded connection, else None
+    metadata: dict[str, str] | None  # the source's flow metadata; see docs/metadata-keys.md
     http2_fingerprint: str | None
     ja3: str | None
     ja4: str | None
@@ -290,8 +291,12 @@ def _flow_summary(f: common_pb2.Flow, tagnames: dict[str, str],
         "connection_id": f.tcp_stream or None,
         # Why a connection is recorded without decoded traffic (tls_rejected — likely
         # certificate pinning —, no_request, udp_undecoded, tcp_passthrough); None for a
-        # decoded flow. The rest of its metadata (hostname.source, tls.sni) is in get_flow.
+        # decoded flow. The same value is conn.outcome in `metadata`.
         "undecoded_reason": f.metadata.get("conn.outcome") or None,
+        # Everything the capture source recorded about the flow, as it stored it:
+        # hostname.source says whether the hostname in `url` was in the request or
+        # inferred (docs/metadata-keys.md has every key).
+        "metadata": dict(f.metadata) or None,
         **_annotations(f, tagnames, groupnames),
         "http2_fingerprint": f.http2_fingerprint or None,
         "ja3": f.ja3 or None,

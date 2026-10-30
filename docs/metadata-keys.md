@@ -12,7 +12,8 @@ Where to name a key in code:
   `capture_sdk`); `tui/traffic_viewer/metadata.py` holds the TUI's display labels.
 
 Beyond the readers named below, MCP's `list_sessions` returns every session key and the
-TUI's flow detail lists every flow key, so any key here is visible to a person or agent.
+TUI's flow detail and every MCP flow summary (`metadata`) carry every flow key, so any
+key here is visible to a person or agent.
 
 ## Session metadata
 

@@ -1615,6 +1615,16 @@ def test_include_hidden_returns_them_with_their_outcome(monkeypatch):
     assert out["flows"][2]["undecoded_reason"] == "tls_rejected"
 
 
+def test_a_flow_carries_all_its_source_metadata(monkeypatch):
+    # Whether the hostname was sent or inferred has to reach an agent as it reaches the TUI.
+    meta = {"hostname.source": "dns", "hostname.dns_candidates": "a.example,b.example",
+            "tls.sni": "", "conn.outcome": "no_request"}
+    f = _flow(id="m1", authority="quiet.example", protocol="TCP", metadata=meta)
+    assert S._flow_summary(f, {}, {})["metadata"] == meta
+    assert S._flow_detail(f, {}, {})["metadata"] == meta
+    assert S._flow_summary(_flow(id="m2"), {}, {})["metadata"] is None
+
+
 # --- undecoded connections (pcap sessions) -----------------------------------
 
 def _undecoded_fixture():
