@@ -29,7 +29,7 @@ from capture_sdk import metadata_keys as mk
 from capture_sdk import terminal
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.upload import SENTINEL, capture_chunks
-from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
+from capture_sdk.viewer import PCAP_VIEWER_COLUMNS
 
 _KEYLOG_SCRIPT = Path(__file__).resolve().parent / "frida_sslkeylog.js"
 # Plain-IIFE bundle of frida-java-bridge that installs globalThis.Java; see
@@ -107,11 +107,11 @@ def run_capture(
     # The capture's own options ride along as session metadata, as the browser sources do:
     # a bundle read back a week later otherwise says nothing about which app it recorded
     # under which uid. Strings for a person reading them, nothing parses them back.
-    md = {VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS,
-          "android.package": package, "android.uid": str(uid),
-          "android.scripts": str(1 + len(extra_scripts))}
+    md = {mk.VIEWER_COLUMNS: PCAP_VIEWER_COLUMNS,
+          mk.ANDROID_PACKAGE: package, mk.ANDROID_UID: str(uid),
+          mk.ANDROID_SCRIPTS: str(1 + len(extra_scripts))}
     if url:
-        md["android.url"] = url
+        md[mk.ANDROID_URL] = url
     if duration:
         md[mk.CAPTURE_DURATION_S] = f"{duration:g}"
     handle = ing.OpenSession(ip.OpenSessionRequest(

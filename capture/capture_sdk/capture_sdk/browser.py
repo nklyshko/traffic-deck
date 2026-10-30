@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 
+from capture_sdk import metadata_keys as mk
 from capture_sdk import snap
 
 # Returned by a tool's profile resolution to mean "launch with no profile flag", so the
@@ -172,11 +173,11 @@ def launch_metadata(binary: str, profile, url: str | None = None, extra_args=())
     Only `url` is omitted when unset; the rest are always stated, because a missing key
     reads as "unknown" rather than as a default."""
     md = {
-        "browser.binary": binary,
-        "browser.profile": profile_desc(profile),
+        mk.BROWSER_BINARY: binary,
+        mk.BROWSER_PROFILE: profile_desc(profile),
     }
     if url:
-        md["browser.url"] = url
+        md[mk.BROWSER_URL] = url
     if args := [a for a in extra_args if a != "--"]:
-        md["browser.extra_args"] = " ".join(args)
+        md[mk.BROWSER_EXTRA_ARGS] = " ".join(args)
     return md

@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Callable
 
 from capture_android.adb import AdbClient
+from capture_sdk import metadata_keys as mk
+from capture_sdk.sessionline import read_session_id
 from capture_sdk.shutdown import GracefulInterrupt
 
 # The sibling mitmproxy module. We run mitmdump out of *its* project rather than depending
@@ -40,6 +42,7 @@ from capture_sdk.shutdown import GracefulInterrupt
 # version, and which a proxy capture needs no frida in at all.
 _MITM_PROJECT = Path(__file__).resolve().parents[2] / "capture_mitmproxy"
 _MITM_ADDON = _MITM_PROJECT / "capture_mitmproxy" / "addon.py"
+_SESSION_GRACE = 120.0
 
 # Browsers offered as targets. Chrome ships *preinstalled*, i.e. as a system app, so it
 # never shows up in `pm list packages -3` — the app picker's usual source — which is why
@@ -180,11 +183,11 @@ def _metadata(adb: AdbClient, package: str, url: str | None) -> str:
     """The capture's own options, recorded on the session as the per-app path records
     android.package/uid — a bundle read back a week later otherwise says only "mitmproxy",
     with nothing about which app on which device. Strings for a person reading them."""
-    md = {"android.package": package, "android.method": "proxy"}
+    md = {mk.ANDROID_PACKAGE: package, mk.ANDROID_METHOD: "proxy"}
     if adb.serial:
-        md["android.serial"] = adb.serial
+        md[mk.ANDROID_SERIAL] = adb.serial
     if url:
-        md["android.url"] = url
+        md[mk.ANDROID_URL] = url
     return json.dumps(md)
 
 
@@ -203,23 +206,14 @@ def _start_mitmdump(port: int, gateway: str, label: str, metadata: str,
 
 def _read_session(proc: subprocess.Popen) -> str:
     """Read mitmdump's output until its addon prints the session id, then keep draining so
-    the pipe never fills. (The twin of capture_mitmproxy's own reader — duplicated rather
-    than imported, to keep mitmproxy out of this module's dependencies.)"""
-    # Watchdog: if the addon never prints SESSION (its startup hook failed, the gateway is
-    # down) mitmdump keeps running and this read would block forever, holding the caller.
-    # Kill it after a grace so the pipe closes and we raise below instead of hanging.
-    watchdog = threading.Timer(30.0, lambda: proc.kill())
-    watchdog.start()
-    try:
-        for line in proc.stdout:
-            if line.startswith("SESSION "):
-                watchdog.cancel()
-                sid = line[len("SESSION "):].strip()
-                threading.Thread(target=_drain, args=(proc,), daemon=True).start()
-                return sid
-    finally:
-        watchdog.cancel()
-    raise RuntimeError("mitmdump exited before opening a session (port taken? uv failed? gateway down?)")
+    the pipe never fills."""
+    # mitmdump runs under `uv run`, whose cold start resolves and builds the environment
+    # first — up to two minutes, the same bound as the gateway's readyTimeout (ADR-0015 §6).
+    sid = read_session_id(proc, grace=_SESSION_GRACE)
+    if sid is None:
+        raise RuntimeError("mitmdump exited before opening a session (port taken? uv failed? gateway down?)")
+    threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+    return sid
 
 
 def _drain(proc: subprocess.Popen) -> None:

@@ -18,6 +18,7 @@ from typing import Mapping
 
 from capture_sdk import source
 from capture_sdk.proto import control_pb2 as ctl
+from capture_sdk.sessionline import read_session_id
 
 _ADDON = str(Path(__file__).resolve().parent / "addon.py")
 
@@ -73,21 +74,10 @@ class MitmproxySource(source.CaptureSource):
                                 text=True, bufsize=1, start_new_session=True)
 
     def _read_session(self, proc: subprocess.Popen) -> str:
-        """Read mitmdump's output until the addon prints its session id (SESSION <id>)."""
-        # Watchdog: if the addon's `running` hook fails (e.g. the gateway is down) mitmdump
-        # logs the error but keeps running and never prints SESSION, so this read would
-        # block forever and hold the calling gRPC thread. Kill mitmdump after a grace so the
-        # pipe closes and the loop ends with the error below.
-        watchdog = threading.Timer(30.0, lambda: proc.kill())
-        watchdog.start()
-        try:
-            for line in proc.stdout:
-                _echo(line)
-                if line.startswith("SESSION "):
-                    return line[len("SESSION "):].strip()
-        finally:
-            watchdog.cancel()
-        raise RuntimeError("mitmdump exited before opening a session (port in use? bad mode? gateway down?)")
+        sid = read_session_id(proc, echo=_echo)
+        if sid is None:
+            raise RuntimeError("mitmdump exited before opening a session (port in use? bad mode? gateway down?)")
+        return sid
 
     def _watch(self, sid: str, proc: subprocess.Popen) -> None:
         # Pass mitmdump's output on to ours, which the gateway writes to the source's log —

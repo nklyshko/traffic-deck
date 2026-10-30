@@ -4,7 +4,14 @@ later says more than "mitmproxy"."""
 
 from __future__ import annotations
 
-from capture_mitmproxy.addon import _extra_metadata
+import gzip as _gzip
+import tracemalloc
+
+import pytest
+from mitmproxy.test import tflow
+
+from capture_mitmproxy import addon as _addon
+from capture_mitmproxy.addon import _extra_metadata, build_flow, build_stream_flow
 
 
 def test_metadata_is_parsed_into_strings():
@@ -26,10 +33,6 @@ def test_bad_metadata_is_dropped_rather_than_raised():
 # --- hostnames -------------------------------------------------------------------------
 # In WireGuard and transparent mode mitmproxy's request.host is only the IP it connected
 # to; the flow's authority must be the name the client asked for, with its source recorded.
-
-from mitmproxy.test import tflow
-
-from capture_mitmproxy.addon import build_flow, build_stream_flow
 
 
 def _wireguard_flow(http_version="HTTP/1.1", host_header="api.example.com", sni="api.example.com"):
@@ -117,13 +120,6 @@ def test_mitmdump_can_load_the_addon_as_a_script():
 # --- body decoding -----------------------------------------------------------------------
 # Bodies are decoded with a bound: mitmproxy's get_content() inflated the whole body before
 # the cap applied, so a compression bomb could exhaust the proxy's memory first.
-
-import gzip as _gzip  # noqa: E402
-import tracemalloc  # noqa: E402
-
-import pytest  # noqa: E402
-
-from capture_mitmproxy import addon as _addon  # noqa: E402
 
 
 @pytest.mark.parametrize("enc", ["gzip", "deflate", "br", "zstd"])

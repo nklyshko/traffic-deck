@@ -367,7 +367,7 @@ def build_dns_flow(flow: dns.DNSFlow) -> cp.Flow:
     )
     if resp:
         rcode = dns_rcodes.to_str(resp.response_code)
-        pf.metadata["dns.rcode"] = rcode
+        pf.metadata[mk.DNS_RCODE] = rcode
         if rcode != "NOERROR":
             pf.error = rcode
         body = json.dumps([rr.to_json() for rr in resp.answers]).encode()
@@ -503,15 +503,15 @@ class GatewayPusher:
         # The proxy options this capture is running with, recorded on the session as every
         # other source records its own. ctx.options rather than the argv we were started
         # with: an option mitmproxy defaulted still shows up here.
-        metadata = {"mitmproxy.mode": ",".join(ctx.options.mode)}
+        metadata = {mk.MITMPROXY_MODE: ",".join(ctx.options.mode)}
         # Both are None/"" unless they were actually passed — mitmproxy applies its own
         # defaults later — so an unset one is left out rather than recorded as "None".
         if ctx.options.listen_port:
-            metadata["mitmproxy.listen_port"] = str(ctx.options.listen_port)
+            metadata[mk.MITMPROXY_LISTEN_PORT] = str(ctx.options.listen_port)
         if ctx.options.listen_host:
-            metadata["mitmproxy.listen_host"] = ctx.options.listen_host
+            metadata[mk.MITMPROXY_LISTEN_HOST] = ctx.options.listen_host
         if self.viewer_columns:
-            metadata[mk.VIEWER_COLUMNS_KEY] = self.viewer_columns
+            metadata[mk.VIEWER_COLUMNS] = self.viewer_columns
         metadata.update(_extra_metadata(self.extra_metadata))
         handle = await self._stub.OpenSession(
             ip.OpenSessionRequest(label=self.label, source="mitmproxy",

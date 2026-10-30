@@ -25,9 +25,14 @@ from capture_android import frida_versions
 from capture_android import chromeproxy
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices, quick_run
+from capture_sdk.sessionline import read_session_id
 
 _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
 _CREATE = "__create__"  # provision-choice value: create + boot a new emulator
+# How long the headless capture may take to announce its session: as long as
+# AndroidSource.start_capture waits for it, after which the start has failed anyway and a
+# process still silent is only holding this thread.
+_SESSION_GRACE = 120.0
 
 
 class RealAndroidBackend:
@@ -131,10 +136,8 @@ class RealAndroidBackend:
     def _relay_session(proc, on_session) -> None:
         """Read the subprocess's stdout until it prints its session id (SESSION <id>), then
         keep draining so its pipe never fills."""
-        for line in proc.stdout:
-            if line.startswith("SESSION "):
-                on_session(line[len("SESSION "):].strip())
-                break
+        if (sid := read_session_id(proc, grace=_SESSION_GRACE)) is not None:
+            on_session(sid)
         threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
 
     @staticmethod

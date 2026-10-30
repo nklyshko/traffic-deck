@@ -35,7 +35,7 @@ from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
 from capture_sdk.upload import SENTINEL, capture_chunks
-from capture_sdk.viewer import PCAP_VIEWER_COLUMNS, VIEWER_COLUMNS_KEY
+from capture_sdk.viewer import PCAP_VIEWER_COLUMNS
 
 #: How long to give the capture backend to fail before assuming it started. One that cannot
 #: open its interface exits at once; one that started is still running well inside this.
@@ -262,7 +262,7 @@ class KeylogCapture(abc.ABC):
         self._ing = ig.IngestServiceStub(self._chan)
         handle = self._ing.OpenSession(ip.OpenSessionRequest(
             label=self.label, source=self.name, shape=cp.SOURCE_SHAPE_PCAP,
-            metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS,
+            metadata={mk.VIEWER_COLUMNS: PCAP_VIEWER_COLUMNS,
                       mk.CAPTURE_IFACE: iface, **self.open_metadata()}))
         self.session_id = handle.session_id
         max_chunk = handle.max_chunk_bytes or (1 << 20)

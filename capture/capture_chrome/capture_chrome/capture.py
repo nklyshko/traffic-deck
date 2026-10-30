@@ -12,6 +12,7 @@ import os
 import subprocess
 
 from capture_chrome import platform, profiles
+from capture_sdk import metadata_keys as mk
 from capture_sdk import snap
 from capture_sdk.browser import BUILTIN_PROFILE, launch_metadata, profile_desc  # noqa: F401 — profile_desc re-exported
 # AlreadyRunning is the SDK's: the preflight below is one way of finding out, and a program
@@ -94,5 +95,5 @@ class ChromeCapture(KeylogCapture):
         # be ambiguous between a normal window and a session captured before this existed.
         return super().open_metadata() | launch_metadata(
             self.chrome, self.profile, self.url, self.extra_args
-        ) | {"browser.incognito": "true" if self.incognito else "false"}
+        ) | {mk.BROWSER_INCOGNITO: "true" if self.incognito else "false"}
 

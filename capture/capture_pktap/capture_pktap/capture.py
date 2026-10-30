@@ -29,6 +29,7 @@ from capture_chrome import profiles
 from capture_chrome.capture import ChromeCapture
 
 from capture_pktap import pktap, privdrop
+from capture_sdk import metadata_keys as mk
 
 #: How often to re-check which processes own the browser's sockets. A NetworkService
 #: appears about a second after launch and is replaced only if it crashes, so this is
@@ -150,7 +151,7 @@ class PktapCapture(ChromeCapture):
         # The process name the kernel filter matches, which is what explains a capture that
         # recorded nothing. excluded_pids is deliberately absent: capture_command fills it
         # after the session is already open.
-        return super().open_metadata() | {"pktap.proc": self.proc_name}
+        return super().open_metadata() | {mk.PKTAP_PROC: self.proc_name}
 
     def close_metadata(self) -> dict[str, str]:
         # The kernel filter could only exclude the pids that existed before launch, so the
@@ -162,4 +163,4 @@ class PktapCapture(ChromeCapture):
             print("pktap: never identified the browser's network process — "
                   "the capture keeps every Chrome-family packet", flush=True)
             return {}
-        return {pktap.PIDS_KEY: ",".join(str(p) for p in sorted(self.helper_pids))}
+        return {mk.CAPTURE_PIDS: ",".join(str(p) for p in sorted(self.helper_pids))}

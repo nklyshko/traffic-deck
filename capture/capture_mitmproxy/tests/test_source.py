@@ -52,6 +52,9 @@ class FakeProc:
         self._alive = False
         self._done.set()
 
+    def kill(self):
+        self.stop()
+
 
 def test_describe_offers_proxy_options():
     d = MitmproxySource("gw").describe({})
@@ -125,6 +128,9 @@ def test_start_capture_raises_if_mitmdump_never_opens_a_session(monkeypatch):
         stdout = iter(["boot error\n"])  # exits without a SESSION line
         pid = 1
 
+        def kill(self):
+            pass
+
     monkeypatch.setattr(MitmproxySource, "_spawn", lambda self, cmd, env: DeadProc())
     try:
         MitmproxySource("gw").start_capture("x", {})
@@ -144,6 +150,9 @@ def test_mitmdump_output_reaches_the_source_log(monkeypatch, capsys):
                        "client TLS handshake failed: unknown ca\n"])
         def poll(self):
             return 0
+
+        def kill(self):
+            pass
 
     monkeypatch.setattr(MitmproxySource, "_spawn", lambda self, cmd, env: ChattyProc())
     src = MitmproxySource("gw")
