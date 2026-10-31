@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// allocatedBy reports how many bytes fn allocated.
 func allocatedBy(fn func()) uint64 {
 	var before, after runtime.MemStats
 	runtime.GC()

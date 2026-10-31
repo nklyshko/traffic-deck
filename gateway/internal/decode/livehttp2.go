@@ -3,8 +3,7 @@ package decode
 // In-process live HTTP/2-over-TLS decode, the H2 counterpart to livehttp.go. The TLS
 // layer (internal/tlsdecrypt) hands us each direction's decrypted bytes; we run an
 // http2.Framer per direction (with an HPACK decoder, so CONTINUATION + dynamic-table
-// state are handled) and reassemble per-stream requests/responses into Flows. As with
-// the HTTP/1.1 path, the batch tshark pass on close stays authoritative.
+// state are handled) and reassemble per-stream requests/responses into Flows.
 
 import (
 	"fmt"
@@ -36,9 +35,7 @@ type h2flow struct {
 	flow    *Flow
 	added   bool
 	respEnc string    // wire content-encoding of the response body ("" = none)
-	respTS  time.Time // capture time of the latest server frame; paired with the request
-	// time in emitLocked to get the duration. Kept separate because the request and response
-	// directions decode on different goroutines and can be applied in either order.
+	respTS  time.Time // capture time of the latest server frame; emitLocked pairs it with the request time
 }
 
 // h2Stream decodes one TLS-decrypted connection as HTTP/2: a goroutine per direction
@@ -107,16 +104,11 @@ func (h *h2Stream) read(src *byteStream, fromClient bool) {
 	}
 	fr := http2.NewFramer(io.Discard, src)
 	fr.ReadMetaHeaders = hpack.NewDecoder(h2HeaderTableSize, nil)
-	// The HPACK dynamic table starts at the 4096-byte protocol default, but the peer
-	// encoding these headers may grow it — via an HPACK dynamic table size update — up to
-	// the SETTINGS_HEADER_TABLE_SIZE the *receiver* advertised. Browsers advertise 65536,
-	// so a server encoding a response for a browser client emits a size update above 4096.
 	// hpack.NewDecoder pins the allowed max to its 4096 argument and rejects any larger
 	// size update as a COMPRESSION_ERROR, which kills the whole direction's decode (no
 	// status/headers/body). Raise only the *allowed* ceiling (not the current size, which
-	// stays at the 4096 default and tracks the encoder's size updates) so a legitimate
-	// browser-sized table is accepted while the table still can't grow past what the real
-	// endpoints negotiated.
+	// stays at the 4096 default and tracks the encoder's size updates); see
+	// maxHPACKDynamicTableSize for why browsers need more.
 	fr.ReadMetaHeaders.SetAllowedMaxDynamicTableSize(maxHPACKDynamicTableSize)
 	fr.MaxHeaderListSize = 1 << 20
 	fr.SetMaxReadFrameSize(1 << 20)
@@ -222,7 +214,7 @@ func (h *h2Stream) onRSTStream(rf *http2.RSTStreamFrame) {
 	}
 	hf := h.flows[rf.StreamID]
 	if hf == nil {
-		return // emitLocked applies the reason when the flow appears
+		return
 	}
 	// A reset after the response began cuts its body short. emitLocked only explains a
 	// reset on a flow with no status, so without this the flow would read as a whole 200

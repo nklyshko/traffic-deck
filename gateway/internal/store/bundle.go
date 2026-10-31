@@ -107,7 +107,6 @@ func (s *Store) MergeBundleDefsIntoCatalog(ctx context.Context, sessionID string
 		5)
 }
 
-// copyDefs streams rows from src to dst, scanning ncol generic columns per row.
 func copyDefs(ctx context.Context, src, dst *sql.DB, query, insert string, ncol int) error {
 	rows, err := src.QueryContext(ctx, query)
 	if err != nil {

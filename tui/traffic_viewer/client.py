@@ -1,4 +1,4 @@
-"""Async gRPC client for the gateway ViewerService.
+"""Async gRPC client for the gateway (ViewerService, ControlService, IngestService).
 
 The generated stubs live in the sibling `gen/` tree (absolute `traffic.v1.*`
 imports), so we put it on sys.path before importing them.
@@ -47,8 +47,6 @@ _LONG_RUNNING = frozenset({
 
 
 class _DefaultDeadline(grpc.aio.UnaryUnaryClientInterceptor):
-    """Give a unary call DEFAULT_UNARY_TIMEOUT unless it set its own or is long-running."""
-
     async def intercept_unary_unary(self, continuation, client_call_details, request):
         method = client_call_details.method
         if isinstance(method, bytes):
@@ -69,7 +67,8 @@ class GatewayClient:
         self._ingest: ingest_pb2_grpc.IngestServiceStub | None = None
 
     def _ensure(self) -> viewer_pb2_grpc.ViewerServiceStub:
-        # Lazily create the aio channel/stub on first use (inside the event loop).
+        # Created on first use rather than in __init__, so the aio channel is made inside
+        # the running event loop.
         if self._stub is None:
             self._channel = grpc.aio.insecure_channel(
                 self._address, interceptors=[_DefaultDeadline()])
@@ -261,7 +260,6 @@ class GatewayClient:
             session_id=session_id, group=group))
 
     async def set_session_label(self, session_id: str, label: str) -> None:
-        """Rename a session."""
         await self._ctrl().SetSessionLabel(control_pb2.SetSessionLabelRequest(
             session_id=session_id, label=label))
 
@@ -316,7 +314,6 @@ class GatewayClient:
         return resp.session_id
 
     async def stop_capture(self, session_id: str) -> None:
-        """Stop a running capture by session id."""
         await self._ctrl().StopCapture(control_pb2.StopCaptureRequest(session_id=session_id))
 
     # --- auxiliary services (MCP, module UIs) ---------------------------

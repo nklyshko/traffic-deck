@@ -57,7 +57,6 @@ def _peer(addr) -> str:
 
 
 def _norm_proto(v: str) -> str:
-    # "HTTP/2.0" -> "HTTP/2", "HTTP/1.1" stays, "HTTP/3.0" -> "HTTP/3"
     return {"HTTP/2.0": "HTTP/2", "HTTP/3.0": "HTTP/3"}.get(v, v or "HTTP/1.1")
 
 
@@ -121,8 +120,6 @@ def _content(msg) -> tuple[bytes, bool]:
 
 
 def _note_truncated(md, side: str, what: str) -> None:
-    """Record that `side` (request, response or payload) was cut at _MAX_BODY_BYTES: in the
-    record's body.truncated metadata, so viewers and agents see it, and in the log."""
     sides = [x for x in md.get(mk.BODY_TRUNCATED, "").split(",") if x]
     if side not in sides:
         md[mk.BODY_TRUNCATED] = ",".join(sides + [side])
@@ -217,12 +214,8 @@ def _is_ws_upgrade(resp) -> bool:
 
 def _socks_proxy(flow: http.HTTPFlow) -> cp.Proxy | None:
     """Extract SOCKS5 proxy metadata stashed by SocksUpstreamLayer, if present."""
-    # SocksUpstreamLayer stashes the same dict on both the server and the client
-    # connection. The server is the natural place, but mitmproxy's HTTP connection pool
-    # can hand the inner request a *different* Server than the one the layer stamped
-    # (it re-keys connections and may build a fresh Server for the stream), which drops
-    # the attribute. The client connection is the stable anchor — the pool never swaps
-    # it — so fall back to it. flow.client_conn is the SocksUpstreamLayer's context.client.
+    # Falls back to the client connection because the pool can hand the inner request a
+    # different Server than the one the layer stamped (see SocksUpstreamLayer._establish).
     info = (getattr(flow.server_conn, "_socks_proxy", None)
             or getattr(flow.client_conn, "_socks_proxy", None))
     if not info:
@@ -289,8 +282,6 @@ def build_flow(flow: http.HTTPFlow, names: DnsNames | None = None) -> cp.Flow:
     if resp and scut:
         _note_truncated(pf.metadata, "response", f"{req.method} {req.pretty_url}")
 
-    # Attach proxy metadata when the flow rode a SOCKS5 tunnel intercepted by
-    # SocksUpstreamLayer (set on the flow's server connection context).
     proxy = _socks_proxy(flow)
     if proxy:
         pf.proxy.CopyFrom(proxy)

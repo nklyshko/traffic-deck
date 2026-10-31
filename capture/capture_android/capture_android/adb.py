@@ -67,7 +67,7 @@ def nflog_rules(uid: int, mark: int, group: int) -> tuple[list[list[str]], list[
     """
     m, g = hex(mark), str(group)
     specs = [
-        # mangle OUTPUT: mark new connections owned by the app UID
+        # mangle OUTPUT: mark every connection the app UID owns (no NEW-state match)
         ["mangle", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", "CONNMARK", "--set-mark", m],
         # NFLOG both directions for packets belonging to a marked connection
         ["mangle", "OUTPUT", "-m", "connmark", "--mark", m, "-j", "NFLOG", "--nflog-group", g],

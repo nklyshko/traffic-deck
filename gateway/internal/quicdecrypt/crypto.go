@@ -161,8 +161,8 @@ func decodePacketNumber(truncated uint64, pnLen int, largest uint64) uint64 {
 // open removes header protection and AEAD-decrypts one packet that starts at packet[0],
 // with the packet-number field at pnOffset. longHeader selects the 4- vs 5-bit first-byte
 // mask. payloadEnd bounds the protected payload (pnOffset .. payloadEnd covers pn+ct+tag).
-// Returns the unprotected header (AAD), the decrypted frames, the full packet number, and
-// the byte just past this packet. ok is false if decryption fails.
+// Returns the unprotected header (AAD), the decrypted frames and the full packet number.
+// ok is false if decryption fails.
 func (k *keys) open(packet []byte, pnOffset, payloadEnd int, longHeader bool, largestPN uint64) (header, plaintext []byte, pn uint64, ok bool) {
 	if pnOffset+4+16 > len(packet) || payloadEnd > len(packet) || payloadEnd < pnOffset+4 {
 		return nil, nil, 0, false

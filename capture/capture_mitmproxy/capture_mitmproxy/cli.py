@@ -26,7 +26,7 @@ from pathlib import Path
 from capture_sdk import prompt
 from capture_sdk.state import Store
 
-# The two modes offered by the interactive selector (label shown, value passed to mitmdump).
+# The modes offered by the interactive selector (label shown, value passed to mitmdump).
 # --mode still accepts any mitmproxy mode (transparent, local, ...) for power users.
 _MODE_CHOICES = [
     ("Regular — set the device/app HTTP(S) proxy to this host", "regular"),
@@ -116,7 +116,7 @@ def _interactive() -> None:
     ap = argparse.ArgumentParser(prog="trafficdeck-capture-mitmproxy")
     ap.add_argument("--mode", default=None,
                     help="mitmproxy mode: regular | wireguard | transparent | local | ...; "
-                         "omit to choose regular/wireguard interactively")
+                         "omit to choose regular/socks5/wireguard interactively")
     ap.add_argument("--label", default="mitmproxy", help="session label shown in the viewer")
     ap.add_argument("--listen-port", type=int, default=store.get("listen_port", 8888),
                     help="proxy/server listen port (default 8888)")
@@ -129,7 +129,6 @@ def _interactive() -> None:
                     help="extra args forwarded to mitmdump (use `--` to separate)")
     args = ap.parse_args()
 
-    # --mode given → use it verbatim; otherwise pick interactively (or the remembered value).
     args.mode = args.mode or _choose_mode(store)
     store.remember("mode", args.mode)
     store.remember("listen_port", args.listen_port)

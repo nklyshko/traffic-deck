@@ -15,7 +15,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/tlsdecrypt"
 )
 
-// putUvarint encodes a QUIC varint (1-byte form is enough for our small test frames).
+// putUvarint encodes a QUIC varint in its 1- or 2-byte form (enough for our small test frames).
 func putUvarint(v uint64) []byte {
 	if v < 64 {
 		return []byte{byte(v)}
@@ -132,7 +132,7 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	s := newQUICSession(&liveTCP{keylog: tlsdecrypt.NewKeylog(""), onFlow: onFlow},
 		"quic:0", "203.0.113.5", "443", "198.51.100.2:50000")
 
-	// Request stream 0 (client bidirectional): HEADERS then DATA.
+	// Request stream 0 (client bidirectional): HEADERS only.
 	reqHdr := h3Frame(h3FrameHeaders, qpackSection(
 		qpack.HeaderField{Name: ":method", Value: "GET"},
 		qpack.HeaderField{Name: ":scheme", Value: "https"},

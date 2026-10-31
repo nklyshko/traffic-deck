@@ -207,8 +207,7 @@ func tsharkArgs(input []string, keylogPath string, live bool) []string {
 	// -O bounds PDML detail to the protocols we parse; -Y keeps HTTP/HTTP3/WebSocket
 	// packets plus all TLS/QUIC packets. TLS packets carry the per-stream ClientHello
 	// SNI + tls.stream index used to pick streams for custom raw-TCP decoders, which run
-	// in a separate `-z follow,tls,raw` pass (tshark only exposes decrypted undissected
-	// bytes through follow, not as a PDML field;).
+	// in a separate `-z follow,tls,raw` pass (see streams.go for why).
 	args = append(args, "-Y", "http or http2 or websocket or tls or http3 or socks", "-T", "pdml",
 		"-O", "frame,ip,ipv6,tcp,udp,tls,quic,http,http2,websocket,http3,socks")
 	return args
@@ -279,7 +278,7 @@ func runTshark(ctx context.Context, tsharkPath string, args []string, stdin io.R
 		case xml.EndElement:
 			switch se.Name.Local {
 			case "proto":
-				if pduName != "" { // emit one record per HTTP PDU
+				if pduName != "" {
 					rec := make(layers, len(meta)+len(cur))
 					for k, v := range meta {
 						rec[k] = v
@@ -370,10 +369,8 @@ func DecodeNative(ctx context.Context, pcapPath, keylogPath string) (*Dataset, e
 // layers is a per-PDU field map (field name -> values), built from PDML.
 type layers map[string][]string
 
-// all returns every value of a field ([] if absent).
 func (l layers) all(field string) []string { return l[field] }
 
-// first returns the first value of a field, or "".
 func (l layers) first(field string) string {
 	if v := l[field]; len(v) > 0 {
 		return v[0]

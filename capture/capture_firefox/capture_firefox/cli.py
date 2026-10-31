@@ -158,9 +158,6 @@ def _capture(argv) -> None:
                     help="extra Firefox flags after --")
     args = ap.parse_args(argv)
 
-    # Interactive by default in a terminal: pick the Firefox binary and profile unless
-    # they were given as flags (or prompting was disabled / there's no TTY). The pickers
-    # default to the previous run's choices, remembered under ~/.traffic-deck/state.
     interactive = not args.no_prompt and sys.stdin.isatty()
     store = Store("firefox")
     firefox = args.firefox or os.environ.get("FIREFOX_BIN")

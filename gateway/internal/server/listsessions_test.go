@@ -10,7 +10,6 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
-// sessionByID finds a session in a ListSessions result.
 func sessionByID(list *trafficv1.SessionList, id string) *trafficv1.Session {
 	for _, s := range list.GetSessions() {
 		if s.GetId() == id {

@@ -31,8 +31,8 @@ const maxChunkBytes = 1 << 20 // advertised upload chunk size
 
 // maxSessionFileBytes bounds where a client may write within a session's pcap or key.log.
 // The write offset arrives on the wire, so this is what stops a crafted offset from
-// creating an enormous sparse file (and from wrapping negative past 2^63). It is far above
-// any real capture.
+// creating an enormous sparse file that a later full read would allocate in memory (and
+// from wrapping negative in WriteAt past 2^63). It is far above any real capture.
 const maxSessionFileBytes = 64 << 30 // 64 GiB
 
 // pidsCaptureKey is reported at CloseSession by the macOS per-process source: the pids its
@@ -306,7 +306,8 @@ func (i *Ingest) OpenSession(ctx context.Context, req *trafficv1.OpenSessionRequ
 }
 
 // UploadCapture streams pcap + key.log chunks into the session bundle, writing
-// each at its byte offset (ordered, resumable). Decode happens on CloseSession.
+// each at its byte offset (ordered, resumable). A live-decoded upload is also teed to the
+// live decoder; otherwise decode happens on CloseSession.
 func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.CaptureChunk, trafficv1.UploadAck]) error {
 	var sid, uploadID string
 	var pcapN, keylogN uint64
@@ -359,10 +360,6 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 			if dir == trafficv1.FileKind_FILE_KIND_KEYLOG {
 				key = keylogKey(sid)
 			}
-			// The offset is client-supplied and written straight to disk. Bound it: an
-			// absurd offset (up to 2^64) would otherwise create a huge sparse file and let a
-			// later full read of it allocate without limit, and a value past 2^63 would wrap
-			// negative in WriteAt. The ceiling is far above any real capture.
 			off := m.Data.GetOffset()
 			if off > maxSessionFileBytes || off+uint64(len(m.Data.GetPayload())) > maxSessionFileBytes {
 				return status.Errorf(codes.InvalidArgument,
@@ -428,7 +425,7 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 		}
 		for _, pf := range flows {
 			ls.publish(pf, true)
-			i.recordWSMeta(pf) // remember host/path so a WSDecoder can claim its frames
+			i.recordWSMeta(pf)
 		}
 
 		// WebSocket / raw-TCP frames: their flow_id references a flow pushed earlier
@@ -548,8 +545,8 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 	return df
 }
 
-// CloseSession finalizes a session: record sizes, batch-decode the bundle, and
-// return the closed session summary.
+// CloseSession finalizes a session: record sizes, persist the live decode's flows (or
+// batch-decode the pcap when live decode was off), and return the closed session summary.
 //
 // Any metadata the source reports here is merged into the session first, so finalization
 // and anyone reading the session later see it alongside what was supplied at open.

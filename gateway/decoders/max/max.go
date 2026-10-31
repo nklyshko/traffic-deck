@@ -191,7 +191,7 @@ func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, boo
 
 	body, err := decompressBody(frame[headerLen:headerLen+plen], comp)
 	if err != nil {
-		raw := rawMessage(msg, frame[headerLen:headerLen+plen]) // keep the raw frame
+		raw := rawMessage(msg, frame[headerLen:headerLen+plen])
 		if errors.Is(err, errTooLarge) {
 			raw.Fields[limitField] = fmt.Sprintf("decompresses past %d MiB; kept compressed", maxDecompressed>>20)
 		}
@@ -278,16 +278,6 @@ func cmdLabel(cmd byte) string {
 		return fmt.Sprintf("%s(%d)", n, cmd)
 	}
 	return fmt.Sprintf("cmd%d", cmd)
-}
-
-// opcodeLabel is the frame's short label — the name alone ("Auth"), since the number is
-// carried in its own field beside it. An unnamed opcode keeps the hex form the decoder
-// has always used.
-func opcodeLabel(op uint16) string {
-	if n := opcodeNames[op]; n != "" {
-		return n
-	}
-	return fmt.Sprintf("op0x%x", op)
 }
 
 // opcodeField renders the opcode column as "Auth(19)": the name for reading, the number
@@ -454,7 +444,6 @@ const (
 // would not decode cleanly anyway. tooDeep says the nesting bound is what failed it.
 func msgpackSane(b []byte) (ok, tooDeep bool) {
 	i := 0
-	// length reads an n-byte big-endian length at i.
 	length := func(n int) (int, bool) {
 		if n > len(b)-i {
 			return 0, false

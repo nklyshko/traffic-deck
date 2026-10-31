@@ -258,7 +258,6 @@ func parseFrames(p []byte) (crypto []cryptoFrame, streams []streamFrame, ok bool
 	return crypto, streams, true
 }
 
-// clientHelloInfo / serverHelloInfo are the handshake bits we need.
 type clientHelloInfo struct {
 	random []byte // 32-byte client_random (the key-log lookup key)
 	sni    string

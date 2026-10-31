@@ -192,7 +192,6 @@ class SocksUpstreamLayer(layer.Layer):
     def _parse_client(self) -> layer.CommandGenerator[None]:
         if self._c_phase == _C_GREETING:
             if not self._greeted:
-                # VER, NMETHODS, METHODS
                 if len(self._client_buf) < 2:
                     return
                 n = self._client_buf[1]
@@ -285,8 +284,7 @@ class SocksUpstreamLayer(layer.Layer):
             # have auth/request bytes already buffered.
             self._s_phase = _S_AUTH if self._method == _MethodUserPass else _S_REQUEST
             if self._method == _MethodNone:
-                self._s_phase = _S_REQUEST  # skip auth on server side
-            # Drive client parser
+                self._s_phase = _S_REQUEST
             if self._method == _MethodUserPass:
                 self._c_phase = _C_AUTH
             else:

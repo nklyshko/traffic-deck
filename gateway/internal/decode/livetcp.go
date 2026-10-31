@@ -59,7 +59,7 @@ const linkTypeNFLOG = gplayers.LinkType(239)
 const linkTypePKTAP = 258
 
 // packetReader is the subset of pcapgo's classic and pcapng readers that the decode loop
-// uses, so LiveTCPDecode can drive either from one code path.
+// uses, so LiveDecode can drive either from one code path.
 type packetReader interface {
 	ReadPacketData() ([]byte, gopacket.CaptureInfo, error)
 	LinkType() gplayers.LinkType
@@ -327,17 +327,17 @@ type liveTCP struct {
 	unparsed []pendingUnparsed
 
 	// Connection counter handed out by connID, in first-seen order. Needs no lock: New
-	// and handleUDP both run on the single packet loop in LiveTCPDecode (as the unlocked
+	// and handleUDP both run on the single packet loop in LiveDecode (as the unlocked
 	// quic map above already assumes).
 	nextConn int
 
 	// wg tracks the per-connection parser goroutines (HTTP/1.1, HTTP/2, WebSocket), spawned
-	// via goParse, so LiveTCPDecode can join them after FlushAll — guaranteeing every flow
+	// via goParse, so LiveDecode can join them after FlushAll — guaranteeing every flow
 	// is emitted before it returns.
 	wg sync.WaitGroup
 }
 
-// goParse runs a per-connection parser goroutine tracked by wg. LiveTCPDecode waits on wg
+// goParse runs a per-connection parser goroutine tracked by wg. LiveDecode waits on wg
 // before returning, so a finite-capture decode never returns while a parser is still
 // draining a closed byte stream and about to emit its last flow.
 func (f *liveTCP) goParse(fn func()) {
@@ -586,7 +586,7 @@ func (s *tcpStream) route(fromClient bool, data []byte) {
 	s.conn.Feed(fromClient, data)
 	if s.conn.Unsupported() {
 		// A TLS connection we recognized but can't decrypt live (e.g. 3DES/RC4). Surface it
-		// with what becomes of it, which depends on whether a batch pass will run.
+		// with what becomes of it (skippedFate).
 		log.Printf("live decode: not decoding %s (%s) live: %s — %s",
 			hostLabel(s.conn.SNI(), s.serverHost), s.serverHost, s.conn.UnsupportedReason(),
 			skippedFate)
@@ -599,6 +599,7 @@ var crlfcrlf = []byte("\r\n\r\n")
 // maxConnectHeader bounds the proxy-CONNECT handshake buffers (connReq/connResp). Real
 // CONNECT request and response headers are well under this; it exists only so a peer that
 // never sends the header terminator cannot grow a per-connection buffer without limit.
+// Past it the stream is not a CONNECT handshake we can parse, and is dropped.
 const maxConnectHeader = 64 << 10
 
 // feedConnect buffers a proxy CONNECT handshake until both the request and the proxy's
@@ -613,10 +614,6 @@ func (s *tcpStream) feedConnect(fromClient bool, data []byte) {
 	} else {
 		s.connResp = append(s.connResp, data...)
 	}
-	// A CONNECT request and the proxy's response headers are kilobytes at most. If the
-	// header terminator never arrives, these buffers would otherwise grow for the life of
-	// the connection on whatever a peer sends — one stream pinning unbounded memory. Past a
-	// generous ceiling this is not a CONNECT handshake we can parse: drop the stream.
 	if len(s.connReq) > maxConnectHeader || len(s.connResp) > maxConnectHeader {
 		s.dropped = true
 		s.connReq, s.connResp = nil, nil
@@ -672,7 +669,6 @@ func (s *tcpStream) feedConnect(fromClient bool, data []byte) {
 	}
 }
 
-// looksLikeConnect reports whether the client bytes open an HTTP CONNECT proxy request.
 func looksLikeConnect(b []byte) bool {
 	return bytes.HasPrefix(b, []byte("CONNECT ")) && looksLikeHTTP1Request(b)
 }
@@ -794,12 +790,12 @@ func (s *tcpStream) onApp(fromClient bool, plain []byte) {
 // Detection is by content, not just the connection's host. A host that speaks a custom
 // binary protocol (e.g. MAX) commonly also serves plain HTTP/2 and HTTP/1.1 on *other*
 // connections — static assets, images, a WebSocket upgrade. Matching the custom decoder by
-// host alone (as this used to) commits those HTTP connections to a decoder that frames none
-// of their bytes, so no flow is ever emitted and live silently drops them — while the batch
-// pass on close decodes them fine, which is exactly the live-vs-batch divergence. So sniff
-// HTTP first and fall back to a host-matched custom decoder only for a genuinely non-HTTP
-// byte stream (a raw MAX transport opens straight with binary frames, never an HTTP
-// request-line or the h2 preface, so this split is unambiguous). A WebSocket-transported
+// host alone would commit those HTTP connections to a decoder that frames none of their
+// bytes, so no flow is ever emitted and they are silently dropped. So sniff HTTP first and
+// fall back to a host-matched custom decoder only for a genuinely non-HTTP byte stream (a
+// raw MAX transport opens straight with binary frames, never an HTTP request-line or the
+// h2 preface, so this split is unambiguous); the tshark path's decodeCustomStreams skips
+// HTTP-dissected streams the same way, so the two agree. A WebSocket-transported
 // custom protocol still decodes: the HTTP/1.1 path hands the upgraded connection to a WS
 // decoder (e.g. MAX-over-WebSocket) after the 101.
 func (s *tcpStream) classify(firstClient []byte) {

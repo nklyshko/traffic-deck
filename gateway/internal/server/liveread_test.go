@@ -15,23 +15,6 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
-// fakeFlowStream is a minimal grpc.ServerStreamingServer[FlowEvent] collecting sent events.
-type fakeFlowStream struct {
-	ctx    context.Context
-	events []*trafficv1.FlowEvent
-}
-
-func (f *fakeFlowStream) Send(e *trafficv1.FlowEvent) error {
-	f.events = append(f.events, e)
-	return nil
-}
-func (f *fakeFlowStream) Context() context.Context     { return f.ctx }
-func (f *fakeFlowStream) SetHeader(metadata.MD) error  { return nil }
-func (f *fakeFlowStream) SendHeader(metadata.MD) error { return nil }
-func (f *fakeFlowStream) SetTrailer(metadata.MD)       {}
-func (f *fakeFlowStream) SendMsg(any) error            { return nil }
-func (f *fakeFlowStream) RecvMsg(any) error            { return nil }
-
 // fakeBodyStream is a minimal grpc.ServerStreamingServer[BodyChunk] accumulating payloads.
 type fakeBodyStream struct {
 	ctx  context.Context
@@ -48,17 +31,6 @@ func (f *fakeBodyStream) SendHeader(metadata.MD) error { return nil }
 func (f *fakeBodyStream) SetTrailer(metadata.MD)       {}
 func (f *fakeBodyStream) SendMsg(any) error            { return nil }
 func (f *fakeBodyStream) RecvMsg(any) error            { return nil }
-
-// addedFlows returns the flows carried by flow_added events, in order.
-func addedFlows(evs []*trafficv1.FlowEvent) []*trafficv1.Flow {
-	var out []*trafficv1.Flow
-	for _, ev := range evs {
-		if f := ev.GetFlowAdded(); f != nil {
-			out = append(out, f)
-		}
-	}
-	return out
-}
 
 // liveFixture opens a store with one OPEN session registered in a live hub.
 func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
@@ -88,11 +60,6 @@ func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
 	hub.sessions[sid] = ls
 	return st, hub, ls, sid
 }
-
-// TestStreamFlowsLiveNoFollow checks that a non-following StreamFlows serves an open
-// session's unpersisted flows (with their annotations) instead of an empty backfill —
-
-// TestStreamFlowsLiveNoDuplicates checks the pushed (mitmproxy) path, where flows are
 
 // TestListMessagesLive checks that an open session's WebSocket timeline — frames that live
 // only in the hub until close — is served by ListMessages, with annotations attached.

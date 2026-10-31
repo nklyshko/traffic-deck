@@ -24,7 +24,6 @@ func newTxStmts(ctx context.Context, tx *sql.Tx) *txStmts {
 	return &txStmts{ctx: ctx, tx: tx, cache: make(map[string]*sql.Stmt)}
 }
 
-// exec runs query with args, preparing it on first use.
 func (t *txStmts) exec(query string, args ...any) error {
 	stmt, ok := t.cache[query]
 	if !ok {

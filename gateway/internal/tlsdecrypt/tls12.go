@@ -5,7 +5,8 @@ package tlsdecrypt
 // §6.2.3.2 with the explicit per-record IV of RFC 5246 §6.2.3.2). Unlike TLS 1.3, keys
 // come from the master secret (the key-log's CLIENT_RANDOM line) via the TLS 1.2 PRF, and
 // the record's content type is the cleartext outer record type (records aren't
-// inner-typed). TLS <1.2 is left to later steps / the batch tshark pass.
+// inner-typed). TLS 1.0/1.1 and SSL 3.0 reuse this record layer with their own PRF and
+// CBC IV scheme (prf10, ssl3.go).
 
 import (
 	"crypto/aes"
@@ -44,8 +45,8 @@ type tls12Suite struct {
 func aesBlock(key []byte) (cipher.Block, error) { return aes.NewCipher(key) }
 
 // tls12SuiteByID returns the parameters for a supported TLS 1.2 suite (AEAD or AES-CBC).
-// Unsupported suites (e.g. 3DES/RC4) return (nil,false) so the connection falls back to
-// the batch tshark pass.
+// Unsupported suites (e.g. 3DES/RC4) return (nil,false); the connection is then marked
+// unsupported and the live decoder skips it (ADR-0009).
 func tls12SuiteByID(id uint16) (*tls12Suite, bool) {
 	switch id {
 	// --- AEAD ---
@@ -254,7 +255,7 @@ func (d *tls12Decryptor) open(header, frag []byte) ([]byte, bool) {
 // openCBC decrypts one TLS 1.0–1.2 AES-CBC record: take the IV (explicit per-record for
 // 1.1/1.2, chained from the previous record for 1.0), CBC-decrypt, remove the TLS padding,
 // split off and verify the trailing HMAC. Returns false on any structural or MAC failure
-// (so the caller bails to the batch pass).
+// (the caller then marks the connection unsupported).
 func (d *tls12Decryptor) openCBC(header, frag []byte) ([]byte, bool) {
 	bs := d.block.BlockSize()
 	var iv, ct []byte

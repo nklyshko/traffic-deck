@@ -1,7 +1,7 @@
 """UI tests driving the Textual app headlessly via App.run_test()/Pilot, with an
 in-memory fake gateway client so screens get deterministic data (real proto objects)
-without a live gateway. They exercise navigation + data wiring; rendering/DSL logic is
-covered by test_render.py / test_filters.py."""
+without a live gateway. They exercise navigation + data wiring; rendering logic is
+covered by test_render.py, and the filter DSL lives in the gateway."""
 
 from __future__ import annotations
 
@@ -657,14 +657,6 @@ async def test_filter_help_shown_only_while_filter_focused():
         await pilot.press("escape")        # leave the filter
         await settle(pilot)
         assert help_.display is False      # hidden again
-
-
-async def _open_flows(pilot):
-    """Navigate sessions → the first session's flow table."""
-    await settle(pilot)
-    await focus(pilot, "#sessions")
-    await pilot.press("enter")
-    await settle(pilot)
 
 
 async def _toggle_column(pilot, cid):
@@ -1565,10 +1557,10 @@ async def test_flow_list_follow_mode():
 
 # --- paged flow table -----------------------------------------------------
 #
-# A big session is held whole in memory but rendered a page at a time (rendering every row
-# made a 6000-flow session take minutes to open). These pin down that only a page is
-# drawn, that navigation crosses page boundaries as if it were one list, and — the part
-# paging must not break — that filtering still runs over every flow in the session.
+# A big session is fetched from the gateway one window at a time (rendering every row made
+# a 6000-flow session take minutes to open; ADR-0012). These pin down that only a window
+# is held and drawn, that navigation crosses window boundaries as if it were one list, and
+# — the part paging must not break — that filtering still covers every flow in the session.
 
 BIG_SESSION_ID = "sess-big"
 _BIG_FLOWS = [_flow(f"b{i:04d}", "POST" if i % 10 == 0 else "GET",

@@ -32,7 +32,7 @@ func parseProxyAuth(headers []Header) (user, pass string) {
 	return "", ""
 }
 
-// stitcher correlates per-frame EK records into request/response flows.
+// stitcher correlates per-frame PDML records into request/response flows.
 type stitcher struct {
 	ds         *Dataset
 	byKey      map[string]*Flow   // HTTP/2: "tcpStream:streamID" -> flow
@@ -40,9 +40,7 @@ type stitcher struct {
 	streamFlow map[string]*Flow   // tcpStream -> its HTTP/1.1 flow (the WebSocket Upgrade)
 
 	// Per-TLS-stream metadata captured during the PDML pass, keyed by tcp.stream —
-	// used to pick which streams to hand to custom raw-TCP decoders. The
-	// decoded bytes themselves are pulled via tshark `follow,tls,raw` (see streams.go),
-	// since tshark only exposes decrypted undissected payloads through follow.
+	// used to pick which streams to hand to custom raw-TCP decoders (see streams.go).
 	streamMeta map[string]*tlsStream
 
 	// proxyByStream records, per tcp.stream, the proxy a connection went through
@@ -151,8 +149,8 @@ func (s *stitcher) emit(f *Flow, isNew bool) {
 }
 
 // finish folds each flow's wire content-encoding into its bodies, once all the frames
-// are in: the encoding is recorded, and gzip is undone so what a flow holds is plain
-// bytes. Bodies accumulate across frames, so this can only run after the last one.
+// are in: the encoding is recorded, and undone where we can so what a flow holds is
+// plain bytes. Bodies accumulate across frames, so this can only run after the last one.
 //
 // tshark decompresses some of them for us and not others: its HTTP/3 dissector has no
 // body-decompression preference at all (Wireshark 4.6), so h3 DATA bytes reach us exactly
@@ -177,7 +175,6 @@ func (s *stitcher) finish() {
 	}
 }
 
-// add dispatches one per-frame PDML record to the handler for its protocol.
 func (s *stitcher) add(l layers) {
 	tcp := l.first(fTCPStream)
 	switch {
@@ -192,7 +189,6 @@ func (s *stitcher) add(l layers) {
 	}
 }
 
-// addHTTP2 correlates one HTTP/2 frame into its flow, keyed by TCP stream + stream id.
 func (s *stitcher) addHTTP2(l layers, tcp, sid string) {
 	method, status := l.first(fH2Method), l.first(fH2Status)
 	body, reassembled := bodyBytes(l)
@@ -291,7 +287,6 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 	// Non-binary frames (text/ping/pong/close) and unclaimed connections fall through.
 	if opName == "binary" {
 		if frames, ok := s.decodeWSBinary(f, fromClient, payload); ok {
-			// Reframe into protocol messages, carrying the raw binary frame (original bytes).
 			for _, fr := range frames {
 				s.emitWsMessage(f, &WsMessage{
 					ID:           uuid.NewString(),
@@ -323,8 +318,6 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 	})
 }
 
-// emitWsMessage appends a WebSocket message to the dataset, bumps the parent flow's
-// frame count, and fires the live callback + flow update.
 func (s *stitcher) emitWsMessage(f *Flow, msg *WsMessage) {
 	f.WsMessageCount++
 	s.ds.Messages = append(s.ds.Messages, msg)

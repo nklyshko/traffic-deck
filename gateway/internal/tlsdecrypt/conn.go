@@ -1,11 +1,5 @@
 package tlsdecrypt
 
-// Conn passively decrypts one TLS 1.2 or 1.3 connection from its two directional record
-// streams, fed incrementally. It parses the cleartext ClientHello (client_random + SNI)
-// and ServerHello (negotiated version + cipher suite), then decrypts application_data
-// records using key material from the key-log, delivering application plaintext via
-// onApp. The negotiated version (from the ServerHello) selects the record layer.
-
 import (
 	"bytes"
 	"fmt"
@@ -57,6 +51,11 @@ type dirState struct {
 	encrypted bool             // TLS 1.2: this direction's ChangeCipherSpec has been seen
 }
 
+// Conn passively decrypts one SSL 3.0 – TLS 1.3 connection from its two directional record
+// streams, fed incrementally. It parses the cleartext ClientHello (client_random + SNI)
+// and ServerHello (negotiated version + cipher suite), then decrypts application_data
+// records using key material from the key-log, delivering application plaintext via
+// onApp. The negotiated version (from the ServerHello) selects the record layer.
 type Conn struct {
 	keylog *Keylog
 	onApp  func(fromClient bool, data []byte)
@@ -69,7 +68,7 @@ type Conn struct {
 	clientHellos [][]byte         // every ClientHello handshake message (verbatim), in wire order
 	hrrSeen      bool             // the server sent a HelloRetryRequest (⇒ a second ClientHello)
 	suite        *suite           // TLS 1.3 suite
-	suite12      *tls12Suite      // TLS 1.2 AEAD suite
+	suite12      *tls12Suite      // SSL 3.0 – TLS 1.2 suite (AEAD or CBC)
 	haveCH       bool
 	haveSH       bool
 	unsupported  bool   // ServerHello seen but not a supported version/suite
@@ -116,8 +115,8 @@ func (c *Conn) ClientHellos() [][]byte { return c.clientHellos }
 func (c *Conn) HRRSeen() bool { return c.hrrSeen }
 
 // Unsupported reports that the ServerHello negotiated something this decryptor can't
-// handle (an unknown version or suite) — the caller should stop and leave the stream to
-// the batch tshark pass.
+// handle (an unknown version or suite) — the caller should stop feeding it. Nothing else
+// decodes such a stream; the live decoder skips it (ADR-0009).
 func (c *Conn) Unsupported() bool { return c.unsupported }
 
 // UnsupportedReason returns a short human-readable explanation of why the connection is
@@ -206,8 +205,8 @@ func (c *Conn) drain(fromClient bool) bool {
 			consumed = c.handle12(fromClient, ds, typ, header, frag)
 		} else {
 			// TLS 1.3, or version not yet known (only cleartext handshake matters until
-			// the ServerHello sets the version). Unsupported versions (e.g. SSL 3.0) also
-			// land here and simply drop through to the batch pass.
+			// the ServerHello sets the version). Unsupported versions also land here;
+			// parsing the ServerHello marks the connection unsupported.
 			consumed = c.handle13(fromClient, ds, typ, header, frag)
 		}
 		if !consumed {
@@ -255,14 +254,14 @@ func (c *Conn) handle13(fromClient bool, ds *dirState, typ byte, header, frag []
 	return true
 }
 
-// handle12 processes one TLS 1.2 record. Before this direction's ChangeCipherSpec the
-// handshake is cleartext; after it every record (Finished, session tickets, application
-// data, alerts) is AEAD-encrypted with a continuous sequence number that starts at 0. It
+// handle12 processes one SSL 3.0 – TLS 1.2 record. Before this direction's ChangeCipherSpec
+// the handshake is cleartext; after it every record (Finished, session tickets, application
+// data, alerts) is encrypted (AEAD or CBC) with a continuous sequence number that starts at 0. It
 // returns false if an encrypted record can't be decrypted yet (master secret not in the
 // key-log), leaving it buffered to retry.
 func (c *Conn) handle12(fromClient bool, ds *dirState, typ byte, header, frag []byte) bool {
 	if c.unsupported {
-		return true // leave the connection to the batch pass; just consume + ignore
+		return true // consume and ignore: the caller skips an unsupported connection
 	}
 	if !ds.encrypted {
 		switch typ {
@@ -292,8 +291,8 @@ func (c *Conn) handle12(fromClient bool, ds *dirState, typ byte, header, frag []
 	}
 	plain, ok := ds.dec12.open(header, frag)
 	if !ok {
-		// With the correct key an AEAD/MAC failure shouldn't happen; bail to the batch pass
-		// rather than desynchronize the sequence number.
+		// With the correct key an AEAD/MAC failure shouldn't happen; give the connection
+		// up rather than desynchronize the sequence number.
 		c.markUnsupported(fmt.Sprintf("%s record decrypt/MAC failed", versionName(c.version)))
 		return true
 	}
@@ -417,7 +416,7 @@ func (c *Conn) parseServerHello(b []byte) {
 		s, found := tls12SuiteByID(id)
 		switch {
 		case !found:
-			// e.g. 3DES/RC4, which we don't decrypt live (tshark handles them on close).
+			// e.g. 3DES/RC4, which we don't decrypt; the live decoder skips the connection.
 			c.markUnsupported(fmt.Sprintf("%s cipher %#04x not supported (3DES/RC4?)", versionName(c.version), id))
 		case c.version < vTLS12 && !s.cbc:
 			c.markUnsupported(fmt.Sprintf("%s with AEAD cipher %#04x (invalid)", versionName(c.version), id))

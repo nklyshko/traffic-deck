@@ -357,7 +357,7 @@ func TestLiveHTTP3GzipBody(t *testing.T) {
 	half := len(raw) / 2
 	s.onStream(0, false, h3Frame(h3FrameData, raw[:half]), false)
 	s.onStream(0, false, h3Frame(h3FrameData, raw[half:]), false)
-	s.close() // QUIC has no end-of-stream callback; teardown is the last word
+	s.close() // the server never sent its FIN, so teardown is the last word
 
 	mu.Lock()
 	defer mu.Unlock()

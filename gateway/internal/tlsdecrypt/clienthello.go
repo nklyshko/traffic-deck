@@ -36,8 +36,6 @@ func isGREASE(v uint16) bool {
 	return v&0xff == v>>8 && v&0x0f == 0x0a
 }
 
-// parseClientHelloInfo parses a TLS-over-TCP ClientHello body (starting at legacy_version)
-// and computes JA3/JA4. Returns nil on a malformed structure.
 func parseClientHelloInfo(b []byte) *ClientHelloInfo { return parseCH(b, 't') }
 
 // ParseClientHelloInfoQUIC is parseClientHelloInfo for a ClientHello carried in a QUIC
@@ -112,7 +110,6 @@ func (ci *ClientHelloInfo) parseExtensions(b []byte, p int) {
 	}
 }
 
-// finalize computes JA3 + JA4 from the parsed fields.
 func (ci *ClientHelloInfo) finalize() {
 	// JA3: SSLVersion,Ciphers,Extensions,EllipticCurves,ECPointFormats (GREASE excluded).
 	ci.JA3Text = strings.Join([]string{
@@ -164,8 +161,6 @@ func (ci *ClientHelloInfo) ja4() string {
 
 	return ja4a + "_" + ja4b + "_" + ja4c
 }
-
-// --- helpers ---------------------------------------------------------------
 
 func be16(b []byte, p int) uint16 { return uint16(b[p])<<8 | uint16(b[p+1]) }
 

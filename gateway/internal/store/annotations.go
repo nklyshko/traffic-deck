@@ -322,9 +322,6 @@ func (s *Store) SetGroups(ctx context.Context, sessionID string, recordIDs, addI
 
 // --- read attach ----------------------------------------------------------
 
-// attachAnnotations fills the annotation fields (tag_ids, favorite, mark_color,
-// group_ids, comments) on the given flows, keyed by id. Whole-table scans are fine
-// for a single session's bundle; callers pass the subset they care about.
 // annotatable is a record that can carry annotations — a Flow or a WsMessage. The
 // annotation store is keyed on record_id (the flow/message id), so one attach path serves
 // both; the adapters below bridge to the generated proto structs, which share no methods.
@@ -352,8 +349,6 @@ func (r msgRecord) setMark(color string)            { r.m.MarkColor = color }
 func (r msgRecord) addGroup(id string)              { r.m.GroupIds = append(r.m.GroupIds, id) }
 func (r msgRecord) addComment(c *trafficv1.Comment) { r.m.Comments = append(r.m.Comments, c) }
 
-// flowRecords / msgRecords wrap a typed record map as the annotatable map attachAnnotations
-// expects, keyed by record id.
 func flowRecords(flows map[string]*trafficv1.Flow) map[string]annotatable {
 	out := make(map[string]annotatable, len(flows))
 	for id, f := range flows {
@@ -407,8 +402,8 @@ func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, 
 	return s.attachAnnotations(ctx, db, msgRecords(byID))
 }
 
-// attachAnnotations folds tags, favorites, marks, groups and comments onto the given
-// records (flows or messages), keyed by record id.
+// attachAnnotations scans each annotation table whole and skips rows for records not in
+// the map; whole-table scans are fine for a single session's bundle.
 func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, records map[string]annotatable) error {
 	if len(records) == 0 {
 		return nil
@@ -474,7 +469,6 @@ func (s *Store) attachAnnotations(ctx context.Context, db *sql.DB, records map[s
 	return rows.Err()
 }
 
-// scanPairs runs a two-string-column query and calls fn for each row.
 func scanPairs(ctx context.Context, db *sql.DB, query string, fn func(a, b string)) error {
 	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
@@ -491,7 +485,6 @@ func scanPairs(ctx context.Context, db *sql.DB, query string, fn func(a, b strin
 	return rows.Err()
 }
 
-// inTx runs fn inside a transaction, committing on success.
 func inTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

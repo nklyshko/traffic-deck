@@ -6,7 +6,7 @@ behind. But a user who really wants out shouldn't be stuck waiting on that teard
 
 So the first Ctrl-C requests a graceful stop: it sets the event the capture loop
 watches, *without* raising, so in-flight cleanup isn't torn apart mid-step. A second
-Ctrl-C restores Python's default handler and raises ``KeyboardInterrupt``, aborting
+Ctrl-C restores the previous handlers and raises ``KeyboardInterrupt``, aborting
 immediately (by which point recording is already stopped, so nothing is left running).
 
 Signals are delivered on the main thread only; off the main thread this no-ops and
@@ -21,7 +21,7 @@ import threading
 
 
 class GracefulInterrupt:
-    """Context manager installing the two-stage SIGINT handler described above.
+    """Context manager installing the two-stage SIGINT/SIGTERM handler described above.
 
     The capture loop should poll [stopping][capture_sdk.shutdown.GracefulInterrupt.stopping]
     (or the shared `event`) and break when it's set, then run its teardown; wrap the
@@ -44,10 +44,11 @@ class GracefulInterrupt:
 
     def _handle(self, signum, frame) -> None:
         if not self.event.is_set():
-            self.event.set()  # first signal: ask the capture to wind down
+            self.event.set()
             print(f"\n{self._message}", file=sys.stderr, flush=True)
             return
-        # Second signal: hand both signals back to their previous handlers and abort now.
+        # Restore the previous handlers so a third signal kills outright, even if the
+        # teardown this abort starts hangs.
         signal.signal(signal.SIGINT, self._prev or signal.SIG_DFL)
         signal.signal(signal.SIGTERM, self._prev_term or signal.SIG_DFL)
         raise KeyboardInterrupt

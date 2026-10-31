@@ -154,10 +154,8 @@ type grammar struct {
 	args  map[string]bool
 	flags map[string]bool
 	// strictTerms rejects a `~`-prefixed token the dialect does not define, instead of
-	// letting it fall through to a bare regex. The flow language cannot do this without
-	// changing what existing expressions mean; the message language, being new, can — and
-	// wants to, because the terms a user is most likely to type there (`~m`, `~c`, `~h`)
-	// are flow terms that would otherwise silently match the payload.
+	// letting it fall through to a bare regex. Only the message language sets it; the
+	// header of message.go says why.
 	strictTerms bool
 	// what names the dialect in an error, e.g. "unknown message filter term".
 	what string
@@ -168,7 +166,7 @@ type grammar struct {
 	bareWhat string
 }
 
-// flowGrammar is the flow filter dialect. Terms taking a regex argument, then flags.
+// flowGrammar is the flow filter dialect.
 var flowGrammar = grammar{
 	args: map[string]bool{
 		"~m": true, "~d": true, "~u": true, "~c": true, "~t": true,

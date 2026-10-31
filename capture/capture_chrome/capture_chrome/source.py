@@ -57,7 +57,7 @@ class ChromeSource(source.CaptureSource):
 
     def _profile_params(self, chrome: str, params: Mapping[str, str]) -> list:
         kinds = []
-        if platform.chrome_profiles(chrome):  # only offer "existing" when some exist
+        if platform.chrome_profiles(chrome):
             kinds.append(source.choice("existing", "An existing profile of this browser"))
         kinds += [source.choice("default", "The browser's own default profile"),
                   source.choice("temp", "A fresh temporary profile"),

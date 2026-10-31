@@ -5,8 +5,8 @@ A frida-free front-end over the capture library. Guided flow:
   2. for an emulator: use a running one, boot an existing AVD, or create one (installing
      a rootable system image if needed)
   3. ensure the target is rooted
-  4. pick the frida version — recommended for the device's Android release, picked from
-     the latest available (auto-checked on GitHub); v16 and v17 are always offered
+  4. pick the frida version — one of two pinned releases (v16, v17), the one recommended
+     for the device's Android release preselected
 
 Then a main menu loops:
   * Start a capture — pick the method first. Per-app packets + TLS keylog: pick the app
@@ -110,7 +110,7 @@ def pick_frida_version(adb: AdbClient, store: Store) -> str:
 
 
 def pick_scripts(scripts_dir: str, store: Store) -> list[str]:
-    """Step 6: pick one of the standard unpinning/bypass scripts bundled in
+    """Pick one of the standard unpinning/bypass scripts bundled in
     `scripts_dir`, or enter a path to a custom script (or none). Last run's pick is
     pre-selected when it's still available."""
     last = store.get("scripts", [])

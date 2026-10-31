@@ -217,8 +217,9 @@ func afterCursor(f *trafficv1.Flow, c *store.Cursor) bool {
 
 // filterFlowFromProto views a proto flow through the filter language. Bodies come from
 // the inline copy: a live flow that still has one can be matched on, and one whose bytes
-// have been released simply does not match a body term — the bundle-backed path is
-// QueryFlows' job, and this only ever sees the unflushed tail.
+// have been released simply does not match a body term. Its callers are the live paths
+// (StreamFlows' per-event match, and mergeUnflushed, which swaps in the hub's full
+// bytes); the bundle-backed path is the store's query.
 func filterFlowFromProto(f *trafficv1.Flow, tagNames, groupNames map[string]string) filter.Flow {
 	ff := filter.Flow{
 		Scheme: f.GetScheme(), Method: f.GetMethod(), Authority: f.GetAuthority(),

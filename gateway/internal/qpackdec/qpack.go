@@ -94,8 +94,6 @@ func readString(prefixBits int, p []byte) (s string, n int, ok bool) {
 	return string(data), ni + int(l), true
 }
 
-// --- dynamic table ---
-
 // dynByRel returns the entry at a relative index (0 = most recently inserted).
 func (d *Decoder) dynByRel(rel uint64) (HeaderField, bool) {
 	if rel >= uint64(len(d.entries)) {

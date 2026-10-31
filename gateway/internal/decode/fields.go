@@ -3,7 +3,6 @@ package decode
 // PDML field and body-field names the decoder reads from tshark, in one place so the
 // schema the gateway depends on is discoverable and typo-safe.
 
-// Packet / transport / TLS metadata fields.
 const (
 	fFrameNum   = "frame.number"
 	fFrameTime  = "frame.time_epoch"
@@ -22,7 +21,6 @@ const (
 	fQUICConn   = "quic.connection.number"
 )
 
-// HTTP/1.1 fields.
 const (
 	fH1Method      = "http.request.method"
 	fH1URI         = "http.request.uri"
@@ -32,7 +30,6 @@ const (
 	fH1ContentType = "http.content_type"
 )
 
-// HTTP/2 fields.
 const (
 	fH2StreamID  = "http2.streamid"
 	fH2Method    = "http2.headers.method"
@@ -44,7 +41,6 @@ const (
 	fH2HdrValue  = "http2.header.value"
 )
 
-// HTTP/3 fields.
 const (
 	fH3StreamID  = "http3.frame_streamid"
 	fH3Method    = "http3.headers.method"
@@ -56,7 +52,6 @@ const (
 	fH3HdrValue  = "http3.headers.header.value"
 )
 
-// WebSocket fields.
 const (
 	fWSOpcode      = "websocket.opcode"
 	fWSPayload     = "websocket.payload"

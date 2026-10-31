@@ -242,7 +242,7 @@ class CaptureWizardScreen(ModalScreen[str | None]):
     """Step through a source's capture options one at a time, like the CLI picker: pick a
     value, the source is re-described so the next step's options load fresh (Chrome binary →
     its profile kinds → that kind's profiles → …), then name the session and start.
-    `backspace` goes back a step, `esc` cancels. Dismisses with the session id. See ADR-0010."""
+    `ctrl+b` goes back a step, `esc` cancels. Dismisses with the session id. See ADR-0010."""
 
     # ctrl+b (not backspace) so Back works on text steps too — Input eats backspace.
     BINDINGS = [
@@ -252,7 +252,6 @@ class CaptureWizardScreen(ModalScreen[str | None]):
 
     _POLL_SECONDS = 2.0  # how often to re-check a source that's still provisioning
 
-    # Yes/No shown for a boolean step.
     _BOOL_CHOICES = [("Yes", "true"), ("No", "")]
 
     def __init__(self, source: str, label: str) -> None:
@@ -333,7 +332,7 @@ class CaptureWizardScreen(ModalScreen[str | None]):
         options = [Option(label, id=value) for label, value in choices]
         ol = OptionList(*options, id="wizard-choice")
         await step.mount(ol)
-        for i, (_, value) in enumerate(choices):  # preselect the default row
+        for i, (_, value) in enumerate(choices):
             if value == default:
                 ol.highlighted = i
                 break
@@ -641,7 +640,7 @@ class SessionsScreen(Screen):
                 _closed_cell(s),
                 key=s.id,
             )
-        if prev_key is not None:  # put the cursor back on the previously selected session
+        if prev_key is not None:
             try:
                 table.move_cursor(row=table.get_row_index(prev_key))
             except Exception:  # noqa: BLE001 — that session is gone (deleted / no longer listed)
@@ -1183,17 +1182,15 @@ async def open_flow_in_wireshark(widget, session_id: str, flow) -> None:
 
 class SessionPane(AnnotatableTable, Vertical):
     """One session's live flow table + filtering + annotations. Hosted as a tab in the
-    WorkspaceScreen so several sessions can be open and compared side by side. (Was a
-    full Screen; the shared Header/Footer now live on the workspace.)
+    WorkspaceScreen so several sessions can be open and compared side by side.
 
-    Flows are held whole in memory but rendered a page at a time. Rendering every flow was
-    what made a big session unopenable: a DataTable repaint costs time proportional to the
-    rows it holds, and painting one per arriving flow is quadratic — a 6000-flow session
-    took ~3.5 minutes to fill in, all of it repaints (the flows themselves stream from the
-    gateway in ~2s). So the stream only feeds the model, a timer renders the current page
-    when it actually changes, and paging is invisible: the cursor walks off a page and the
-    next one loads (see PagedDataTable). Filtering still runs over every flow in the
-    session, not just the rendered page — the whole session is in `flows`."""
+    Only one window of flows is held and rendered; the gateway filters and pages
+    (ADR-0012). Rendering every flow was what made a big session unopenable: a DataTable
+    repaint costs time proportional to the rows it holds, and painting one per arriving
+    flow is quadratic — a 6000-flow session took ~3.5 minutes to fill in, all of it
+    repaints. So the stream only feeds the model, a timer renders the window when it
+    actually changes, and paging is invisible: the cursor walks off the window and the
+    next one loads (see PagedDataTable)."""
 
     BINDINGS = [
         Binding("f", "filter", "Filter"),
@@ -1232,7 +1229,7 @@ class SessionPane(AnnotatableTable, Vertical):
         self._prev = None                   # cursor before its first
         self._matched = 0                   # rows matching, possibly a lower bound
         self._last_query = ("top", None, None, False)  # to re-issue when the stream is up
-        self._capped = False                # ...when the scan cap stopped counting
+        self._capped = False                # the scan cap stopped counting: _matched is a floor
         self._at_end = True                 # the window includes the end of the list
         self._changed: set[str] = set()     # rows whose cells changed since the last draw
         self._rows: set[str] = set()        # ids rendered right now (the current page)
@@ -2318,8 +2315,6 @@ class FlowDetailScreen(Screen):
         return Content("\n").join(lines)
 
     def _append_annotations(self, lines: list[Content], f) -> None:
-        """Render the record's annotations: mark, favorite, tags, groups,
-        comments. Names resolve via the maps passed from the flow list."""
         lines.extend(annotation_lines(f, self._tagnames, self._groupnames))
 
     @classmethod
@@ -2331,7 +2326,8 @@ class FlowDetailScreen(Screen):
         if body.content_encoding:
             # What the bytes were encoded as on the wire. They are stored decoded where the
             # gateway supports the encoding, so this is provenance for a readable body —
-            # except for one it cannot decode (brotli), where it says why this looks binary.
+            # except for one it could not undo (a chain like "gzip, br", or a failed
+            # decode), where it says why this looks binary.
             meta = f"{body.content_encoding} · {meta}"
         lines.append(Content(""))
         lines.append(Content.from_markup(
@@ -2354,7 +2350,6 @@ class FlowDetailScreen(Screen):
 
 
 def remove_quietly(path: str) -> None:
-    """Delete a temp file we created, ignoring one that is already gone."""
     try:
         os.unlink(path)
     except OSError:
@@ -2462,7 +2457,8 @@ class _PayloadView(Screen):
             return
         content = body_for_editor(self._content_type, self._data)
         suffix = editor_suffix(self._content_type, self._data)
-        # The stem is built from gateway-supplied ids, so no separators reach the filename.
+        # The stem comes from ids a pushing client controls; a separator in mkstemp's prefix
+        # would put the file outside the temp dir.
         stem = self._file_stem.replace(os.sep, "_")
         fd, path = tempfile.mkstemp(prefix=f"trafficdeck-{stem}-", suffix=suffix)
         with os.fdopen(fd, "wb") as fp:
@@ -2577,7 +2573,7 @@ class WsMessagesScreen(AnnotatableTable, Screen):
         # Decoder-supplied header fields, shown as extra columns. Unlike the flow table's
         # metadata columns these are on by default: a custom decoder emits a handful of
         # fields and they are the reason to look at the frame at all (MAX's command,
-        # sequence and opcode). _keys is what is displayed, in display order.
+        # sequence and opcode). _msg_col_keys is what is displayed, in display order.
         self._msg_col_keys: list[str] = []
         self._msg_col_ids: dict[str, object] = {}   # key -> DataTable ColumnKey
         self._hidden_keys: set[str] = set()         # toggled off with C; stays off
@@ -3060,22 +3056,18 @@ class CompareScreen(Screen):
             Content.from_markup(f"{mb} [b magenta]B[/b magenta] [dim]$m $auth$p[/dim]",
                                 m=b.method, auth=b.authority, p=b.path))
 
-        # HTTP version
         title("HTTP version", a.protocol == b.protocol)
         (eq if a.protocol == b.protocol else chg)(a.protocol or "∅", b.protocol or "∅")
 
-        # Pseudo-header order (compared separately from regular headers)
         pa, pb = self._pseudo(a), self._pseudo(b)
         title("Pseudo-header order", pa == pb)
         diff_list(pa, pb)
 
-        # Header order (names only)
         na = [n for n, _ in self._regular(a)]
         nb = [n for n, _ in self._regular(b)]
         title("Header order", na == nb)
         diff_list(na, nb)
 
-        # Cookie order (names only)
         cna = [n for n, _ in self._cookies(a)]
         cnb = [n for n, _ in self._cookies(b)]
         title("Cookie order", cna == cnb)

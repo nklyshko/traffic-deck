@@ -34,7 +34,6 @@ func (c *collectMsgStream) Send(ev *trafficv1.MessageEvent) error {
 	return nil
 }
 
-// added returns the ids of the frames sent, in order.
 func (c *collectMsgStream) added() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

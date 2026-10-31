@@ -236,7 +236,7 @@ def run_capture(
             if tcpdump is not None:
                 tcpdump.terminate()
             adb.sh_root("pkill tcpdump", check=False)
-            for rule in teardown_rules:  # always remove our NFLOG rules
+            for rule in teardown_rules:
                 adb.sh_root(" ".join(rule), check=False)
             if tcpdump is not None:
                 try:

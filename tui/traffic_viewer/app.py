@@ -1,4 +1,4 @@
-"""Traffic-viewer TUI: a read-only Textual UI over the gateway's ViewerService.
+"""Traffic-viewer TUI: a Textual UI over the gateway's ViewerService and ControlService.
 Session list → a tabbed workspace (one flow table per open session) → flow detail, with
 live follow, annotations, filtering, cross-tab compare, and export. See render.py /
 filters.py / screens.py for the pieces."""

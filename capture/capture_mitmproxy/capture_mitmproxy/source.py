@@ -40,6 +40,7 @@ class MitmproxySource(source.CaptureSource):
         return source.descriptor([
             source.param("mode", "Proxy mode", source.CHOICE, default=params.get("mode") or "regular",
                          choices=[source.choice("regular", "Regular HTTP proxy"),
+                                  source.choice("socks5", "SOCKS5 proxy"),
                                   source.choice("wireguard", "WireGuard server"),
                                   source.choice("transparent", "Transparent"),
                                   source.choice("local", "Local (this host's traffic)")]),

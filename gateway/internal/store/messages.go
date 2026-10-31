@@ -260,13 +260,12 @@ func (s *Store) attachWsCounts(ctx context.Context, db *sql.DB, flows map[string
 }
 
 // DeleteCustomProtocolFlows removes a session's synthetic custom-protocol flows — those
-// whose protocol is a registered decoder's name — along with their messages, header fields
-// and annotable side rows. HTTP flows are untouched.
+// whose protocol is a registered decoder's name — along with the rows deleteFlowRows
+// removes with them. HTTP flows are untouched.
 //
 // This is what makes `redecode` re-decoding rather than decoding again: the command used
 // to append a second copy of every custom flow each time it ran, so a decoder fixed twice
-// left three MAX connections in a session that had one. Blobs are left alone; they are
-// content-addressed, so an orphan costs space and nothing else.
+// left three MAX connections in a session that had one.
 func (s *Store) DeleteCustomProtocolFlows(ctx context.Context, sessionID string, protocols []string) (int, error) {
 	if len(protocols) == 0 {
 		return 0, nil

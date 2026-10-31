@@ -60,8 +60,8 @@ func TestLiveWebSocketCustomDecoder(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Two messages: the decoded binary frame (carrying its original bytes in Raw) and the
-	// text frame. The decoded message's Raw is the original undecoded frame, queryable via MCP.
+	// Two messages: the decoded binary frame (carrying its original bytes in Raw, queryable
+	// via MCP) and the text frame.
 	if len(msgs) != 2 {
 		t.Fatalf("got %d ws messages, want 2: %+v", len(msgs), msgs)
 	}

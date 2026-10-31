@@ -161,7 +161,7 @@ func (ls *liveSession) flush(ctx context.Context, final bool) error {
 		}
 		writes = append(writes, w)
 	}
-	// Written in an earlier cycle and untouched since: their bodies are final now.
+	// Written in an earlier cycle and untouched since: their bodies go in once settled.
 	for id := range ls.pending {
 		if _, stillDirty := flushing[id]; stillDirty {
 			continue // changed again; it gets another quiet cycle first

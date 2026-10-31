@@ -18,7 +18,7 @@ dials `addr` rather than spawning anything. So one interactive `sudo` at startup
 prompt-free start/stop for every capture after it, from the TUI and a web UI alike.
 
 `describe` and the profile tree are inherited from `ChromeSource` wholesale; only the
-runner differs (`capture_cls`) and the filesystem work that must not happen as root.
+runner differs (`new_capture`) and the filesystem work that must not happen as root.
 """
 
 from __future__ import annotations

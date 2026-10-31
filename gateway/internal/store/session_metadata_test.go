@@ -55,8 +55,7 @@ func TestSessionMetadataRoundTrip(t *testing.T) {
 		t.Errorf("plain session should have no metadata: %v", byID[plain].GetMetadata())
 	}
 
-	// Delete removes the metadata rows (no leak onto a future same-id session is possible,
-	// but verify the row is gone via a fresh session reusing nothing).
+	// Delete removes the metadata rows.
 	if err := st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, 0); err != nil {
 		t.Fatal(err)
 	}

@@ -87,6 +87,30 @@ def test_persistent_path_creates_dir(monkeypatch, tmp_path):
     assert profiles.persistent_path("chrome", "") == str(tmp_path / "default")
 
 
+def test_a_typed_profile_name_stays_inside_the_profiles_dir(monkeypatch, tmp_path):
+    # The interactive picker must map a name the way the serve path does, not join it raw.
+    from capture_chrome import cli
+
+    root = tmp_path / "profiles"
+    root.mkdir()
+    monkeypatch.setattr(profiles, "profiles_dir", lambda _b: str(root))
+    monkeypatch.setattr(cli.prompt, "select", lambda *a, **k: "__new__")
+    monkeypatch.setattr(cli.prompt, "text", lambda *a, **k: "../escape")
+
+    class Store:
+        def get(self, _k):
+            return None
+
+        def get_valid(self, *_a):
+            return None
+
+        def remember(self, _k, v):
+            return v
+
+    assert cli._pick_persistent_profile("chrome", Store()) == str(root / "..-escape")
+    assert not (tmp_path / "escape").exists()
+
+
 def test_resolve_existing_maps_dir_to_udd(monkeypatch):
     monkeypatch.setattr(profiles.platform, "chrome_profiles",
                         lambda _b: [("/u/.config/chrome", "Default", "Personal"),

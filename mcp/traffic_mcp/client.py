@@ -39,7 +39,7 @@ class _DefaultDeadline(grpc.aio.UnaryUnaryClientInterceptor):
 
 
 class GatewayClient:
-    """Thin async wrapper over ViewerServiceStub (+ ControlService reads)."""
+    """Thin async wrapper over ViewerServiceStub (+ the ControlService calls below)."""
 
     def __init__(self, address: str) -> None:
         self._address = address
@@ -163,13 +163,13 @@ class GatewayClient:
 
     # --- capture control ---------------------------------------------------
     #
-    # The one place this client is not read-only. Each call carries its own deadline,
+    # Writes, like the session-metadata calls above. Each call carries its own deadline,
     # because the first describe or start of a source *spawns* it: the built-ins launch
     # through `uv`, which on a cold environment resolves and builds the tool's
     # dependencies first (the gateway allows two minutes for that — sourcemgr.readyTimeout,
-    # and the TUI paints a "this can take a minute" notice over the same wait). A client
-    # default of thirty seconds would give up in the middle of that build and leave the
-    # source coming up behind it.
+    # and the TUI paints a "this can take a minute" notice over the same wait). The client
+    # default (DEFAULT_UNARY_TIMEOUT) would give up in the middle of that build and leave
+    # the source coming up behind it.
 
     #: Deadline for a call that may have to spawn a source. Matches the gateway's own
     #: patience, plus a margin so the gateway's error arrives instead of our timeout.

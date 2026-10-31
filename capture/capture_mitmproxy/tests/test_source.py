@@ -56,7 +56,7 @@ class FakeProc:
 def test_describe_offers_proxy_options():
     d = MitmproxySource("gw").describe({})
     assert [p.key for p in d.params] == ["mode", "listen_port", "listen_host"]
-    assert [c.value for c in d.params[0].choices] == ["regular", "wireguard", "transparent", "local"]
+    assert [c.value for c in d.params[0].choices] == ["regular", "socks5", "wireguard", "transparent", "local"]
     assert d.params[0].default == "regular"
     assert d.params[1].default == "8888"
 

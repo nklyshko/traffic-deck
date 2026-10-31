@@ -94,9 +94,9 @@ func (v *Viewer) liveFlow(ctx context.Context, sessionID, flowID string) *traffi
 	return f
 }
 
-// StreamFlows replays stored flows (backfill), then — if follow is set and the
-// session is live — streams a snapshot + subsequent live flow events until the
-// session closes or the client disconnects.
+// StreamFlows carries a session's live flow events — no stored rows, no snapshot — when
+// follow is set, until the session closes or the client disconnects. Without follow it
+// returns at once.
 func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerStreamingServer[trafficv1.FlowEvent]) error {
 	sid := req.GetSessionId()
 	pred, err := v.compileFilter(srv.Context(), sid, req.GetFilter())
@@ -168,7 +168,7 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	ls := v.waitForLive(srv.Context(), sid)
 	if ls == nil {
 		// Not live, and it will not become live: waitForLive only gives up once the
-		// session has stopped being open. Backfill is all there was.
+		// session has stopped being open.
 		s, err := v.st.GetSession(srv.Context(), sid)
 		if err != nil {
 			return nil // the session is gone; the stream ending is all we can say
@@ -188,8 +188,9 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	if err := srv.Send(openEvent); err != nil {
 		return err
 	}
-	// The subscription snapshot is skipped for the same reason as the backfill above: it
-	// is the hub's whole session, and replaying it would hand a paging viewer everything.
+	// The subscription snapshot is skipped for the same reason stored flows are not
+	// replayed: it is the hub's whole session, and replaying it would hand a paging viewer
+	// everything.
 	// A flow arriving between the viewer's QueryFlows and this subscribe is therefore not
 	// reported until it next queries — the gap ADR-0012 §8 flags, whose buffer-then-replay
 	// fix belongs with bounding the hub's own row map rather than here.
@@ -225,36 +226,10 @@ func (v *Viewer) StreamFlows(req *trafficv1.StreamFlowsRequest, srv grpc.ServerS
 	}
 }
 
-// sendLiveFlows sends the in-progress (unpersisted) flows of an open session as
-// flow_added events, skipping ids already sent from the store, with the bundle's
-// annotations folded in. A no-op when the session isn't live. Annotation attach is
-// best-effort: the flows are still worth sending if that read fails.
-func (v *Viewer) sendLiveFlows(srv grpc.ServerStreamingServer[trafficv1.FlowEvent], sessionID string,
-	sent map[string]bool, send func(*trafficv1.FlowEvent) error) error {
-	ls := v.hub.get(sessionID)
-	if ls == nil {
-		return nil
-	}
-	var live []*trafficv1.Flow
-	for _, f := range ls.unflushedFlows() {
-		if !sent[f.GetId()] {
-			live = append(live, f)
-		}
-	}
-	_ = v.st.AttachFlowAnnotations(srv.Context(), sessionID, live...)
-	for _, f := range live {
-		if err := send(&trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowAdded{FlowAdded: f}}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // waitForLive returns the live-hub session for sessionID, waiting out the race between
 // OpenSession (the session row is created) and the first UploadBegin (which registers the
 // hub session and starts live decode). Without this, a viewer that subscribes in that
-// window sees hub.get==nil and gets only backfill — no live flows — even though the
-// session is live. Returns nil once the session is no longer open, or gone.
+// window sees hub.get==nil and gets no live flows even though the session is live. Returns nil once the session is no longer open, or gone.
 //
 // The wait is bounded by the session staying open, not by a clock: how long the race
 // lasts is the source's business (a device capture registers on its first upload, which
@@ -270,7 +245,6 @@ func (v *Viewer) waitForLive(ctx context.Context, sessionID string) *liveSession
 		if ls := v.hub.get(sessionID); ls != nil {
 			return ls
 		}
-		// Stop waiting once the session is no longer open (it won't become live) or gone.
 		s, err := v.st.GetSession(ctx, sessionID)
 		if err != nil || s.GetStatus() != trafficv1.SessionStatus_SESSION_STATUS_OPEN {
 			return nil
@@ -370,7 +344,7 @@ func (v *Viewer) liveMessage(ctx context.Context, sessionID, messageID string) *
 
 // StreamMessages replays an Upgrade flow's stored frames, then — if follow is set and
 // the session is live — streams newly decoded frames until the session closes or the
-// client disconnects (the live WebSocket timeline, mirroring StreamFlows;).
+// client disconnects (the live WebSocket timeline).
 func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.ServerStreamingServer[trafficv1.MessageEvent]) error {
 	pred, err := v.compileMessageFilter(srv.Context(), req.GetSessionId(), req.GetFilter())
 	if err != nil {
@@ -441,7 +415,6 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 			return nil
 		case m, ok := <-ch:
 			if !ok {
-				// Session closed: signal end of the live stream and finish.
 				_ = srv.Send(&trafficv1.MessageEvent{Event: &trafficv1.MessageEvent_SessionEvent{
 					SessionEvent: &trafficv1.SessionEvent{
 						SessionId: req.GetSessionId(),
@@ -481,7 +454,6 @@ func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.S
 	return streamBytes(srv, body)
 }
 
-// streamBytes sends a byte slice as BodyChunks over a server stream.
 func streamBytes(srv grpc.ServerStreamingServer[trafficv1.BodyChunk], body []byte) error {
 	const chunk = 64 << 10
 	for off := 0; off < len(body); off += chunk {

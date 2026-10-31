@@ -116,7 +116,6 @@ const (
 	maxLogTail     = 4 << 20
 )
 
-// logEntry pairs a log's stable name and human label with the file backing it.
 type logEntry struct{ name, label, path string }
 
 // logCatalog is every log the gateway can serve: its own, then one per capture source and
@@ -317,8 +316,6 @@ func ctrlErr(what string, err error) error {
 
 var empty = &trafficv1.Empty{}
 
-// --- tags ---
-
 func (c *Control) CreateTag(ctx context.Context, req *trafficv1.CreateTagRequest) (*trafficv1.Tag, error) {
 	if req.GetName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tag name required")
@@ -348,8 +345,6 @@ func (c *Control) ToggleFavorite(ctx context.Context, req *trafficv1.ToggleFavor
 	return empty, ctrlErr("toggle favorite", c.st.ToggleFavorite(ctx, req.GetSessionId(), req.GetRecordIds()))
 }
 
-// --- comments ---
-
 func (c *Control) AddComment(ctx context.Context, req *trafficv1.AddCommentRequest) (*trafficv1.Comment, error) {
 	cm, err := c.st.AddComment(ctx, req.GetSessionId(), req.GetRecordId(), req.GetBody())
 	return cm, ctrlErr("add comment", err)
@@ -363,8 +358,6 @@ func (c *Control) EditComment(ctx context.Context, req *trafficv1.EditCommentReq
 func (c *Control) DeleteComment(ctx context.Context, req *trafficv1.DeleteCommentRequest) (*trafficv1.Empty, error) {
 	return empty, ctrlErr("delete comment", c.st.DeleteComment(ctx, req.GetSessionId(), req.GetId()))
 }
-
-// --- color marks ---
 
 func (c *Control) SetMark(ctx context.Context, req *trafficv1.SetMarkRequest) (*trafficv1.Empty, error) {
 	return empty, ctrlErr("set mark", c.st.SetMark(ctx, req.GetSessionId(), req.GetRecordIds(), req.GetColor()))
@@ -491,8 +484,6 @@ func (c *Control) localArtifact(key string) (string, uint64) {
 	}
 	return path, uint64(fi.Size())
 }
-
-// --- groups ---
 
 func (c *Control) CreateGroup(ctx context.Context, req *trafficv1.CreateGroupRequest) (*trafficv1.Group, error) {
 	if req.GetName() == "" {

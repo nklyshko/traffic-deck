@@ -188,7 +188,7 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 	}()
 }
 
-// startPassive registers a tshark-less live session for a *pushed* source
+// startPassive registers a decode-less live session for a *pushed* source
 // (PushFlows / mitmproxy): no pipe, no decode goroutine — flows are published
 // directly via publish(). Idempotent: returns the existing session if present.
 func (h *liveHub) startPassive(sessionID string) *liveSession {
@@ -212,7 +212,7 @@ func (h *liveHub) write(sessionID string, b []byte) {
 	}
 }
 
-// stop ends a session's live decode: close the pipe (EOF tshark), wait for all
+// stop ends a session's live decode: close the pipe (EOF to the decoder), wait for all
 // flows to be emitted, publish a closed session_event, and close subscribers. It
 // returns the finalized session (or nil) so the caller can persist its flows; the
 // accumulated flows/messages stay readable after close.
@@ -290,8 +290,7 @@ func (ls *liveSession) flow(id string) *trafficv1.Flow {
 }
 
 // liveFlows returns clones of the flows published so far, in arrival order — the
-// unpersisted counterpart of store.ListFlows, for reading a session that is still open
-// (the live decode paths persist nothing until close).
+// in-memory counterpart of store.ListFlows, for reading a session that is still open.
 func (ls *liveSession) liveFlows() []*trafficv1.Flow {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -455,7 +454,6 @@ func (ls *liveSession) onMessage(m *decode.WsMessage) {
 	ls.publishMessage(wsMsgToProto(m))
 }
 
-// publishMessage records a decoded WebSocket frame and fans it to message followers.
 func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -512,7 +510,7 @@ func (ls *liveSession) subscribeMessages(flowID string) (snapshot []*trafficv1.W
 }
 
 // publish records a (proto) flow and fans an added/updated event to subscribers.
-// Shared by the tshark live path (onFlow) and the PushFlows path. A flow id seen
+// Shared by the native live decode path (onFlow) and the PushFlows path. A flow id seen
 // before is an update even if isNew is set.
 func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
 	ls.mu.Lock()
@@ -574,7 +572,7 @@ func (ls *liveSession) subscribe() (snapshot []*trafficv1.FlowEvent, sub *flowSu
 }
 
 // flowToProto converts a decoded flow to the proto type for live events, inlining
-// small bodies (large bodies are available in full after the session is persisted).
+// small bodies (large ones are read in full through bodyBytes or, once flushed, the store).
 func flowToProto(f *decode.Flow) *trafficv1.Flow {
 	pf := &trafficv1.Flow{
 		Id:               f.ID,

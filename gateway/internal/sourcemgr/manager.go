@@ -66,7 +66,7 @@ type SourceInfo struct {
 type conn struct {
 	client trafficv1.CaptureSourceServiceClient
 	cc     *grpc.ClientConn
-	proc   *exec.Cmd      // nil for an injected/pre-dialed conn (tests)
+	proc   *exec.Cmd      // nil for a dial-only source, or an injected conn (tests)
 	log    io.WriteCloser // this source's own log sink; nil when not spawned by us
 }
 
@@ -84,12 +84,9 @@ type Manager struct {
 }
 
 // builtinSources are the sources the gateway registers by default, no configuration
-// needed. A source appears here once it has a `serve` mode; android (keep_warm, for its
-// emulator) and mitmproxy join as those land.
+// needed. A source appears here once it has a `serve` mode.
 //
-// servedBy names a source served over another one's connection: the android tool offers
-// two — per-app capture and browser capture — over one emulator, so the second is reached
-// through the first's process rather than booting a device of its own. Its launcher is
+// servedBy becomes Spec.ServedBy (which says why it exists). Such a source's launcher is
 // never resolved separately; it rides the owner's.
 var builtinSources = []struct {
 	name     string
@@ -113,7 +110,7 @@ func DefaultSpecs() map[string]Spec {
 	specs := map[string]Spec{}
 	for _, b := range builtinSources {
 		// A shared source has no launcher of its own; it is only offerable if the source
-		// serving it was found, which (map iteration being unordered) is checked after.
+		// serving it was found, which is checked once every launcher has been resolved.
 		if b.servedBy != "" {
 			specs[b.name] = Spec{ServedBy: b.servedBy, Label: b.label, KeepWarm: b.keepWarm}
 			continue
@@ -500,7 +497,7 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 	argv = append(argv, "--gateway", m.gatewayAddr, "--control", "127.0.0.1:0")
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+m.gatewayAddr)
-	cmd.SysProcAttr = detachedProcAttr() // no controlling tty; conn.close group-kills it
+	cmd.SysProcAttr = detachedProcAttr() // reaped by conn.close's group-kill
 	srcLog := logging.ChildLog(name)
 	cmd.Stderr = srcLog
 	stdout, err := cmd.StdoutPipe()

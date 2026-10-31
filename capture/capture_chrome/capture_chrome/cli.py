@@ -95,9 +95,7 @@ def _pick_existing_profile(chrome: str, discovered: list[tuple[str, str, str]], 
 
 def _pick_persistent_profile(chrome: str, store: Store) -> str:
     """Choose one of the saved persistent profiles, or create a new named one."""
-    profiles_dir = profiles.profiles_dir(chrome)
-    existing = sorted(d for d in os.listdir(profiles_dir)
-                      if os.path.isdir(os.path.join(profiles_dir, d)))
+    existing = profiles.saved_profiles(chrome)
     choice = prompt.select("Custom persistent profile:", existing + [("＋ create new…", "__new__")],
                            default=store.get_valid("profile_name", existing))
     if choice == "__new__":
@@ -105,9 +103,7 @@ def _pick_persistent_profile(chrome: str, store: Store) -> str:
     else:
         name = choice
     store.remember("profile_name", name)
-    path = os.path.join(profiles_dir, name)
-    os.makedirs(path, exist_ok=True)
-    return path
+    return profiles.persistent_path(chrome, name)
 
 
 def main(argv=None) -> None:
@@ -165,9 +161,6 @@ def _capture(argv) -> None:
                     help="extra Chrome flags after --")
     args = ap.parse_args(argv)
 
-    # Interactive by default in a terminal: pick the Chrome binary and profile unless
-    # they were given as flags (or prompting was disabled / there's no TTY). The pickers
-    # default to the previous run's choices, remembered under ~/.traffic-deck/state.
     interactive = not args.no_prompt and sys.stdin.isatty()
     store = Store("chrome")
     chrome = args.chrome or os.environ.get("CHROME_BIN")

@@ -8,7 +8,7 @@ package decode
 // encoder stream), and emit a Flow per request/response — like the H1/H2 live paths.
 //
 // Unlike TCP there is no assembler calling us back at end-of-capture, so close() is
-// driven from LiveTCPDecode's teardown; see it for the ways an HTTP/3 connection can end
+// driven from LiveDecode's teardown; see it for the ways an HTTP/3 connection can end
 // up incomplete.
 
 import (
@@ -77,7 +77,7 @@ type h3Stream struct {
 	// An encoded response body (respEnc set from the response headers) accumulates here
 	// in its wire form, because gzip can only be read from the start; the flow's own
 	// ResponseBody holds the decoded bytes. respDecoded is how much of respRaw the last
-	// decode covered — see decodeResp for why a stream can't just decode once at the end.
+	// decode covered — see decodeResp for why it decodes as bytes arrive, not once at the end.
 	respEnc     string
 	respRaw     []byte
 	respDecoded int
@@ -321,7 +321,6 @@ func (s *quicSession) onHeaders(st *h3Stream, fromClient bool, payload []byte) {
 	s.applyHeaders(st, fromClient, fields)
 }
 
-// retryBlocked re-attempts buffered HEADERS sections after the encoder stream advanced.
 func (s *quicSession) retryBlocked() {
 	if len(s.blocked) == 0 {
 		return
@@ -339,7 +338,6 @@ func (s *quicSession) retryBlocked() {
 	s.blocked = kept
 }
 
-// applyHeaders folds decoded header fields into the stream's Flow and emits it.
 func (s *quicSession) applyHeaders(st *h3Stream, fromClient bool, fields []qpackdec.HeaderField) {
 	f := st.flow
 	if fromClient {
@@ -404,12 +402,12 @@ func (s *quicSession) onData(st *h3Stream, fromClient bool, payload []byte) {
 
 // decodeResp refreshes the flow's plain body from the accumulated wire bytes.
 //
-// HTTP/2 can decode once, at END_STREAM; QUIC gives this decoder no end-of-stream
-// callback, and a capture can stop mid-response anyway, so the flow has to hold the best
-// plain bytes available at every emit. Decoding is from the start each time (a gzip
-// stream can only be read whole), so during capture it runs on a doubling schedule —
-// amortized linear in the body's size rather than quadratic in its DATA frames — and
-// `final` forces the last, authoritative pass when the connection ends.
+// It runs on DATA frames as they arrive, not only at the stream's FIN (end), because a
+// capture can stop mid-response and the flow has to hold the best plain bytes available at
+// every emit. Decoding is from the start each time (a gzip stream can only be read whole),
+// so during capture it runs on a doubling schedule — amortized linear in the body's size
+// rather than quadratic in its DATA frames — and `final` forces the last, authoritative
+// pass when the stream or connection ends.
 func (st *h3Stream) decodeResp(final bool) {
 	if st.respEnc == "" || len(st.respRaw) == 0 {
 		return

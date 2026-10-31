@@ -2,10 +2,10 @@ package decode
 
 // In-process live HTTP/1.1 decode over a TLS-decrypted connection. tshark can't decrypt
 // a live capture whose key-log is still growing (it reads the key-log once, at the first
-// TLS record, and never reloads), so HTTPS flows never appear live via the tshark path —
-// only via the batch decode on close. Here we parse the bytes the in-process TLS layer
-// (internal/tlsdecrypt) hands us, using the stdlib HTTP parsers, and emit Flow events in
-// real time. The batch pass on close stays authoritative (full bodies, HTTP/2/3, WS).
+// TLS record, and never reloads), so the live path parses the bytes the in-process TLS
+// layer (internal/tlsdecrypt) hands us, using the stdlib HTTP parsers, and emits Flow
+// events in real time. Its flows are authoritative: no batch pass re-decodes a live
+// capture on close (ADR-0009).
 
 import (
 	"bufio"
@@ -194,7 +194,7 @@ func (h *httpStream) run() {
 			}
 			f.BodyDone = true
 			h.onFlow(f, false)
-			return // no response
+			return
 		}
 		f.Status = uint32(resp.StatusCode)
 		f.ResponseHeaders = headersOf(resp.Header)

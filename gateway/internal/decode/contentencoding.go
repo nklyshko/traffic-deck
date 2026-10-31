@@ -67,9 +67,7 @@ func noteBodyCut(f *Flow, side string) {
 		f.Method, f.Authority, f.Path, side, maxDecodedBytes>>20, BodyTruncatedKey)
 }
 
-// readAllCapped reads up to maxDecodedBytes+1 from r and reports whether it overflowed the
-// cap (in which case the returned bytes are truncated to the cap). It never allocates an
-// unbounded buffer, whatever r decompresses to.
+// readAllCapped reads one byte past the cap so a body exactly at it is not reported as cut.
 func readAllCapped(r io.Reader) (data []byte, truncated bool, err error) {
 	data, err = io.ReadAll(io.LimitReader(r, int64(maxDecodedBytes)+1))
 	if len(data) > maxDecodedBytes {
@@ -162,9 +160,6 @@ func decoderFor(enc string) func(io.Reader) (io.ReadCloser, error) {
 // A body cut short (a capture that ended mid-response) decompresses to
 // as much as it has rather than to nothing, which is why a truncated read with output still
 // counts as a success.
-//
-// cut reports that the decoded body ran past maxDecodedBytes and was cut there; the
-// caller records it with noteBodyCut.
 func decodeBody(enc string, b []byte) (out []byte, cut bool) {
 	if len(b) == 0 {
 		return b, false

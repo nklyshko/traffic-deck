@@ -61,7 +61,6 @@ func TestLiveWebSocketUpgradeAndFrames(t *testing.T) {
 	}
 	h := newHTTPStream(s)
 
-	// HTTP/1.1 upgrade handshake, then frames.
 	h.feed(true, []byte("GET /ws HTTP/1.1\r\nHost: e\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
 	h.feed(false, []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"))
 	// client text frame (masked), server text frame (unmasked).

@@ -88,8 +88,8 @@ def test_render_columns_stay_line_aligned():
     b = flow([("accept", "*/*"), ("x-b", "2")])
     left, right = _render(a, b)
     assert left.count("\n") == right.count("\n")
-    assert "- x-a: 1" in left  # removed on the left
-    assert "+ x-b: 2" in right  # added on the right
+    assert "- x-a: 1" in left
+    assert "+ x-b: 2" in right
 
 
 def test_render_marks_copy_target_side():

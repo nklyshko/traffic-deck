@@ -37,7 +37,6 @@ func openSession(t *testing.T, st2 trafficv1.SessionStatus) (*store.Store, *live
 	return st, newLiveHub(), sid
 }
 
-// sessionStatuses returns the status carried by each session event sent, in order.
 func sessionStatuses(c *collectStream) []trafficv1.SessionStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()

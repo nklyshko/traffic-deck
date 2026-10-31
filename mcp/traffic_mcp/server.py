@@ -2,7 +2,8 @@
 clients. Backed by the gateway's ViewerService over gRPC — it does not
 touch SQLite directly, so it works locally or against a remote gateway.
 
-Run (stdio transport):  GATEWAY_ADDR=127.0.0.1:7331 uv run trafficdeck-mcp
+Run:  GATEWAY_ADDR=127.0.0.1:7331 uv run trafficdeck-mcp
+(streamable HTTP by default; MCP_TRANSPORT=stdio for stdio — see main)
 """
 
 from __future__ import annotations
@@ -283,19 +284,12 @@ def _flow_summary(f: common_pb2.Flow, tagnames: dict[str, str],
         "request_bytes": f.request_bytes,
         "tls_decrypted": f.tls_decrypted,
         "websocket": f.websocket,
-        # WebSocket frames, or messages a custom decoder framed: see list_messages.
         "message_count": f.ws_message_count,
-        # The connection the flow rode on: a TCP stream number, or quic:<n> for HTTP/3.
-        # Flows sharing it were multiplexed on one connection; list_undecoded_connections
-        # and get_connection_bytes use the same id.
         "connection_id": f.tcp_stream or None,
         # Why a connection is recorded without decoded traffic (tls_rejected — likely
         # certificate pinning —, no_request, udp_undecoded, tcp_passthrough); None for a
         # decoded flow. The same value is conn.outcome in `metadata`.
         "undecoded_reason": f.metadata.get("conn.outcome") or None,
-        # Everything the capture source recorded about the flow, as it stored it:
-        # hostname.source says whether the hostname in `url` was in the request or
-        # inferred (docs/metadata-keys.md has every key).
         "metadata": dict(f.metadata) or None,
         **_annotations(f, tagnames, groupnames),
         "http2_fingerprint": f.http2_fingerprint or None,
@@ -376,8 +370,8 @@ def _body_meta(body) -> dict | None:
     if body.content_encoding:
         # The encoding the bytes had on the wire. They are stored decoded from it where
         # the gateway supports the encoding, so on a readable body this is provenance;
-        # on one that reads as binary (brotli, which the gateway does not decode) it is
-        # the reason. `size` always counts the stored bytes.
+        # on one that reads as binary (a chain like "gzip, br", or a decode that failed)
+        # it is the reason. `size` always counts the stored bytes.
         meta["content_encoding"] = body.content_encoding
     if body.WhichOneof("content") != "inline":
         meta["note"] = "large body — fetch with get_body"
@@ -399,7 +393,6 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     d["src_addr"] = f.src_addr or None
     d["dst_addr"] = f.dst_addr or None
     d["user_agent"] = f.user_agent or None
-    # The stream within `connection_id`, for HTTP/2 and HTTP/3 (multiplexed) flows.
     d["stream_id"] = f.h2_stream_id or None
     if f.proxy.addr:
         d["proxy"] = {"addr": f.proxy.addr, "type": f.proxy.type,
@@ -705,7 +698,7 @@ def _timeline_row(seq: int, f, t0: int) -> dict:
     return {
         "seq": seq,
         "id": f.id,
-        "t_ms": t_ms,  # ms since first request
+        "t_ms": t_ms,
         "method": f.method or ("WS" if f.websocket else ""),
         "status": f.status or None,
         "error": f.error or None,
@@ -1102,8 +1095,8 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     directly instead of paging through get_flow/get_body. Each one reads every candidate
     it reaches, so narrow with the metadata criteria first: only `max_scan` candidates
     (default 400) are examined and the result reports `scanned`/`scan_limited`. Scanning
-    stops as soon as the requested page is full, so a later page re-scans from the start
-    — prefer one query with a bigger `limit` over walking many pages.
+    stops as soon as the requested page is full; `next_cursor` resumes after the last row
+    returned.
 
     These criteria only say "contains". For "does NOT contain" — which loads of a page
     lack a marker — use filter_flows with a negated term, e.g.
@@ -1132,9 +1125,6 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     status_set = _parse_status_set(status_in)  # raises ValueError on a bad spec
     since_us, until_us = _parse_time(since), _parse_time(until)
 
-    # Everything the gateway can evaluate goes into one filter expression. These criteria
-    # are substrings, not regexes, so they are escaped — a dot in a domain must not match
-    # any character.
     expr = _criteria_filter(domain=domain, method=method, content_type=content_type,
                             status=status, status_set=status_set,
                             path_contains=path_contains, url_contains=url_contains,
@@ -1727,7 +1717,6 @@ async def list_messages(session_id: str, flow_id: str, limit: int = 100,
             "sender": "client" if m.from_client else "server",  # what ~from matches
             "opcode": m.opcode,
             "size": size,
-            # Messages are annotatable records, like flows.
             **_annotations(m, tagnames, groupnames),
         }
         if m.metadata:
@@ -1845,9 +1834,9 @@ async def sqlite_query(sql: str, session_id: str = "", params: list[str] | None 
       SELECT name, COUNT(*) FROM flow_headers WHERE direction = 0 GROUP BY name
       SELECT status, COUNT(*) FROM flows GROUP BY status ORDER BY 2 DESC
 
-    Prefer `search`/`filter_flows` for "which flows match" — they page by cursor, return
-    bodies and annotations, and merge in a live capture's newest flows, none of which
-    this does.
+    Prefer `search`/`filter_flows` for "which flows match" — they page by cursor, read
+    every body (spilled ones too), return annotations, and merge in a live capture's
+    newest flows, none of which this does.
 
     Two things this reads are the bundle *as written to disk*: a session still capturing
     is missing its unflushed tail (flows are persisted incrementally, so counts here run
@@ -1926,8 +1915,7 @@ def main() -> None:
     # MCP_TRANSPORT: streamable-http (default), sse, or stdio. The HTTP transports bind
     # MCP_HOST:MCP_PORT (default 127.0.0.1:8765) and serve at /mcp; set stdio to speak
     # the protocol over stdin/stdout instead.
-    # MCP_READONLY (default on): expose only read tools; set MCP_READONLY=0 to also allow
-    # the mutating rename_session / set_session_group tools.
+    # MCP_READONLY (default on): see READONLY for what MCP_READONLY=0 adds.
     transport = os.environ.get("MCP_TRANSPORT", "streamable-http")
     try:
         mcp.run(transport=transport)

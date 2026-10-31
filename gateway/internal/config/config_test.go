@@ -116,3 +116,14 @@ func TestSelfUpdateHintFromFileAndEnv(t *testing.T) {
 		t.Errorf("SelfUpdateHint() = %q, want the environment to win", got)
 	}
 }
+
+// Fingerprints live under the same home as plugins and config.toml: a TRAFFIC_DECK_HOME
+// that moved those must move them too, not leave them in ~/.traffic-deck.
+func TestFingerprintsFollowTrafficDeckHome(t *testing.T) {
+	writeConfig(t, "")
+	t.Setenv("TRAFFICDECK_FP_DIR", "")
+	home := os.Getenv("TRAFFIC_DECK_HOME")
+	if got, want := Load().FingerprintsDir, filepath.Join(home, "fingerprints"); got != want {
+		t.Fatalf("FingerprintsDir = %q, want %q", got, want)
+	}
+}

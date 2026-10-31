@@ -53,7 +53,6 @@ def parse_devices(adb_devices_l: str) -> list[Device]:
         if len(parts) < 2:
             continue
         serial, state = parts[0], parts[1]
-        is_emu = serial.startswith("emulator-") or "transport_id" in line and "usb:" not in line
         out.append(Device(serial=serial, state=state, emulator=serial.startswith("emulator-")))
     return out
 

@@ -206,7 +206,7 @@ func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 	for k, v := range spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	cmd.SysProcAttr = detachedProcAttr() // no controlling tty; killGroup(-pid) reaps it
+	cmd.SysProcAttr = detachedProcAttr() // reaped by killGroup(-pid)
 	out := logging.ChildLog(name)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {

@@ -65,7 +65,6 @@ func Export(ctx context.Context, st *store.Store, dataRoot, sessionID string, w 
 		return err
 	}
 
-	// flows.sqlite: VACUUM INTO a temp file (a clean snapshot), then stream it in.
 	tmp, err := os.CreateTemp("", "flows-*.sqlite")
 	if err != nil {
 		return err

@@ -28,7 +28,6 @@ import (
 // that anyway) — or no progress at all.
 const maxConsecutiveReadErrors = 10_000
 
-// progressGuard turns a reader that has stopped making progress into a clean end.
 type progressGuard struct {
 	packetReader
 	errs int

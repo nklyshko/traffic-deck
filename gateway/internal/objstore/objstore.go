@@ -131,5 +131,4 @@ func (s *FSStore) LocalPath(key string) (string, bool) {
 	return full, true
 }
 
-// compile-time check
 var _ Store = (*FSStore)(nil)

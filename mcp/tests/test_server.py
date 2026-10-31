@@ -455,7 +455,6 @@ def test_bytes_payload_hex_and_offset():
     h = S._bytes_payload(data, as_hex=True)
     assert h["encoding"] == "hex" and h["hex"] == "0a000102030405"
     assert h["size"] == 7 and h["byte_offset"] == 0 and h["returned"] == 7
-    # windowed hex from an offset
     w = S._bytes_payload(data, as_hex=True, start=2)
     assert w["hex"] == "0102030405" and w["byte_offset"] == 2 and w["size"] == 7
 
@@ -1012,8 +1011,6 @@ def test_filter_flows_pages_and_reports_total(monkeypatch):
     assert "filter_syntax" not in out and "hints" not in out
 
 
-# --- filter syntax diagnostics -------------------------------------------
-
 # --- grep_bodies ------------------------------------------------------------
 
 def _pages(bodies: dict[str, bytes]):
@@ -1127,6 +1124,8 @@ def test_save_body_without_a_body_writes_nothing(monkeypatch):
     monkeypatch.setattr(S, "_resolve_session", _resolve)
     assert asyncio.run(S.save_body("s1", "f0")) == {"size": 0, "note": "no body"}
 
+
+# --- filter syntax diagnostics -------------------------------------------
 
 def _run_filter_flows(monkeypatch, flows, expr):
     import asyncio

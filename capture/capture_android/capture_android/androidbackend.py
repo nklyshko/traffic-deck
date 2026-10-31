@@ -125,7 +125,7 @@ class RealAndroidBackend:
             while proc.poll() is None and not stop_event.wait(0.5):
                 pass
         finally:
-            self._reap(proc)  # signal + wait for a graceful close, then escalate
+            self._reap(proc)
 
     @staticmethod
     def _relay_session(proc, on_session) -> None:
@@ -153,7 +153,7 @@ class RealAndroidBackend:
         if proc.poll() is not None:
             return
         try:
-            os.kill(proc.pid, signal.SIGINT)  # uv forwards a single SIGINT to the python
+            os.kill(proc.pid, signal.SIGINT)
             proc.wait(timeout=15)
             return
         except ProcessLookupError:
@@ -162,7 +162,7 @@ class RealAndroidBackend:
             pass
         for sig, grace in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
             try:
-                os.killpg(os.getpgid(proc.pid), sig)  # force-kill the whole group, no orphans
+                os.killpg(os.getpgid(proc.pid), sig)
                 proc.wait(timeout=grace)
                 return
             except ProcessLookupError:

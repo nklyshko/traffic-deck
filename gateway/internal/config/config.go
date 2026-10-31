@@ -12,8 +12,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-
-	"github.com/nklyshko/traffic-deck/gateway/internal/tlsfp"
 )
 
 type Config struct {
@@ -54,7 +52,7 @@ type Config struct {
 
 	// FingerprintsDir is the directory of user TLS-fingerprint files (*.json) that
 	// register additional well-known ClientHello fingerprints on top of the compiled-in
-	// builtin set. Default ~/.traffic-deck/fingerprints; override with TRAFFICDECK_FP_DIR.
+	// builtin set. Default $TRAFFIC_DECK_HOME/fingerprints; override with TRAFFICDECK_FP_DIR.
 	// Empty (home undeterminable and unset) means builtin-only.
 	FingerprintsDir string
 
@@ -142,7 +140,6 @@ func (s source) str(key, def string) string {
 	return def
 }
 
-// boolean reads a boolean setting (1/true/yes/on enable; 0/false/no/off disable).
 func (s source) boolean(key string, def bool) bool {
 	switch strings.ToLower(s.str(key, "")) {
 	case "1", "true", "yes", "on":
@@ -154,7 +151,6 @@ func (s source) boolean(key string, def bool) bool {
 	}
 }
 
-// integer reads an integer setting, falling back to def when unset or unparseable.
 func (s source) integer(key string, def int) int {
 	if n, err := strconv.Atoi(s.str(key, "")); err == nil {
 		return n
@@ -167,6 +163,10 @@ func (s source) integer(key string, def int) int {
 func Load() Config {
 	s := loadFile()
 	dataRoot := s.str("DATA_ROOT", "./data")
+	fpDir := "" // builtin fingerprints only
+	if home := Home(); home != "" {
+		fpDir = filepath.Join(home, "fingerprints")
+	}
 	if !s.boolean("GATEWAY_RECORD_LIVE", true) {
 		// Said once rather than silently ignored: someone who set it expects tshark to
 		// re-decode every capture on close, and that no longer happens (ADR-0009).
@@ -183,7 +183,7 @@ func Load() Config {
 		StartMCP:        s.boolean("GATEWAY_MCP", true),
 		Viewer:          s.str("GATEWAY_VIEWER", "tui"),
 		UpdateCheck:     s.boolean("GATEWAY_UPDATE_CHECK", true),
-		FingerprintsDir: s.str("TRAFFICDECK_FP_DIR", tlsfp.DefaultDir()),
+		FingerprintsDir: s.str("TRAFFICDECK_FP_DIR", fpDir),
 		LogFile:         s.str("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
 		LogMaxSizeMB:    s.integer("GATEWAY_LOG_MAX_SIZE_MB", 50),
 		LogMaxBackups:   s.integer("GATEWAY_LOG_MAX_BACKUPS", 10),

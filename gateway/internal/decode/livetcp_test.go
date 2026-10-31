@@ -515,8 +515,8 @@ func TestLiveTCPDecodePKTAP(t *testing.T) {
 // buildPktapPcap wraps the Ethernet frames of buildPcap in pktap_headers and declares the
 // file as LINKTYPE_PKTAP. pcapgo cannot write that header itself — WriteFileHeader takes a
 // layers.LinkType (uint8), and 258 does not fit — which is the whole reason the decoder
-// reads the raw link type instead of trusting the reader's. So the Ethernet header is
-// written and its link-type field overwritten in place, exactly as tcpdump emits it.
+// reads the raw link type instead of trusting the reader's. So the file header is written
+// as Ethernet and its link-type field overwritten in place, exactly as tcpdump emits it.
 func buildPktapPcap(t *testing.T, c2s, s2c []byte) []byte {
 	t.Helper()
 	var out bytes.Buffer

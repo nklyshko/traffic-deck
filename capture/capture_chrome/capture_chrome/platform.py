@@ -132,7 +132,6 @@ def parse_chrome_profiles(local_state: dict) -> list[tuple[str, str]]:
     prof = local_state.get("profile", {})
     cache = prof.get("info_cache", {})
     order = prof.get("profiles_order") or []
-    # Honour profiles_order, then append any cache entries it omits (sorted, stable).
     ordered = [d for d in order if d in cache] + [d for d in sorted(cache) if d not in order]
     out = []
     for dirn in ordered:

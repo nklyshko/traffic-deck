@@ -33,7 +33,7 @@ func (i *Ingest) verifyRecordedLive(ctx context.Context, sid string, ls *liveSes
 	verifyLiveVsTshark(sid, ls.protoFlows(), batch)
 }
 
-// verifyLiveVsTshark compares the live-decoded flows against the authoritative tshark
+// verifyLiveVsTshark compares the live-decoded flows against a tshark
 // decode and logs any differences, so a live-decoder gap (a missed or extra flow) is
 // surfaced rather than silent. Flows are matched by a natural key
 // (protocol/method/authority/path) counted per side — live and tshark assign independent

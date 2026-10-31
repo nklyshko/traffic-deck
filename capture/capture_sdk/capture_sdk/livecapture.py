@@ -195,7 +195,7 @@ class KeylogCapture(abc.ABC):
         which filters by process) overrides this."""
         cmd = [self.dumpcap or dumpcap_mod.binary(), "-i", iface, "-P", "-w", "-", "-q"]
         if self.capture_filter:
-            cmd += ["-f", self.capture_filter]  # no filter = capture everything
+            cmd += ["-f", self.capture_filter]
         return cmd
 
     def open_metadata(self) -> dict[str, str]:

@@ -242,9 +242,9 @@ func ApplyManifests(dir string, srcSpecs map[string]Spec, svcSpecs map[string]Se
 				Detail: p.Detail,
 			}
 			if lazy {
-				spec.Module = m.Name // started on first use of the module's source
+				spec.Module = m.Name
 			} else {
-				spec.AutoStart = true // no capture type to gate on; start at launch
+				spec.AutoStart = true
 			}
 			svcSpecs[key] = spec
 		}

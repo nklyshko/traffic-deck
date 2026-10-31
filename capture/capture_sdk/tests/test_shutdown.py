@@ -1,7 +1,7 @@
 """Tests for the two-stage Ctrl-C handler (capture_sdk.shutdown).
 
 The handler logic is exercised by calling ._handle directly (no real signals), plus
-one round-trip test that the context manager installs and restores the SIGINT handler.
+round-trip tests that the context manager installs and restores the SIGINT/SIGTERM handlers.
 """
 
 from __future__ import annotations

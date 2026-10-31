@@ -1,7 +1,9 @@
 // Command gateway is the TrafficDeck gateway entry point.
 //
+//	gateway [run]                                      run the gateway with a foreground viewer
 //	gateway serve                                      run the gRPC server
 //	gateway import --pcap f [--keylog f] [--label s] [--decoder tshark|native]  import a capture
+//	gateway redecode <session-id> [-engine native|tshark] re-run the custom decoders
 //	gateway export <session-id> [-o file.tar.gz]       export a session bundle
 //	gateway import-session <file> [--new-id] [--label s] import a session bundle
 package main
@@ -148,7 +150,7 @@ func usage() {
 }
 
 // configureFingerprints points the TLS-fingerprint classifier at the user's directory
-// (default ~/.traffic-deck/fingerprints) on top of the compiled-in builtin set, and
+// (default $TRAFFIC_DECK_HOME/fingerprints) on top of the compiled-in builtin set, and
 // routes load errors (malformed rows/files) to the gateway log instead of failing.
 func configureFingerprints(cfg config.Config) {
 	tlsfp.LogErrors = func(errs []error) {
@@ -162,7 +164,6 @@ func configureFingerprints(cfg config.Config) {
 	}
 }
 
-// openDeps opens the object store (session bundles) and the SQLite store.
 func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.Store) {
 	obj, err := objstore.NewFSStore(cfg.DataRoot)
 	if err != nil {
@@ -348,8 +349,7 @@ func runFused() {
 		}
 	}
 
-	// Viewer exited → tear the gateway down (reap capture sources + services, close store).
-	// Narrated and bounded: the terminal is ours again but nothing here used to print, so a
+	// The teardown is narrated and bounded: the terminal is ours again but nothing here used to print, so a
 	// slow teardown looked identical to a hang.
 	deadline := time.Now().Add(shutdownTimeout)
 	log.Printf("shutting down (up to %s)…", shutdownTimeout)

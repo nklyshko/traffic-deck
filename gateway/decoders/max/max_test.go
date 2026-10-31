@@ -168,7 +168,7 @@ func TestDecodeZstd(t *testing.T) {
 		t.Fatalf("zstd writer: %v", err)
 	}
 	z := enc.EncodeAll(body, nil)
-	f := rawFrame(compZstd, z) // comp=0xFF
+	f := rawFrame(compZstd, z)
 	msgs := decode(t, []decoders.Turn{{FromClient: true, Data: f}})
 	if len(msgs) != 1 || !strings.Contains(string(msgs[0].Payload), `"hello":"world"`) {
 		t.Fatalf("zstd decode: %+v", msgs)

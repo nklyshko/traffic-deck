@@ -86,7 +86,7 @@ func TestParseResetStreamFrame(t *testing.T) {
 }
 
 func TestParseServerHelloSuite(t *testing.T) {
-	// Minimal ServerHello: type 2, body = legacy_version(0303) random(32x aa) session_id<1>=00
+	// Minimal ServerHello: type 2, body = legacy_version(0303) random(32 zero bytes) session_id<1>=00
 	// cipher_suite(1301). bodyLen = 2+32+1+2 = 37 = 0x25.
 	body := []byte{0x03, 0x03}
 	body = append(body, make([]byte, 32)...)

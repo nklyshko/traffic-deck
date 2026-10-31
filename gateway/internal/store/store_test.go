@@ -313,11 +313,9 @@ func TestDeleteSession(t *testing.T) {
 		t.Fatalf("bundle should exist: %v", err)
 	}
 
-	// Open session → refused.
 	if err := st.DeleteSession(ctx, sid); err == nil {
 		t.Fatal("deleting an open session should be refused")
 	}
-	// Close, then delete.
 	if err := st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +328,6 @@ func TestDeleteSession(t *testing.T) {
 	if _, err := os.Stat(bundle); !os.IsNotExist(err) {
 		t.Errorf("bundle dir should be removed: %v", err)
 	}
-	// Deleting a missing session → ErrNotFound.
 	if err := st.DeleteSession(ctx, uuid.NewString()); err != ErrNotFound {
 		t.Errorf("delete missing = %v, want ErrNotFound", err)
 	}

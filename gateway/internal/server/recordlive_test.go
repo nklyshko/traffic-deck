@@ -13,8 +13,7 @@ import (
 )
 
 // TestPersistLiveFullBodies checks that close persists the live decoder's flows —
-// including a response body larger than the live preview cap — in full, plus WS messages,
-// as a "live" analysis on close.
+// including a large response body — in full, plus WS messages, as a "live" analysis.
 func TestPersistLiveFullBodies(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(ctx, t.TempDir())
@@ -38,8 +37,8 @@ func TestPersistLiveFullBodies(t *testing.T) {
 		msgSubs: map[int]chan *trafficv1.WsMessage{},
 	}
 
-	// A response body well past the 256 KiB live preview cap — the live record must keep it all.
-	bigBody := bytes.Repeat([]byte("A"), 700<<10)
+	// Past store.InlineBlobMax, so the body spills out of the bundle and must still come back whole.
+	bigBody := bytes.Repeat([]byte("A"), 2<<20)
 	f1 := uuid.NewString()
 	flow := &decode.Flow{ID: f1, Authority: "example.com", Method: "GET", Protocol: "HTTP/2"}
 	ls.onFlow(flow, true)       // request seen
@@ -67,7 +66,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 		t.Fatalf("persisted %d flows, want 2", len(flows))
 	}
 
-	// The big response body must be stored in full (not truncated to the preview cap).
+	// The big response body must be stored in full, not truncated.
 	body, _, err := st.GetBodyBytes(ctx, sid, f1, true)
 	if err != nil {
 		t.Fatal(err)

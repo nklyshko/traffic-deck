@@ -105,7 +105,6 @@ func (s *Store) Close() {
 	_ = s.catalog.Close()
 }
 
-// openDB opens a SQLite file, applies pragmas and the (idempotent) schema.
 func openDB(ctx context.Context, path, schema string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path+dsnPragmas)
 	if err != nil {
@@ -118,7 +117,6 @@ func openDB(ctx context.Context, path, schema string) (*sql.DB, error) {
 	return db, nil
 }
 
-// sessionDB returns the (cached) DB for a session, creating the bundle dir + file.
 func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -176,8 +174,6 @@ func migrateSession(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// validateSessionSchema verifies the flows + ws_messages tables have every column the read
-// path needs. Returns an ErrSchemaOutdated wrapping the missing columns when they don't.
 func validateSessionSchema(ctx context.Context, db *sql.DB) error {
 	if missing, err := missingColumns(ctx, db, "flows", requiredFlowColumns); err != nil {
 		return err
@@ -192,7 +188,6 @@ func validateSessionSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// missingColumns returns which of `required` are absent from `table`.
 func missingColumns(ctx context.Context, db *sql.DB, table string, required []string) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
 	if err != nil {
@@ -219,8 +214,6 @@ func missingColumns(ctx context.Context, db *sql.DB, table string, required []st
 	return missing, nil
 }
 
-// --- writes ---------------------------------------------------------------
-
 type NewSession struct {
 	ID          string
 	Label       string
@@ -246,7 +239,6 @@ func (s *Store) CreateSession(ctx context.Context, ns NewSession) error {
 			return err
 		}
 	}
-	// Materialize the per-session bundle DB up front.
 	_, err := s.sessionDB(ctx, ns.ID)
 	return err
 }
@@ -266,7 +258,6 @@ func (s *Store) SetSessionMetadata(ctx context.Context, sessionID string, md map
 	return nil
 }
 
-// attachSessionMetadata fills each session's Metadata map from the session_metadata table.
 func (s *Store) attachSessionMetadata(ctx context.Context, sessions map[string]*trafficv1.Session) error {
 	if len(sessions) == 0 {
 		return nil
@@ -491,7 +482,6 @@ func (s *Store) InsertFlowWrites(ctx context.Context, sessionID, analysisID stri
 	return len(writes), nil
 }
 
-// insertMetadata writes a flow's opaque source-supplied key/value metadata.
 func insertMetadata(stmts *txStmts, flowID string, md map[string]string) error {
 	for k, v := range md {
 		if err := stmts.exec(
@@ -503,7 +493,6 @@ func insertMetadata(stmts *txStmts, flowID string, md map[string]string) error {
 	return nil
 }
 
-// insertClientHellos writes a flow's raw ClientHello handshake messages in wire order.
 func insertClientHellos(stmts *txStmts, flowID string, hellos [][]byte) error {
 	for i, raw := range hellos {
 		if err := stmts.exec(
@@ -582,8 +571,6 @@ func nullIfEmpty(s string) any {
 	}
 	return s
 }
-
-// --- reads ----------------------------------------------------------------
 
 func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]*trafficv1.Session, error) {
 	if limit <= 0 {
@@ -811,7 +798,6 @@ func linkRedirects(flows []*trafficv1.Flow) {
 	}
 }
 
-// flowURL is a flow's absolute request URL (scheme://authority/path?query).
 func flowURL(f *trafficv1.Flow) string {
 	scheme := f.GetScheme()
 	if scheme == "" {
@@ -852,7 +838,6 @@ func resolveRedirect(f *decode.Flow) string {
 	return base.ResolveReference(ref).String()
 }
 
-// attachMetadata fills each flow's Metadata map from the flow_metadata side table.
 func (s *Store) attachMetadata(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
 	if len(flows) == 0 {
 		return nil
@@ -963,7 +948,6 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		return nil, err
 	}
 
-	// Attach bodies (inlined; capped at decode.MaxBodyBytes).
 	var reqRef, respRef sql.NullString
 	var reqEnc, respEnc string
 	if err := db.QueryRowContext(ctx,
@@ -984,7 +968,6 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 		return nil, err
 	}
 	attachCookies(f)
-	// Link the redirect chain: which flow (if any) redirected to this one.
 	var srcID string
 	if err := db.QueryRowContext(ctx,
 		`SELECT id FROM flows WHERE redirect_location=? AND id!=? LIMIT 1`, flowURL(f), f.Id).

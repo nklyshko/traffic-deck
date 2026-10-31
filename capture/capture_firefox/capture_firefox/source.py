@@ -53,7 +53,7 @@ class FirefoxSource(source.CaptureSource):
 
     def _profile_params(self, firefox: str, params: Mapping[str, str]) -> list:
         kinds = []
-        if platform.firefox_profiles(firefox):  # only offer "existing" when some exist
+        if platform.firefox_profiles(firefox):
             kinds.append(source.choice("existing", "An existing profile of this browser"))
         kinds += [source.choice("default", "The browser's own default profile"),
                   source.choice("temp", "A fresh temporary profile"),

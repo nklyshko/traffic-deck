@@ -2,7 +2,7 @@
 // name (e.g. "Chrome 150", "OkHttp (Android)") from a registry of well-known
 // fingerprints. The registry is a compiled-in builtin set (builtin.json, embedded)
 // plus any JSON files a user drops into a directory (default
-// ~/.traffic-deck/fingerprints, override TRAFFICDECK_FP_DIR) — so new fingerprints are
+// $TRAFFIC_DECK_HOME/fingerprints, override TRAFFICDECK_FP_DIR) — so new fingerprints are
 // registered without modifying or rebuilding TrafficDeck.
 //
 // Classification is a pure function of the fingerprint, run at serve time, so editing
@@ -142,8 +142,8 @@ func (r *Registry) Classify(fp Fingerprint) (Match, bool) {
 		if !row.matches(fp) {
 			continue
 		}
-		// Higher score wins; equal score → later load order (user > builtin) wins;
-		// an SNI-constrained row outranks an equal-score unconstrained one.
+		// Higher score wins; at equal score an SNI-constrained row outranks an
+		// unconstrained one, and after that the later load order (user > builtin) wins.
 		if best < 0 {
 			best = i
 			continue
@@ -311,14 +311,4 @@ func Name(fp Fingerprint) string {
 		return ""
 	}
 	return m.String()
-}
-
-// DefaultDir returns the default user fingerprint directory
-// (~/.traffic-deck/fingerprints), or "" if the home dir can't be determined.
-func DefaultDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".traffic-deck", "fingerprints")
 }

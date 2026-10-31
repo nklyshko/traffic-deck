@@ -5,7 +5,7 @@ package tlsdecrypt
 // and the record MAC is a bespoke two-pass hash (not HMAC) that — unlike TLS — omits the
 // protocol version. Record encryption is CBC with an implicit IV, like TLS 1.0. Only the
 // AES-CBC suites we already have a block cipher for are handled; everything else (RC4,
-// 3DES) falls back to the batch pass. SSL 3.0 is long dead (POODLE); this exists for
+// 3DES) is reported unsupported. SSL 3.0 is long dead (POODLE); this exists for
 // completeness against archived captures.
 
 import (
@@ -43,10 +43,14 @@ func ssl3KeyBlock(master, clientRandom, serverRandom []byte, n int) []byte {
 //
 //	hash(mac_secret || pad2 || hash(mac_secret || pad1 || seq || type || length || content))
 //
-// pad1/pad2 are 0x36/0x5c repeated (48 bytes for MD5, 40 for SHA-1 = hash block size minus
-// output size). Note the absence of the version field that the TLS MAC includes.
+// pad1/pad2 are 0x36/0x5c repeated 48 times for MD5 and 40 times for SHA-1. Those are the
+// RFC's literal counts, not a formula: 64 minus the output size gives 48 for MD5 but 44 for
+// SHA-1. Note the absence of the version field that the TLS MAC includes.
 func ssl3MAC(newHash func() hash.Hash, macSecret []byte, macLen int, seq uint64, typ byte, content []byte) []byte {
-	padLen := 64 - macLen // 48 for MD5, 40 for SHA-1
+	padLen := 40 // SHA-1
+	if macLen == md5.Size {
+		padLen = 48
+	}
 	pad1 := make([]byte, padLen)
 	pad2 := make([]byte, padLen)
 	for i := range pad1 {
