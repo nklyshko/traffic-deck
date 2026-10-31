@@ -306,7 +306,7 @@ func ctrlErr(what string, err error) error {
 		return status.Errorf(codes.NotFound, "%s: not found", what)
 	case errors.Is(err, store.ErrProtected):
 		return status.Errorf(codes.InvalidArgument, "%s: protected object", what)
-	case errors.Is(err, store.ErrSchemaOutdated):
+	case errors.Is(err, store.ErrSchemaOutdated), errors.Is(err, store.ErrSchemaNewer):
 		return status.Errorf(codes.FailedPrecondition, "%s: %v", what, err)
 	case err != nil:
 		return status.Errorf(codes.Internal, "%s: %v", what, err)

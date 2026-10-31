@@ -102,7 +102,8 @@ func TestOlderBundleGainsEncodingColumns(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	// Drop the session's cached handle and the columns, leaving a pre-migration bundle.
+	// Drop the session's cached handle and the columns, leaving a bundle as a gateway
+	// before versioning wrote it.
 	st.mu.Lock()
 	db := st.sessions[sid]
 	delete(st.sessions, sid)
@@ -111,6 +112,9 @@ func TestOlderBundleGainsEncodingColumns(t *testing.T) {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE flows DROP COLUMN `+col); err != nil {
 			t.Fatalf("drop %s: %v", col, err)
 		}
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA user_version = 0`); err != nil {
+		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -130,9 +134,15 @@ func TestOlderBundleGainsEncodingColumns(t *testing.T) {
 			t.Errorf("column %s missing after migration", col)
 		}
 	}
-	// Re-running the migration on an up-to-date bundle is a no-op, not an error.
-	if err := migrateSession(ctx, reopened); err != nil {
-		t.Errorf("migrateSession twice: %v", err)
+	// The baseline checks before each change, so running it on a current bundle is a
+	// no-op, not an error.
+	tx, err := reopened.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := sessionBaseline(ctx, tx); err != nil {
+		t.Errorf("baseline on a current bundle: %v", err)
 	}
 }
 

@@ -39,7 +39,7 @@ func (s *Store) InsertMessages(ctx context.Context, sessionID string, msgs []*de
 				return err
 			}
 			if err := stmts.exec(`
-				INSERT INTO ws_messages (id, flow_id, frame_number, ts_micros,
+				INSERT INTO messages (id, flow_id, frame_number, ts_micros,
 				    from_client, opcode, payload_len, payload_ref, raw_ref)
 				VALUES (?,?,?,?,?,?,?,?,?)`,
 				m.ID, m.FlowID, int64(m.FrameNumber), m.TSUnixMicros,
@@ -49,7 +49,7 @@ func (s *Store) InsertMessages(ctx context.Context, sessionID string, msgs []*de
 			}
 			for k, v := range m.Metadata {
 				if err := stmts.exec(
-					`INSERT OR REPLACE INTO ws_message_metadata (message_id, key, value)
+					`INSERT OR REPLACE INTO message_metadata (message_id, key, value)
 					 VALUES (?,?,?)`, m.ID, k, v); err != nil {
 					return err
 				}
@@ -72,7 +72,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, flow_id, frame_number, ts_micros, from_client, opcode, payload_ref, raw_ref
-		FROM ws_messages WHERE flow_id=? ORDER BY ts_micros, frame_number`, flowID)
+		FROM messages WHERE flow_id=? ORDER BY ts_micros, frame_number`, flowID)
 	if err != nil {
 		return nil, err
 	}
@@ -121,14 +121,14 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 	return out, nil
 }
 
-// attachMessageMetadata fills each message's Metadata map from the ws_message_metadata
+// attachMessageMetadata fills each message's Metadata map from the message_metadata
 // side table — the decoder's own header fields. One whole-table read rather than a join
 // per row, the pattern attachMetadata already uses for flows.
 func attachMessageMetadata(ctx context.Context, db *sql.DB, msgs map[string]*trafficv1.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT message_id, key, value FROM ws_message_metadata`)
+	rows, err := db.QueryContext(ctx, `SELECT message_id, key, value FROM message_metadata`)
 	if err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*t
 	)
 	err = db.QueryRowContext(ctx, `
 		SELECT id, flow_id, frame_number, ts_micros, from_client, opcode, payload_ref, raw_ref
-		FROM ws_messages WHERE id=?`, messageID).
+		FROM messages WHERE id=?`, messageID).
 		Scan(&id, &flow, &frameNumber, &ts, &fromClient, &opcode, &payloadRef, &rawRef)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -210,7 +210,7 @@ func (s *Store) GetMessageBody(ctx context.Context, sessionID, messageID string,
 	}
 	var ref sql.NullString
 	switch err := db.QueryRowContext(ctx,
-		`SELECT `+col+` FROM ws_messages WHERE id=?`, messageID).Scan(&ref); {
+		`SELECT `+col+` FROM messages WHERE id=?`, messageID).Scan(&ref); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
 	case err != nil:
@@ -234,13 +234,13 @@ func (s *Store) GetMessageBody(ctx context.Context, sessionID, messageID string,
 }
 
 // attachMessageCounts sets Websocket + MessageCount on the given flows from one grouped
-// scan over ws_messages (cheap; the bundle is one session).
+// scan over messages (cheap; the bundle is one session).
 func (s *Store) attachMessageCounts(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
 	if len(flows) == 0 {
 		return nil
 	}
 	rows, err := db.QueryContext(ctx,
-		`SELECT flow_id, COUNT(*) FROM ws_messages GROUP BY flow_id`)
+		`SELECT flow_id, COUNT(*) FROM messages GROUP BY flow_id`)
 	if err != nil {
 		return err
 	}
@@ -320,12 +320,12 @@ func (s *Store) DeleteCustomProtocolFlows(ctx context.Context, sessionID string,
 func deleteFlowRows(ctx context.Context, tx *sql.Tx, ids []string) error {
 	for _, fid := range ids {
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM ws_message_metadata WHERE message_id IN
-			   (SELECT id FROM ws_messages WHERE flow_id=?)`, fid); err != nil {
+			`DELETE FROM message_metadata WHERE message_id IN
+			   (SELECT id FROM messages WHERE flow_id=?)`, fid); err != nil {
 			return err
 		}
 		for _, q := range []string{
-			`DELETE FROM ws_messages WHERE flow_id=?`,
+			`DELETE FROM messages WHERE flow_id=?`,
 			`DELETE FROM flow_headers WHERE flow_id=?`,
 			`DELETE FROM flow_metadata WHERE flow_id=?`,
 			`DELETE FROM flow_client_hellos WHERE flow_id=?`,

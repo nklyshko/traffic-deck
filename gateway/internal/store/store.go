@@ -34,9 +34,8 @@ import (
 var ErrNotFound = errors.New("store: not found")
 
 // ErrSchemaOutdated is returned when a session bundle's flows.sqlite was written by
-// an older gateway and is missing columns the current read path needs. The session
-// schema uses CREATE TABLE IF NOT EXISTS, which never alters an existing table, so
-// such bundles cannot be migrated in place — they must be re-imported. The error
+// an older gateway and is missing columns the current read path needs, whose data no
+// migration (migrate.go) can supply — the bundle must be re-imported. The error
 // message names the missing columns and is safe to surface to clients.
 var ErrSchemaOutdated = errors.New("session bundle schema is outdated — re-import this session")
 
@@ -45,9 +44,9 @@ var ErrSchemaOutdated = errors.New("session bundle schema is outdated — re-imp
 var requiredFlowColumns = []string{
 	"id", "session_id", "analysis_id", "frame_number", "ts_micros", "method", "scheme",
 	"authority", "path", "query", "protocol", "status", "src_addr", "dst_addr",
-	"user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream",
-	"h2_stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
-	"proxy_user", "proxy_pass", "error", "duration_micros", "h2_fingerprint",
+	"user_agent", "content_type", "request_bytes", "tls_decrypted", "connection_id",
+	"stream_id", "req_body_ref", "resp_body_ref", "proxy_addr", "proxy_type",
+	"proxy_user", "proxy_pass", "error", "duration_micros", "http2_fingerprint",
 	"ja3", "ja4", "tls_client_hello", "redirect_location", "tls_hrr",
 }
 
@@ -71,29 +70,11 @@ func Open(ctx context.Context, dataRoot string) (*Store, error) {
 	if err := os.MkdirAll(dataRoot, 0o755); err != nil {
 		return nil, err
 	}
-	cat, err := openDB(ctx, filepath.Join(dataRoot, "catalog.sqlite"), catalogSchema)
+	cat, err := openVersioned(ctx, filepath.Join(dataRoot, "catalog.sqlite"), catalogSchema, catalogMigrations)
 	if err != nil {
 		return nil, err
 	}
-	if err := migrateCatalog(ctx, cat); err != nil {
-		cat.Close()
-		return nil, err
-	}
 	return &Store{dataRoot: dataRoot, catalog: cat, sessions: map[string]*sql.DB{}}, nil
-}
-
-// migrateCatalog applies additive column migrations to an existing catalog — CREATE TABLE
-// IF NOT EXISTS never alters a table, so columns added over time need ALTER. Each is
-// idempotent: a duplicate-column error means it's already present.
-func migrateCatalog(ctx context.Context, db *sql.DB) error {
-	for _, stmt := range []string{
-		`ALTER TABLE sessions ADD COLUMN session_group TEXT NOT NULL DEFAULT ''`,
-	} {
-		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Store) Close() {
@@ -103,18 +84,6 @@ func (s *Store) Close() {
 		_ = db.Close()
 	}
 	_ = s.catalog.Close()
-}
-
-func openDB(ctx context.Context, path, schema string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path+dsnPragmas)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.ExecContext(ctx, schema); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return db, nil
 }
 
 func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error) {
@@ -127,12 +96,8 @@ func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	db, err := openDB(ctx, filepath.Join(dir, "flows.sqlite"), sessionSchema)
+	db, err := openVersioned(ctx, filepath.Join(dir, "flows.sqlite"), sessionSchema, sessionMigrations)
 	if err != nil {
-		return nil, err
-	}
-	if err := migrateSession(ctx, db); err != nil {
-		db.Close()
 		return nil, err
 	}
 	// Reject bundles older than the current flows schema up front, so every read/write
@@ -147,31 +112,11 @@ func (s *Store) sessionDB(ctx context.Context, sessionID string) (*sql.DB, error
 	return db, nil
 }
 
-// requiredWsMessageColumns are the ws_messages columns the read path depends on. Bundles
+// requiredMessageColumns are the messages columns the read path depends on. Bundles
 // predating raw_ref trip ErrSchemaOutdated (re-import to get the raw-bytes column).
-var requiredWsMessageColumns = []string{
+var requiredMessageColumns = []string{
 	"id", "flow_id", "frame_number", "ts_micros", "from_client", "opcode",
 	"payload_ref", "raw_ref",
-}
-
-// migrateSession applies additive column migrations to an existing session bundle —
-// CREATE TABLE IF NOT EXISTS never alters a table. Used where a bundle written by an
-// older gateway stays readable without the new column's data: the body content-encoding
-// columns are empty for such a bundle, which reads as "no encoding recorded" — the
-// bodies in it are whatever that gateway stored. Re-import to have them decoded.
-// A column the read path cannot do without belongs in requiredFlowColumns instead, which
-// rejects the bundle outright (ErrSchemaOutdated). Each statement is idempotent: a
-// duplicate-column error means it is already applied.
-func migrateSession(ctx context.Context, db *sql.DB) error {
-	for _, stmt := range []string{
-		`ALTER TABLE flows ADD COLUMN req_content_encoding TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE flows ADD COLUMN resp_content_encoding TEXT NOT NULL DEFAULT ''`,
-	} {
-		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return err
-		}
-	}
-	return nil
 }
 
 func validateSessionSchema(ctx context.Context, db *sql.DB) error {
@@ -180,10 +125,10 @@ func validateSessionSchema(ctx context.Context, db *sql.DB) error {
 	} else if len(missing) > 0 {
 		return fmt.Errorf("%w (flows table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
 	}
-	if missing, err := missingColumns(ctx, db, "ws_messages", requiredWsMessageColumns); err != nil {
+	if missing, err := missingColumns(ctx, db, "messages", requiredMessageColumns); err != nil {
 		return err
 	} else if len(missing) > 0 {
-		return fmt.Errorf("%w (ws_messages table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
+		return fmt.Errorf("%w (messages table missing columns: %s)", ErrSchemaOutdated, strings.Join(missing, ", "))
 	}
 	return nil
 }
@@ -447,8 +392,8 @@ func (s *Store) InsertFlowWrites(ctx context.Context, sessionID, analysisID stri
 			INSERT OR REPLACE INTO flows (id, session_id, analysis_id, frame_number, ts_micros,
 			    method, scheme, authority, path, query, protocol, status,
 			    src_addr, dst_addr, user_agent, content_type, request_bytes,
-			    tls_decrypted, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref,
-			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
+			    tls_decrypted, connection_id, stream_id, req_body_ref, resp_body_ref,
+			    proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, http2_fingerprint,
 			    ja3, ja4, tls_client_hello, redirect_location, tls_hrr,
 			    req_content_encoding, resp_content_encoding)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -737,8 +682,8 @@ func (s *Store) SetSessionBytes(ctx context.Context, id string, pcapBytes, keylo
 
 const flowCols = `id, session_id, analysis_id, frame_number, ts_micros, method, scheme,
 	authority, path, query, protocol, status, src_addr, dst_addr,
-	user_agent, content_type, request_bytes, tls_decrypted, tcp_stream, h2_stream_id,
-	proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, h2_fingerprint,
+	user_agent, content_type, request_bytes, tls_decrypted, connection_id, stream_id,
+	proxy_addr, proxy_type, proxy_user, proxy_pass, error, duration_micros, http2_fingerprint,
 	ja3, ja4, tls_client_hello, redirect_location, tls_hrr`
 
 // ListFlows returns flow summaries (no headers/bodies) for backfill.
@@ -908,7 +853,7 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 	}
 
 	hrows, err := db.QueryContext(ctx,
-		`SELECT direction, name, value FROM flow_headers WHERE flow_id=? ORDER BY direction, ord`, flowID)
+		`SELECT response, name, value FROM flow_headers WHERE flow_id=? ORDER BY response, ord`, flowID)
 	if err != nil {
 		return nil, err
 	}

@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS flows (
     content_type  TEXT,
     request_bytes INTEGER,
     tls_decrypted INTEGER NOT NULL DEFAULT 0,
-    tcp_stream    TEXT,
-    h2_stream_id  TEXT,
+    connection_id TEXT,           -- TCP stream number, or quic:<n> for HTTP/3
+    stream_id     TEXT,           -- HTTP/2 or HTTP/3 stream within it; NULL/'' for HTTP/1
     req_body_ref  TEXT,
     resp_body_ref TEXT,
     proxy_addr    TEXT,           -- proxy this connection went through (host:port), if any
@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS flows (
     proxy_pass    TEXT,
     error         TEXT NOT NULL DEFAULT '',  -- failure reason (no response / transport error), "" if none
     duration_micros INTEGER NOT NULL DEFAULT 0,  -- request→response elapsed µs, 0 while pending
-    h2_fingerprint TEXT NOT NULL DEFAULT '',  -- HTTP/2 client fingerprint (Akamai format), "" if n/a
+    http2_fingerprint TEXT NOT NULL DEFAULT '',  -- HTTP/2 client fingerprint (Akamai format), "" if n/a
     ja3 TEXT NOT NULL DEFAULT '',              -- TLS JA3 (MD5)
     ja4 TEXT NOT NULL DEFAULT '',              -- TLS JA4
     tls_client_hello TEXT NOT NULL DEFAULT '', -- readable ClientHello (JA3 text + ALPN), for export
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS flow_client_hellos (
 
 CREATE TABLE IF NOT EXISTS flow_headers (
     flow_id   TEXT NOT NULL,
-    direction INTEGER NOT NULL,   -- 0 request, 1 response
+    response  INTEGER NOT NULL,   -- 0 request headers, 1 response headers
     ord       INTEGER NOT NULL,
     name      TEXT NOT NULL,
     value     TEXT NOT NULL
@@ -87,8 +87,9 @@ CREATE TABLE IF NOT EXISTS blobs (
     external_path TEXT            -- set when spilled; relative to the data root
 );
 
--- WebSocket frames (plan §8.6): message-shaped records belonging to an Upgrade flow.
-CREATE TABLE IF NOT EXISTS ws_messages (
+-- WebSocket frames and custom-decoder frames (plan §8.6): message-shaped records
+-- belonging to a flow.
+CREATE TABLE IF NOT EXISTS messages (
     id           TEXT PRIMARY KEY,
     flow_id      TEXT NOT NULL,        -- parent Upgrade flow
     frame_number INTEGER,
@@ -104,7 +105,7 @@ CREATE TABLE IF NOT EXISTS ws_messages (
 -- protocol opcode). Opaque key/value pairs, the message-side twin of flow_metadata — and a
 -- side table for the same reason: a bundle written before this feature still reads
 -- cleanly, the table is simply empty.
-CREATE TABLE IF NOT EXISTS ws_message_metadata (
+CREATE TABLE IF NOT EXISTS message_metadata (
     message_id TEXT NOT NULL,
     key        TEXT NOT NULL,
     value      TEXT NOT NULL,
@@ -116,8 +117,8 @@ CREATE INDEX IF NOT EXISTS flows_authority_idx   ON flows (authority);
 CREATE INDEX IF NOT EXISTS flow_headers_flow_idx ON flow_headers (flow_id);
 CREATE INDEX IF NOT EXISTS flow_client_hellos_flow_idx ON flow_client_hellos (flow_id);
 CREATE INDEX IF NOT EXISTS flow_metadata_flow_idx ON flow_metadata (flow_id);
-CREATE INDEX IF NOT EXISTS ws_messages_flow_idx  ON ws_messages (flow_id, ts_micros, frame_number);
-CREATE INDEX IF NOT EXISTS ws_message_metadata_msg_idx ON ws_message_metadata (message_id);
+CREATE INDEX IF NOT EXISTS messages_flow_idx     ON messages (flow_id, ts_micros, frame_number);
+CREATE INDEX IF NOT EXISTS message_metadata_msg_idx ON message_metadata (message_id);
 
 -- Annotations (plan §12). A "record" is a flow today (a WebSocket message later).
 -- tags/groups here mirror the catalog defs so the bundle stays self-contained;
@@ -170,8 +171,8 @@ CREATE INDEX IF NOT EXISTS group_members_rec_idx ON group_members (record_id);
 -- Connections a packet capture carried that produced no flow (decode.UndecodedConn): an
 -- index, not a copy — the bytes stay in capture.pcap, found again from pcap_offset. Kept
 -- out of `flows` because on an interface-wide capture most of them are other programs'.
-CREATE TABLE IF NOT EXISTS undecoded_conns (
-    conn_id     TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS undecoded_connections (
+    connection_id TEXT PRIMARY KEY,
     transport   TEXT NOT NULL,          -- tcp | udp
     client      TEXT NOT NULL,          -- host:port that opened it
     server      TEXT NOT NULL,          -- host:port it went to
@@ -181,7 +182,7 @@ CREATE TABLE IF NOT EXISTS undecoded_conns (
     detail      TEXT NOT NULL DEFAULT '',
     bytes_up    INTEGER NOT NULL DEFAULT 0,
     bytes_down  INTEGER NOT NULL DEFAULT 0,
-    first_ts    INTEGER NOT NULL,       -- unix micros
-    last_ts     INTEGER NOT NULL,
+    first_ts_micros INTEGER NOT NULL,   -- unix micros
+    last_ts_micros  INTEGER NOT NULL,
     pcap_offset INTEGER NOT NULL DEFAULT -1  -- first packet's record; -1 unknown
 );

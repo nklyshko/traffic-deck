@@ -2,7 +2,7 @@ package store
 
 // Ad-hoc read-only SQL over a bundle (ViewerService.QuerySQL). The filter DSL answers
 // "which flows match", deliberately and cheaply; this answers the questions it does not
-// express — GROUP BY, joins onto flow_headers/ws_messages, "how many distinct
+// express — GROUP BY, joins onto flow_headers/messages, "how many distinct
 // authorities". It lives in the store because the store owns the files and the only safe
 // way to run someone else's SQL against them: a *separate* connection opened read-only,
 // never the pooled read/write handle the decode path is using.
@@ -102,6 +102,14 @@ func (s *Store) QuerySQL(ctx context.Context, sessionID, query string, params []
 	path, err := s.dbPath(sessionID)
 	if err != nil {
 		return nil, err
+	}
+	// The read-only connection cannot migrate an older bundle, so open it through the
+	// store first; until then a query would see the old schema, names included. A bundle
+	// too old to read otherwise is migrated all the same and stays queryable.
+	if sessionID != "" {
+		if _, err := s.sessionDB(ctx, sessionID); err != nil && !errors.Is(err, ErrSchemaOutdated) {
+			return nil, err
+		}
 	}
 	db, err := sql.Open("sqlite", readOnlyDSN(path))
 	if err != nil {

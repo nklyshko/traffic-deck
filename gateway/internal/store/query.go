@@ -71,7 +71,7 @@ type FlowPage struct {
 // queryCols are the columns the predicate can see. Deliberately narrow: this is the scan
 // that runs for every row, and hydrating a full flow happens only for the page.
 const queryCols = `id, ts_micros, frame_number, scheme, method, authority, path, query,
-	status, content_type, tcp_stream, h2_stream_id, req_body_ref, resp_body_ref, protocol`
+	status, content_type, connection_id, stream_id, req_body_ref, resp_body_ref, protocol`
 
 type scanRow struct {
 	id                  string
@@ -303,7 +303,7 @@ func headerLoader(ctx context.Context, db *sql.DB, flowID string) func(filter.Di
 		}
 		var b strings.Builder
 		rows, err := db.QueryContext(ctx,
-			`SELECT name, value FROM flow_headers WHERE flow_id=? AND direction=? ORDER BY ord`,
+			`SELECT name, value FROM flow_headers WHERE flow_id=? AND response=? ORDER BY ord`,
 			flowID, dir)
 		if err == nil {
 			for rows.Next() {

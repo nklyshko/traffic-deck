@@ -58,7 +58,7 @@ var headerInsertSQL = func() [headerChunk + 1]string {
 	var out [headerChunk + 1]string
 	for n := 1; n <= headerChunk; n++ {
 		var b strings.Builder
-		b.WriteString(`INSERT INTO flow_headers (flow_id, direction, ord, name, value) VALUES `)
+		b.WriteString(`INSERT INTO flow_headers (flow_id, response, ord, name, value) VALUES `)
 		for i := range n {
 			if i > 0 {
 				b.WriteByte(',')

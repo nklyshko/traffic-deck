@@ -30,12 +30,12 @@ type Viewer struct {
 
 func NewViewer(st *store.Store, hub *liveHub) *Viewer { return &Viewer{st: st, hub: hub} }
 
-// storeStatus maps a store error to a gRPC status. ErrSchemaOutdated becomes
-// FailedPrecondition carrying the re-import message, so any client can tell a stale
-// bundle (fix: re-import the session) apart from a transient server fault; everything
+// storeStatus maps a store error to a gRPC status. ErrSchemaOutdated and ErrSchemaNewer
+// become FailedPrecondition carrying their message, so any client can tell a bundle it
+// must re-import, or a newer gateway's bundle, apart from a transient server fault; everything
 // else is Internal. Callers handle ErrNotFound first when they want a specific message.
 func storeStatus(err error, action string) error {
-	if errors.Is(err, store.ErrSchemaOutdated) {
+	if errors.Is(err, store.ErrSchemaOutdated) || errors.Is(err, store.ErrSchemaNewer) {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return status.Errorf(codes.Internal, "%s: %v", action, err)

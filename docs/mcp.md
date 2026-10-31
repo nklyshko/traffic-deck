@@ -171,7 +171,7 @@ the questions the other tools don't ask — aggregates, joins, distributions:
 
 ```sql
 SELECT authority, COUNT(*) n, SUM(status >= 400) errs FROM flows GROUP BY authority
-SELECT name, COUNT(*) FROM flow_headers WHERE direction = 0 GROUP BY name ORDER BY 2 DESC
+SELECT name, COUNT(*) FROM flow_headers WHERE response = 0 GROUP BY name ORDER BY 2 DESC
 ```
 
 `sqlite_schema` lists the tables and their `CREATE` statements; an empty `session_id`

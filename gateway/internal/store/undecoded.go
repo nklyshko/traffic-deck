@@ -24,9 +24,9 @@ func (s *Store) InsertUndecoded(ctx context.Context, sessionID string, conns []*
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck — a no-op once committed
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO undecoded_conns
-		(conn_id, transport, client, server, sni, ja4, reason, detail, bytes_up, bytes_down,
-		 first_ts, last_ts, pcap_offset) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO undecoded_connections
+		(connection_id, transport, client, server, sni, ja4, reason, detail, bytes_up, bytes_down,
+		 first_ts_micros, last_ts_micros, pcap_offset) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
@@ -47,9 +47,9 @@ func (s *Store) ListUndecoded(ctx context.Context, sessionID string) ([]*decode.
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT conn_id, transport, client, server, sni, ja4,
-		reason, detail, bytes_up, bytes_down, first_ts, last_ts, pcap_offset
-		FROM undecoded_conns ORDER BY bytes_up + bytes_down DESC, first_ts`)
+	rows, err := db.QueryContext(ctx, `SELECT connection_id, transport, client, server, sni, ja4,
+		reason, detail, bytes_up, bytes_down, first_ts_micros, last_ts_micros, pcap_offset
+		FROM undecoded_connections ORDER BY bytes_up + bytes_down DESC, first_ts_micros`)
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,5 +66,38 @@ func TestQuerySQL(t *testing.T) {
 		if _, err := v.QuerySQL(ctx, tc.req); status.Code(err) != tc.want {
 			t.Errorf("%s: code = %v (%v), want %v", tc.name, status.Code(err), err, tc.want)
 		}
+	}
+}
+
+// A bundle a newer gateway wrote is refused as FailedPrecondition, like every other read,
+// not as the caller's bad SQL.
+func TestQuerySQLOnANewerGatewaysBundleIsFailedPrecondition(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateSession(ctx, store.NewSession{ID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "sessions", "s1", "flows.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version = 99`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	st, err = store.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	_, err = NewViewer(st, newLiveHub()).QuerySQL(ctx, &trafficv1.QuerySQLRequest{SessionId: "s1", Sql: "SELECT 1"})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("got %v, want FailedPrecondition", err)
 	}
 }

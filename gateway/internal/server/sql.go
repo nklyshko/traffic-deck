@@ -43,6 +43,8 @@ func (v *Viewer) QuerySQL(ctx context.Context, req *trafficv1.QuerySQLRequest) (
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return nil, status.Error(codes.NotFound, "no such session bundle")
+	case errors.Is(err, store.ErrSchemaNewer):
+		return nil, storeStatus(err, "query")
 	case errors.Is(err, context.DeadlineExceeded):
 		return nil, status.Errorf(codes.DeadlineExceeded,
 			"query ran longer than %s — narrow it, add a LIMIT, or raise timeout_millis", timeout)

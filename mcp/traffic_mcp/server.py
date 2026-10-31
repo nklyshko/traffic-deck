@@ -1831,7 +1831,7 @@ async def sqlite_query(sql: str, session_id: str = "", params: list[str] | None 
 
       SELECT authority, COUNT(*) n, SUM(status >= 400) errs FROM flows
         GROUP BY authority ORDER BY n DESC
-      SELECT name, COUNT(*) FROM flow_headers WHERE direction = 0 GROUP BY name
+      SELECT name, COUNT(*) FROM flow_headers WHERE response = 0 GROUP BY name
       SELECT status, COUNT(*) FROM flows GROUP BY status ORDER BY 2 DESC
 
     Prefer `search`/`filter_flows` for "which flows match" — they page by cursor, read

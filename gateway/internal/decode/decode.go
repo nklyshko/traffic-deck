@@ -82,7 +82,7 @@ type Flow struct {
 	// carrying WebSocket frames, or a custom-protocol connection's synthetic flow.
 	Websocket bool
 	// MessageCount tracks frames seen so far (for the live flow proto; the stored
-	// path recomputes it from ws_messages via attachMessageCounts).
+	// path recomputes it from messages via attachMessageCounts).
 	MessageCount uint32
 
 	// Proxy is set when this connection went through an HTTP CONNECT or SOCKS proxy,
