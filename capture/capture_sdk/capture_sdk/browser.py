@@ -10,6 +10,7 @@ the shape lives here.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -55,7 +56,8 @@ def temp_profile(binary: str, prefix: str) -> str:
 
 
 def profiles_root(binary: str, *, unconfined: str, snap_dir: str) -> str:
-    """The dir holding a tool's named persistent profiles for `binary`, created on demand.
+    """The dir holding a tool's named persistent profiles for `binary`, created on demand,
+    with any profile an older build saved nested moved out (flatten_nested_profiles).
 
     For a snap browser this is `snap_dir` under the snap's own writable area — the hidden
     ~/.traffic-deck home is blocked by confinement — so persistent profiles are separate
@@ -65,7 +67,24 @@ def profiles_root(binary: str, *, unconfined: str, snap_dir: str) -> str:
     else:
         path = unconfined
     os.makedirs(path, exist_ok=True)
+    flatten_nested_profiles(path)
     return path
+
+
+_PATH_CHARS = re.compile(r"[/\\\0]")
+
+
+def profile_folder(name: str) -> str:
+    """The folder a saved profile called `name` lives in: the name with every character
+    that would make it a path ("/", "\\", NUL) replaced by "-", and "." / ".." spelled as
+    dashes. Always a single path component under the profiles root.
+
+    Lossy on purpose, so folders stay readable: "client/acme" and "client-acme" are the
+    same profile, and the picker lists it under its folder name. A plain name is its own
+    folder, so every profile saved before is still found."""
+    if name in (".", ".."):
+        return "-" * len(name)
+    return _PATH_CHARS.sub("-", name)
 
 
 def saved_profiles(root: str) -> list[str]:
@@ -73,18 +92,60 @@ def saved_profiles(root: str) -> list[str]:
     return sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)))
 
 
+def flatten_nested_profiles(root: str) -> None:
+    """Move profiles that older builds saved under a name with a "/" in it — `a/b` became
+    the folders root/a/b — to the folder profile_folder gives that name now (`a-b`).
+    Otherwise the picker lists only `a`, and choosing it hands the browser the parent.
+
+    Such a parent holds only folders, and the profile inside carries the file a browser
+    writes at a profile's top (_PROFILE_MARKERS). Both are required: a Chrome killed before
+    writing Local State leaves a real profile holding only Default/, which must stay put.
+    Nothing is moved over a folder that already exists. A deeper `a/b/c` becomes `a-b/c`
+    on one pass and `a-b-c` on the next."""
+    moved = True
+    while moved:
+        moved = False
+        for name in os.listdir(root):
+            parent = os.path.join(root, name)
+            if not _is_nested_parent(parent):
+                continue
+            for child in os.listdir(parent):
+                target = os.path.join(root, profile_folder(f"{name}/{child}"))
+                if not os.path.exists(target):
+                    os.rename(os.path.join(parent, child), target)
+                    moved = True
+            try:
+                os.rmdir(parent)
+            except OSError:
+                pass  # a name clash kept something behind; leave it for the user
+
+
+# Chrome's user-data dir has Local State at its top; a Firefox profile has prefs.js and
+# times.json.
+_PROFILE_MARKERS = ("Local State", "prefs.js", "times.json")
+
+
+def _is_nested_parent(path: str) -> bool:
+    if not os.path.isdir(path) or os.path.islink(path):
+        return False
+    entries = [os.path.join(path, e) for e in os.listdir(path)]
+    return (bool(entries) and all(os.path.isdir(e) for e in entries)
+            and any(_holds_profile(e) for e in entries))
+
+
+def _holds_profile(path: str) -> bool:
+    return (any(os.path.isfile(os.path.join(path, m)) for m in _PROFILE_MARKERS)
+            or _is_nested_parent(path))
+
+
 def persistent_path(root: str, name: str) -> str:
     """The profile dir for a saved persistent profile `name` under `root`, created on
     demand. An empty name falls back to "default".
 
-    `name` arrives from a capture request (new_profile_name / saved_profile), so it must be
-    a single path component: "../x" or an absolute path (which os.path.join honours
-    outright) would otherwise create and use an arbitrary directory as the browser's
-    --user-data-dir."""
-    name = name or "default"
-    if name in (".", "..") or os.path.basename(name) != name or (os.altsep and os.altsep in name):
-        raise ValueError(f"invalid profile name {name!r}: use a plain name, not a path")
-    path = os.path.join(root, name)
+    `name` arrives from a capture request (new_profile_name / saved_profile) and may hold
+    anything, so it goes through profile_folder: "../x" or "/etc" (which os.path.join would
+    honour outright) names a profile, never a directory outside `root`."""
+    path = os.path.join(root, profile_folder(name or "default"))
     os.makedirs(path, exist_ok=True)
     return path
 

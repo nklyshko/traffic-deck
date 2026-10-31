@@ -44,6 +44,7 @@ def profiles_dir(chrome: str) -> str:
             dst = os.path.join(_PROFILES_DIR, name)
             if not os.path.exists(dst):
                 os.rename(src, dst)
+        browser.flatten_nested_profiles(path)
     return path
 
 
