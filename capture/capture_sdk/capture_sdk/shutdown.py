@@ -15,9 +15,36 @@ the caller keeps the default Ctrl-C behaviour.
 
 from __future__ import annotations
 
+import queue
 import signal
 import sys
 import threading
+from typing import Callable
+
+
+def signal_safe_set(event: threading.Event, before: Callable[[], None] | None = None):
+    """A callable that sets `event` and is safe to call from a signal handler.
+
+    Event.set takes a non-reentrant lock, and a handler runs on the main thread between any
+    two bytecodes, including while that same thread holds the lock: inside a wait on the
+    event, or inside the set of a signal delivered just before. It then waits on itself
+    forever, and every later signal joins it, so nothing short of SIGKILL ends the process.
+    This is not a corner case: a process under `uv run` gets SIGTERM twice from a group
+    kill, the kill and uv's forward, about 100µs apart.
+
+    So the handler only queues the request, SimpleQueue.put being reentrant, and a thread
+    sets the event. `before` runs on that thread first, for work a handler can't do either
+    (print is not reentrant)."""
+    requests: queue.SimpleQueue[None] = queue.SimpleQueue()
+
+    def deliver() -> None:
+        requests.get()
+        if before is not None:
+            before()
+        event.set()
+
+    threading.Thread(target=deliver, daemon=True, name="signal-stop").start()
+    return lambda: requests.put(None)
 
 
 class GracefulInterrupt:
@@ -33,6 +60,8 @@ class GracefulInterrupt:
                  message: str = "stopping — press Ctrl-C again to force-quit") -> None:
         self.event = event or threading.Event()
         self._message = message
+        self._requested = False
+        self._request = signal_safe_set(self.event, self._announce)
         self._installed = False
         self._prev = None
         self._prev_term = None
@@ -40,12 +69,15 @@ class GracefulInterrupt:
     @property
     def stopping(self) -> bool:
         """Whether a graceful stop has been requested (the first Ctrl-C arrived)."""
-        return self.event.is_set()
+        return self._requested or self.event.is_set()
+
+    def _announce(self) -> None:
+        print(f"\n{self._message}", file=sys.stderr, flush=True)
 
     def _handle(self, signum, frame) -> None:
-        if not self.event.is_set():
-            self.event.set()
-            print(f"\n{self._message}", file=sys.stderr, flush=True)
+        if not self.stopping:
+            self._requested = True
+            self._request()
             return
         # Restore the previous handlers so a third signal kills outright, even if the
         # teardown this abort starts hangs.

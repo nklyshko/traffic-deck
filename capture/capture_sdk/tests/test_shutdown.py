@@ -10,7 +10,7 @@ import signal
 
 import pytest
 
-from capture_sdk.shutdown import GracefulInterrupt
+from capture_sdk.shutdown import GracefulInterrupt, signal_safe_set
 
 
 def test_first_ctrl_c_requests_stop_without_raising(capsys):
@@ -18,6 +18,7 @@ def test_first_ctrl_c_requests_stop_without_raising(capsys):
     gi._prev = signal.SIG_DFL
     gi._handle(signal.SIGINT, None)  # first press: must not raise
     assert gi.stopping is True
+    assert gi.event.wait(2)
     assert "stopping…" in capsys.readouterr().err
 
 
@@ -62,4 +63,34 @@ def test_shares_a_caller_supplied_event():
     assert gi.stopping is False
     gi._prev = signal.SIG_DFL
     gi._handle(signal.SIGINT, None)
-    assert ev.is_set()  # the capture loop watching `ev` will see the stop request
+    assert ev.wait(2)  # the capture loop watching `ev` will see the stop request
+
+
+def test_a_signal_landing_while_the_main_thread_holds_the_events_lock_cannot_deadlock():
+    # What a real signal does at the wrong moment: Event.set from a handler, on the thread
+    # already inside the event's non-reentrant lock. Reproduced with two SIGTERMs ~100µs
+    # apart, as `uv run` delivers them: the process then ignored every later signal.
+    import threading
+
+    ev = threading.Event()
+    request = signal_safe_set(ev)
+
+    def handler_during_wait():
+        with ev._cond:
+            request()
+
+    t = threading.Thread(target=handler_during_wait, daemon=True)
+    t.start()
+    t.join(2)
+    assert not t.is_alive()
+    assert ev.wait(2)
+
+
+def test_a_handler_interrupted_by_a_second_signal_still_stops():
+    import threading
+
+    ev = threading.Event()
+    request = signal_safe_set(ev)
+    request()
+    request()
+    assert ev.wait(2)

@@ -30,6 +30,7 @@ import grpc
 
 from capture_sdk.proto import control_pb2 as ctl
 from capture_sdk.proto import source_pb2_grpc as sp_grpc
+from capture_sdk.shutdown import signal_safe_set
 
 # Re-exported for ergonomic descriptors: `source.STRING`, `source.CHOICE`, …
 STRING = ctl.PARAM_TYPE_STRING
@@ -259,8 +260,12 @@ def serve_forever(sources: CaptureSource | Mapping[str, CaptureSource], addr: st
     if on_ready is not None:
         on_ready(port)
     stop = threading.Event()
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    request_stop = signal_safe_set(stop)
+    # Further signals change nothing, on purpose: under `uv run` a second SIGTERM is the
+    # same stop delivered twice (see signal_safe_set), so it can't mean "force". The gateway
+    # bounds a teardown that hangs with SIGKILL (sourceShutdownGrace).
+    signal.signal(signal.SIGTERM, lambda *_: request_stop())
+    signal.signal(signal.SIGINT, lambda *_: request_stop())
     stop.wait()
     # Every source, not just the primary: each stops its own captures, and a resource shared
     # between them is torn down by whichever of them is last (see CaptureSource.release).
