@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"strconv"
 	"strings"
@@ -38,8 +39,16 @@ const (
 // (a 24-bit length), and both codecs expand adversarially: LZ4 runs of 0xFF length bytes
 // reach ~255x, zstd far more (klauspost's default limit is 64 GiB). Uncapped, one crafted
 // frame could exhaust the gateway's memory. MAX payloads are small structured messages,
-// so this is generous; a body past it is left undecoded (kept raw).
+// so this is generous; a body past it is left undecoded (kept raw, compressed) and the
+// message says why in its limitField.
 const maxDecompressed = 64 << 20
+
+// limitField, on a message kept raw, names the bound its frame ran into — so a frame left
+// undecoded for its size reads differently from one in an encoding the decoder can't
+// parse. The session logs each bound once per connection as well.
+const limitField = "max.limit"
+
+var errTooLarge = errors.New("max: frame body decompresses past the cap")
 
 // zstdDec is a shared stateless decoder (DecodeAll is safe for concurrent use). The memory
 // limit also bounds DecodeAll's output, which then fails with ErrDecoderSizeExceeded.
@@ -103,7 +112,8 @@ func isMaxHost(host string) bool {
 func (decoder) NewSession() decoders.Session { return &session{bufs: map[bool][]byte{}} }
 
 type session struct {
-	bufs map[bool][]byte // from_client -> pending (un-framed) bytes
+	bufs   map[bool][]byte // from_client -> pending (un-framed) bytes
+	logged map[string]bool // limitField values already logged on this connection
 }
 
 // Feed appends newly-arrived bytes for one direction and returns any frames that
@@ -118,11 +128,27 @@ func (s *session) Feed(fromClient bool, data []byte) []decoders.Message {
 		}
 		buf = rest
 		if m, ok := decodeFrame(frame, fromClient, 0); ok {
+			s.logLimit(m)
 			out = append(out, m)
 		}
 	}
 	s.bufs[fromClient] = buf
 	return out
+}
+
+// logLimit logs a frame kept raw for a size or depth bound, once per bound per connection:
+// a peer that keeps sending such frames gets one line, not one per frame.
+func (s *session) logLimit(m decoders.Message) {
+	why := m.Fields[limitField]
+	if why == "" || s.logged[why] {
+		return
+	}
+	if s.logged == nil {
+		s.logged = map[string]bool{}
+	}
+	s.logged[why] = true
+	log.Printf("max: %s frame %s kept raw: %s (%s; logged once per connection)",
+		m.Fields["max.cmd"], m.Fields["max.opcode"], why, limitField)
 }
 
 // nextFrame splits one complete frame off the front of buf, or reports !ok if buf
@@ -165,15 +191,23 @@ func decodeFrame(frame []byte, fromClient bool, ts int64) (decoders.Message, boo
 
 	body, err := decompressBody(frame[headerLen:headerLen+plen], comp)
 	if err != nil {
-		return rawMessage(msg, frame[headerLen:headerLen+plen]), true // keep the raw frame
+		raw := rawMessage(msg, frame[headerLen:headerLen+plen]) // keep the raw frame
+		if errors.Is(err, errTooLarge) {
+			raw.Fields[limitField] = fmt.Sprintf("decompresses past %d MiB; kept compressed", maxDecompressed>>20)
+		}
+		return raw, true
 	}
 
-	v, ok := unpackMsgpack(body)
+	v, ok, limit := unpackMsgpack(body)
 	if !ok {
 		// LOGIN/HISTORY use a compact/ref encoding plain msgpack can't parse; keep the
 		// decompressed bytes raw (like the reference client's decoded=None path) rather
 		// than dropping the frame.
-		return rawMessage(msg, body), true
+		raw := rawMessage(msg, body)
+		if limit != "" {
+			raw.Fields[limitField] = limit
+		}
+		return raw, true
 	}
 	js, err := json.Marshal(jsonSafe(v))
 	if err != nil {
@@ -272,9 +306,16 @@ func decompressBody(body []byte, comp byte) ([]byte, error) {
 		return body, nil
 	}
 	if comp == compZstd {
-		return zstdDec.DecodeAll(body, nil)
+		out, err := zstdDec.DecodeAll(body, nil)
+		if errors.Is(err, zstd.ErrDecoderSizeExceeded) {
+			return nil, errTooLarge
+		}
+		return out, err
 	}
-	out := lz4BlockDecompress(body)
+	out, capped := lz4BlockDecompress(body)
+	if capped {
+		return nil, errTooLarge
+	}
 	if len(out) == 0 {
 		return nil, errLZ4
 	}
@@ -285,9 +326,9 @@ func decompressBody(body []byte, comp byte) ([]byte, error) {
 // stored uncompressed size, so the output grows dynamically). Ported from the reference
 // client's codec.lz4_block_decompress, including byte-by-byte copies for overlapping
 // matches (offset < length). Best-effort: it returns what it decoded if the block ends
-// or is truncated, leaving msgpack parsing to judge the result.
-func lz4BlockDecompress(src []byte) []byte {
-	var out []byte
+// or is truncated, leaving msgpack parsing to judge the result. capped reports that it
+// stopped at maxDecompressed instead, so the output is not the whole body.
+func lz4BlockDecompress(src []byte) (out []byte, capped bool) {
 	i, n := 0, len(src)
 	for i < n {
 		token := src[i]
@@ -332,14 +373,14 @@ func lz4BlockDecompress(src []byte) []byte {
 			}
 		}
 		if len(out)+matchLen > maxDecompressed {
-			break // a bomb, not a message: stop rather than expand without limit
+			return out, true // a bomb, not a message: stop rather than expand without limit
 		}
 		start := len(out) - offset
 		for j := 0; j < matchLen; j++ { // byte-by-byte handles overlapping matches
 			out = append(out, out[start+j])
 		}
 	}
-	return out
+	return out, false
 }
 
 // unpackMsgpack decodes the body as MessagePack, tolerating 1-4 leading service bytes
@@ -350,22 +391,37 @@ func lz4BlockDecompress(src []byte) []byte {
 // Maps are decoded untyped (map[interface{}]interface{}): MAX keys presence/chat maps
 // by a boxed-id ext (a non-string key), which the default string-keyed map decoder
 // rejects ("invalid code=c7 decoding string length"). jsonSafe stringifies the keys.
-func unpackMsgpack(body []byte) (interface{}, bool) {
-	for off := 0; off <= 4 && off < len(body); off++ {
-		if v, ok := decodeMsgpackAt(body[off:]); ok {
-			return v, true
-		}
+//
+// limit, when it fails, names a size or depth bound the body ran into (for limitField);
+// "" means the body simply is not plain MessagePack.
+func unpackMsgpack(body []byte) (v interface{}, ok bool, limit string) {
+	if len(body) > maxMsgpackBody {
+		return nil, false, fmt.Sprintf("MessagePack body over %d MiB; kept undecoded", maxMsgpackBody>>20)
 	}
-	return nil, false
+	deep := false
+	for off := 0; off <= 4 && off < len(body); off++ {
+		v, ok, tooDeep := decodeMsgpackAt(body[off:])
+		if ok {
+			return v, true, ""
+		}
+		deep = deep || tooDeep
+	}
+	if deep {
+		return nil, false, fmt.Sprintf("MessagePack nested deeper than %d; kept undecoded", msgpackMaxDepth)
+	}
+	return nil, false, ""
 }
 
 // decodeMsgpackAt is one unpackMsgpack attempt. The untyped map decoder panics, inside the
 // msgpack library, on a map whose key is itself a map or slice ("hash of unhashable
 // type") — reachable from any frame on the wire. That is a malformed body, not a crash:
 // recover it as a failed decode, and the frame is kept raw.
-func decodeMsgpackAt(b []byte) (v interface{}, ok bool) {
-	if len(b) > maxMsgpackBody || !msgpackSane(b) {
-		return nil, false
+func decodeMsgpackAt(b []byte) (v interface{}, ok, tooDeep bool) {
+	if len(b) > maxMsgpackBody {
+		return nil, false, false
+	}
+	if sane, deep := msgpackSane(b); !sane {
+		return nil, false, deep
 	}
 	defer func() {
 		if recover() != nil {
@@ -376,9 +432,9 @@ func decodeMsgpackAt(b []byte) (v interface{}, ok bool) {
 	dec := msgpack.NewDecoder(r)
 	dec.SetMapDecoder(func(d *msgpack.Decoder) (interface{}, error) { return d.DecodeUntypedMap() })
 	if err := dec.Decode(&v); err != nil || r.Len() != 0 {
-		return nil, false
+		return nil, false, false
 	}
-	return v, true
+	return v, true, false
 }
 
 // Bounds on what is handed to the msgpack library. Its untyped decoders allocate a
@@ -395,8 +451,8 @@ const (
 // whether it is safe to give to the library: every container declares no more elements
 // than bytes remain (each needs at least one), nesting stays under msgpackMaxDepth, every
 // length fits in what is left, and the value ends exactly at the end of b. Anything else
-// would not decode cleanly anyway.
-func msgpackSane(b []byte) bool {
+// would not decode cleanly anyway. tooDeep says the nesting bound is what failed it.
+func msgpackSane(b []byte) (ok, tooDeep bool) {
 	i := 0
 	// length reads an n-byte big-endian length at i.
 	length := func(n int) (int, bool) {
@@ -419,7 +475,7 @@ func msgpackSane(b []byte) bool {
 		}
 		stack[top]--
 		if i >= len(b) {
-			return false
+			return false, false
 		}
 		c := b[i]
 		i++
@@ -462,20 +518,23 @@ func msgpackSane(b []byte) bool {
 			count, ok = length(4)
 			count *= 2
 		default: // 0xc1 is never used
-			return false
+			return false, false
 		}
 		if !ok || skip > len(b)-i {
-			return false
+			return false, false
 		}
 		i += skip
 		if count > 0 {
-			if count > len(b)-i || len(stack) >= msgpackMaxDepth {
-				return false
+			if count > len(b)-i {
+				return false, false
+			}
+			if len(stack) >= msgpackMaxDepth {
+				return false, true
 			}
 			stack = append(stack, count)
 		}
 	}
-	return i == len(b)
+	return i == len(b), false
 }
 
 // rawMessage keeps an undecodable (e.g. compact-encoded) frame's bytes verbatim so no

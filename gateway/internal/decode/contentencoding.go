@@ -17,6 +17,9 @@ import (
 	"compress/zlib"
 	"errors"
 	"io"
+	"log"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/andybalholm/brotli"
@@ -27,17 +30,48 @@ import (
 // undone. Decompression is adversarial: a kilobyte of gzip expands to a gigabyte of zeros
 // (a "zip bomb"), and without a ceiling io.ReadAll grows an in-memory buffer until the OOM
 // killer ends the gateway — which also ends every other live capture it is hosting. The
-// bytes past the cap are dropped; a body truncated this way still records its encoding, so
-// a consumer is told the bytes are the decoded prefix rather than the whole. 256 MiB is far
-// larger than any body a viewer pages through and matches the gRPC transport ceiling, so a
-// legitimate large download is unaffected.
-const maxDecodedBytes = 256 << 20
+// bytes past the cap are dropped: the stored body is the decoded prefix, and noteBodyCut
+// names the side in the flow's body.truncated metadata and logs it. 256 MiB is far larger
+// than any body a viewer pages through and matches the gRPC transport ceiling, so a
+// legitimate download rarely reaches it. A var only so tests can lower it.
+var maxDecodedBytes = 256 << 20
+
+// BodyTruncatedKey is the flow metadata naming which bodies were cut at a size cap —
+// "request", "response", or both comma-separated. The mitmproxy source writes the same key
+// for its own cap (capture_sdk metadata_keys.BODY_TRUNCATED).
+const BodyTruncatedKey = "body.truncated"
+
+// decodeFlowBody is decodeBody for one side of a flow, noting on the flow a body cut at
+// the cap.
+func decodeFlowBody(f *Flow, side, enc string, b []byte) []byte {
+	out, cut := decodeBody(enc, b)
+	if cut {
+		noteBodyCut(f, side)
+	}
+	return out
+}
+
+// noteBodyCut replaces f.Metadata rather than writing into it. The live server snapshots a
+// flow with a shallow copy on every report, so the map a snapshot holds may still be f's;
+// writing into it would race the flusher reading it.
+func noteBodyCut(f *Flow, side string) {
+	sides := strings.FieldsFunc(f.Metadata[BodyTruncatedKey], func(r rune) bool { return r == ',' })
+	if slices.Contains(sides, side) {
+		return
+	}
+	md := make(map[string]string, len(f.Metadata)+1)
+	maps.Copy(md, f.Metadata)
+	md[BodyTruncatedKey] = strings.Join(append(sides, side), ",")
+	f.Metadata = md
+	log.Printf("decode: %s %s%s: %s body cut to its first %d MiB after decompression (%s)",
+		f.Method, f.Authority, f.Path, side, maxDecodedBytes>>20, BodyTruncatedKey)
+}
 
 // readAllCapped reads up to maxDecodedBytes+1 from r and reports whether it overflowed the
 // cap (in which case the returned bytes are truncated to the cap). It never allocates an
 // unbounded buffer, whatever r decompresses to.
 func readAllCapped(r io.Reader) (data []byte, truncated bool, err error) {
-	data, err = io.ReadAll(io.LimitReader(r, maxDecodedBytes+1))
+	data, err = io.ReadAll(io.LimitReader(r, int64(maxDecodedBytes)+1))
 	if len(data) > maxDecodedBytes {
 		return data[:maxDecodedBytes], true, err
 	}
@@ -128,16 +162,19 @@ func decoderFor(enc string) func(io.Reader) (io.ReadCloser, error) {
 // A body cut short (a capture that ended mid-response) decompresses to
 // as much as it has rather than to nothing, which is why a truncated read with output still
 // counts as a success.
-func decodeBody(enc string, b []byte) []byte {
+//
+// cut reports that the decoded body ran past maxDecodedBytes and was cut there; the
+// caller records it with noteBodyCut.
+func decodeBody(enc string, b []byte) (out []byte, cut bool) {
 	if len(b) == 0 {
-		return b
+		return b, false
 	}
 	for _, a := range attemptsFor(enc) {
 		zr, err := a.open(bytes.NewReader(b))
 		if err != nil {
 			continue // its header says these are not those bytes
 		}
-		out, _, rerr := readAllCapped(zr)
+		out, cut, rerr := readAllCapped(zr)
 		_ = zr.Close()
 		if len(out) == 0 {
 			continue
@@ -147,7 +184,7 @@ func decodeBody(enc string, b []byte) []byte {
 		if a.strict && rerr != nil && !errors.Is(rerr, io.ErrUnexpectedEOF) {
 			continue
 		}
-		return out
+		return out, cut
 	}
-	return b
+	return b, false
 }

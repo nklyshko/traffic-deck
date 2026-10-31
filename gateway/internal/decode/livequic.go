@@ -419,7 +419,7 @@ func (st *h3Stream) decodeResp(final bool) {
 	}
 	st.respDecoded = len(st.respRaw)
 	st.flow.ResponseBodyEncoding = st.respEnc
-	st.flow.ResponseBody = decodeBody(st.respEnc, st.respRaw)
+	st.flow.ResponseBody = decodeFlowBody(st.flow, "response", st.respEnc, st.respRaw)
 }
 
 // setRespEnc records the response body's wire encoding, once its HEADERS are decoded.

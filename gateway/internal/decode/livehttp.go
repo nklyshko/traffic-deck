@@ -216,7 +216,11 @@ func (h *httpStream) run() {
 
 		wire := &wireBody{ReadCloser: resp.Body}
 		resp.Body = wire
-		f.ResponseBody, f.ResponseBodyEncoding = readRespBody(resp)
+		var cut bool
+		f.ResponseBody, f.ResponseBodyEncoding, cut = readRespBody(resp)
+		if cut {
+			noteBodyCut(f, "response")
+		}
 		if wire.err != nil {
 			// The connection ended before the framing (Content-Length or chunked) said the
 			// body did — e.g. Chrome dropping a media range read. Without this the flow reads
@@ -342,25 +346,32 @@ func cutBytes(got, declared int64) string {
 // readRespBody captures the response body, undoing its Content-Encoding so it is
 // readable, and always drains the underlying body for keep-alive alignment. It also reports
 // the encoding the bytes had on the wire ("" when they arrived plain, or when there are no
-// bytes to describe).
-func readRespBody(resp *http.Response) (body []byte, encoding string) {
+// bytes to describe), and whether the decoded body was cut at maxDecodedBytes.
+func readRespBody(resp *http.Response) (body []byte, encoding string, cut bool) {
 	defer resp.Body.Close()
 	enc := normalizeEncoding(resp.Header.Get("Content-Encoding"))
-	var r io.Reader = resp.Body
-	// Same encodings as the whole-body path (decoderFor); streaming here, because this one
-	// reads a live response rather than bytes already in hand.
+	// Same encodings as the whole-body path (decodeBody), via decoderFor; streaming here,
+	// because this one reads a live response rather than bytes already in hand. Only a
+	// decoded body is capped: a plain one is no larger than the bytes captured, which is
+	// how the HTTP/2 path treats it too.
+	var dr io.ReadCloser
 	if newReader := decoderFor(enc); newReader != nil {
-		if dr, err := newReader(resp.Body); err == nil {
-			defer dr.Close()
-			r = dr
+		if r, err := newReader(resp.Body); err == nil {
+			defer r.Close()
+			dr = r
 		}
 	}
-	data, _, _ := readAllCapped(r)        // bounded: a compressed body can expand without limit
+	var data []byte
+	if dr != nil {
+		data, cut, _ = readAllCapped(dr)
+	} else {
+		data, _ = io.ReadAll(resp.Body)
+	}
 	_, _ = io.Copy(io.Discard, resp.Body) // drain what a failed decode left unread
 	if len(data) == 0 {
 		enc = "" // the field describes body bytes; there are none
 	}
-	return data, enc
+	return data, enc, cut
 }
 
 func headersOf(h http.Header) []Header {

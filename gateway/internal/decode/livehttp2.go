@@ -249,7 +249,7 @@ func (h *h2Stream) serverEnded() {
 // marks the flow's bodies final, and reports it. Caller holds mu.
 func (h *h2Stream) endLocked(hf *h2flow) {
 	if hf.respEnc != "" {
-		hf.flow.ResponseBody = decodeBody(hf.respEnc, hf.flow.ResponseBody)
+		hf.flow.ResponseBody = decodeFlowBody(hf.flow, "response", hf.respEnc, hf.flow.ResponseBody)
 		hf.respEnc = ""
 	}
 	hf.flow.BodyDone = true

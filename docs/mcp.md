@@ -74,7 +74,10 @@ registered at all, so they never appear in the tool list.
   (**inferred** from the device's DNS answer for the IP; `hostname.dns_candidates` lists
   the other names that IP had) or `ip` (no name at all). Only the mitmproxy source writes
   it today; a flow without it from a pcap capture took its hostname from the request
-  headers, else the SNI, else the address.
+  headers, else the SNI, else the address. `body.truncated` (`request`, `response`)
+  means that body was cut at a size cap and `get_body` returns only its beginning; on a
+  message (`list_messages` `fields`) it reads `payload`, and `max.limit` marks a MAX frame
+  kept raw because it ran into a size or nesting bound.
 
 ## Driving a capture
 

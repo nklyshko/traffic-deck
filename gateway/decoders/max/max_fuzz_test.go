@@ -3,6 +3,9 @@ package max
 import (
 	"bytes"
 	"encoding/binary"
+	"log"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,9 +21,48 @@ func TestLZ4BombIsCapped(t *testing.T) {
 	src.Write([]byte{0x01, 0x00})                  // offset 1: repeat the last byte
 	src.Write(bytes.Repeat([]byte{0xFF}, 300_000)) // match length ext: ~76.5 MB
 	src.WriteByte(0x00)
-	out := lz4BlockDecompress(src.Bytes())
-	if len(out) > maxDecompressed {
-		t.Fatalf("lz4 output %d bytes exceeds the %d cap", len(out), maxDecompressed)
+	out, capped := lz4BlockDecompress(src.Bytes())
+	if len(out) > maxDecompressed || !capped {
+		t.Fatalf("lz4 output %d bytes (capped=%v); want at most %d, capped", len(out), capped, maxDecompressed)
+	}
+}
+
+// A frame kept raw because it hit a bound says which one, and is logged once per
+// connection; a frame merely in an encoding plain msgpack can't read carries no such field.
+func TestAFrameKeptRawForABoundSaysWhich(t *testing.T) {
+	var lz4 bytes.Buffer
+	lz4.Write([]byte{0x1F, 'A', 0x01, 0x00})
+	lz4.Write(bytes.Repeat([]byte{0xFF}, 300_000))
+	lz4.WriteByte(0x00)
+	bomb := maxFrame(lz4.Bytes())
+	bomb[6] = 0x01 // LZ4-compressed
+
+	deep := maxFrame(append(bytes.Repeat([]byte{0x91}, 1000), 0xc0))
+	plain := maxFrame([]byte{0xc1}) // never valid msgpack, not a bound
+
+	var logBuf bytes.Buffer
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(os.Stderr)
+
+	s := decoder{}.NewSession()
+	msgs := s.Feed(false, append(append(append(bomb, bomb...), deep...), plain...))
+	if len(msgs) != 4 {
+		t.Fatalf("got %d messages, want 4", len(msgs))
+	}
+	if why := msgs[0].Fields[limitField]; !strings.Contains(why, "64 MiB") {
+		t.Errorf("LZ4 bomb: %s = %q", limitField, why)
+	}
+	if !bytes.Equal(msgs[0].Payload, lz4.Bytes()) {
+		t.Error("LZ4 bomb: the compressed frame was not kept as it came")
+	}
+	if why := msgs[2].Fields[limitField]; !strings.Contains(why, "deeper than 64") {
+		t.Errorf("deep nesting: %s = %q", limitField, why)
+	}
+	if why, ok := msgs[3].Fields[limitField]; ok {
+		t.Errorf("unparseable frame: %s = %q, want none", limitField, why)
+	}
+	if n := strings.Count(logBuf.String(), "64 MiB"); n != 1 {
+		t.Errorf("the LZ4 bound was logged %d times for one connection, want 1:\n%s", n, logBuf.String())
 	}
 }
 
@@ -38,7 +80,7 @@ func TestMsgpackSaneAcceptsEncodedValues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal %T: %v", v, err)
 		}
-		if !msgpackSane(b) {
+		if ok, _ := msgpackSane(b); !ok {
 			t.Errorf("msgpackSane rejected a valid encoding of %T (% x…)", v, b[:min(len(b), 12)])
 		}
 	}
@@ -53,7 +95,7 @@ func TestMsgpackSaneRejectsBombs(t *testing.T) {
 		"deep nesting":       append(bytes.Repeat([]byte{0x91}, 1000), 0xc0),
 		"trailing bytes":     {0xc0, 0xc0},
 	} {
-		if msgpackSane(b) {
+		if ok, _ := msgpackSane(b); ok {
 			t.Errorf("%s: accepted", name)
 		}
 	}
@@ -85,7 +127,7 @@ func FuzzLZ4(f *testing.F) {
 	f.Add([]byte{0x10, 'a'})
 	f.Add([]byte{0x1F, 'a', 0x01, 0x00, 0xFF, 0x00})
 	f.Fuzz(func(t *testing.T, src []byte) {
-		if out := lz4BlockDecompress(src); len(out) > maxDecompressed {
+		if out, _ := lz4BlockDecompress(src); len(out) > maxDecompressed {
 			t.Fatalf("output %d bytes exceeds the cap", len(out))
 		}
 	})

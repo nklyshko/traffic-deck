@@ -133,14 +133,14 @@ def test_compressed_bodies_decode_like_mitmproxy(enc):
     f.response.content = body
     f.response.encode(enc)  # mitmproxy's own encoder sets content-encoding
     assert f.response.raw_content != body
-    assert _addon._content(f.response) == body
+    assert _addon._content(f.response) == (body, False)
 
 
 def test_an_unknown_or_chained_encoding_is_kept_as_it_came():
     f = tflow.tflow(resp=True)
     f.response.headers["content-encoding"] = "gzip, br"
     f.response.raw_content = b"\x00\x01opaque"
-    assert _addon._content(f.response) == b"\x00\x01opaque"
+    assert _addon._content(f.response) == (b"\x00\x01opaque", False)
 
 
 def test_a_compression_bomb_is_cut_off_at_the_cap(monkeypatch):
@@ -150,9 +150,42 @@ def test_a_compression_bomb_is_cut_off_at_the_cap(monkeypatch):
     f.response.raw_content = _gzip.compress(b"\x00" * (200 << 20))  # 200 MiB of zeros, ~200 KB
     tracemalloc.start()
     try:
-        out = _addon._content(f.response)
+        out, cut = _addon._content(f.response)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert len(out) == 1 << 20
+    assert len(out) == 1 << 20 and cut
     assert peak < 32 << 20, f"decoding peaked at {peak} bytes"
+
+
+def test_a_body_that_exactly_fits_the_cap_is_not_called_cut(monkeypatch):
+    monkeypatch.setattr(_addon, "_MAX_BODY_BYTES", 1000)
+    f = tflow.tflow(resp=True)
+    f.response.content = b"x" * 1000
+    f.response.encode("gzip")
+    assert _addon._content(f.response) == (b"x" * 1000, False)
+    f.response.raw_content = b"y" * 1000  # plain, no encoding
+    del f.response.headers["content-encoding"]
+    assert _addon._content(f.response) == (b"y" * 1000, False)
+
+
+def test_a_cut_body_is_named_on_the_flow_and_logged(monkeypatch, caplog):
+    monkeypatch.setattr(_addon, "_MAX_BODY_BYTES", 1000)
+    f = tflow.tflow(resp=True)
+    f.response.content = b"z" * 5000
+    f.response.encode("gzip")
+    with caplog.at_level("WARNING", logger=_addon.__name__):
+        pf = _addon.build_flow(f)
+    assert pf.response_body.size == 1000
+    assert pf.metadata["body.truncated"] == "response"
+    assert "response cut" in caplog.text
+
+
+def test_a_cut_message_is_named_and_logged(monkeypatch, caplog):
+    monkeypatch.setattr(_addon, "_MAX_BODY_BYTES", 10)
+    with caplog.at_level("WARNING", logger=_addon.__name__):
+        m = _addon._message("f1", True, "binary", b"0123456789abc", 0)
+    assert m.payload.size == 10 and m.payload.inline == b"0123456789"
+    assert m.metadata["body.truncated"] == "payload"
+    assert "payload cut" in caplog.text
+    assert "body.truncated" not in _addon._message("f1", True, "binary", b"short", 0).metadata

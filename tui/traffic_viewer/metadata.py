@@ -61,6 +61,7 @@ _LABELS = {
     "hostname.dns_candidates": "Other names for this IP",
     "conn.bytes_up": "Bytes sent",
     "conn.bytes_down": "Bytes received",
+    "body.truncated": "Cut at size cap (only the start is kept)",
 }
 
 

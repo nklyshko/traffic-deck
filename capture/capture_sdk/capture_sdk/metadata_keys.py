@@ -38,6 +38,9 @@ CONN_OUTCOME = "conn.outcome"
 #: Bytes client→server / server→client on such a connection.
 CONN_BYTES_UP = "conn.bytes_up"
 CONN_BYTES_DOWN = "conn.bytes_down"
+#: Which bodies were cut at a size cap, comma-separated: request, response (on a flow) or
+#: payload (on a message). The kept bytes are the body's beginning; its size is the cut size.
+BODY_TRUNCATED = "body.truncated"
 #: Prefix of the per-outcome undecoded-connection counts on a session ("conn.undecoded.<o>").
 #: The gateway's own native decoder writes these under "undecoded." instead; readers accept
 #: both.

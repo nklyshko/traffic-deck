@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import ipaddress
 import json
+import logging
 import os
 import time
 import uuid
@@ -63,8 +64,11 @@ def _norm_proto(v: str) -> str:
 #: Cap on a single body pushed to the gateway. A malicious response can be a compression
 #: bomb (a kilobyte of gzip → gigabytes), and the whole body is embedded in the proto, so
 #: an uncapped one both pressures this proxy's memory and, past the gateway's 256 MiB gRPC
-#: limit, fails to send and loses the flow. Truncation records the bytes we kept.
+#: limit, fails to send and loses the flow. A body cut here keeps its first _MAX_BODY_BYTES,
+#: is named in the flow's body.truncated metadata, and is logged.
 _MAX_BODY_BYTES = 64 * 1024 * 1024
+
+log = logging.getLogger(__name__)  # mitmproxy shows stdlib logging in its event log
 
 
 def _bounded_decode(raw: bytes, enc: str, cap: int) -> bytes | None:
@@ -100,18 +104,29 @@ def _bounded_decode(raw: bytes, enc: str, cap: int) -> bytes | None:
     return None
 
 
-def _content(msg) -> bytes:
-    """Best-effort decoded body bytes (decompressed), capped; falls back to raw/empty."""
+def _content(msg) -> tuple[bytes, bool]:
+    """Best-effort decoded body bytes (decompressed), capped at _MAX_BODY_BYTES; falls back
+    to raw/empty. The flag says the body was longer than the cap and was cut."""
     raw = msg.raw_content or b""  # None for a streamed body
     enc = _wire_encoding(msg)
     if raw and enc:
         try:
-            decoded = _bounded_decode(raw, enc, _MAX_BODY_BYTES)
+            # One byte past the cap tells a body that fits exactly from one that was cut.
+            decoded = _bounded_decode(raw, enc, _MAX_BODY_BYTES + 1)
         except Exception:  # noqa: BLE001 (not actually in that encoding: keep the wire bytes)
             decoded = None
         if decoded:
-            return decoded
-    return raw[:_MAX_BODY_BYTES]
+            return decoded[:_MAX_BODY_BYTES], len(decoded) > _MAX_BODY_BYTES
+    return raw[:_MAX_BODY_BYTES], len(raw) > _MAX_BODY_BYTES
+
+
+def _note_truncated(md, side: str, what: str) -> None:
+    """Record that `side` (request, response or payload) was cut at _MAX_BODY_BYTES: in the
+    record's body.truncated metadata, so viewers and agents see it, and in the log."""
+    sides = [x for x in md.get(mk.BODY_TRUNCATED, "").split(",") if x]
+    if side not in sides:
+        md[mk.BODY_TRUNCATED] = ",".join(sides + [side])
+    log.warning("%s: %s cut to its first %d MiB (body.truncated)", what, side, _MAX_BODY_BYTES >> 20)
 
 
 def _wire_encoding(msg) -> str:
@@ -252,13 +267,13 @@ def build_flow(flow: http.HTTPFlow, names: DnsNames | None = None) -> cp.Flow:
     if not pf.content_type:
         pf.content_type = req.headers.get("content-type", "")
 
-    rbody = _content(req)
+    rbody, rcut = _content(req)
     pf.request_bytes = len(rbody)
     if rbody:
         pf.request_body.CopyFrom(cp.Body(size=len(rbody), content_type=req.headers.get("content-type", ""),
                                          inline=rbody, content_encoding=_wire_encoding(req)))
     if resp:
-        sbody = _content(resp)
+        sbody, scut = _content(resp)
         if sbody:
             pf.response_body.CopyFrom(cp.Body(size=len(sbody), content_type=resp.headers.get("content-type", ""),
                                               inline=sbody, content_encoding=_wire_encoding(resp)))
@@ -269,6 +284,10 @@ def build_flow(flow: http.HTTPFlow, names: DnsNames | None = None) -> cp.Flow:
     for k, v in (flow.metadata or {}).items():
         pf.metadata[_s(k)] = _s(v)
     _hostname_metadata(pf, hostname, _sni(flow))
+    if rcut:
+        _note_truncated(pf.metadata, "request", f"{req.method} {req.pretty_url}")
+    if resp and scut:
+        _note_truncated(pf.metadata, "response", f"{req.method} {req.pretty_url}")
 
     # Attach proxy metadata when the flow rode a SOCKS5 tunnel intercepted by
     # SocksUpstreamLayer (set on the flow's server connection context).
@@ -413,16 +432,20 @@ def _ws_opcode(msg) -> str:
 
 def _message(flow_id: str, from_client: bool, opcode: str, content: bytes, ts: float) -> cp.WsMessage:
     # Same bound as bodies: one giant frame past the gateway's gRPC limit would fail the
-    # push and lose the message. The size describes the bytes kept, as for bodies.
-    content = (content or b"")[:_MAX_BODY_BYTES]
-    return cp.WsMessage(
+    # push and lose the message. The size describes the bytes kept, as for bodies, and a cut
+    # message says so in its metadata.
+    content = content or b""
+    msg = cp.WsMessage(
         id=str(uuid.uuid4()),
         flow_id=flow_id,
         from_client=bool(from_client),
         opcode=opcode,
         ts_unix_micros=int((ts or 0) * 1_000_000),
-        payload=cp.Body(size=len(content), inline=content),
+        payload=cp.Body(size=min(len(content), _MAX_BODY_BYTES), inline=content[:_MAX_BODY_BYTES]),
     )
+    if len(content) > _MAX_BODY_BYTES:
+        _note_truncated(msg.metadata, "payload", f"message on flow {flow_id}")
+    return msg
 
 
 def _extra_metadata(raw: str) -> dict[str, str]:

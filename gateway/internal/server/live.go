@@ -606,6 +606,9 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		TlsClientHello:   f.TLSClientHello,
 		ClientHellos:     f.ClientHellos,
 		TlsHrr:           f.TLSHRR,
+		// Shared, not copied: the decoder replaces a flow's Metadata map, never writes
+		// into one it has handed out (decode.noteBodyCut).
+		Metadata: f.Metadata,
 	}
 	if f.Proxy != nil {
 		pf.Proxy = &trafficv1.Proxy{

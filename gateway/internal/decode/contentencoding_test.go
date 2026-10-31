@@ -442,7 +442,7 @@ func TestLiveHTTP1RecordsGzipEncoding(t *testing.T) {
 		Body:   io.NopCloser(bytes.NewReader(gzipBytes(t, page))),
 	}
 
-	body, enc := readRespBody(resp)
+	body, enc, _ := readRespBody(resp)
 
 	if string(body) != page {
 		t.Errorf("body = %q, want %q whole", body, page)
@@ -459,7 +459,7 @@ func TestLiveHTTP1EncodingOmitted(t *testing.T) {
 		Header: http.Header{"Content-Encoding": {"identity"}},
 		Body:   io.NopCloser(strings.NewReader("plain")),
 	}
-	if _, enc := readRespBody(resp); enc != "" {
+	if _, enc, _ := readRespBody(resp); enc != "" {
 		t.Errorf("identity encoding = %q, want none", enc)
 	}
 
@@ -467,7 +467,7 @@ func TestLiveHTTP1EncodingOmitted(t *testing.T) {
 		Header: http.Header{"Content-Encoding": {"gzip"}},
 		Body:   io.NopCloser(strings.NewReader("")),
 	}
-	if _, enc := readRespBody(empty); enc != "" {
+	if _, enc, _ := readRespBody(empty); enc != "" {
 		t.Errorf("empty body encoding = %q, want none — there are no bytes to describe", enc)
 	}
 }
@@ -476,7 +476,7 @@ func TestLiveHTTP1EncodingOmitted(t *testing.T) {
 // decompresses to as much as it has: a partial page beats no page.
 func TestMaybeGunzipPartialStream(t *testing.T) {
 	raw := gzipBytes(t, strings.Repeat("searchable ", 2000))
-	got := decodeBody("gzip", raw[:len(raw)-20])
+	got, _ := decodeBody("gzip", raw[:len(raw)-20])
 	if !strings.HasPrefix(string(got), "searchable searchable") {
 		t.Errorf("partial gunzip = %.40q…, want the decompressed prefix", got)
 	}
@@ -498,7 +498,7 @@ func TestDecodeBodyUndoesEveryEncodingWeClaim(t *testing.T) {
 		{"deflate", rawDeflateBytes(t, needle)}, // as some servers send it
 	} {
 		t.Run(tc.enc+"-"+strconv.Itoa(len(tc.body)), func(t *testing.T) {
-			if got := string(decodeBody(tc.enc, tc.body)); got != needle {
+			if got, _ := decodeBody(tc.enc, tc.body); string(got) != needle {
 				t.Errorf("decodeBody(%q) = %.40q, want %q", tc.enc, got, needle)
 			}
 		})
@@ -513,7 +513,7 @@ func TestDecodeBodyUndoesEveryEncodingWeClaim(t *testing.T) {
 func TestDecodeBodyLeavesAMislabelledPlainBodyAlone(t *testing.T) {
 	plain := "{\"ok\":true,\"searchable\":\"needle\"}"
 	for _, enc := range []string{"gzip", "br", "zstd", "deflate"} {
-		if got := string(decodeBody(enc, []byte(plain))); got != plain {
+		if got, _ := decodeBody(enc, []byte(plain)); string(got) != plain {
 			t.Errorf("a plain body labelled %q came back as %.60q, want it untouched", enc, got)
 		}
 	}
@@ -524,7 +524,7 @@ func TestDecodeBodyLeavesAMislabelledPlainBodyAlone(t *testing.T) {
 func TestDecodeBodyLeavesWhatItCannotUndo(t *testing.T) {
 	raw := brBytes(t, "searchable needle")
 	for _, enc := range []string{"gzip, br", "br, gzip", "exi", "compress"} {
-		if got := decodeBody(enc, raw); !bytes.Equal(got, raw) {
+		if got, _ := decodeBody(enc, raw); !bytes.Equal(got, raw) {
 			t.Errorf("decodeBody(%q) changed the bytes; an encoding we cannot undo must not be touched", enc)
 		}
 	}
@@ -548,7 +548,7 @@ func TestLiveHTTP1DecodesEveryEncodingWeClaim(t *testing.T) {
 				Header:     http.Header{"Content-Encoding": {tc.enc}},
 				Body:       io.NopCloser(bytes.NewReader(tc.body)),
 			}
-			body, enc := readRespBody(resp)
+			body, enc, _ := readRespBody(resp)
 			if string(body) != "searchable needle" {
 				t.Errorf("body = %.40q, want it decompressed", body)
 			}

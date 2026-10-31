@@ -36,3 +36,13 @@ key here is visible to a person or agent.
 | `hostname.dns_candidates` | mitmproxy addon | TUI | Other names the address resolved to. |
 | `conn.outcome` | mitmproxy addon (`CONN_OUTCOME`) | gateway (`filter.ConnOutcomeKey`), TUI, MCP | Fate of a connection that produced no decoded request; some outcomes are hidden by default. |
 | `conn.bytes_up` / `conn.bytes_down` | mitmproxy addon | TUI | Bytes each way on such a connection. |
+| `body.truncated` | mitmproxy addon (`BODY_TRUNCATED`, 64 MiB cap), gateway decoders (`decode.BodyTruncatedKey`, 256 MiB after decompression) | TUI, MCP | Which bodies were cut at a size cap: `request`, `response`, or both comma-separated; on a message, `payload`. The kept bytes are the body's beginning and its size is the cut size. Each cut is also logged. |
+
+## Message fields
+
+A custom decoder's message carries its own header fields, namespaced by decoder name
+(`max.cmd`, `max.opcode`, …). One is about the decode itself:
+
+| Key | Written by | Meaning |
+|-----|-----------|---------|
+| `max.limit` | MAX decoder (`limitField`) | The frame hit a size or nesting bound (decompresses past 64 MiB, MessagePack over 8 MiB or nested deeper than 64) and was kept raw. Its bytes are intact; only the decoding was skipped. Logged once per connection per bound. |

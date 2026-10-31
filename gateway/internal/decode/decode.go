@@ -90,8 +90,9 @@ type Flow struct {
 	Proxy *FlowProxy
 
 	// Metadata is opaque key/value data attached by the capture source (e.g. proxy
-	// provider). Only the pushed-flow path populates it; tshark-decoded flows leave
-	// it nil. Persisted verbatim and surfaced in the viewer.
+	// provider), persisted verbatim and surfaced in the viewer. The decoders add one key of
+	// their own, BodyTruncatedKey, when a body is cut at the decompression cap (noteBodyCut
+	// replaces the map rather than writing into it).
 	Metadata map[string]string
 
 	// Error is the failure reason when the flow got no response or hit a transport/

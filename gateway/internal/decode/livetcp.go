@@ -91,7 +91,7 @@ func newPacketReader(r io.Reader) (packetReader, uint32, bool, error) {
 		if err != nil {
 			return nil, lt, false, err
 		}
-		return &progressGuard{packetReader: &recoveringReader{packetReader: rd}}, lt, false, nil
+		return guarded(rd), lt, false, nil
 	}
 	// Classic header: the link type is a uint32 at offset 20, in the file's own byte order
 	// — which the magic identifies (0xA1 first = written big-endian).
@@ -107,8 +107,12 @@ func newPacketReader(r io.Reader) (packetReader, uint32, bool, error) {
 	if err != nil {
 		return nil, rawLinkType, true, err
 	}
-	return &progressGuard{packetReader: &recoveringReader{
-		packetReader: &classicGuard{Reader: rd, br: br, bo: bo}}}, rawLinkType, true, nil
+	return guarded(&classicGuard{Reader: rd, br: br, bo: bo}), rawLinkType, true, nil
+}
+
+// guarded wraps a pcap reader in the guards every format needs (see pcapguard.go).
+func guarded(rd packetReader) packetReader {
+	return &progressGuard{packetReader: &recoveringReader{packetReader: rd}}
 }
 
 // pcapngLinkType peeks the first Interface Description Block's LinkType without consuming
