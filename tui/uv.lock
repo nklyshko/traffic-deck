@@ -276,7 +276,7 @@ wheels = [
 [[package]]
 name = "trafficdeck-tui"
 version = "0.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "grpcio" },
     { name = "grpcio-tools" },

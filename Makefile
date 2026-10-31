@@ -9,6 +9,7 @@
 #   make gen        regenerate all stubs (Go + Python) via mise
 #   make clean      remove the built binary
 #
+#   make install         freeze this tree into a self-contained prefix (ADR-0017)
 #   make install-pktap   enrol the macOS per-process capture module (writes a manifest)
 
 GO          ?= go
@@ -20,8 +21,12 @@ TD_HOME     ?= $(if $(TRAFFIC_DECK_HOME),$(TRAFFIC_DECK_HOME),$(HOME)/.traffic-d
 # Address the pktap source serves on, and the gateway dials. Override to move it:
 #   make install-pktap PKTAP_ADDR=127.0.0.1:7099
 PKTAP_ADDR  ?= 127.0.0.1:7071
+# How to start that source: the installed copy when there is one, so enrolling doesn't tie an
+# installed gateway to this checkout.
+PKTAP_INSTALLED := $(or $(PREFIX),$(HOME)/.local/share/trafficdeck)/libexec/trafficdeck-capture-pktap
+PKTAP_CMD   ?= $(if $(wildcard $(PKTAP_INSTALLED)),sudo $(PKTAP_INSTALLED) serve,$(CURDIR)/capture/capture-pktap.sh)
 
-.PHONY: build run test vet gen clean help install-pktap
+.PHONY: build run test vet gen clean help install install-pktap
 
 build: ## build the gateway binary -> ./trafficdeck
 	cd $(GATEWAY_DIR) && $(GO) build -o ../$(GATEWAY_BIN) ./cmd/gateway
@@ -41,6 +46,11 @@ gen: ## regenerate all stubs (Go + Python) after editing proto/
 clean: ## remove the built binary
 	rm -f $(GATEWAY_BIN)
 
+# PREFIX, BINDIR and COMPONENTS pass through the environment; ALLOW_DIRTY=1 installs a tree
+# with uncommitted changes and records that it did.
+install: ## freeze this tree into ~/.local/share/trafficdeck
+	./scripts/install.sh
+
 # The pktap source is the one capture tool the gateway cannot spawn: PKTAP creates its
 # interface with a privileged ioctl, and sources are spawned unprivileged with no
 # controlling terminal, so there is nowhere to answer a sudo prompt. It enrols as a
@@ -59,7 +69,7 @@ install-pktap: ## enrol the macOS per-process (PKTAP) capture module
 		'# with no controlling terminal, so it could never answer a sudo prompt. Start the' \
 		'# source yourself and leave it up; the gateway only dials it:' \
 		'#' \
-		'#   $(CURDIR)/capture/capture-pktap.sh' \
+		'#   $(PKTAP_CMD)' \
 		'name = "pktap"' \
 		'' \
 		'[control]' \
@@ -70,7 +80,7 @@ install-pktap: ## enrol the macOS per-process (PKTAP) capture module
 	@echo "wrote $(TD_HOME)/plugins/pktap.toml"
 	@echo
 	@echo "next:"
-	@echo "  1. $(CURDIR)/capture/capture-pktap.sh            # prompts for sudo"
+	@echo "  1. $(PKTAP_CMD)            # prompts for sudo"
 	@echo "  2. restart the gateway (manifests are read at startup)"
 	@echo "  3. pick 'Chrome (per-process)' in the source list"
 	@echo

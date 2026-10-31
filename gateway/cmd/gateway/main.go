@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,6 +33,7 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/config"
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 	"github.com/nklyshko/traffic-deck/gateway/internal/importer"
+	"github.com/nklyshko/traffic-deck/gateway/internal/install"
 	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
 	"github.com/nklyshko/traffic-deck/gateway/internal/objstore"
 	"github.com/nklyshko/traffic-deck/gateway/internal/server"
@@ -129,6 +131,8 @@ func main() {
 		runFused()
 	case "serve":
 		serve()
+	case "version":
+		printVersion()
 	case "import":
 		importCapture(os.Args[2:])
 	case "redecode":
@@ -142,8 +146,33 @@ func main() {
 	}
 }
 
+func printVersion() {
+	if prefix := install.Prefix(); prefix != "" {
+		info, err := install.Read()
+		if err != nil {
+			log.Fatalf("reading the install record: %v", err)
+		}
+		dirty := ""
+		if info.Dirty {
+			dirty = " (dirty)"
+		}
+		fmt.Printf("trafficdeck %s%s\ninstalled %s in %s from %s\n",
+			info.Commit, dirty, info.Date, prefix, info.SourceDir)
+		return
+	}
+	rev := "unknown"
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" {
+				rev = s.Value
+			}
+		}
+	}
+	fmt.Printf("trafficdeck %s\ndev build, checkout %s\n", rev, install.Checkout())
+}
+
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|import|redecode|export|import-session] [flags]")
+	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|version|import|redecode|export|import-session] [flags]")
 	fmt.Fprintln(os.Stderr, "  (no command)  run the gateway and the TUI together")
 	fmt.Fprintln(os.Stderr, "                (GATEWAY_VIEWER=tui|<module>|<command>|none picks the foreground viewer)")
 	os.Exit(2)
@@ -187,8 +216,11 @@ func startMCP(cfg config.Config, svcs *sourcemgr.Services) {
 	_, err := svcs.Start("mcp")
 	switch {
 	case errors.Is(err, sourcemgr.ErrServiceNotFound):
-		log.Print("MCP server not started: no launcher found (needs `uv` with the repo's mcp/ dir, " +
-			"a trafficdeck-mcp on PATH, or TRAFFICDECK_SERVICE_MCP); set GATEWAY_MCP=off to skip this")
+		hint := "`uv` with the repo's mcp/ dir, a trafficdeck-mcp on PATH, or TRAFFICDECK_SERVICE_MCP"
+		if install.Prefix() != "" {
+			hint = "the mcp component in this install, or TRAFFICDECK_SERVICE_MCP"
+		}
+		log.Printf("MCP server not started: no launcher found (needs %s); set GATEWAY_MCP=off to skip this", hint)
 	case err != nil:
 		log.Printf("auto-start mcp: %v", err)
 	}
@@ -403,18 +435,11 @@ func resolveViewer(name string) (*viewer, error) {
 	case strings.EqualFold(name, "none"):
 		return nil, nil
 	case strings.EqualFold(name, "tui"):
-		tuiDir := findTUIDir()
-		if tuiDir == "" {
-			return nil, errors.New("cannot locate the tui/ directory; run `trafficdeck serve` and the TUI separately")
+		argv := resolveTUI()
+		if argv == nil {
+			return nil, errors.New("cannot find the TUI; run `trafficdeck serve` and attach it separately")
 		}
-		if _, err := exec.LookPath("uv"); err != nil {
-			return nil, errors.New("`uv` is required to run the TUI; install it or run the TUI yourself against `trafficdeck serve`")
-		}
-		return &viewer{
-			label:  "tui",
-			argv:   []string{"uv", "run", "--directory", tuiDir, "python", "-m", "traffic_viewer.app"},
-			screen: true,
-		}, nil
+		return &viewer{label: "tui", argv: argv, screen: true}, nil
 	}
 
 	viewers := sourcemgr.Viewers(sourcemgr.PluginsDir())
@@ -470,30 +495,18 @@ func warnNoViewer(services []sourcemgr.ServiceInfo) {
 		"otherwise attach a viewer to this gateway yourself.")
 }
 
-// findTUIDir locates the repo's tui/ directory (holding traffic_viewer/app.py) by walking
-// up from the working directory, then the executable's directory. Returns "" if not found.
-func findTUIDir() string {
-	var starts []string
-	if wd, err := os.Getwd(); err == nil {
-		starts = append(starts, wd)
-	}
-	if exe, err := os.Executable(); err == nil {
-		starts = append(starts, filepath.Dir(exe))
-	}
-	for _, start := range starts {
-		for dir := start; ; {
-			cand := filepath.Join(dir, "tui", "traffic_viewer", "app.py")
-			if _, err := os.Stat(cand); err == nil {
-				return filepath.Join(dir, "tui")
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
+func resolveTUI() []string {
+	return install.Resolve("TRAFFICDECK_TUI", "trafficdeck-tui", func() []string {
+		root := install.Checkout()
+		if root == "" {
+			return nil
 		}
-	}
-	return ""
+		uv, err := exec.LookPath("uv")
+		if err != nil {
+			return nil
+		}
+		return []string{uv, "run", "--directory", filepath.Join(root, "tui"), "python", "-m", "traffic_viewer.app"}
+	})
 }
 
 func importCapture(args []string) {

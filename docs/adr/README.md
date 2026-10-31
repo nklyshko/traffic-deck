@@ -12,11 +12,12 @@ reasoning at the time. Format: Context → Decision → Consequences.
 | [0005](0005-message-shaped-records.md) | WebSocket and custom frames are message records on one timeline |
 | [0006](0006-in-process-tls-decryption.md) | In-process Go TLS decryption for live custom-protocol decode *(generalized by 0009)* |
 | [0007](0007-android-per-app-capture.md) | Android per-app capture via a Frida key-log and UID→NFLOG |
-| [0008](0008-independent-capture-apps.md) | Capture tools are independent apps over a shared SDK |
+| [0008](0008-independent-capture-apps.md) | Capture tools are independent apps over a shared SDK *(install path in 0017)* |
 | [0009](0009-native-live-decode-default.md) | The native in-process decoder is the default, authoritative path |
 | [0010](0010-supervisor-and-capture-modules.md) | The gateway supervises capture; viewers are clients |
 | [0011](0011-incremental-flow-persistence.md) | Live-decoded flows persist incrementally, not on close *(proposed)* |
 | [0012](0012-server-side-filtering-and-pagination.md) | Filtering and pagination happen in the gateway *(proposed)* |
 | [0013](0013-source-name-and-shape.md) | A session records its source as a name plus a delivery shape |
-| [0014](0014-update-checks-read-git.md) | Update checks read git; a module declares a source directory, not a version |
-| [0015](0015-agents-drive-capture-over-mcp.md) | An agent starts and stops captures through the MCP server |
+| [0014](0014-update-checks-read-git.md) | Update checks read git; a module declares a source directory, not a version *(installed comparison in 0017)* |
+| [0015](0015-agents-drive-capture-over-mcp.md) | An agent starts and stops captures through the MCP server *(deadline rationale narrowed by 0017)* |
+| [0017](0017-frozen-install.md) | A frozen install lives in a self-contained prefix; the running binary picks its code |

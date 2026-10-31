@@ -7,7 +7,7 @@ script path instead, or skip loading one. Override the directory with
 `--scripts-dir <path>`.
 
 The selected script loads alongside the always-on TLS keylog hook
-(`../capture_android/frida_sslkeylog.js`); it does not replace it.
+(`../frida_sslkeylog.js`); it does not replace it.
 
 ## Frida 17 compatibility (the `_bridge/` bundle)
 

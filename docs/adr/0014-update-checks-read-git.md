@@ -3,7 +3,8 @@
 Status: accepted; implemented in this repo — the gateway's checker and `CheckUpdates`, the
 manifest's `source_dir`/`update_hint`, and the TUI's `U`. A third-party component opts in on
 its own side: a module by declaring `source_dir` in the manifest it already writes, a
-third-party viewer by adding its own notification policy over the RPC.
+third-party viewer by adding its own notification policy over the RPC. An installed gateway
+compares its recorded commit instead of asking a checkout ([0017](0017-frozen-install.md) §4).
 
 ## Context
 

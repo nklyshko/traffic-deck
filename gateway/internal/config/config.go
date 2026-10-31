@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/nklyshko/traffic-deck/gateway/internal/install"
 )
 
 type Config struct {
@@ -79,7 +81,7 @@ func Home() string {
 }
 
 // SelfUpdateHint is what to tell the user to run when TrafficDeck itself is behind its remote
-// (GATEWAY_UPDATE_HINT). The default suits a plain checkout, which most installs are.
+// (GATEWAY_UPDATE_HINT). The default follows how this binary was put here.
 //
 // It is settable because TrafficDeck is the one component that cannot say this for itself. A
 // module carries its own `update_hint` in the manifest it writes, but TrafficDeck has no
@@ -91,7 +93,11 @@ func Home() string {
 // Read on demand rather than from Config, so updates.List stays a plain func() the checker can
 // hold: the cost is one config.toml read per update check, a few times a day.
 func SelfUpdateHint() string {
-	return loadFile().str("GATEWAY_UPDATE_HINT", "git pull && make build")
+	def := "git pull && make build"
+	if install.Prefix() != "" {
+		def = "make install"
+	}
+	return loadFile().str("GATEWAY_UPDATE_HINT", def)
 }
 
 // source resolves one setting: the environment first, then $TRAFFIC_DECK_HOME/config.toml,
@@ -158,11 +164,24 @@ func (s source) integer(key string, def int) int {
 	return def
 }
 
+// defaultDataRoot keeps an installed gateway and each checkout's dev gateway on separate
+// catalogs: they run different schemas, and a gateway refuses a database written by a newer
+// one, so sharing would let a dev migration lock the installed gateway out (ADR-0017 §3).
+func defaultDataRoot() string {
+	if home := Home(); home != "" && install.Prefix() != "" {
+		return filepath.Join(home, "data")
+	}
+	if root := install.Checkout(); root != "" {
+		return filepath.Join(root, "data")
+	}
+	return "./data"
+}
+
 // Load reads config from the environment and $TRAFFIC_DECK_HOME/config.toml (env wins),
 // with sensible local-dev defaults.
 func Load() Config {
 	s := loadFile()
-	dataRoot := s.str("DATA_ROOT", "./data")
+	dataRoot := s.str("DATA_ROOT", defaultDataRoot())
 	fpDir := "" // builtin fingerprints only
 	if home := Home(); home != "" {
 		fpDir = filepath.Join(home, "fingerprints")

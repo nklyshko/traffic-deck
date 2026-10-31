@@ -2,7 +2,7 @@
 
 This process never imports frida: provision/list use adb (and the SDK's emulator tools)
 only, and each capture runs as a subprocess under the frida version chosen for the device
-(`uv run --with frida==<ver> python -m capture_android.headless …`), exactly as the
+(`capture_android.headless`, under frida_env), exactly as the
 interactive CLI does — client and frida-server versions must match, and frida 17 can't
 spawn on Android ≤ 11, so the version has to be per-device.
 
@@ -17,17 +17,16 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import threading
-from pathlib import Path
 from typing import Mapping
 
-from capture_android import frida_versions
+from capture_android import frida_env, frida_versions
 from capture_android import chromeproxy
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices, quick_run
 from capture_sdk.sessionline import read_session_id
 
-_PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
 _CREATE = "__create__"  # provision-choice value: create + boot a new emulator
 # How long the headless capture may take to announce its session: as long as
 # AndroidSource.start_capture waits for it, after which the start has failed anyway and a
@@ -103,14 +102,14 @@ class RealAndroidBackend:
     def start(self, package: str, label: str, params: Mapping[str, str],
               on_session, stop_event: threading.Event) -> None:
         method = params.get("method") or "frida"
-        cmd = ["uv", "run", "--project", _PROJECT]
-        if method != "proxy":
-            # Client and frida-server versions must match, so the capture runs under the
-            # version chosen for this device. The proxy method loads no frida at all, and
-            # pinning one there would only make `uv run` resolve a package nothing imports.
-            cmd += ["--with", f"frida=={params.get('frida') or self.frida_versions()[1]}"]
-        cmd += ["python", "-m", "capture_android.headless", "--method", method,
-                "--package", package, "--gateway", self._gateway]
+        # Client and frida-server versions must match, so the capture runs under the version
+        # chosen for this device. The proxy method loads no frida at all.
+        fver = None if method == "proxy" else params.get("frida") or self.frida_versions()[1]
+        if fver:
+            frida_env.ensure_frida(fver, wait=frida_env.START_WAIT,
+                                   log=lambda m: print(m, file=sys.stderr, flush=True))
+        cmd = frida_env.python_cmd("capture_android.headless", fver)
+        cmd += ["--method", method, "--package", package, "--gateway", self._gateway]
         if self._serial:
             cmd += ["--serial", self._serial]
         if label:
@@ -120,8 +119,9 @@ class RealAndroidBackend:
         if params.get("duration"):
             cmd += ["--duration", params["duration"]]
 
-        # New session so the capture runs off the TUI's terminal; proc is the `uv run`
-        # wrapper, which forwards a single SIGINT to the headless python it runs (see _reap).
+        # New session so the capture runs off the TUI's terminal. proc is the `uv run` wrapper
+        # from a checkout, which forwards a single SIGINT (see _reap); installed, it is the
+        # headless python itself.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 text=True, start_new_session=True)
         try:
@@ -147,7 +147,7 @@ class RealAndroidBackend:
         run to wind down gracefully — stop tcpdump/frida, drain the upload, CloseSession (see
         capture_sdk.shutdown.GracefulInterrupt) — then we wait.
 
-        The SIGINT goes to `proc` (the `uv run` wrapper) alone, NOT its process group: uv
+        The SIGINT goes to `proc` alone, NOT its process group. Under `uv run` (a checkout) uv
         forwards exactly one SIGINT to the headless python, whereas signalling the group
         delivers one to the python directly *and* one via uv's forward — and the second
         SIGINT is GracefulInterrupt's "force-quit", which aborts the close and strands the

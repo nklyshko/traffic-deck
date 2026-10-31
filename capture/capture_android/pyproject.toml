@@ -5,11 +5,9 @@ description = "Per-app Android capture (rooted emulator/device) → the TrafficD
 requires-python = ">=3.12"
 dependencies = [
     "trafficdeck-capture-sdk",
-    # Client + server frida versions must match, and the agent fetches the matching
-    # frida-server. frida 17 dropped support for older Android (e.g. Android 10 → spawn
-    # "unable to pick a payload base"); the interactive CLI picks a version per device
-    # and runs the capture under it via `uv run --with frida==<ver>`, so allow 16 & 17.
-    "frida>=16.7,<18",
+    # No frida here: client and frida-server versions must match, so it is chosen per
+    # device from frida_versions.py and layered on at launch (frida_env.py). Pinning one
+    # here would put a second, possibly different version under every capture.
 ]
 
 [project.scripts]

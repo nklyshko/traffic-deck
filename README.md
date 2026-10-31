@@ -68,6 +68,21 @@ For live capture you also need permission to capture packets: on Linux join the
 `wireshark` group (`sudo usermod -aG wireshark $USER`, then re-login); on macOS install
 Wireshark's ChmodBPF helper.
 
+### A frozen install beside the checkout
+
+`make install` freezes the current commit into `~/.local/share/trafficdeck` and links
+`trafficdeck` into `~/.local/bin`. That copy runs its own code from any directory, until you run
+`make install` again; `make build && ./trafficdeck` stays the dev build of its own worktree.
+
+- It refuses uncommitted changes; `ALLOW_DIRTY=1` installs them and records that it did.
+- `PREFIX`, `BINDIR` and `COMPONENTS` narrow where and what. To uninstall, delete the prefix and
+  the link.
+- Android's frida is prepared the first time a version is used, which needs `uv` and the network.
+  A start that outruns it says to retry shortly.
+- Both copies share `~/.traffic-deck` and keep separate data. Running both at once needs a different
+  `GATEWAY_ADDR` and `MCP_PORT` on one of them. Going back to an older install after a newer one has
+  migrated your data isn't supported. See [ADR-0017](docs/adr/0017-frozen-install.md).
+
 ## Quick start
 
 ```sh

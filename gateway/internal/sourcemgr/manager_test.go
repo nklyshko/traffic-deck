@@ -70,23 +70,6 @@ func TestRealSpawnWritesPerSourceLog(t *testing.T) {
 	}
 }
 
-func TestFindCaptureDirWalksUp(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "capture", "capture_chrome"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	deep := filepath.Join(root, "a", "b", "c")
-	if err := os.MkdirAll(deep, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := findCaptureDirFrom([]string{deep}); got != filepath.Join(root, "capture") {
-		t.Errorf("findCaptureDirFrom = %q, want %q", got, filepath.Join(root, "capture"))
-	}
-	if got := findCaptureDirFrom([]string{t.TempDir()}); got != "" {
-		t.Errorf("no capture dir should yield \"\", got %q", got)
-	}
-}
-
 func TestResolveLauncherPrefersEnvThenRepo(t *testing.T) {
 	// Explicit override wins.
 	t.Setenv("TRAFFICDECK_SOURCE_CHROME", "my launcher here")

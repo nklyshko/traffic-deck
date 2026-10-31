@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import AsyncIterator
 
-_GEN = Path(__file__).resolve().parent.parent / "gen"
+_GEN = Path(__file__).resolve().parent / "gen"
 if str(_GEN) not in sys.path:
     sys.path.insert(0, str(_GEN))
 

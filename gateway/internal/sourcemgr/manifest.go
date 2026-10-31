@@ -147,6 +147,11 @@ type ComponentSpec struct {
 	Name       string
 	Dir        string // the git checkout
 	UpdateHint string // free text: what to run to update it
+
+	// Set for a frozen install, whose running code is not what Dir has checked out:
+	// compared against Remote's Branch instead of asking the checkout (ADR-0017 §4).
+	InstalledCommit string
+	Remote, Branch  string
 }
 
 // Components lists every module in dir that opted into update checks by declaring a

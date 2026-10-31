@@ -1,6 +1,7 @@
 # 0008 — Capture tools are independent apps over a shared SDK
 
-Status: accepted
+Status: accepted. The editable path dependency is the dev setup; an installed copy builds wheels
+into per-component venvs ([0017](0017-frozen-install.md)).
 
 ## Context
 

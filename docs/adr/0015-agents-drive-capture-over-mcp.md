@@ -76,7 +76,9 @@ describe or start of a source *starts* it, and the built-ins launch through `uv`
 a cold environment resolves and builds the tool's dependencies first — the gateway allows
 two minutes for exactly this (`sourcemgr.readyTimeout`) and the TUI paints a "this can take
 a minute" notice over the same wait. A client default of thirty seconds would give up
-mid-build, leaving the source coming up behind a call that already failed.
+mid-build, leaving the source coming up behind a call that already failed. An installed
+component starts without `uv`, so this wait applies to dev; the first-use Frida build, which
+does not fit it, runs independently of the call ([0017](0017-frozen-install.md) §5).
 
 ## Consequences
 

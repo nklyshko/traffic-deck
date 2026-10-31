@@ -18,7 +18,7 @@ Then a main menu loops:
   * Stop / Delete emulator — shut it down, or delete the AVD.
   * Exit — and offer to stop an emulator we booted.
 
-Each capture runs under the chosen frida via `uv run --with frida==<ver>` (client and
+Each capture runs under the chosen frida, set up by frida_env (client and
 server must match), so the CLI itself never imports frida.
 
   trafficdeck-capture-android
@@ -33,15 +33,14 @@ import sys
 from pathlib import Path
 
 from capture_android import chromeproxy
-from capture_android import frida_versions
+from capture_android import frida_env, frida_versions
 from capture_android.adb import AdbClient
 from capture_android.emulator import DEFAULT_AVD, DEFAULT_IMAGE, Sdk
 from capture_sdk import prompt, terminal
 from capture_sdk.state import Store
 
-_PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
 # Standard unpinning/bypass scripts shipped with the repo; the picker lists these.
-_DEFAULT_SCRIPTS_DIR = str(Path(_PROJECT) / "frida_scripts")
+_DEFAULT_SCRIPTS_DIR = str(Path(__file__).resolve().parent / "frida_scripts")
 
 # Sentinel choices for the script picker (kept off the filesystem-path namespace).
 _CUSTOM = "\0custom"
@@ -147,19 +146,19 @@ def parse_app_names(stdout: str) -> dict[str, str]:
 def enumerate_app_names(serial: str, fver: str) -> dict[str, str]:
     """Resolve {package: label} via Frida, run under the chosen frida version.
 
-    Spawns `capture_android.list_apps` through `uv run --with frida==<fver>` (the same
-    way the capture is launched, so this CLI stays frida-free) and reads its labels
+    Spawns `capture_android.list_apps` under that frida (the same way the capture is
+    launched, so this CLI stays frida-free) and reads its labels
     from the device's PackageManager — no APK downloads. Returns {} on any failure, so
     the picker falls back to bare package names.
     """
-    cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
-           "python", "-m", "capture_android.list_apps", "--serial", serial]
+    cmd = [*frida_env.python_cmd("capture_android.list_apps", fver), "--serial", serial]
     try:
+        frida_env.ensure_frida(fver, log=print)
         # stdin=DEVNULL: this subprocess's adb/frida calls would otherwise inherit the
         # controlling tty and leave it in a broken input state, wedging the next prompt.
         out = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
                              check=True, stdin=subprocess.DEVNULL).stdout
-    except (subprocess.SubprocessError, OSError):
+    except (subprocess.SubprocessError, OSError, RuntimeError):
         return {}
     return parse_app_names(out)
 
@@ -196,8 +195,8 @@ def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str,
     url = store.remember("url", prompt.text(
         "URL to open in the app (optional)", store.get("url", "")))
 
-    cmd = ["uv", "run", "--project", _PROJECT, "--with", f"frida=={fver}",
-           "python", "-m", "capture_android.headless", "--method", "frida",
+    frida_env.ensure_frida(fver, log=print)
+    cmd = [*frida_env.python_cmd("capture_android.headless", fver), "--method", "frida",
            "--serial", serial, "--package", package, "--gateway", args.gateway]
     if url:
         cmd += ["--url", url]
@@ -223,8 +222,7 @@ def _run_proxy_capture(adb: AdbClient, store: Store, serial: str, args) -> None:
     url = store.remember("url", prompt.text(
         "URL to open in the browser (optional)", store.get("url", "")))
 
-    cmd = ["uv", "run", "--project", _PROJECT,
-           "python", "-m", "capture_android.headless", "--method", "proxy",
+    cmd = [*frida_env.python_cmd("capture_android.headless"), "--method", "proxy",
            "--serial", serial, "--package", package, "--gateway", args.gateway]
     if url:
         cmd += ["--url", url]

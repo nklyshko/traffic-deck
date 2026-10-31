@@ -9,10 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/nklyshko/traffic-deck/gateway/internal/install"
 	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
 )
 
@@ -83,21 +83,21 @@ func DefaultServices() map[string]ServiceSpec {
 }
 
 func resolveMCP() []string {
-	if env := os.Getenv("TRAFFICDECK_SERVICE_MCP"); env != "" {
-		return strings.Fields(env)
-	}
-	if capDir := findCaptureDir(); capDir != "" {
-		mcpDir := filepath.Join(filepath.Dir(capDir), "mcp")
-		if fi, err := os.Stat(filepath.Join(mcpDir, "traffic_mcp")); err == nil && fi.IsDir() {
-			if uv, err := exec.LookPath("uv"); err == nil {
-				return []string{uv, "run", "--directory", mcpDir, "python", "-m", "traffic_mcp.server"}
-			}
+	return install.Resolve("TRAFFICDECK_SERVICE_MCP", "trafficdeck-mcp", func() []string {
+		root := install.Checkout()
+		if root == "" {
+			return nil
 		}
-	}
-	if p, err := exec.LookPath("trafficdeck-mcp"); err == nil {
-		return []string{p}
-	}
-	return nil
+		mcpDir := filepath.Join(root, "mcp")
+		if fi, err := os.Stat(filepath.Join(mcpDir, "traffic_mcp")); err != nil || !fi.IsDir() {
+			return nil
+		}
+		uv, err := exec.LookPath("uv")
+		if err != nil {
+			return nil
+		}
+		return []string{uv, "run", "--directory", mcpDir, "python", "-m", "traffic_mcp.server"}
+	})
 }
 
 func mcpURL() string {

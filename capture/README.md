@@ -42,4 +42,4 @@ sudo uv run --project capture/capture_pktap trafficdeck-capture-pktap serve
 
 The non-interactive Android flow is `python -m capture_android.headless` (takes
 `--package …`). Regenerate the shared gRPC stubs with `mise run gen` (they land in
-`capture_sdk/capture_sdk/gen/`, gitignored).
+`capture_sdk/capture_sdk/gen/`, committed).

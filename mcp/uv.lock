@@ -760,7 +760,7 @@ wheels = [
 [[package]]
 name = "trafficdeck-mcp"
 version = "0.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "grpcio" },
     { name = "grpcio-tools" },
