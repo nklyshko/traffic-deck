@@ -38,8 +38,8 @@ GATEWAY_LOG_MAX_BACKUPS = 3
 	if cfg.Viewer != "none" {
 		t.Errorf("Viewer = %q, want the file's %q", cfg.Viewer, "none")
 	}
-	if cfg.GRPCAddr != "127.0.0.1:9999" {
-		t.Errorf("GRPCAddr = %q, want the file's value", cfg.GRPCAddr)
+	if cfg.GatewayAddr != "127.0.0.1:9999" {
+		t.Errorf("GatewayAddr = %q, want the file's value", cfg.GatewayAddr)
 	}
 	if cfg.StartMCP {
 		t.Error("StartMCP = true; a lowercase key and a TOML bool must both take effect")
@@ -90,7 +90,7 @@ func TestRecordLiveOffIsReportedAsIgnored(t *testing.T) {
 func TestNoFileIsFine(t *testing.T) {
 	writeConfig(t, "")
 	cfg := Load()
-	if cfg.Viewer != "tui" || cfg.GRPCAddr != "127.0.0.1:7331" {
+	if cfg.Viewer != "tui" || cfg.GatewayAddr != "127.0.0.1:7331" {
 		t.Errorf("with no config.toml, want built-in defaults, got %+v", cfg)
 	}
 }

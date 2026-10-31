@@ -166,7 +166,7 @@ func RedecodeCustom(ctx context.Context, st *store.Store, engine, tsharkPath, se
 		log.Printf("redecode: replacing %d previously decoded custom-protocol flow(s)", n)
 	}
 	analysisID := uuid.NewString()
-	if err := st.CreateAnalysis(ctx, store.NewAnalysis{ID: analysisID, SessionID: sessionID, Engine: "decoders"}); err != nil {
+	if err := st.CreateAnalysis(ctx, store.NewAnalysis{ID: analysisID, SessionID: sessionID, Engine: decode.EngineDecoders}); err != nil {
 		return 0, fmt.Errorf("create analysis: %w", err)
 	}
 	if _, err := st.InsertFlows(ctx, sessionID, analysisID, flows); err != nil {

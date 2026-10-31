@@ -34,8 +34,16 @@ const (
 	compZstd  = 0xFF // header[6] flag: body is zstd-compressed
 )
 
-// zstdDec is a shared stateless decoder (DecodeAll is safe for concurrent use).
-var zstdDec, _ = zstd.NewReader(nil)
+// maxDecompressed caps one frame's body after decompression. A frame carries up to 16 MiB
+// (a 24-bit length), and both codecs expand adversarially: LZ4 runs of 0xFF length bytes
+// reach ~255x, zstd far more (klauspost's default limit is 64 GiB). Uncapped, one crafted
+// frame could exhaust the gateway's memory. MAX payloads are small structured messages,
+// so this is generous; a body past it is left undecoded (kept raw).
+const maxDecompressed = 64 << 20
+
+// zstdDec is a shared stateless decoder (DecodeAll is safe for concurrent use). The memory
+// limit also bounds DecodeAll's output, which then fails with ErrDecoderSizeExceeded.
+var zstdDec, _ = zstd.NewReader(nil, zstd.WithDecoderMaxMemory(maxDecompressed))
 
 var errLZ4 = errors.New("max: lz4 block decompress produced no output")
 
@@ -323,6 +331,9 @@ func lz4BlockDecompress(src []byte) []byte {
 				}
 			}
 		}
+		if len(out)+matchLen > maxDecompressed {
+			break // a bomb, not a message: stop rather than expand without limit
+		}
 		start := len(out) - offset
 		for j := 0; j < matchLen; j++ { // byte-by-byte handles overlapping matches
 			out = append(out, out[start+j])
@@ -341,15 +352,130 @@ func lz4BlockDecompress(src []byte) []byte {
 // rejects ("invalid code=c7 decoding string length"). jsonSafe stringifies the keys.
 func unpackMsgpack(body []byte) (interface{}, bool) {
 	for off := 0; off <= 4 && off < len(body); off++ {
-		r := bytes.NewReader(body[off:])
-		dec := msgpack.NewDecoder(r)
-		dec.SetMapDecoder(func(d *msgpack.Decoder) (interface{}, error) { return d.DecodeUntypedMap() })
-		var v interface{}
-		if err := dec.Decode(&v); err == nil && r.Len() == 0 {
+		if v, ok := decodeMsgpackAt(body[off:]); ok {
 			return v, true
 		}
 	}
 	return nil, false
+}
+
+// decodeMsgpackAt is one unpackMsgpack attempt. The untyped map decoder panics, inside the
+// msgpack library, on a map whose key is itself a map or slice ("hash of unhashable
+// type") — reachable from any frame on the wire. That is a malformed body, not a crash:
+// recover it as a failed decode, and the frame is kept raw.
+func decodeMsgpackAt(b []byte) (v interface{}, ok bool) {
+	if len(b) > maxMsgpackBody || !msgpackSane(b) {
+		return nil, false
+	}
+	defer func() {
+		if recover() != nil {
+			v, ok = nil, false
+		}
+	}()
+	r := bytes.NewReader(b)
+	dec := msgpack.NewDecoder(r)
+	dec.SetMapDecoder(func(d *msgpack.Decoder) (interface{}, error) { return d.DecodeUntypedMap() })
+	if err := dec.Decode(&v); err != nil || r.Len() != 0 {
+		return nil, false
+	}
+	return v, true
+}
+
+// Bounds on what is handed to the msgpack library. Its untyped decoders allocate a
+// container from the element count on the wire — make([]interface{}, 0, n) and
+// make(map[interface{}]interface{}, n) with n up to 2^32-1 — and recurse once per nesting
+// level, so a few bytes can demand tens of gigabytes (a fatal out-of-memory no recover
+// catches) or overflow the stack. MAX messages are small structured payloads.
+const (
+	maxMsgpackBody  = 8 << 20
+	msgpackMaxDepth = 64
+)
+
+// msgpackSane walks b as exactly one MessagePack value without decoding it, and reports
+// whether it is safe to give to the library: every container declares no more elements
+// than bytes remain (each needs at least one), nesting stays under msgpackMaxDepth, every
+// length fits in what is left, and the value ends exactly at the end of b. Anything else
+// would not decode cleanly anyway.
+func msgpackSane(b []byte) bool {
+	i := 0
+	// length reads an n-byte big-endian length at i.
+	length := func(n int) (int, bool) {
+		if n > len(b)-i {
+			return 0, false
+		}
+		v := 0
+		for k := 0; k < n; k++ {
+			v = v<<8 | int(b[i+k])
+		}
+		i += n
+		return v, true
+	}
+	stack := []int{1} // values still to read in each open container; the root holds one
+	for len(stack) > 0 {
+		top := len(stack) - 1
+		if stack[top] == 0 {
+			stack = stack[:top]
+			continue
+		}
+		stack[top]--
+		if i >= len(b) {
+			return false
+		}
+		c := b[i]
+		i++
+		skip, count, ok := 0, 0, true
+		switch {
+		case c <= 0x7f, c >= 0xe0, c == 0xc0, c == 0xc2, c == 0xc3: // ints, nil, bools
+		case c <= 0x8f: // fixmap
+			count = 2 * int(c&0x0f)
+		case c <= 0x9f: // fixarray
+			count = int(c & 0x0f)
+		case c <= 0xbf: // fixstr
+			skip = int(c & 0x1f)
+		case c == 0xc4, c == 0xd9: // bin8, str8
+			skip, ok = length(1)
+		case c == 0xc5, c == 0xda: // bin16, str16
+			skip, ok = length(2)
+		case c == 0xc6, c == 0xdb: // bin32, str32
+			skip, ok = length(4)
+		case c == 0xc7, c == 0xc8, c == 0xc9: // ext8/16/32: length, then a type byte
+			skip, ok = length(1 << (c - 0xc7))
+			skip++
+		case c == 0xcc, c == 0xd0:
+			skip = 1
+		case c == 0xcd, c == 0xd1:
+			skip = 2
+		case c == 0xca, c == 0xce, c == 0xd2:
+			skip = 4
+		case c == 0xcb, c == 0xcf, c == 0xd3:
+			skip = 8
+		case c >= 0xd4 && c <= 0xd8: // fixext 1/2/4/8/16, plus a type byte
+			skip = 1 + 1<<(c-0xd4)
+		case c == 0xdc:
+			count, ok = length(2)
+		case c == 0xdd:
+			count, ok = length(4)
+		case c == 0xde:
+			count, ok = length(2)
+			count *= 2
+		case c == 0xdf:
+			count, ok = length(4)
+			count *= 2
+		default: // 0xc1 is never used
+			return false
+		}
+		if !ok || skip > len(b)-i {
+			return false
+		}
+		i += skip
+		if count > 0 {
+			if count > len(b)-i || len(stack) >= msgpackMaxDepth {
+				return false
+			}
+			stack = append(stack, count)
+		}
+	}
+	return i == len(b)
 }
 
 // rawMessage keeps an undecodable (e.g. compact-encoded) frame's bytes verbatim so no

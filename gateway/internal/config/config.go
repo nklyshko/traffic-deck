@@ -17,8 +17,8 @@ import (
 )
 
 type Config struct {
-	GRPCAddr string // listen address for the gRPC server
-	DataRoot string // root for session bundles + catalog.sqlite
+	GatewayAddr string // GATEWAY_ADDR: the gRPC listen address, and what viewers and tools dial
+	DataRoot    string // root for session bundles + catalog.sqlite
 	// TsharkPath is the tshark binary, used only for the batch decode: pcap import
 	// (--decoder tshark), redecode --engine tshark (custom-protocol flows), a capture with
 	// live decode off, and tshark-verify on close. The live decode needs no tshark.
@@ -175,7 +175,7 @@ func Load() Config {
 			"capture.pcap and key.log as a new session with `trafficdeck import --decoder tshark`")
 	}
 	return Config{
-		GRPCAddr:        s.str("GATEWAY_ADDR", "127.0.0.1:7331"),
+		GatewayAddr:     s.str("GATEWAY_ADDR", "127.0.0.1:7331"),
 		DataRoot:        dataRoot,
 		TsharkPath:      s.str("TSHARK_PATH", "tshark"),
 		LiveDecode:      s.boolean("GATEWAY_LIVE_DECODE", true),

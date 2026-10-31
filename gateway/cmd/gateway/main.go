@@ -46,10 +46,16 @@ import (
 // on something that will not finish; past this, what is left is forced.
 const shutdownTimeout = 3 * time.Minute
 
+// gracefulStopTimeout bounds how long `serve` lets in-flight RPCs finish on shutdown
+// before forcing connections closed. Follow streams never finish on their own, so this is
+// what makes SIGTERM end a gateway with a viewer attached.
+const gracefulStopTimeout = 10 * time.Second
+
 // shutdownSignals have to reach the teardown rather than the Go runtime's default action,
 // which is to kill the process where it stands — leaving every capture source, module
 // process and the MCP server running with no parent, detached from the terminal (they are
-// spawned with Setsid) and so immune to anything the shell would have sent them.
+// spawned in their own session, see sourcemgr.detachedProcAttr) and so immune to anything
+// the shell would have sent them.
 //
 // SIGHUP is here for closing the terminal, which is otherwise exactly that case.
 var shutdownSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
@@ -195,30 +201,66 @@ func serve() {
 	obj, st := openDeps(ctx, cfg)
 	defer st.Close()
 
-	lis, err := net.Listen("tcp", cfg.GRPCAddr)
+	lis, err := net.Listen("tcp", cfg.GatewayAddr)
 	if err != nil {
-		log.Fatalf("listen %s: %v", cfg.GRPCAddr, err)
+		log.Fatalf("listen %s: %v", cfg.GatewayAddr, err)
 	}
-	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
-	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
-	s := grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
+	s := newGRPCServer()
+	mgr, svcs := server.Register(s, st, obj, cfg.TsharkPath, cfg.GatewayAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
 	startMCP(cfg, svcs)
 	// Reap spawned capture-source and service processes (and their groups) on shutdown, so a
 	// browser, emulator, or MCP server they started doesn't linger after the gateway stops.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, shutdownSignals...)
+	// Serve returns as soon as the listener closes, which can be before the handlers it
+	// cancelled have returned; the deferred st.Close must wait for the whole teardown.
+	tornDown := make(chan struct{})
 	go func() {
+		defer close(tornDown)
 		<-sig
-		log.Println("shutting down: reaping capture sources and services")
-		mgr.Close()
-		svcs.Close()
-		s.GracefulStop()
+		// A second signal takes the default action, so a wedged teardown stays escapable.
+		signal.Reset(shutdownSignals...)
+		log.Println("shutting down: reaping capture sources and services (signal again to force)")
+		deadline := time.Now().Add(shutdownTimeout)
+		shutdownStep("stopping capture sources", deadline, mgr.Close)
+		shutdownStep("stopping services", deadline, svcs.Close)
+		// Serve does not return until GracefulStop finishes, and GracefulStop waits for every
+		// in-flight RPC — a viewer following a live session never ends its stream on its own,
+		// so unbounded this made SIGTERM hang forever. Give connections a short grace, then
+		// force them closed.
+		connDeadline := time.Now().Add(gracefulStopTimeout)
+		if connDeadline.After(deadline) {
+			connDeadline = deadline
+		}
+		if !shutdownStep("closing client connections", connDeadline, s.GracefulStop) {
+			forceStop(s)
+		}
 	}()
 	log.Printf("gateway listening on %s (live decode: %v, tshark verify: %v, update check: %v)",
-		cfg.GRPCAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
+		cfg.GatewayAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)
+	}
+	<-tornDown
+}
+
+// newGRPCServer is the gateway's server. WaitForHandlers makes Stop wait for the handlers
+// it cancels: an upload stream cut at shutdown auto-finalizes its session, and that write
+// must finish before the store is closed under it.
+func newGRPCServer() *grpc.Server {
+	// Pushed flows (mitmproxy) inline full bodies; a large download can far exceed gRPC's
+	// 4 MiB default, so raise the receive limit to avoid dropping those flows.
+	return grpc.NewServer(grpc.MaxRecvMsgSize(256<<20), grpc.WaitForHandlers(true),
+		grpc.ChainUnaryInterceptor(server.RecoveryUnaryInterceptor),
+		grpc.ChainStreamInterceptor(server.RecoveryStreamInterceptor))
+}
+
+// forceStop closes every connection once the graceful stop has run out of time. It gets
+// its own bound, even past the shutdown deadline: skipping it would leave Serve running.
+func forceStop(s *grpc.Server) {
+	log.Printf("shutdown: forcing connections closed")
+	if !shutdownStep("waiting for cancelled calls to return", time.Now().Add(gracefulStopTimeout), s.Stop) {
+		log.Printf("shutdown: closing the store with calls still running")
 	}
 }
 
@@ -250,22 +292,22 @@ func runFused() {
 	var mgr *sourcemgr.Manager
 	var svcs *sourcemgr.Services
 	var stClose func()
-	if lis, err := net.Listen("tcp", cfg.GRPCAddr); err != nil {
+	if lis, err := net.Listen("tcp", cfg.GatewayAddr); err != nil {
 		if v == nil {
 			// Nothing to attach and nothing to tear down: the running gateway already
 			// launched whatever serves the UI. Blocking on a signal here would do nothing.
-			log.Printf("gateway address %s already in use — the running gateway already has the viewer", cfg.GRPCAddr)
+			log.Printf("gateway address %s already in use — the running gateway already has the viewer", cfg.GatewayAddr)
 			return
 		}
-		log.Printf("gateway address %s already in use — attaching the viewer to the running gateway", cfg.GRPCAddr)
+		log.Printf("gateway address %s already in use — attaching the viewer to the running gateway", cfg.GatewayAddr)
 	} else {
 		obj, st := openDeps(ctx, cfg)
 		stClose = st.Close
-		s = grpc.NewServer(grpc.MaxRecvMsgSize(256 << 20))
-		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GRPCAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
+		s = newGRPCServer()
+		mgr, svcs = server.Register(s, st, obj, cfg.TsharkPath, cfg.GatewayAddr, cfg.LiveDecode, cfg.TsharkVerify, cfg.UpdateCheck)
 		startMCP(cfg, svcs)
 		go func() { _ = s.Serve(lis) }()
-		log.Printf("gateway listening on %s (live decode: %v)", cfg.GRPCAddr, cfg.LiveDecode)
+		log.Printf("gateway listening on %s (live decode: %v)", cfg.GatewayAddr, cfg.LiveDecode)
 		if v == nil {
 			warnNoViewer(svcs.List())
 		}
@@ -276,12 +318,7 @@ func runFused() {
 	// spot, skipping every teardown step below. That is how a Ctrl-C in one-command mode
 	// left capture sources and the MCP server running with no parent — the handler used to
 	// be installed only on the no-viewer branch, so the common way of running TrafficDeck
-	// was the one way that leaked.
-	//
-	// SIGHUP is in the set because closing the terminal is the other way this happens, and
-	// nothing else saves the children from it: they are spawned with Setsid on purpose (so
-	// they cannot write over the viewer), which also detaches them from the terminal whose
-	// hangup would otherwise have reached them.
+	// was the one way that leaked. (Why SIGHUP is in the set: see shutdownSignals.)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, shutdownSignals...)
 
@@ -297,7 +334,7 @@ func runFused() {
 		}
 		cmd := exec.Command(v.argv[0], v.argv[1:]...)
 		cmd.Dir = v.cwd
-		cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+cfg.GRPCAddr)
+		cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+cfg.GatewayAddr)
 		for k, val := range v.env {
 			cmd.Env = append(cmd.Env, k+"="+val)
 		}
@@ -326,8 +363,7 @@ func runFused() {
 		// GracefulStop waits for every in-flight RPC, and a follow stream never returns on
 		// its own — so without a bound, one reader that will not let go hangs the exit.
 		if !shutdownStep("closing client connections", deadline, s.GracefulStop) {
-			log.Printf("shutdown: forcing connections closed")
-			s.Stop()
+			forceStop(s)
 		}
 	}
 	if stClose != nil {

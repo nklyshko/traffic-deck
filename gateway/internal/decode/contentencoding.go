@@ -23,6 +23,27 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// maxDecodedBytes caps how large one body may become after its Content-Encoding is
+// undone. Decompression is adversarial: a kilobyte of gzip expands to a gigabyte of zeros
+// (a "zip bomb"), and without a ceiling io.ReadAll grows an in-memory buffer until the OOM
+// killer ends the gateway — which also ends every other live capture it is hosting. The
+// bytes past the cap are dropped; a body truncated this way still records its encoding, so
+// a consumer is told the bytes are the decoded prefix rather than the whole. 256 MiB is far
+// larger than any body a viewer pages through and matches the gRPC transport ceiling, so a
+// legitimate large download is unaffected.
+const maxDecodedBytes = 256 << 20
+
+// readAllCapped reads up to maxDecodedBytes+1 from r and reports whether it overflowed the
+// cap (in which case the returned bytes are truncated to the cap). It never allocates an
+// unbounded buffer, whatever r decompresses to.
+func readAllCapped(r io.Reader) (data []byte, truncated bool, err error) {
+	data, err = io.ReadAll(io.LimitReader(r, maxDecodedBytes+1))
+	if len(data) > maxDecodedBytes {
+		return data[:maxDecodedBytes], true, err
+	}
+	return data, false, err
+}
+
 // bodyEncoding returns the transport encoding a message's headers name, lower-cased
 // ("" = none). "identity" is spelled-out absence, so it folds to none.
 func bodyEncoding(headers []Header) string {
@@ -116,7 +137,7 @@ func decodeBody(enc string, b []byte) []byte {
 		if err != nil {
 			continue // its header says these are not those bytes
 		}
-		out, rerr := io.ReadAll(zr)
+		out, _, rerr := readAllCapped(zr)
 		_ = zr.Close()
 		if len(out) == 0 {
 			continue

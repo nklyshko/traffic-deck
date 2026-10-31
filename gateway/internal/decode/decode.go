@@ -24,6 +24,11 @@ const (
 	EngineNative = "native"
 )
 
+// EngineDecoders labels the analysis a `redecode` writes: only the custom-protocol
+// decoders re-ran over the stored capture. It is an analysis label, not a batch engine a
+// caller can select — redecode itself runs on EngineNative or EngineTshark.
+const EngineDecoders = "decoders"
+
 // Header is one HTTP header (order preserved, duplicates allowed).
 type Header struct {
 	Name  string

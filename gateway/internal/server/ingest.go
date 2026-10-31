@@ -29,6 +29,12 @@ import (
 
 const maxChunkBytes = 1 << 20 // advertised upload chunk size
 
+// maxSessionFileBytes bounds where a client may write within a session's pcap or key.log.
+// The write offset arrives on the wire, so this is what stops a crafted offset from
+// creating an enormous sparse file (and from wrapping negative past 2^63). It is far above
+// any real capture.
+const maxSessionFileBytes = 64 << 30 // 64 GiB
+
 // pidsCaptureKey is reported at CloseSession by the macOS per-process source: the pids its
 // browser's network process used while the capture ran, comma-separated. Mirrors
 // capture/capture_pktap/capture_pktap/pktap.py.
@@ -61,6 +67,13 @@ type Ingest struct {
 	// stopCapture ends the capture feeding a session, for when its flush fails and the
 	// session can no longer be recorded (ADR-0011 §5). Set by Register; nil in tests.
 	stopCapture func(ctx context.Context, sessionID string) error
+
+	// finalizing holds the sessions a finalizeSession call is working on. A close can race
+	// an upload stream that breaks right after it (the client cancels the stream once it
+	// has closed the session), and a second finalize of a session the first one closed
+	// would run a whole tshark batch decode and store a second analysis.
+	finalizeMu sync.Mutex
+	finalizing map[string]bool
 
 	// wsStates runs custom WebSocket decoders over pushed binary frames (the push path
 	// bypasses the tshark/Go decoders), keyed by the parent flow id.
@@ -305,6 +318,26 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 			break
 		}
 		if err != nil {
+			// The upload stream broke before the client finished it — the source process
+			// died, or the connection dropped — and the CloseSession that normally
+			// finalizes the capture will never arrive. Left alone the session stays OPEN
+			// forever and, for a live capture, its decode goroutine and reassembly buffers
+			// leak until the gateway restarts (the manual escape hatch is ForceCloseSession).
+			// Reclaim it: finalize what was captured, on a fresh context since the stream's
+			// is already cancelled. The real capture clients do not resume a dropped upload,
+			// so there is nothing being truncated here. A client that closed the session and
+			// then dropped the stream lands here too; finalizeSession refuses that one.
+			if sid != "" {
+				_, ferr := i.finalizeSession(context.Background(), sid)
+				switch {
+				case ferr == nil:
+					log.Printf("upload %s broke (%v); finalized what was captured", sid, err)
+				case errors.Is(ferr, errFinalizing), status.Code(ferr) == codes.FailedPrecondition:
+					// Closed, or being closed, by CloseSession: nothing to reclaim.
+				default:
+					log.Printf("upload %s broke (%v); auto-finalize failed too: %v", sid, err, ferr)
+				}
+			}
 			return err
 		}
 		switch m := msg.GetMsg().(type) {
@@ -326,7 +359,16 @@ func (i *Ingest) UploadCapture(stream grpc.ClientStreamingServer[trafficv1.Captu
 			if dir == trafficv1.FileKind_FILE_KIND_KEYLOG {
 				key = keylogKey(sid)
 			}
-			if err := i.obj.WriteAt(key, m.Data.GetPayload(), int64(m.Data.GetOffset())); err != nil {
+			// The offset is client-supplied and written straight to disk. Bound it: an
+			// absurd offset (up to 2^64) would otherwise create a huge sparse file and let a
+			// later full read of it allocate without limit, and a value past 2^63 would wrap
+			// negative in WriteAt. The ceiling is far above any real capture.
+			off := m.Data.GetOffset()
+			if off > maxSessionFileBytes || off+uint64(len(m.Data.GetPayload())) > maxSessionFileBytes {
+				return status.Errorf(codes.InvalidArgument,
+					"chunk offset %d beyond the %d-byte per-file ceiling", off, maxSessionFileBytes)
+			}
+			if err := i.obj.WriteAt(key, m.Data.GetPayload(), int64(off)); err != nil {
 				return status.Errorf(codes.Internal, "write chunk: %v", err)
 			}
 			n := uint64(len(m.Data.GetPayload()))
@@ -535,8 +577,7 @@ func (i *Ingest) ForceCloseSession(ctx context.Context, req *trafficv1.CloseSess
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "force close: %v", err)
 	}
-	if s := sess.GetStatus(); s == trafficv1.SessionStatus_SESSION_STATUS_CLOSED ||
-		s == trafficv1.SessionStatus_SESSION_STATUS_ERROR {
+	if s := sess.GetStatus(); finalized(s) {
 		return nil, status.Errorf(codes.FailedPrecondition, "session already finalized (%s)", s)
 	}
 
@@ -544,12 +585,13 @@ func (i *Ingest) ForceCloseSession(ctx context.Context, req *trafficv1.CloseSess
 	// e.g. the bundle has an outdated schema (an old stale session), or a partial/corrupt
 	// pcap — force-close must still unstick the session, so fall back to marking it closed
 	// in the catalog only (which doesn't touch the bundle DB). Live decode was already
-	// stopped inside finalizeSession.
-	if summary, err := i.finalizeSession(ctx, sid); err == nil {
-		return summary, nil
-	} else {
-		log.Printf("force close %s: finalize failed (%v); marking closed in the catalog", sid, err)
+	// stopped inside finalizeSession. Not when another call is finalizing it right now:
+	// marking it closed under that call would cut its persist short.
+	summary, err := i.finalizeSession(ctx, sid)
+	if err == nil || errors.Is(err, errFinalizing) {
+		return summary, err
 	}
+	log.Printf("force close %s: finalize failed (%v); marking closed in the catalog", sid, err)
 	if err := i.st.FinishSession(ctx, sid, trafficv1.SessionStatus_SESSION_STATUS_CLOSED, int(sess.GetFlowCount())); err != nil {
 		return nil, status.Errorf(codes.Internal, "force close: mark closed: %v", err)
 	}
@@ -560,7 +602,33 @@ func (i *Ingest) ForceCloseSession(ctx context.Context, req *trafficv1.CloseSess
 	return &trafficv1.SessionSummary{Session: closed}, nil
 }
 
+// errFinalizing refuses a finalize while another call is finalizing the same session.
+var errFinalizing = status.Error(codes.Aborted, "session is already being finalized")
+
+func finalized(s trafficv1.SessionStatus) bool {
+	return s == trafficv1.SessionStatus_SESSION_STATUS_CLOSED || s == trafficv1.SessionStatus_SESSION_STATUS_ERROR
+}
+
 func (i *Ingest) finalizeSession(ctx context.Context, sid string) (*trafficv1.SessionSummary, error) {
+	i.finalizeMu.Lock()
+	if i.finalizing[sid] {
+		i.finalizeMu.Unlock()
+		return nil, errFinalizing
+	}
+	if i.finalizing == nil {
+		i.finalizing = map[string]bool{}
+	}
+	i.finalizing[sid] = true
+	i.finalizeMu.Unlock()
+	defer func() {
+		i.finalizeMu.Lock()
+		delete(i.finalizing, sid)
+		i.finalizeMu.Unlock()
+	}()
+	if sess, err := i.st.GetSession(ctx, sid); err == nil && finalized(sess.GetStatus()) {
+		return nil, status.Errorf(codes.FailedPrecondition, "session already finalized (%s)", sess.GetStatus())
+	}
+
 	// Stop live decode (if any); ls holds the live flows not yet persisted.
 	ls := i.hub.stop(sid)
 

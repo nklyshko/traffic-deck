@@ -355,7 +355,7 @@ func readRespBody(resp *http.Response) (body []byte, encoding string) {
 			r = dr
 		}
 	}
-	data, _ := io.ReadAll(r)
+	data, _, _ := readAllCapped(r)        // bounded: a compressed body can expand without limit
 	_, _ = io.Copy(io.Discard, resp.Body) // drain what a failed decode left unread
 	if len(data) == 0 {
 		enc = "" // the field describes body bytes; there are none

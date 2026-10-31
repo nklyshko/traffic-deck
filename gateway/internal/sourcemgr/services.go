@@ -206,12 +206,7 @@ func (s *Services) realSpawn(name string, spec ServiceSpec) (*exec.Cmd, error) {
 	for k, v := range spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	// Setsid, not just Setpgid: a new session with no controlling terminal. We already
-	// redirect stdout/stderr to the child's log, but under one-command mode the terminal is
-	// the TUI's, and a child (or a grandchild) that writes straight to /dev/tty would scribble
-	// over the viewer regardless. No controlling terminal means /dev/tty can't be opened.
-	// The session leader's pid is still the process-group id, so killGroup(-pid) reaps it.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedProcAttr() // no controlling tty; killGroup(-pid) reaps it
 	out := logging.ChildLog(name)
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {

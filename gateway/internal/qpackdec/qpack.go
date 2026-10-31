@@ -77,7 +77,10 @@ func readString(prefixBits int, p []byte) (s string, n int, ok bool) {
 	}
 	huff := p[0]&(1<<uint(prefixBits)) != 0
 	l, ni, ok := readInt(prefixBits, p)
-	if !ok || uint64(ni)+l > uint64(len(p)) {
+	// Compare against what is left rather than adding: l is a wire integer that can reach
+	// 2^64-1, so uint64(ni)+l could wrap to a small value, pass, and then slice with a
+	// negative bound. (readInt consumed ni bytes of p, so len(p)-ni cannot underflow.)
+	if !ok || l > uint64(len(p)-ni) {
 		return "", 0, false
 	}
 	data := p[ni : ni+int(l)]
@@ -181,7 +184,7 @@ func (d *Decoder) encInsertNameRef(buf []byte) (int, error) {
 	}
 	var name string
 	if static {
-		if int(idx) >= len(staticTable) {
+		if idx >= uint64(len(staticTable)) {
 			return 0, errQPACK
 		}
 		name = staticTable[idx].Name
@@ -347,7 +350,7 @@ func (d *Decoder) fieldIndexed(base uint64, p []byte) (HeaderField, int, bool) {
 		return HeaderField{}, 0, false
 	}
 	if static {
-		if int(idx) >= len(staticTable) {
+		if idx >= uint64(len(staticTable)) {
 			return HeaderField{}, 0, false
 		}
 		return staticTable[idx], n, true
@@ -377,7 +380,7 @@ func (d *Decoder) fieldLiteralNameRef(base uint64, p []byte) (HeaderField, int, 
 	}
 	var name string
 	if static {
-		if int(idx) >= len(staticTable) {
+		if idx >= uint64(len(staticTable)) {
 			return HeaderField{}, 0, false
 		}
 		name = staticTable[idx].Name

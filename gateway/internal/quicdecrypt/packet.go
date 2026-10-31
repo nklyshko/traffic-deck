@@ -82,10 +82,18 @@ func parseLongHeader(data []byte) (h longHeader, ok bool) {
 	p += sl
 	if h.kind == pktInitial { // token
 		tl, n := readVarint(data[p:])
-		if n == 0 {
+		// A token cannot be longer than the datagram that carries it. The upper bound is
+		// what keeps int(tl) from overflowing and p from running off the end: without it a
+		// crafted token length (up to 2^62) advances p past len(data) and the readVarint
+		// below slices data[p:] out of range — a panic that, uncontained, takes the gateway
+		// down.
+		if n == 0 || tl > uint64(len(data)) {
 			return h, false
 		}
 		p += n + int(tl)
+		if p > len(data) {
+			return h, false
+		}
 	}
 	length, n := readVarint(data[p:])
 	if n == 0 {

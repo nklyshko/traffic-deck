@@ -86,21 +86,29 @@ func newPacketReader(r io.Reader) (packetReader, uint32, bool, error) {
 		opts := pcapgo.DefaultNgReaderOptions
 		opts.SkipUnknownVersion = true // tolerate newer sections rather than erroring out
 		lt := pcapngLinkType(br)
-		rd, err := pcapgo.NewNgReader(br, opts)
-		return rd, lt, false, err
+		// newNgGuard checks each block's lengths before pcapgo allocates (see pcapguard.go).
+		rd, err := newNgReader(newNgGuard(br), opts)
+		if err != nil {
+			return nil, lt, false, err
+		}
+		return &progressGuard{packetReader: &recoveringReader{packetReader: rd}}, lt, false, nil
 	}
 	// Classic header: the link type is a uint32 at offset 20, in the file's own byte order
 	// — which the magic identifies (0xA1 first = written big-endian).
 	var rawLinkType uint32
+	var bo binary.ByteOrder = binary.LittleEndian
+	if magic[0] == 0xA1 {
+		bo = binary.BigEndian
+	}
 	if hdr, err := br.Peek(24); err == nil {
-		if magic[0] == 0xA1 {
-			rawLinkType = binary.BigEndian.Uint32(hdr[20:24])
-		} else {
-			rawLinkType = binary.LittleEndian.Uint32(hdr[20:24])
-		}
+		rawLinkType = bo.Uint32(hdr[20:24])
 	}
 	rd, err := pcapgo.NewReader(br)
-	return rd, rawLinkType, true, err
+	if err != nil {
+		return nil, rawLinkType, true, err
+	}
+	return &progressGuard{packetReader: &recoveringReader{
+		packetReader: &classicGuard{Reader: rd, br: br, bo: bo}}}, rawLinkType, true, nil
 }
 
 // pcapngLinkType peeks the first Interface Description Block's LinkType without consuming
@@ -150,9 +158,9 @@ func mustPeekAtMost(br *bufio.Reader, n int) []byte {
 	return nil
 }
 
-// LiveTCPDecode reads a live pcap byte stream from r, reassembles TCP, decrypts TLS
-// using the (growing) key-log at keylogPath, and emits decoded flows and frames via
-// onFlow/onMsg. Returns when r reaches EOF (the capture's pipe is closed).
+// LiveTCPDecode is LiveDecode with only the flow and message sinks — a convenience kept for
+// callers (mostly tests) that do not want the undecoded-connection index. Despite the name
+// it decodes everything LiveDecode does, QUIC/HTTP/3 over UDP included.
 func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage)) error {
 	return LiveDecode(r, keylogPath, Sinks{OnFlow: onFlow, OnMsg: onMsg})
 }
@@ -166,7 +174,9 @@ type Sinks struct {
 	OnUndecoded func(*UndecodedConn)
 }
 
-// LiveDecode is LiveTCPDecode with every sink, including the undecoded-connection index.
+// LiveDecode reads a live pcap byte stream from r, reassembles TCP and QUIC, decrypts TLS
+// using the (growing) key-log at keylogPath, and emits decoded flows, frames and
+// undecoded connections to sinks. Returns when r reaches EOF (the capture's pipe closed).
 func LiveDecode(r io.Reader, keylogPath string, sinks Sinks) error {
 	reader, rawLinkType, classic, err := newPacketReader(r)
 	if err != nil {
@@ -582,6 +592,11 @@ func (s *tcpStream) route(fromClient bool, data []byte) {
 
 var crlfcrlf = []byte("\r\n\r\n")
 
+// maxConnectHeader bounds the proxy-CONNECT handshake buffers (connReq/connResp). Real
+// CONNECT request and response headers are well under this; it exists only so a peer that
+// never sends the header terminator cannot grow a per-connection buffer without limit.
+const maxConnectHeader = 64 << 10
+
 // feedConnect buffers a proxy CONNECT handshake until both the request and the proxy's
 // response headers are complete, emits a flow for the CONNECT (with the proxy attached),
 // and on a 2xx restarts decoding of the tunnelled bytes underneath as a fresh connection to
@@ -593,6 +608,15 @@ func (s *tcpStream) feedConnect(fromClient bool, data []byte) {
 		s.connReq = append(s.connReq, data...)
 	} else {
 		s.connResp = append(s.connResp, data...)
+	}
+	// A CONNECT request and the proxy's response headers are kilobytes at most. If the
+	// header terminator never arrives, these buffers would otherwise grow for the life of
+	// the connection on whatever a peer sends — one stream pinning unbounded memory. Past a
+	// generous ceiling this is not a CONNECT handshake we can parse: drop the stream.
+	if len(s.connReq) > maxConnectHeader || len(s.connResp) > maxConnectHeader {
+		s.dropped = true
+		s.connReq, s.connResp = nil, nil
+		return
 	}
 	for s.inConnect {
 		reqEnd := bytes.Index(s.connReq, crlfcrlf)

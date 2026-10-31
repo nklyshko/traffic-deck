@@ -500,10 +500,7 @@ func (m *Manager) realSpawn(ctx context.Context, name string, spec Spec) (*conn,
 	argv = append(argv, "--gateway", m.gatewayAddr, "--control", "127.0.0.1:0")
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), "GATEWAY_ADDR="+m.gatewayAddr)
-	// Setsid: a new session with no controlling terminal, so a source (or a grandchild it
-	// spawns — dumpcap, a browser) can't write to the TUI's /dev/tty behind our redirect.
-	// pgid still equals the leader's pid, so the group-kill in conn.close reaps it.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachedProcAttr() // no controlling tty; conn.close group-kills it
 	srcLog := logging.ChildLog(name)
 	cmd.Stderr = srcLog
 	stdout, err := cmd.StdoutPipe()

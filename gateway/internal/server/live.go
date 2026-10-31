@@ -171,6 +171,18 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		// Close the read end when decode exits so write() can't block forever if the
 		// decoder returns early (writes get ErrClosedPipe instead).
 		defer pr.Close()
+		// A hand-rolled wire parser that hits a malformed frame can panic (a short QUIC
+		// Initial, a bad TLS record). This goroutine is not a request handler, so an
+		// uncaught panic here would take the whole gateway — and every other live capture
+		// — down with it. Contain it: the session loses its remaining decode, the rest of
+		// the gateway keeps serving. The deferred pr.Close() above then makes every later
+		// write() return ErrClosedPipe rather than block, so the upload drains cleanly.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("session %s: live decode panicked, abandoning its decode (gateway stays up): %v",
+					sessionID, r)
+			}
+		}()
 		_ = decode.LiveDecode(pr, keylogPath, decode.Sinks{
 			OnFlow: ls.onFlow, OnMsg: ls.onMessage, OnUndecoded: ls.onUndecoded})
 	}()

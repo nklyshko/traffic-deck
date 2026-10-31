@@ -85,6 +85,52 @@ func TestForceCloseSessionToleratesOldBundle(t *testing.T) {
 	}
 }
 
+// A session is finalized once. A client that closes the session and then drops its upload
+// stream reaches finalizeSession a second time (the broken stream auto-finalizes); on a
+// captured session that second pass would run a tshark batch decode and store a second
+// analysis. And while one finalize runs, another (or a force close) must not start.
+func TestASessionIsFinalizedOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	st, err := store.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(st.Close)
+	obj, err := objstore.NewFSStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ing := &Ingest{st: st, obj: obj, hub: newLiveHub()}
+	open := func() string {
+		sid := uuid.NewString()
+		if err := st.CreateSession(ctx, store.NewSession{ID: sid, Source: "mitmproxy", Status: trafficv1.SessionStatus_SESSION_STATUS_OPEN}); err != nil {
+			t.Fatal(err)
+		}
+		return sid
+	}
+
+	sid := open()
+	if _, err := ing.CloseSession(ctx, &trafficv1.CloseSessionRequest{SessionId: sid}); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	if _, err := ing.finalizeSession(ctx, sid); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("second finalize: code=%v, want FailedPrecondition", status.Code(err))
+	}
+
+	busy := open()
+	ing.finalizing = map[string]bool{busy: true} // a finalize of it is in progress
+	if _, err := ing.CloseSession(ctx, &trafficv1.CloseSessionRequest{SessionId: busy}); err != errFinalizing {
+		t.Fatalf("close during a finalize: %v, want errFinalizing", err)
+	}
+	if _, err := ing.ForceCloseSession(ctx, &trafficv1.CloseSessionRequest{SessionId: busy}); err != errFinalizing {
+		t.Fatalf("force close during a finalize: %v, want errFinalizing", err)
+	}
+	if got, _ := st.GetSession(ctx, busy); got.GetStatus() != trafficv1.SessionStatus_SESSION_STATUS_OPEN {
+		t.Fatalf("force close marked a session closed under a running finalize: %v", got.GetStatus())
+	}
+}
+
 // writeOldFlowsBundle replaces a session's flows.sqlite with the flows table as it stood
 // before the proxy_* and later columns — the read path now requires them, so opening it
 // trips ErrSchemaOutdated.
