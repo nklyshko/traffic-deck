@@ -30,7 +30,7 @@ Two things pushed the exception to become the rule:
 
 Decode natively in Go, in-process, for everything; keep tshark as a secondary path.
 
-- The live pipeline (`decode.LiveTCPDecode`) reassembles TCP and QUIC with `gopacket`
+- The live pipeline (`decode.LiveDecode`) reassembles TCP and QUIC with `gopacket`
   (plus the Android NFLOG link type), decrypts TLS (SSL 3.0 – TLS 1.3) and QUIC from the
   key-log, and frames HTTP/1.1, HTTP/2, HTTP/3, WebSocket and custom raw-TCP —
   plaintext or TLS.

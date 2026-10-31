@@ -93,7 +93,7 @@ def test_an_unanswered_ip_stays_an_ip():
 def test_flows_carry_their_connection_id():
     f = tflow.tflow(resp=True)
     pf = build_flow(f)
-    assert pf.tcp_stream and pf.tcp_stream == f.client_conn.id[:8]
+    assert pf.connection_id and pf.connection_id == f.client_conn.id[:8]
 
 
 def test_udp_that_nothing_decodes_is_a_stream_flow():

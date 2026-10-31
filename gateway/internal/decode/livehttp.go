@@ -125,7 +125,7 @@ func tsMicros(t time.Time) int64 {
 type httpStream struct {
 	owner  *tcpStream
 	onFlow func(*Flow, bool)
-	onMsg  func(*WsMessage)
+	onMsg  func(*Message)
 	req    *byteStream
 	resp   *byteStream
 	wsMu   sync.Mutex // guards the upgraded flow across the two WebSocket reader goroutines
@@ -257,7 +257,7 @@ func isWSUpgrade(resp *http.Response) bool {
 }
 
 // startWebSocket reads RFC 6455 frames from both directions of the upgraded connection,
-// emitting a WsMessage per frame and refreshing the flow's frame count. The two
+// emitting a Message per frame and refreshing the flow's frame count. The two
 // goroutines share the flow under wsMu; they exit when close() shuts the byte streams.
 //
 // If a registered WebSocket binary decoder claims this Upgrade (by host/path/SNI), its
@@ -271,8 +271,8 @@ func (h *httpStream) startWebSocket(f *Flow, reqBr, respBr *bufio.Reader) {
 	}
 
 	emitMsg := func(opcode string, fromClient bool, payload, raw []byte, fields map[string]string) {
-		f.WsMessageCount++
-		h.onMsg(&WsMessage{
+		f.MessageCount++
+		h.onMsg(&Message{
 			ID:           uuid.NewString(),
 			FlowID:       f.ID,
 			TSUnixMicros: time.Now().UnixMicro(),
@@ -409,7 +409,7 @@ func (s *tcpStream) newHTTPFlow() *Flow {
 		SrcAddr:      s.clientAddr,
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
 		TLSDecrypted: !s.plaintext,
-		TCPStream:    s.connID,
+		ConnectionID: s.connID,
 		Proxy:        s.proxy, // set once a CONNECT tunnel is established; nil otherwise
 	}
 	s.applyTLSFingerprint(f)

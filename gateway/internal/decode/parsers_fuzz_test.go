@@ -58,6 +58,6 @@ func FuzzLiveDecode(f *testing.F) {
 	f.Add([]byte{0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0, 0})
 	f.Fuzz(func(_ *testing.T, pcap []byte) {
 		_ = LiveDecode(bytes.NewReader(pcap), "", Sinks{
-			OnFlow: func(*Flow, bool) {}, OnMsg: func(*WsMessage) {}, OnUndecoded: func(*UndecodedConn) {}})
+			OnFlow: func(*Flow, bool) {}, OnMsg: func(*Message) {}, OnUndecoded: func(*UndecodedConn) {}})
 	})
 }

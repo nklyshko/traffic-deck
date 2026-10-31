@@ -270,7 +270,7 @@ func (h *h2Stream) getLocked(id uint32) *h2flow {
 	if hf == nil {
 		f := h.owner.newHTTPFlow()
 		f.Protocol = "HTTP/2"
-		f.H2StreamID = strconv.FormatUint(uint64(id), 10)
+		f.StreamID = strconv.FormatUint(uint64(id), 10)
 		hf = &h2flow{id: id, flow: f}
 		h.flows[id] = hf
 	}

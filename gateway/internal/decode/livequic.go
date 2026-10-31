@@ -455,8 +455,8 @@ func (s *quicSession) newFlow(streamID uint64) *Flow {
 		SrcAddr:      s.clientAddr,
 		DstAddr:      addr(s.serverHost, "", s.serverPort),
 		TLSDecrypted: true,
-		TCPStream:    s.connID,
-		H2StreamID:   strconv.FormatUint(streamID, 10),
+		ConnectionID: s.connID,
+		StreamID:     strconv.FormatUint(streamID, 10),
 	}
 	if ch := s.conn.ClientHello; ch != nil {
 		f.JA3, f.JA4 = ch.JA3, ch.JA4

@@ -322,7 +322,7 @@ func (s *Store) SetGroups(ctx context.Context, sessionID string, recordIDs, addI
 
 // --- read attach ----------------------------------------------------------
 
-// annotatable is a record that can carry annotations — a Flow or a WsMessage. The
+// annotatable is a record that can carry annotations — a Flow or a Message. The
 // annotation store is keyed on record_id (the flow/message id), so one attach path serves
 // both; the adapters below bridge to the generated proto structs, which share no methods.
 type annotatable interface {
@@ -341,7 +341,7 @@ func (r flowRecord) setMark(color string)            { r.f.MarkColor = color }
 func (r flowRecord) addGroup(id string)              { r.f.GroupIds = append(r.f.GroupIds, id) }
 func (r flowRecord) addComment(c *trafficv1.Comment) { r.f.Comments = append(r.f.Comments, c) }
 
-type msgRecord struct{ m *trafficv1.WsMessage }
+type msgRecord struct{ m *trafficv1.Message }
 
 func (r msgRecord) addTag(id string)                { r.m.TagIds = append(r.m.TagIds, id) }
 func (r msgRecord) setFavorite()                    { r.m.Favorite = true }
@@ -357,7 +357,7 @@ func flowRecords(flows map[string]*trafficv1.Flow) map[string]annotatable {
 	return out
 }
 
-func msgRecords(msgs map[string]*trafficv1.WsMessage) map[string]annotatable {
+func msgRecords(msgs map[string]*trafficv1.Message) map[string]annotatable {
 	out := make(map[string]annotatable, len(msgs))
 	for id, m := range msgs {
 		out[id] = msgRecord{m}
@@ -387,7 +387,7 @@ func (s *Store) AttachFlowAnnotations(ctx context.Context, sessionID string, flo
 
 // AttachMessageAnnotations is the message-side counterpart of AttachFlowAnnotations, for
 // live WebSocket/parsed messages not yet persisted.
-func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, msgs ...*trafficv1.WsMessage) error {
+func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, msgs ...*trafficv1.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -395,7 +395,7 @@ func (s *Store) AttachMessageAnnotations(ctx context.Context, sessionID string, 
 	if err != nil {
 		return err
 	}
-	byID := make(map[string]*trafficv1.WsMessage, len(msgs))
+	byID := make(map[string]*trafficv1.Message, len(msgs))
 	for _, m := range msgs {
 		byID[m.Id] = m
 	}

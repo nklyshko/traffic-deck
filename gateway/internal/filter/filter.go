@@ -34,16 +34,16 @@ const (
 // are the one thing that costs a read: body terms sort last, so Body is only called for a
 // row that has already passed every cheaper term (ADR-0012 §2a).
 type Flow struct {
-	Scheme     string
-	Method     string
-	Authority  string
-	Path       string
-	Query      string
-	Status     uint32
-	ContentTyp string
-	TCPStream  string
-	H2StreamID string
-	Protocol   string // "HTTP/1.1", "HTTP/2", "HTTP/3", "TCP", "UDP", "DNS", or a decoder's ("MAX")
+	Scheme       string
+	Method       string
+	Authority    string
+	Path         string
+	Query        string
+	Status       uint32
+	ContentTyp   string
+	ConnectionID string
+	StreamID     string
+	Protocol     string // "HTTP/1.1", "HTTP/2", "HTTP/3", "TCP", "UDP", "DNS", or a decoder's ("MAX")
 
 	MarkColor  string
 	Favorite   bool
@@ -368,9 +368,9 @@ func fieldGetter(name string, tagNames, groupNames map[string]string) func(*Flow
 	case "~t":
 		return func(f *Flow) string { return f.ContentTyp }
 	case "~conn":
-		return func(f *Flow) string { return f.TCPStream }
+		return func(f *Flow) string { return f.ConnectionID }
 	case "~stream":
-		return func(f *Flow) string { return f.H2StreamID }
+		return func(f *Flow) string { return f.StreamID }
 	case "~proto":
 		return func(f *Flow) string { return f.Protocol }
 	case "~mark":

@@ -28,7 +28,7 @@ func newFlushSession(t *testing.T, st *store.Store, sid string) *liveSession {
 		flows:     map[string]*trafficv1.Flow{},
 		dflows:    map[string]*decode.Flow{},
 		subs:      map[int]*flowSub{},
-		msgSubs:   map[int]chan *trafficv1.WsMessage{},
+		msgSubs:   map[int]chan *trafficv1.Message{},
 		sessionID: sid, analysisID: "a1", sink: st,
 		dirty: map[string]struct{}{}, pending: map[string]struct{}{},
 		stored:    map[string]storedBody{},
@@ -185,7 +185,7 @@ func TestFlushWebSocketMessages(t *testing.T) {
 	ls.onFlow(&decode.Flow{ID: "f1", Method: "GET", Authority: "ws.example.com",
 		Path: "/socket", Status: 101, Websocket: true}, true)
 	for i := range 5 {
-		ls.onMessage(&decode.WsMessage{
+		ls.onMessage(&decode.Message{
 			ID: string(rune('a' + i)), FlowID: "f1", Opcode: "text",
 			FromClient: i%2 == 0, Payload: []byte(strings.Repeat("x", 10))})
 	}
@@ -218,7 +218,7 @@ var errSinkFull = errors.New("disk full")
 func (failingSink) InsertFlowWrites(context.Context, string, string, []store.FlowWrite) (int, error) {
 	return 0, errSinkFull
 }
-func (failingSink) InsertWsMessages(context.Context, string, []*decode.WsMessage) (int, error) {
+func (failingSink) InsertMessages(context.Context, string, []*decode.Message) (int, error) {
 	return 0, errSinkFull
 }
 
@@ -358,7 +358,7 @@ func TestFlushKeepsDecoderFields(t *testing.T) {
 	ls := newFlushSession(t, st, "s1")
 
 	ls.onFlow(&decode.Flow{ID: "f1", Protocol: "MAX", Authority: "api.oneme.ru"}, true)
-	ls.onMessage(&decode.WsMessage{
+	ls.onMessage(&decode.Message{
 		ID: "m1", FlowID: "f1", TSUnixMicros: 1, FromClient: true,
 		Opcode: "Auth", Payload: []byte(`{"token":"x"}`),
 		Metadata: map[string]string{

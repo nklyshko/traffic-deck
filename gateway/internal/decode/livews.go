@@ -3,7 +3,7 @@ package decode
 // Live WebSocket decode. A WebSocket connection begins as an HTTP/1.1 Upgrade request
 // answered with 101 Switching Protocols (handled in livehttp.go); after that both
 // directions carry RFC 6455 frames over the same TLS-decrypted byte streams. We parse
-// those frames here and emit a WsMessage per frame, like the custom-decoder live path.
+// those frames here and emit a Message per frame, like the custom-decoder live path.
 
 import (
 	"bufio"

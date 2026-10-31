@@ -150,8 +150,8 @@ func TestLiveHTTP2RequestResponse(t *testing.T) {
 		t.Fatalf("got %d flows, want 1", len(flows))
 	}
 	f := flows[0]
-	if f.Protocol != "HTTP/2" || f.H2StreamID != "1" {
-		t.Errorf("proto=%q h2stream=%q", f.Protocol, f.H2StreamID)
+	if f.Protocol != "HTTP/2" || f.StreamID != "1" {
+		t.Errorf("proto=%q h2stream=%q", f.Protocol, f.StreamID)
 	}
 	if f.Method != "GET" || f.Path != "/h2" || f.Query != "x=1" || f.Authority != "example.com" {
 		t.Errorf("req: method=%q path=%q query=%q authority=%q", f.Method, f.Path, f.Query, f.Authority)
@@ -311,12 +311,12 @@ func TestLiveHTTP2MultiplexedStreamsShareConnID(t *testing.T) {
 	}
 	// One connection (the id feedH2Until gives its tcpStream), two distinct streams.
 	for _, f := range flows {
-		if f.TCPStream != "7" {
+		if f.ConnectionID != "7" {
 			t.Errorf("stream %q: conn=%q, want %q — multiplexed flows share a connection",
-				f.H2StreamID, f.TCPStream, "7")
+				f.StreamID, f.ConnectionID, "7")
 		}
 	}
-	if a, b := flows[0].H2StreamID, flows[1].H2StreamID; a != "1" || b != "3" {
+	if a, b := flows[0].StreamID, flows[1].StreamID; a != "1" || b != "3" {
 		t.Errorf("h2 stream ids = %q,%q; want 1,3", a, b)
 	}
 }
@@ -517,7 +517,7 @@ func TestLiveHTTP2GoAwayFlagsUnprocessed(t *testing.T) {
 
 	flows := feedH2Until(t, client, sbuf.Bytes(), func(fs []*Flow) bool {
 		for _, f := range fs {
-			if f.H2StreamID == "3" && f.Error != "" {
+			if f.StreamID == "3" && f.Error != "" {
 				return true
 			}
 		}
@@ -525,7 +525,7 @@ func TestLiveHTTP2GoAwayFlagsUnprocessed(t *testing.T) {
 	})
 	byStream := map[string]*Flow{}
 	for _, f := range flows {
-		byStream[f.H2StreamID] = f
+		byStream[f.StreamID] = f
 	}
 	if s1 := byStream["1"]; s1 == nil || s1.Status != 200 || s1.Error != "" {
 		t.Errorf("stream 1 should be clean 200: %+v", s1)

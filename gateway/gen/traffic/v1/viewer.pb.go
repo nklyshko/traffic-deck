@@ -894,7 +894,7 @@ func (x *ListMessagesRequest) GetFilter() string {
 
 type MessageList struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
-	Messages []*WsMessage           `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	Messages []*Message             `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
 	// Advisory diagnostics for the request's filter, like FlowPage.hints.
 	Hints         []string `protobuf:"bytes,2,rep,name=hints,proto3" json:"hints,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -931,7 +931,7 @@ func (*MessageList) Descriptor() ([]byte, []int) {
 	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *MessageList) GetMessages() []*WsMessage {
+func (x *MessageList) GetMessages() []*Message {
 	if x != nil {
 		return x.Messages
 	}
@@ -1064,7 +1064,7 @@ func (x *MessageEvent) GetEvent() isMessageEvent_Event {
 	return nil
 }
 
-func (x *MessageEvent) GetMessageAdded() *WsMessage {
+func (x *MessageEvent) GetMessageAdded() *Message {
 	if x != nil {
 		if x, ok := x.Event.(*MessageEvent_MessageAdded); ok {
 			return x.MessageAdded
@@ -1096,7 +1096,7 @@ type isMessageEvent_Event interface {
 }
 
 type MessageEvent_MessageAdded struct {
-	MessageAdded *WsMessage `protobuf:"bytes,1,opt,name=message_added,json=messageAdded,proto3,oneof"`
+	MessageAdded *Message `protobuf:"bytes,1,opt,name=message_added,json=messageAdded,proto3,oneof"`
 }
 
 type MessageEvent_SessionEvent struct {
@@ -1430,13 +1430,13 @@ func (x *QuerySQLResponse) GetElapsedMicros() uint64 {
 }
 
 type UndecodedConnection struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	ConnId    string                 `protobuf:"bytes,1,opt,name=conn_id,json=connId,proto3" json:"conn_id,omitempty"`
-	Transport string                 `protobuf:"bytes,2,opt,name=transport,proto3" json:"transport,omitempty"` // tcp | udp
-	Client    string                 `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`       // host:port that opened it
-	Server    string                 `protobuf:"bytes,4,opt,name=server,proto3" json:"server,omitempty"`       // host:port it went to
-	Sni       string                 `protobuf:"bytes,5,opt,name=sni,proto3" json:"sni,omitempty"`
-	Ja4       string                 `protobuf:"bytes,6,opt,name=ja4,proto3" json:"ja4,omitempty"` // ClientHello fingerprint: compare with the app's own flows
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	ConnectionId string                 `protobuf:"bytes,1,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
+	Transport    string                 `protobuf:"bytes,2,opt,name=transport,proto3" json:"transport,omitempty"` // tcp | udp
+	Client       string                 `protobuf:"bytes,3,opt,name=client,proto3" json:"client,omitempty"`       // host:port that opened it
+	Server       string                 `protobuf:"bytes,4,opt,name=server,proto3" json:"server,omitempty"`       // host:port it went to
+	Sni          string                 `protobuf:"bytes,5,opt,name=sni,proto3" json:"sni,omitempty"`
+	Ja4          string                 `protobuf:"bytes,6,opt,name=ja4,proto3" json:"ja4,omitempty"` // ClientHello fingerprint: compare with the app's own flows
 	// no_key (handshake complete, no key-log secret), handshake_incomplete, unsupported,
 	// unparsed (bytes in hand, no parser recognised them), udp (not QUIC)
 	Reason        string `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -1479,9 +1479,9 @@ func (*UndecodedConnection) Descriptor() ([]byte, []int) {
 	return file_traffic_v1_viewer_proto_rawDescGZIP(), []int{20}
 }
 
-func (x *UndecodedConnection) GetConnId() string {
+func (x *UndecodedConnection) GetConnectionId() string {
 	if x != nil {
-		return x.ConnId
+		return x.ConnectionId
 	}
 	return ""
 }
@@ -1713,9 +1713,9 @@ func (x *UndecodedList) GetIndexed() bool {
 type GetConnectionBytesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ConnId        string                 `protobuf:"bytes,2,opt,name=conn_id,json=connId,proto3" json:"conn_id,omitempty"`
+	ConnectionId  string                 `protobuf:"bytes,2,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
 	FromClient    bool                   `protobuf:"varint,3,opt,name=from_client,json=fromClient,proto3" json:"from_client,omitempty"` // which direction's bytes
-	Offset        uint64                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`                           // into that direction's stream
+	ByteOffset    uint64                 `protobuf:"varint,4,opt,name=byte_offset,json=byteOffset,proto3" json:"byte_offset,omitempty"` // into that direction's stream
 	Limit         uint32                 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`                             // default and max 256 KiB
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1758,9 +1758,9 @@ func (x *GetConnectionBytesRequest) GetSessionId() string {
 	return ""
 }
 
-func (x *GetConnectionBytesRequest) GetConnId() string {
+func (x *GetConnectionBytesRequest) GetConnectionId() string {
 	if x != nil {
-		return x.ConnId
+		return x.ConnectionId
 	}
 	return ""
 }
@@ -1772,9 +1772,9 @@ func (x *GetConnectionBytesRequest) GetFromClient() bool {
 	return false
 }
 
-func (x *GetConnectionBytesRequest) GetOffset() uint64 {
+func (x *GetConnectionBytesRequest) GetByteOffset() uint64 {
 	if x != nil {
-		return x.Offset
+		return x.ByteOffset
 	}
 	return 0
 }
@@ -1787,12 +1787,12 @@ func (x *GetConnectionBytesRequest) GetLimit() uint32 {
 }
 
 type ConnectionBytes struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Data      []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
-	Offset    uint64                 `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
-	Total     uint64                 `protobuf:"varint,3,opt,name=total,proto3" json:"total,omitempty"`         // that direction's length as read (see truncated)
-	Truncated bool                   `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"` // the read stopped at its cap; total is a floor
-	Gaps      uint32                 `protobuf:"varint,5,opt,name=gaps,proto3" json:"gaps,omitempty"`           // holes the capture left in the TCP stream
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Data       []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	ByteOffset uint64                 `protobuf:"varint,2,opt,name=byte_offset,json=byteOffset,proto3" json:"byte_offset,omitempty"`
+	Total      uint64                 `protobuf:"varint,3,opt,name=total,proto3" json:"total,omitempty"`         // that direction's length as read (see truncated)
+	Truncated  bool                   `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"` // the read stopped at its cap; total is a floor
+	Gaps       uint32                 `protobuf:"varint,5,opt,name=gaps,proto3" json:"gaps,omitempty"`           // holes the capture left in the TCP stream
 	// What the TLS handshake says in the clear — ClientHello SNI/ALPN/JA4, ServerHello
 	// version and cipher, a TLS 1.2 server's certificate subjects — when it is TLS.
 	Tls           []string `protobuf:"bytes,6,rep,name=tls,proto3" json:"tls,omitempty"`
@@ -1837,9 +1837,9 @@ func (x *ConnectionBytes) GetData() []byte {
 	return nil
 }
 
-func (x *ConnectionBytes) GetOffset() uint64 {
+func (x *ConnectionBytes) GetByteOffset() uint64 {
 	if x != nil {
-		return x.Offset
+		return x.ByteOffset
 	}
 	return 0
 }
@@ -1941,18 +1941,18 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
 	"\aflow_id\x18\x02 \x01(\tR\x06flowId\x12\x16\n" +
-	"\x06filter\x18\x03 \x01(\tR\x06filter\"V\n" +
-	"\vMessageList\x121\n" +
-	"\bmessages\x18\x01 \x03(\v2\x15.traffic.v1.WsMessageR\bmessages\x12\x14\n" +
+	"\x06filter\x18\x03 \x01(\tR\x06filter\"T\n" +
+	"\vMessageList\x12/\n" +
+	"\bmessages\x18\x01 \x03(\v2\x13.traffic.v1.MessageR\bmessages\x12\x14\n" +
 	"\x05hints\x18\x02 \x03(\tR\x05hints\"\x7f\n" +
 	"\x15StreamMessagesRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
 	"\aflow_id\x18\x02 \x01(\tR\x06flowId\x12\x16\n" +
 	"\x06follow\x18\x03 \x01(\bR\x06follow\x12\x16\n" +
-	"\x06filter\x18\x04 \x01(\tR\x06filter\"\xd4\x01\n" +
-	"\fMessageEvent\x12<\n" +
-	"\rmessage_added\x18\x01 \x01(\v2\x15.traffic.v1.WsMessageH\x00R\fmessageAdded\x12?\n" +
+	"\x06filter\x18\x04 \x01(\tR\x06filter\"\xd2\x01\n" +
+	"\fMessageEvent\x12:\n" +
+	"\rmessage_added\x18\x01 \x01(\v2\x13.traffic.v1.MessageH\x00R\fmessageAdded\x12?\n" +
 	"\rsession_event\x18\x02 \x01(\v2\x18.traffic.v1.SessionEventH\x00R\fsessionEvent\x12<\n" +
 	"\ffilter_hints\x18\x03 \x01(\v2\x17.traffic.v1.FilterHintsH\x00R\vfilterHintsB\a\n" +
 	"\x05event\"#\n" +
@@ -1980,9 +1980,9 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\acolumns\x18\x01 \x03(\tR\acolumns\x12\x1b\n" +
 	"\trows_json\x18\x02 \x03(\tR\browsJson\x12\x1c\n" +
 	"\ttruncated\x18\x03 \x01(\bR\ttruncated\x12%\n" +
-	"\x0eelapsed_micros\x18\x04 \x01(\x04R\relapsedMicros\"\xd8\x02\n" +
-	"\x13UndecodedConnection\x12\x17\n" +
-	"\aconn_id\x18\x01 \x01(\tR\x06connId\x12\x1c\n" +
+	"\x0eelapsed_micros\x18\x04 \x01(\x04R\relapsedMicros\"\xe4\x02\n" +
+	"\x13UndecodedConnection\x12#\n" +
+	"\rconnection_id\x18\x01 \x01(\tR\fconnectionId\x12\x1c\n" +
 	"\ttransport\x18\x02 \x01(\tR\ttransport\x12\x16\n" +
 	"\x06client\x18\x03 \x01(\tR\x06client\x12\x16\n" +
 	"\x06server\x18\x04 \x01(\tR\x06server\x12\x10\n" +
@@ -2010,22 +2010,24 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\aindexed\x18\x04 \x01(\bR\aindexed\x1a;\n" +
 	"\rByReasonEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\xa2\x01\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\xb7\x01\n" +
 	"\x19GetConnectionBytesRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x17\n" +
-	"\aconn_id\x18\x02 \x01(\tR\x06connId\x12\x1f\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12#\n" +
+	"\rconnection_id\x18\x02 \x01(\tR\fconnectionId\x12\x1f\n" +
 	"\vfrom_client\x18\x03 \x01(\bR\n" +
-	"fromClient\x12\x16\n" +
-	"\x06offset\x18\x04 \x01(\x04R\x06offset\x12\x14\n" +
-	"\x05limit\x18\x05 \x01(\rR\x05limit\"\x97\x01\n" +
+	"fromClient\x12\x1f\n" +
+	"\vbyte_offset\x18\x04 \x01(\x04R\n" +
+	"byteOffset\x12\x14\n" +
+	"\x05limit\x18\x05 \x01(\rR\x05limit\"\xa0\x01\n" +
 	"\x0fConnectionBytes\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\x12\x16\n" +
-	"\x06offset\x18\x02 \x01(\x04R\x06offset\x12\x14\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1f\n" +
+	"\vbyte_offset\x18\x02 \x01(\x04R\n" +
+	"byteOffset\x12\x14\n" +
 	"\x05total\x18\x03 \x01(\x04R\x05total\x12\x1c\n" +
 	"\ttruncated\x18\x04 \x01(\bR\ttruncated\x12\x12\n" +
 	"\x04gaps\x18\x05 \x01(\rR\x04gaps\x12\x10\n" +
-	"\x03tls\x18\x06 \x03(\tR\x03tls2\x84\a\n" +
+	"\x03tls\x18\x06 \x03(\tR\x03tls2\x82\a\n" +
 	"\rViewerService\x12H\n" +
 	"\fListSessions\x12\x1f.traffic.v1.ListSessionsRequest\x1a\x17.traffic.v1.SessionList\x12A\n" +
 	"\n" +
@@ -2033,9 +2035,9 @@ const file_traffic_v1_viewer_proto_rawDesc = "" +
 	"\vStreamFlows\x12\x1e.traffic.v1.StreamFlowsRequest\x1a\x15.traffic.v1.FlowEvent0\x01\x127\n" +
 	"\aGetFlow\x12\x1a.traffic.v1.GetFlowRequest\x1a\x10.traffic.v1.Flow\x12>\n" +
 	"\aGetBody\x12\x1a.traffic.v1.GetBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12H\n" +
-	"\fListMessages\x12\x1f.traffic.v1.ListMessagesRequest\x1a\x17.traffic.v1.MessageList\x12B\n" +
+	"\fListMessages\x12\x1f.traffic.v1.ListMessagesRequest\x1a\x17.traffic.v1.MessageList\x12@\n" +
 	"\n" +
-	"GetMessage\x12\x1d.traffic.v1.GetMessageRequest\x1a\x15.traffic.v1.WsMessage\x12O\n" +
+	"GetMessage\x12\x1d.traffic.v1.GetMessageRequest\x1a\x13.traffic.v1.Message\x12O\n" +
 	"\x0eStreamMessages\x12!.traffic.v1.StreamMessagesRequest\x1a\x18.traffic.v1.MessageEvent0\x01\x12L\n" +
 	"\x0eGetMessageBody\x12!.traffic.v1.GetMessageBodyRequest\x1a\x15.traffic.v1.BodyChunk0\x01\x12E\n" +
 	"\bQuerySQL\x12\x1b.traffic.v1.QuerySQLRequest\x1a\x1c.traffic.v1.QuerySQLResponse\x12W\n" +
@@ -2089,7 +2091,7 @@ var file_traffic_v1_viewer_proto_goTypes = []any{
 	(*Flow)(nil),                      // 27: traffic.v1.Flow
 	(SessionStatus)(0),                // 28: traffic.v1.SessionStatus
 	(*DecodeProgress)(nil),            // 29: traffic.v1.DecodeProgress
-	(*WsMessage)(nil),                 // 30: traffic.v1.WsMessage
+	(*Message)(nil),                   // 30: traffic.v1.Message
 }
 var file_traffic_v1_viewer_proto_depIdxs = []int32{
 	26, // 0: traffic.v1.SessionList.sessions:type_name -> traffic.v1.Session
@@ -2103,8 +2105,8 @@ var file_traffic_v1_viewer_proto_depIdxs = []int32{
 	27, // 8: traffic.v1.FlowEvent.flow_updated:type_name -> traffic.v1.Flow
 	6,  // 9: traffic.v1.FlowEvent.session_event:type_name -> traffic.v1.SessionEvent
 	29, // 10: traffic.v1.FlowEvent.decode_progress:type_name -> traffic.v1.DecodeProgress
-	30, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.WsMessage
-	30, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.WsMessage
+	30, // 11: traffic.v1.MessageList.messages:type_name -> traffic.v1.Message
+	30, // 12: traffic.v1.MessageEvent.message_added:type_name -> traffic.v1.Message
 	6,  // 13: traffic.v1.MessageEvent.session_event:type_name -> traffic.v1.SessionEvent
 	15, // 14: traffic.v1.MessageEvent.filter_hints:type_name -> traffic.v1.FilterHints
 	20, // 15: traffic.v1.UndecodedList.connections:type_name -> traffic.v1.UndecodedConnection
@@ -2127,7 +2129,7 @@ var file_traffic_v1_viewer_proto_depIdxs = []int32{
 	27, // 32: traffic.v1.ViewerService.GetFlow:output_type -> traffic.v1.Flow
 	10, // 33: traffic.v1.ViewerService.GetBody:output_type -> traffic.v1.BodyChunk
 	12, // 34: traffic.v1.ViewerService.ListMessages:output_type -> traffic.v1.MessageList
-	30, // 35: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.WsMessage
+	30, // 35: traffic.v1.ViewerService.GetMessage:output_type -> traffic.v1.Message
 	14, // 36: traffic.v1.ViewerService.StreamMessages:output_type -> traffic.v1.MessageEvent
 	10, // 37: traffic.v1.ViewerService.GetMessageBody:output_type -> traffic.v1.BodyChunk
 	19, // 38: traffic.v1.ViewerService.QuerySQL:output_type -> traffic.v1.QuerySQLResponse

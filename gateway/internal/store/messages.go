@@ -15,8 +15,8 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
 
-// InsertWsMessages writes a session's decoded WebSocket frames into the bundle.
-func (s *Store) InsertWsMessages(ctx context.Context, sessionID string, msgs []*decode.WsMessage) (int, error) {
+// InsertMessages writes a session's decoded frames into the bundle.
+func (s *Store) InsertMessages(ctx context.Context, sessionID string, msgs []*decode.Message) (int, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
@@ -65,7 +65,7 @@ func (s *Store) InsertWsMessages(ctx context.Context, sessionID string, msgs []*
 
 // ListMessages returns the WebSocket frames of an Upgrade flow in timeline order,
 // with small payloads inline and large payloads as object_refs (fetch via GetMessageBody).
-func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*trafficv1.WsMessage, error) {
+func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*trafficv1.Message, error) {
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 	}
 	defer rows.Close()
 
-	var out []*trafficv1.WsMessage
+	var out []*trafficv1.Message
 	for rows.Next() {
 		var (
 			id, flow           string
@@ -90,7 +90,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 		if err := rows.Scan(&id, &flow, &frameNumber, &ts, &fromClient, &opcode, &payloadRef, &rawRef); err != nil {
 			return nil, err
 		}
-		m := &trafficv1.WsMessage{
+		m := &trafficv1.Message{
 			Id:           id,
 			SessionId:    sessionID,
 			FlowId:       flow,
@@ -108,7 +108,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	byID := make(map[string]*trafficv1.WsMessage, len(out))
+	byID := make(map[string]*trafficv1.Message, len(out))
 	for _, m := range out {
 		byID[m.Id] = m
 	}
@@ -124,7 +124,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID, flowID string) ([]*
 // attachMessageMetadata fills each message's Metadata map from the ws_message_metadata
 // side table — the decoder's own header fields. One whole-table read rather than a join
 // per row, the pattern attachMetadata already uses for flows.
-func attachMessageMetadata(ctx context.Context, db *sql.DB, msgs map[string]*trafficv1.WsMessage) error {
+func attachMessageMetadata(ctx context.Context, db *sql.DB, msgs map[string]*trafficv1.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -152,7 +152,7 @@ func attachMessageMetadata(ctx context.Context, db *sql.DB, msgs map[string]*tra
 
 // GetMessage returns a single WebSocket/parsed message with its annotations attached — the
 // message-side counterpart of GetFlow, used to refresh a row after an annotation change.
-func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*trafficv1.WsMessage, error) {
+func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*trafficv1.Message, error) {
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -174,7 +174,7 @@ func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*t
 	if err != nil {
 		return nil, err
 	}
-	m := &trafficv1.WsMessage{
+	m := &trafficv1.Message{
 		Id:           id,
 		SessionId:    sessionID,
 		FlowId:       flow,
@@ -187,19 +187,19 @@ func (s *Store) GetMessage(ctx context.Context, sessionID, messageID string) (*t
 	if rawRef.Valid && rawRef.String != "" {
 		m.Raw = s.loadBody(ctx, db, rawRef.String, "")
 	}
-	if err := s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.WsMessage{m.Id: m})); err != nil {
+	if err := s.attachAnnotations(ctx, db, msgRecords(map[string]*trafficv1.Message{m.Id: m})); err != nil {
 		return nil, err
 	}
-	if err := attachMessageMetadata(ctx, db, map[string]*trafficv1.WsMessage{m.Id: m}); err != nil {
+	if err := attachMessageMetadata(ctx, db, map[string]*trafficv1.Message{m.Id: m}); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-// GetWsMessageBody returns the full payload bytes of one WebSocket message. When raw is
+// GetMessageBody returns the full payload bytes of one WebSocket message. When raw is
 // true it returns the original undecoded bytes instead (available when a custom decoder
 // produced the message).
-func (s *Store) GetWsMessageBody(ctx context.Context, sessionID, messageID string, raw bool) ([]byte, error) {
+func (s *Store) GetMessageBody(ctx context.Context, sessionID, messageID string, raw bool) ([]byte, error) {
 	db, err := s.sessionDB(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -233,9 +233,9 @@ func (s *Store) GetWsMessageBody(ctx context.Context, sessionID, messageID strin
 	return b, nil
 }
 
-// attachWsCounts sets Websocket + WsMessageCount on the given flows from one grouped
+// attachMessageCounts sets Websocket + MessageCount on the given flows from one grouped
 // scan over ws_messages (cheap; the bundle is one session).
-func (s *Store) attachWsCounts(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
+func (s *Store) attachMessageCounts(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
 	if len(flows) == 0 {
 		return nil
 	}
@@ -253,7 +253,7 @@ func (s *Store) attachWsCounts(ctx context.Context, db *sql.DB, flows map[string
 		}
 		if f := flows[fid]; f != nil {
 			f.Websocket = true
-			f.WsMessageCount = uint32(n)
+			f.MessageCount = uint32(n)
 		}
 	}
 	return rows.Err()

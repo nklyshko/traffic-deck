@@ -55,8 +55,8 @@ type Flow struct {
 	ContentType     string
 	RequestBytes    uint64
 	TLSDecrypted    bool
-	TCPStream       string
-	H2StreamID      string
+	ConnectionID    string
+	StreamID        string
 	RequestHeaders  []Header
 	ResponseHeaders []Header
 
@@ -78,12 +78,12 @@ type Flow struct {
 	// END_STREAM. Persistence writes a live flow's bodies as final only once this is set.
 	BodyDone bool
 
-	// Websocket is set when this flow is an HTTP Upgrade that carries WebSocket
-	// frames; the frames themselves are WsMessages keyed by this flow's ID.
+	// Websocket is set when this flow owns Messages keyed by its ID: an HTTP Upgrade
+	// carrying WebSocket frames, or a custom-protocol connection's synthetic flow.
 	Websocket bool
-	// WsMessageCount tracks frames seen so far (for the live flow proto; the stored
-	// path recomputes it from ws_messages via attachWsCounts).
-	WsMessageCount uint32
+	// MessageCount tracks frames seen so far (for the live flow proto; the stored
+	// path recomputes it from ws_messages via attachMessageCounts).
+	MessageCount uint32
 
 	// Proxy is set when this connection went through an HTTP CONNECT or SOCKS proxy,
 	// detected from the captured handshake.
@@ -137,10 +137,10 @@ type FlowProxy struct {
 	Password string
 }
 
-// WsMessage is one decoded WebSocket frame, a message-shaped record distinct from
-// the request/response Flow model. It belongs to the Upgrade flow on its
-// TCP stream (FlowID).
-type WsMessage struct {
+// Message is one decoded frame — a WebSocket frame or one a custom decoder framed — a
+// message-shaped record distinct from the request/response Flow model. It belongs to
+// the flow on its connection (FlowID): the Upgrade flow for WebSocket.
+type Message struct {
 	ID           string
 	FlowID       string // parent Upgrade flow
 	FrameNumber  uint64
@@ -160,7 +160,7 @@ type Dataset struct {
 	Engine        string
 	TLSKeyLogUsed bool
 	Flows         []*Flow
-	Messages      []*WsMessage
+	Messages      []*Message
 	Warnings      []string
 	// Undecoded indexes the connections that produced no flow (native engine only).
 	Undecoded []*UndecodedConn
@@ -327,7 +327,7 @@ func Decode(ctx context.Context, tsharkPath, pcapPath, keylogPath string) (*Data
 }
 
 // DecodeNative decodes pcapPath entirely in-process in Go — the same pipeline the live
-// capture path uses (LiveTCPDecode): gopacket TCP/QUIC reassembly, in-process TLS
+// capture path uses (LiveDecode): gopacket TCP/QUIC reassembly, in-process TLS
 // decryption from keylogPath (when non-empty), and HTTP/1.1, HTTP/2, HTTP/3, WebSocket and
 // custom raw-TCP framing, with no tshark. It is the tshark-free alternative to Decode for
 // importing a stored pcap. Flows are returned in first-seen order; because the whole file
@@ -350,7 +350,7 @@ func DecodeNative(ctx context.Context, pcapPath, keylogPath string) (*Dataset, e
 		ds.Flows = append(ds.Flows, fl)
 		mu.Unlock()
 	}
-	onMsg := func(m *WsMessage) {
+	onMsg := func(m *Message) {
 		mu.Lock()
 		ds.Messages = append(ds.Messages, m)
 		mu.Unlock()

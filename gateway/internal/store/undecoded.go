@@ -32,9 +32,9 @@ func (s *Store) InsertUndecoded(ctx context.Context, sessionID string, conns []*
 	}
 	defer stmt.Close()
 	for _, c := range conns {
-		if _, err := stmt.ExecContext(ctx, c.ConnID, c.Transport, c.Client, c.Server, c.SNI, c.JA4,
-			c.Reason, c.Detail, int64(c.BytesUp), int64(c.BytesDown), c.FirstTS, c.LastTS, c.PcapOffset); err != nil {
-			return fmt.Errorf("insert undecoded %s: %w", c.ConnID, err)
+		if _, err := stmt.ExecContext(ctx, c.ConnectionID, c.Transport, c.Client, c.Server, c.SNI, c.JA4,
+			c.Reason, c.Detail, int64(c.BytesUp), int64(c.BytesDown), c.FirstTSMicros, c.LastTSMicros, c.PcapOffset); err != nil {
+			return fmt.Errorf("insert undecoded %s: %w", c.ConnectionID, err)
 		}
 	}
 	return tx.Commit()
@@ -68,8 +68,8 @@ func (s *Store) ListUndecoded(ctx context.Context, sessionID string) ([]*decode.
 func scanUndecoded(rows *sql.Rows) (*decode.UndecodedConn, error) {
 	var c decode.UndecodedConn
 	var up, down int64
-	err := rows.Scan(&c.ConnID, &c.Transport, &c.Client, &c.Server, &c.SNI, &c.JA4, &c.Reason,
-		&c.Detail, &up, &down, &c.FirstTS, &c.LastTS, &c.PcapOffset)
+	err := rows.Scan(&c.ConnectionID, &c.Transport, &c.Client, &c.Server, &c.SNI, &c.JA4, &c.Reason,
+		&c.Detail, &up, &down, &c.FirstTSMicros, &c.LastTSMicros, &c.PcapOffset)
 	c.BytesUp, c.BytesDown = uint64(up), uint64(down)
 	return &c, err
 }

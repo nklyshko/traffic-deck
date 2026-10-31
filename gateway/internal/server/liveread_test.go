@@ -55,7 +55,7 @@ func liveFixture(t *testing.T) (*store.Store, *liveHub, *liveSession, string) {
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},
 		subs:    map[int]*flowSub{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		msgSubs: map[int]chan *trafficv1.Message{},
 	}
 	hub.sessions[sid] = ls
 	return st, hub, ls, sid
@@ -70,11 +70,11 @@ func TestListMessagesLive(t *testing.T) {
 	fid, other := uuid.NewString(), uuid.NewString()
 	mid := uuid.NewString()
 	ls.publish(&trafficv1.Flow{Id: fid, Authority: "ws.example.com", Websocket: true}, true)
-	ls.publishMessage(&trafficv1.WsMessage{
+	ls.publishMessage(&trafficv1.Message{
 		Id: mid, FlowId: fid, Opcode: "text",
 		Payload: &trafficv1.Body{Size: 2, Content: &trafficv1.Body_Inline{Inline: []byte("hi")}},
 	})
-	ls.publishMessage(&trafficv1.WsMessage{Id: uuid.NewString(), FlowId: other, Opcode: "text"})
+	ls.publishMessage(&trafficv1.Message{Id: uuid.NewString(), FlowId: other, Opcode: "text"})
 	if _, err := st.AddComment(ctx, sid, mid, "look here"); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestGetMessageBodyLive(t *testing.T) {
 	st, hub, ls, sid := liveFixture(t)
 
 	mid := uuid.NewString()
-	ls.publishMessage(&trafficv1.WsMessage{
+	ls.publishMessage(&trafficv1.Message{
 		Id: mid, FlowId: uuid.NewString(), Opcode: "text",
 		Payload: &trafficv1.Body{Size: 7, Content: &trafficv1.Body_Inline{Inline: []byte("decoded")}},
 		Raw:     &trafficv1.Body{Size: 3, Content: &trafficv1.Body_Inline{Inline: []byte("raw")}},

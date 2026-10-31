@@ -34,7 +34,7 @@ func TestMessageAnnotations(t *testing.T) {
 		t.Fatal(err)
 	}
 	m1, m2 := uuid.NewString(), uuid.NewString()
-	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+	if _, err := st.InsertMessages(ctx, sid, []*decode.Message{
 		{ID: m1, FlowID: fid, TSUnixMicros: 100, FromClient: true, Opcode: "text", Payload: []byte("a")},
 		{ID: m2, FlowID: fid, TSUnixMicros: 200, FromClient: false, Opcode: "text", Payload: []byte("b")},
 	}); err != nil {
@@ -76,7 +76,7 @@ func TestMessageAnnotations(t *testing.T) {
 	if err != nil || len(msgs) != 2 {
 		t.Fatalf("list: n=%d err=%v", len(msgs), err)
 	}
-	byID := map[string]*trafficv1.WsMessage{msgs[0].Id: msgs[0], msgs[1].Id: msgs[1]}
+	byID := map[string]*trafficv1.Message{msgs[0].Id: msgs[0], msgs[1].Id: msgs[1]}
 	if byID[m1].GetMarkColor() != "red" || byID[m2].GetMarkColor() != "" {
 		t.Errorf("marks: m1=%q m2=%q", byID[m1].GetMarkColor(), byID[m2].GetMarkColor())
 	}

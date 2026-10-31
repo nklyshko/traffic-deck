@@ -8,7 +8,7 @@ import (
 func hexOf(s string) string { return hex.EncodeToString([]byte(s)) }
 
 // TestStitchWebsocket drives the stitcher directly: an HTTP/1.1 Upgrade request
-// followed by WebSocket frames on the same TCP stream become WsMessages bound to the
+// followed by WebSocket frames on the same TCP stream become Messages bound to the
 // Upgrade flow, with direction taken from the source address.
 func TestStitchWebsocket(t *testing.T) {
 	ds := &Dataset{}
@@ -56,13 +56,13 @@ func TestStitchWebsocket(t *testing.T) {
 }
 
 // TestStitchWebsocketLiveEmit checks the live path: onMessage fires per frame as it's
-// decoded, the parent flow's WsMessageCount increments, and the flow is marked ws —
+// decoded, the parent flow's MessageCount increments, and the flow is marked ws —
 // the data the live timeline + flow-row indicator rely on.
 func TestStitchWebsocketLiveEmit(t *testing.T) {
 	ds := &Dataset{}
-	var emitted []*WsMessage
+	var emitted []*Message
 	st := newStitcher(ds, nil)
-	st.onMessage = func(m *WsMessage) { emitted = append(emitted, m) }
+	st.onMessage = func(m *Message) { emitted = append(emitted, m) }
 
 	st.add(layers{
 		"tcp.stream": {"7"}, "frame.number": {"1"}, "frame.time_epoch": {"100.0"},
@@ -82,8 +82,8 @@ func TestStitchWebsocketLiveEmit(t *testing.T) {
 	if len(emitted) != 2 {
 		t.Fatalf("onMessage fired %d times, want 2", len(emitted))
 	}
-	if got := ds.Flows[0].WsMessageCount; got != 2 {
-		t.Fatalf("WsMessageCount = %d, want 2", got)
+	if got := ds.Flows[0].MessageCount; got != 2 {
+		t.Fatalf("MessageCount = %d, want 2", got)
 	}
 	if !ds.Flows[0].Websocket {
 		t.Fatal("flow not marked websocket")

@@ -82,7 +82,7 @@ message UploadAck {
 message FlowBatch {
   string session_id = 1;
   repeated Flow flows = 2;
-  repeated WsMessage messages = 3;
+  repeated Message messages = 3;
 }
 
 message PushAck {

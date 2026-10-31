@@ -72,11 +72,11 @@ func TestParseFollowRaw(t *testing.T) {
 // dissected as HTTP-family; httpStreamSet identifies them.
 func TestHTTPStreamSet(t *testing.T) {
 	ds := &Dataset{Flows: []*Flow{
-		{Protocol: "HTTP/2", TCPStream: "11"},                   // HTTP/2 to web.max.ru — skip custom
-		{Protocol: "HTTP/1.1", TCPStream: "8", Websocket: true}, // WS upgrade — MAX via WS path
-		{Protocol: "HTTP/3", TCPStream: "quic:abcd"},            // h3 — not a tcp stream
-		{Protocol: "MAX", TCPStream: "9"},                       // a genuine raw-TLS custom flow
-		{Protocol: "HTTP/2", TCPStream: ""},                     // no stream id — ignored
+		{Protocol: "HTTP/2", ConnectionID: "11"},                   // HTTP/2 to web.max.ru — skip custom
+		{Protocol: "HTTP/1.1", ConnectionID: "8", Websocket: true}, // WS upgrade — MAX via WS path
+		{Protocol: "HTTP/3", ConnectionID: "quic:abcd"},            // h3 — not a tcp stream
+		{Protocol: "MAX", ConnectionID: "9"},                       // a genuine raw-TLS custom flow
+		{Protocol: "HTTP/2", ConnectionID: ""},                     // no stream id — ignored
 	}}
 	got := httpStreamSet(ds)
 	if !got["11"] || !got["8"] {
@@ -103,7 +103,7 @@ func TestCustomFlowCarriesStreamTimestamp(t *testing.T) {
 	if f.TSUnixMicros != 1783685313000000 || f.FrameNumber != 42 {
 		t.Fatalf("ts=%d frame=%d, want 1783685313000000/42", f.TSUnixMicros, f.FrameNumber)
 	}
-	if f.Protocol != "MAX" || f.Authority != "api.oneme.ru" || f.TCPStream != "9" {
+	if f.Protocol != "MAX" || f.Authority != "api.oneme.ru" || f.ConnectionID != "9" {
 		t.Fatalf("flow = %+v", f)
 	}
 }

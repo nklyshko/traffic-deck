@@ -7,7 +7,7 @@ display filter that isolates the flow's connection, and the packet cursor parked
 request's frame.
 
 The connection is pinned by the flow's address/port 4-tuple rather than by its
-`tcp_stream` id. The id only agrees with Wireshark's `tcp.stream` index on the tshark
+`connection_id`. The id only agrees with Wireshark's `tcp.stream` index on the tshark
 decode path, which reads it from tshark; the native decoder numbers the connections *it*
 tracks, skipping the ones it doesn't (and sharing the counter with QUIC), so its ids
 address a different connection in Wireshark — measured against the sample capture, 58 of
@@ -48,7 +48,7 @@ def build_display_filter(flow) -> str:
     conn = _connection_filter(flow)
     if not conn:
         return ""
-    sid = (flow.h2_stream_id or "").strip()
+    sid = (flow.stream_id or "").strip()
     if sid.isdigit() and (flow.protocol or "").startswith("HTTP/2"):
         return f"{conn} and (http2.streamid eq {sid} or not http2)"
     return conn
@@ -58,7 +58,7 @@ def _connection_filter(flow) -> str:
     """The flow's connection, as its address/port 4-tuple — the same packets Wireshark's
     own conversation filter selects. (Two connections that reused a client port within one
     capture would fold together; nothing in a flow distinguishes them.)"""
-    udp = (flow.protocol or "").startswith("HTTP/3") or (flow.tcp_stream or "").startswith("quic:")
+    udp = (flow.protocol or "").startswith("HTTP/3") or (flow.connection_id or "").startswith("quic:")
     transport = "udp" if udp else "tcp"
     terms: list[str] = []
     for a in (flow.src_addr, flow.dst_addr):
@@ -94,9 +94,9 @@ def describe_filter(flow) -> str:
     """Short human tag for the notification: what the filter pinned the view to. Names the
     flow's own connection id (what the Conn column shows), not the packet-level 4-tuple the
     filter is written in."""
-    conn = (flow.tcp_stream or "").strip()
+    conn = (flow.connection_id or "").strip()
     where = f"conn {conn}" if conn else (flow.dst_addr or "this connection")
-    sid = (flow.h2_stream_id or "").strip()
+    sid = (flow.stream_id or "").strip()
     if sid.isdigit() and (flow.protocol or "").startswith("HTTP/2"):
         return f"{where} · stream {sid}"
     return where

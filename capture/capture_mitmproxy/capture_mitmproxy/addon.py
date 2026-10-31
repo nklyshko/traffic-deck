@@ -156,7 +156,7 @@ def _sni(flow) -> str:
 
 
 def _conn_id(client) -> str:
-    """The connection id a flow is grouped by (tcp_stream, the viewer's conn column):
+    """The connection id a flow is grouped by (connection_id, the viewer's conn column):
     mitmproxy's client connection, which every request, stream or lookup on it shares."""
     return (getattr(client, "id", "") or "")[:8]
 
@@ -249,7 +249,7 @@ def build_flow(flow: http.HTTPFlow, names: DnsNames | None = None) -> cp.Flow:
         tls_decrypted=(req.scheme == "https"),
         user_agent=req.headers.get("user-agent", ""),
         websocket=_is_ws_upgrade(resp),
-        tcp_stream=_conn_id(flow.client_conn),
+        connection_id=_conn_id(flow.client_conn),
     )
     for k, v in req.headers.fields:
         pf.request_headers.append(cp.Header(name=_s(k), value=_s(v)))
@@ -332,7 +332,7 @@ def build_stream_flow(flow, names: DnsNames | None = None) -> cp.Flow:
         ts_unix_micros=int((flow.client_conn.timestamp_start or 0) * 1_000_000),
         tls_decrypted=bool(getattr(flow.server_conn, "tls_established", False)),
         websocket=True,
-        tcp_stream=_conn_id(flow.client_conn),
+        connection_id=_conn_id(flow.client_conn),
     )
     _hostname_metadata(pf, hostname, _sni(flow))
     pf.metadata[mk.CONN_OUTCOME] = UDP_UNDECODED if is_udp else TCP_PASSTHROUGH
@@ -363,7 +363,7 @@ def build_dns_flow(flow: dns.DNSFlow) -> cp.Flow:
         src_addr=_peer(flow.client_conn.peername),
         dst_addr=_peer(flow.server_conn.address),
         ts_unix_micros=int((req.timestamp or flow.client_conn.timestamp_start or 0) * 1_000_000),
-        tcp_stream=_conn_id(flow.client_conn),
+        connection_id=_conn_id(flow.client_conn),
     )
     if resp:
         rcode = dns_rcodes.to_str(resp.response_code)
@@ -408,7 +408,7 @@ def build_conn_flow(client: connection.Client, outcome: str, error: str,
         dst_addr=_peer(dst),
         ts_unix_micros=int((client.timestamp_start or 0) * 1_000_000),
         duration_micros=max(int((end - (client.timestamp_start or end)) * 1_000_000), 0),
-        tcp_stream=_conn_id(client),
+        connection_id=_conn_id(client),
         error=error,
     )
     _hostname_metadata(pf, hostname, _s(client.sni or ""))
@@ -421,12 +421,12 @@ def _ws_opcode(msg) -> str:
     return "text" if name.upper() == "TEXT" else "binary"
 
 
-def _message(flow_id: str, from_client: bool, opcode: str, content: bytes, ts: float) -> cp.WsMessage:
+def _message(flow_id: str, from_client: bool, opcode: str, content: bytes, ts: float) -> cp.Message:
     # Same bound as bodies: one giant frame past the gateway's gRPC limit would fail the
     # push and lose the message. The size describes the bytes kept, as for bodies, and a cut
     # message says so in its metadata.
     content = content or b""
-    msg = cp.WsMessage(
+    msg = cp.Message(
         id=str(uuid.uuid4()),
         flow_id=flow_id,
         from_client=bool(from_client),

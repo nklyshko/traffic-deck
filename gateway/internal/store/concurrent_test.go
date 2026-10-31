@@ -43,8 +43,8 @@ func TestConcurrentWritesNoBusy(t *testing.T) {
 				errs <- err
 				return
 			}
-			m := &decode.WsMessage{ID: uuid.NewString(), FlowID: f.ID, Opcode: "binary", Payload: []byte("x")}
-			if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{m}); err != nil {
+			m := &decode.Message{ID: uuid.NewString(), FlowID: f.ID, Opcode: "binary", Payload: []byte("x")}
+			if _, err := st.InsertMessages(ctx, sid, []*decode.Message{m}); err != nil {
 				errs <- err
 			}
 		}(k)

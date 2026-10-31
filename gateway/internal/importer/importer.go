@@ -102,7 +102,7 @@ func Finalize(ctx context.Context, st *store.Store, engine, tsharkPath, sessionI
 		return nil, fmt.Errorf("insert flows: %w", err)
 	}
 
-	if _, err := st.InsertWsMessages(ctx, sessionID, ds.Messages); err != nil {
+	if _, err := st.InsertMessages(ctx, sessionID, ds.Messages); err != nil {
 		_ = st.FinishSession(ctx, sessionID, trafficv1.SessionStatus_SESSION_STATUS_ERROR, 0)
 		return nil, fmt.Errorf("insert ws messages: %w", err)
 	}
@@ -152,7 +152,7 @@ func RedecodeCustom(ctx context.Context, st *store.Store, engine, tsharkPath, se
 			keep[f.ID] = true
 		}
 	}
-	var msgs []*decode.WsMessage
+	var msgs []*decode.Message
 	for _, m := range ds.Messages {
 		if keep[m.FlowID] {
 			msgs = append(msgs, m)
@@ -173,7 +173,7 @@ func RedecodeCustom(ctx context.Context, st *store.Store, engine, tsharkPath, se
 	if _, err := st.InsertFlows(ctx, sessionID, analysisID, flows); err != nil {
 		return 0, fmt.Errorf("insert flows: %w", err)
 	}
-	if _, err := st.InsertWsMessages(ctx, sessionID, msgs); err != nil {
+	if _, err := st.InsertMessages(ctx, sessionID, msgs); err != nil {
 		return 0, fmt.Errorf("insert ws messages: %w", err)
 	}
 	return len(flows), nil

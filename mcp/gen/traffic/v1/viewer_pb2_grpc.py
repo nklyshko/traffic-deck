@@ -69,7 +69,7 @@ class ViewerServiceStub(object):
         self.GetMessage = channel.unary_unary(
                 '/traffic.v1.ViewerService/GetMessage',
                 request_serializer=traffic_dot_v1_dot_viewer__pb2.GetMessageRequest.SerializeToString,
-                response_deserializer=traffic_dot_v1_dot_common__pb2.WsMessage.FromString,
+                response_deserializer=traffic_dot_v1_dot_common__pb2.Message.FromString,
                 _registered_method=True)
         self.StreamMessages = channel.unary_stream(
                 '/traffic.v1.ViewerService/StreamMessages',
@@ -234,7 +234,7 @@ def add_ViewerServiceServicer_to_server(servicer, server):
             'GetMessage': grpc.unary_unary_rpc_method_handler(
                     servicer.GetMessage,
                     request_deserializer=traffic_dot_v1_dot_viewer__pb2.GetMessageRequest.FromString,
-                    response_serializer=traffic_dot_v1_dot_common__pb2.WsMessage.SerializeToString,
+                    response_serializer=traffic_dot_v1_dot_common__pb2.Message.SerializeToString,
             ),
             'StreamMessages': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamMessages,
@@ -451,7 +451,7 @@ class ViewerService(object):
             target,
             '/traffic.v1.ViewerService/GetMessage',
             traffic_dot_v1_dot_viewer__pb2.GetMessageRequest.SerializeToString,
-            traffic_dot_v1_dot_common__pb2.WsMessage.FromString,
+            traffic_dot_v1_dot_common__pb2.Message.FromString,
             options,
             channel_credentials,
             insecure,

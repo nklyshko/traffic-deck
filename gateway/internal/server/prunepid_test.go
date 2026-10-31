@@ -51,7 +51,7 @@ func TestPersistLiveDropsForeignFlows(t *testing.T) {
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},
 		subs:    map[int]*flowSub{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		msgSubs: map[int]chan *trafficv1.Message{},
 	}
 	ls.onFlow(&decode.Flow{
 		ID: uuid.NewString(), Authority: "ours.example", Protocol: "HTTP/2",
@@ -108,7 +108,7 @@ func TestPersistLiveKeepsEverythingWithoutEvidence(t *testing.T) {
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},
 		subs:    map[int]*flowSub{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		msgSubs: map[int]chan *trafficv1.Message{},
 	}
 	ls.onFlow(&decode.Flow{
 		ID: uuid.NewString(), Authority: "a.example", Protocol: "HTTP/2",

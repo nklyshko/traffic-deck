@@ -16,8 +16,8 @@ tui/run.sh                                 # GATEWAY_ADDR overridable
 | Sessions | `a` new capture (pick a source, then step through its options — binary, profile, … — and start) · `s` stop the focused capture · `X` start/stop the MCP server · `L` gateway/child logs · `U` check for updates · `r` refresh · `n` rename · `g` group · `e` export as a `.tar.gz` bundle · `i` import a bundle · `I` import a pcap · `c` force-close a session left open · `d` delete |
 | Workspace (tabs) | `o` open another session in a tab · `[` / `]` prev/next tab · `w` close tab |
 | Flow list | `f` filter (see [filters.md](filters.md)) · `C` toggle optional columns (`Conn`/`Stream`, and any source metadata key) · `c` mark/compare two requests across sessions · `l` follow new flows as they arrive · `space` select / `D` deselect · `t` tag · `F` favorite · `m` color-mark · `n` comment · `g` group · `M` WebSocket timeline for a `⇅` flow · `W` open the request in Wireshark |
-| Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` ws messages · `W` open in Wireshark |
-| WS messages | `f` filter by payload/opcode/direction (the message dialect — see [filters.md](filters.md#filtering-a-message-timeline)) · `C` toggle decoder-field columns · `space` select / `D` deselect · `t` `F` `m` `n` `g` annotate · `l` follow new |
+| Flow detail | `b` / `B` view request/response body · `r` / `s` save request/response body · `x` export curl · `w` export raw request+response · `H` export TLS ClientHellos · `M` messages (WebSocket and decoder frames) · `W` open in Wireshark |
+| Messages | `f` filter by payload/opcode/direction (the message dialect — see [filters.md](filters.md#filtering-a-message-timeline)) · `C` toggle decoder-field columns · `space` select / `D` deselect · `t` `F` `m` `n` `g` annotate · `l` follow new |
 | Compare A/B | `s` switch A/B · `h` copy header order · `p` copy pseudo-header order · `k` copy cookie order |
 
 Annotation keys act on the selection if there is one, else on the focused row. Bodies

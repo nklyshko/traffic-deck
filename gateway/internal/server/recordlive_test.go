@@ -34,7 +34,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},
 		subs:    map[int]*flowSub{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		msgSubs: map[int]chan *trafficv1.Message{},
 	}
 
 	// Past store.InlineBlobMax, so the body spills out of the bundle and must still come back whole.
@@ -48,7 +48,7 @@ func TestPersistLiveFullBodies(t *testing.T) {
 
 	f2 := uuid.NewString()
 	ls.onFlow(&decode.Flow{ID: f2, Authority: "ws.example.com", Protocol: "HTTP/1.1", Websocket: true}, true)
-	ls.publishMessage(&trafficv1.WsMessage{
+	ls.publishMessage(&trafficv1.Message{
 		Id: uuid.NewString(), FlowId: f2, Opcode: "text",
 		Payload: &trafficv1.Body{Size: 2, Content: &trafficv1.Body_Inline{Inline: []byte("hi")}},
 	})

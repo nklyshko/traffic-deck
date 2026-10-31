@@ -86,7 +86,6 @@ func newPacketReader(r io.Reader) (packetReader, uint32, bool, error) {
 		opts := pcapgo.DefaultNgReaderOptions
 		opts.SkipUnknownVersion = true // tolerate newer sections rather than erroring out
 		lt := pcapngLinkType(br)
-		// newNgGuard checks each block's lengths before pcapgo allocates (see pcapguard.go).
 		rd, err := newNgReader(newNgGuard(br), opts)
 		if err != nil {
 			return nil, lt, false, err
@@ -162,19 +161,12 @@ func mustPeekAtMost(br *bufio.Reader, n int) []byte {
 	return nil
 }
 
-// LiveTCPDecode is LiveDecode with only the flow and message sinks — a convenience kept for
-// callers (mostly tests) that do not want the undecoded-connection index. Despite the name
-// it decodes everything LiveDecode does, QUIC/HTTP/3 over UDP included.
-func LiveTCPDecode(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*WsMessage)) error {
-	return LiveDecode(r, keylogPath, Sinks{OnFlow: onFlow, OnMsg: onMsg})
-}
-
 // Sinks receive what a live decode produces. OnUndecoded is called once per connection
 // that ended without a flow (see UndecodedConn) — from the packet loop, or after it for
 // what is only known once every parser has drained; nil discards them.
 type Sinks struct {
 	OnFlow      func(*Flow, bool)
-	OnMsg       func(*WsMessage)
+	OnMsg       func(*Message)
 	OnUndecoded func(*UndecodedConn)
 }
 
@@ -188,7 +180,7 @@ func LiveDecode(r io.Reader, keylogPath string, sinks Sinks) error {
 	}
 	onMsg, onUndecoded := sinks.OnMsg, sinks.OnUndecoded
 	if onMsg == nil {
-		onMsg = func(*WsMessage) {} // the WebSocket/custom paths call it unconditionally
+		onMsg = func(*Message) {} // the WebSocket/custom paths call it unconditionally
 	}
 	if onUndecoded == nil {
 		onUndecoded = func(*UndecodedConn) {}
@@ -314,7 +306,7 @@ func packetOf(data []byte, linkType gplayers.LinkType, rawLinkType uint32) gopac
 type liveTCP struct {
 	keylog      *tlsdecrypt.Keylog
 	onFlow      func(*Flow, bool)
-	onMsg       func(*WsMessage)
+	onMsg       func(*Message)
 	onUndecoded func(*UndecodedConn)
 	quic        map[string]*quicConnState // QUIC connections keyed by canonical UDP 4-tuple
 	udp         map[string]*udpConv       // non-QUIC UDP conversations, same key
@@ -895,8 +887,8 @@ func (s *tcpStream) feedCustom(fromClient bool, plain []byte) {
 			s.flowEmitted = true
 			log.Printf("live decode: %s first frame on %s (%d bytes)", s.flow.Protocol, s.conn.SNI(), len(msg.Payload))
 		}
-		s.flow.WsMessageCount++
-		s.lt.onMsg(&WsMessage{
+		s.flow.MessageCount++
+		s.lt.onMsg(&Message{
 			ID:           uuid.NewString(),
 			FlowID:       s.flow.ID,
 			TSUnixMicros: tsMicros(s.curTS),

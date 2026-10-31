@@ -20,7 +20,7 @@ def flow(**kw):
         method="GET", authority="api.example.com", path="/v1", query="", scheme="https",
         status=200, protocol="HTTP/2", request_headers=[], response_headers=[],
         mark_color="", tag_ids=[], group_ids=[], favorite=False, comments=[],
-        websocket=False, ws_message_count=0, proxy=proxy(), metadata={}, error="",
+        websocket=False, message_count=0, proxy=proxy(), metadata={}, error="",
         ts_unix_micros=0, duration_micros=0, http2_fingerprint="",
         ja3="", ja4="", tls_client_hello="", redirect_location="", redirected_from_id="",
     )
@@ -216,7 +216,7 @@ def test_editor_command_falls_back_to_gui_opener(monkeypatch):
 def test_flags_cell():
     f = flow(favorite=True, mark_color="red", tag_ids=["a", "b"],
              comments=[types.SimpleNamespace(body="x")], group_ids=["g"],
-             websocket=True, ws_message_count=3)
+             websocket=True, message_count=3)
     plain = render.flags_cell(f, selected=True).plain
     assert "✓" in plain and "★" in plain and "●" in plain
     assert "#2" in plain and "💬" in plain and "⬡" in plain and "⇅3" in plain

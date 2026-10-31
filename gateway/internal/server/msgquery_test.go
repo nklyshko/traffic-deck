@@ -71,7 +71,7 @@ func msgFixture(t *testing.T) (*store.Store, string, string) {
 	if err := st.CreateSession(ctx, store.NewSession{ID: sid}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+	if _, err := st.InsertMessages(ctx, sid, []*decode.Message{
 		{ID: "m1", FlowID: fid, FrameNumber: 1, TSUnixMicros: 1, FromClient: true,
 			Opcode: "text", Payload: []byte(`{"op":"subscribe","channel":"trades"}`)},
 		{ID: "m2", FlowID: fid, FrameNumber: 2, TSUnixMicros: 2, FromClient: false,
@@ -132,7 +132,7 @@ func TestListMessagesMatchesASpilledPayload(t *testing.T) {
 	ctx := context.Background()
 	st, sid, fid := msgFixture(t)
 	big := append(bytes.Repeat([]byte("A"), store.InlineBlobMax+1), []byte("needle")...)
-	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+	if _, err := st.InsertMessages(ctx, sid, []*decode.Message{
 		{ID: "big", FlowID: fid, FrameNumber: 4, TSUnixMicros: 4, Opcode: "text", Payload: big},
 	}); err != nil {
 		t.Fatal(err)
@@ -210,7 +210,7 @@ func TestStreamMessagesFiltersBackfillAndLiveFrames(t *testing.T) {
 	fid := uuid.NewString()
 
 	// One stored frame each way, already flushed to the bundle.
-	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+	if _, err := st.InsertMessages(ctx, sid, []*decode.Message{
 		{ID: "stored-text", FlowID: fid, FrameNumber: 1, TSUnixMicros: 1,
 			Opcode: "text", Payload: []byte("hello trades")},
 		{ID: "stored-ping", FlowID: fid, FrameNumber: 2, TSUnixMicros: 2, Opcode: "ping"},
@@ -233,10 +233,10 @@ func TestStreamMessagesFiltersBackfillAndLiveFrames(t *testing.T) {
 		return len(ls.msgSubs) > 0
 	})
 
-	ls.publishMessage(&trafficv1.WsMessage{
+	ls.publishMessage(&trafficv1.Message{
 		Id: "live-text", FlowId: fid, Opcode: "text",
 		Payload: &trafficv1.Body{Size: 2, Content: &trafficv1.Body_Inline{Inline: []byte("xy")}}})
-	ls.publishMessage(&trafficv1.WsMessage{Id: "live-pong", FlowId: fid, Opcode: "pong"})
+	ls.publishMessage(&trafficv1.Message{Id: "live-pong", FlowId: fid, Opcode: "pong"})
 
 	waitFor(t, func() bool { return len(s.added()) == 2 })
 	if got := s.added(); !equalStrings(got, []string{"stored-text", "live-text"}) {
@@ -287,7 +287,7 @@ func equalStrings(a, b []string) bool {
 func TestMessageMetadataRoundTripsAndFilters(t *testing.T) {
 	ctx := context.Background()
 	st, sid, fid := msgFixture(t)
-	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+	if _, err := st.InsertMessages(ctx, sid, []*decode.Message{
 		{ID: "d1", FlowID: fid, FrameNumber: 5, TSUnixMicros: 5, FromClient: true,
 			Opcode: "Auth", Payload: []byte("{}"),
 			Metadata: map[string]string{"max.cmd": "Request(0)", "max.seq": "17"}},

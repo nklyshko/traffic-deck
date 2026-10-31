@@ -11,18 +11,18 @@ import "time"
 // is indexed: enough to tell them apart (SNI, JA4, volume, time) and to find the bytes in
 // capture.pcap again without copying them.
 type UndecodedConn struct {
-	ConnID    string // the live decoder's connection id ("quic:" or "udp:" prefixed for UDP)
-	Transport string // "tcp" or "udp"
-	Client    string // host:port that opened it
-	Server    string // host:port it went to
-	SNI       string
-	JA4       string // the ClientHello fingerprint, to compare with the app's own connections
-	Reason    string // see the Undecoded* constants
-	Detail    string // the decoder's own words, e.g. an unsupported suite's name
-	BytesUp   uint64 // payload bytes client→server
-	BytesDown uint64 // payload bytes server→client
-	FirstTS   int64  // unix micros of its first packet
-	LastTS    int64  // unix micros of its last packet
+	ConnectionID  string // the live decoder's connection id ("quic:" or "udp:" prefixed for UDP)
+	Transport     string // "tcp" or "udp"
+	Client        string // host:port that opened it
+	Server        string // host:port it went to
+	SNI           string
+	JA4           string // the ClientHello fingerprint, to compare with the app's own connections
+	Reason        string // see the Undecoded* constants
+	Detail        string // the decoder's own words, e.g. an unsupported suite's name
+	BytesUp       uint64 // payload bytes client→server
+	BytesDown     uint64 // payload bytes server→client
+	FirstTSMicros int64  // its first packet
+	LastTSMicros  int64  // its last packet
 	// PcapOffset is the byte offset of its first packet's record in the capture as the
 	// decoder read it — where to start reading it back; negative when unknown (pcapng). A
 	// hint, not a promise: a capture rewritten afterwards (a per-process prune) moves
@@ -67,9 +67,9 @@ func (t *connTally) add(fromClient bool, n int, ts time.Time) {
 
 func (t *connTally) record(connID, transport, client, server, reason string) *UndecodedConn {
 	return &UndecodedConn{
-		ConnID: connID, Transport: transport, Client: client, Server: server, Reason: reason,
+		ConnectionID: connID, Transport: transport, Client: client, Server: server, Reason: reason,
 		BytesUp: t.bytesUp, BytesDown: t.bytesDown,
-		FirstTS: tsMicros(t.first), LastTS: tsMicros(t.last), PcapOffset: t.offset,
+		FirstTSMicros: tsMicros(t.first), LastTSMicros: tsMicros(t.last), PcapOffset: t.offset,
 	}
 }
 

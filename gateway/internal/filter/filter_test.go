@@ -9,7 +9,7 @@ func testFlow() *Flow {
 	return &Flow{
 		Scheme: "https", Method: "GET", Authority: "api.example.com",
 		Path: "/v1/things", Query: "page=2", Status: 200,
-		ContentTyp: "application/json", TCPStream: "12", H2StreamID: "3", Protocol: "HTTP/2",
+		ContentTyp: "application/json", ConnectionID: "12", StreamID: "3", Protocol: "HTTP/2",
 		MarkColor: "red", Favorite: true,
 		TagNames: []string{"t-auth"}, GroupNames: []string{"g-api"},
 		Comments: []string{"looks suspicious"},

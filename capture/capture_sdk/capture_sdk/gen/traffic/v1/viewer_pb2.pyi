@@ -145,9 +145,9 @@ class MessageList(_message.Message):
     __slots__ = ("messages", "hints")
     MESSAGES_FIELD_NUMBER: _ClassVar[int]
     HINTS_FIELD_NUMBER: _ClassVar[int]
-    messages: _containers.RepeatedCompositeFieldContainer[_common_pb2.WsMessage]
+    messages: _containers.RepeatedCompositeFieldContainer[_common_pb2.Message]
     hints: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, messages: _Optional[_Iterable[_Union[_common_pb2.WsMessage, _Mapping]]] = ..., hints: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, messages: _Optional[_Iterable[_Union[_common_pb2.Message, _Mapping]]] = ..., hints: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class StreamMessagesRequest(_message.Message):
     __slots__ = ("session_id", "flow_id", "follow", "filter")
@@ -166,10 +166,10 @@ class MessageEvent(_message.Message):
     MESSAGE_ADDED_FIELD_NUMBER: _ClassVar[int]
     SESSION_EVENT_FIELD_NUMBER: _ClassVar[int]
     FILTER_HINTS_FIELD_NUMBER: _ClassVar[int]
-    message_added: _common_pb2.WsMessage
+    message_added: _common_pb2.Message
     session_event: SessionEvent
     filter_hints: FilterHints
-    def __init__(self, message_added: _Optional[_Union[_common_pb2.WsMessage, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ..., filter_hints: _Optional[_Union[FilterHints, _Mapping]] = ...) -> None: ...
+    def __init__(self, message_added: _Optional[_Union[_common_pb2.Message, _Mapping]] = ..., session_event: _Optional[_Union[SessionEvent, _Mapping]] = ..., filter_hints: _Optional[_Union[FilterHints, _Mapping]] = ...) -> None: ...
 
 class FilterHints(_message.Message):
     __slots__ = ("hints",)
@@ -222,8 +222,8 @@ class QuerySQLResponse(_message.Message):
     def __init__(self, columns: _Optional[_Iterable[str]] = ..., rows_json: _Optional[_Iterable[str]] = ..., truncated: bool = ..., elapsed_micros: _Optional[int] = ...) -> None: ...
 
 class UndecodedConnection(_message.Message):
-    __slots__ = ("conn_id", "transport", "client", "server", "sni", "ja4", "reason", "detail", "bytes_up", "bytes_down", "first_ts_micros", "last_ts_micros")
-    CONN_ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("connection_id", "transport", "client", "server", "sni", "ja4", "reason", "detail", "bytes_up", "bytes_down", "first_ts_micros", "last_ts_micros")
+    CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     TRANSPORT_FIELD_NUMBER: _ClassVar[int]
     CLIENT_FIELD_NUMBER: _ClassVar[int]
     SERVER_FIELD_NUMBER: _ClassVar[int]
@@ -235,7 +235,7 @@ class UndecodedConnection(_message.Message):
     BYTES_DOWN_FIELD_NUMBER: _ClassVar[int]
     FIRST_TS_MICROS_FIELD_NUMBER: _ClassVar[int]
     LAST_TS_MICROS_FIELD_NUMBER: _ClassVar[int]
-    conn_id: str
+    connection_id: str
     transport: str
     client: str
     server: str
@@ -247,7 +247,7 @@ class UndecodedConnection(_message.Message):
     bytes_down: int
     first_ts_micros: int
     last_ts_micros: int
-    def __init__(self, conn_id: _Optional[str] = ..., transport: _Optional[str] = ..., client: _Optional[str] = ..., server: _Optional[str] = ..., sni: _Optional[str] = ..., ja4: _Optional[str] = ..., reason: _Optional[str] = ..., detail: _Optional[str] = ..., bytes_up: _Optional[int] = ..., bytes_down: _Optional[int] = ..., first_ts_micros: _Optional[int] = ..., last_ts_micros: _Optional[int] = ...) -> None: ...
+    def __init__(self, connection_id: _Optional[str] = ..., transport: _Optional[str] = ..., client: _Optional[str] = ..., server: _Optional[str] = ..., sni: _Optional[str] = ..., ja4: _Optional[str] = ..., reason: _Optional[str] = ..., detail: _Optional[str] = ..., bytes_up: _Optional[int] = ..., bytes_down: _Optional[int] = ..., first_ts_micros: _Optional[int] = ..., last_ts_micros: _Optional[int] = ...) -> None: ...
 
 class ListUndecodedRequest(_message.Message):
     __slots__ = ("session_id", "reason", "host", "limit", "offset")
@@ -283,31 +283,31 @@ class UndecodedList(_message.Message):
     def __init__(self, connections: _Optional[_Iterable[_Union[UndecodedConnection, _Mapping]]] = ..., total: _Optional[int] = ..., by_reason: _Optional[_Mapping[str, int]] = ..., indexed: bool = ...) -> None: ...
 
 class GetConnectionBytesRequest(_message.Message):
-    __slots__ = ("session_id", "conn_id", "from_client", "offset", "limit")
+    __slots__ = ("session_id", "connection_id", "from_client", "byte_offset", "limit")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
-    CONN_ID_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
     FROM_CLIENT_FIELD_NUMBER: _ClassVar[int]
-    OFFSET_FIELD_NUMBER: _ClassVar[int]
+    BYTE_OFFSET_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
     session_id: str
-    conn_id: str
+    connection_id: str
     from_client: bool
-    offset: int
+    byte_offset: int
     limit: int
-    def __init__(self, session_id: _Optional[str] = ..., conn_id: _Optional[str] = ..., from_client: bool = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+    def __init__(self, session_id: _Optional[str] = ..., connection_id: _Optional[str] = ..., from_client: bool = ..., byte_offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
 
 class ConnectionBytes(_message.Message):
-    __slots__ = ("data", "offset", "total", "truncated", "gaps", "tls")
+    __slots__ = ("data", "byte_offset", "total", "truncated", "gaps", "tls")
     DATA_FIELD_NUMBER: _ClassVar[int]
-    OFFSET_FIELD_NUMBER: _ClassVar[int]
+    BYTE_OFFSET_FIELD_NUMBER: _ClassVar[int]
     TOTAL_FIELD_NUMBER: _ClassVar[int]
     TRUNCATED_FIELD_NUMBER: _ClassVar[int]
     GAPS_FIELD_NUMBER: _ClassVar[int]
     TLS_FIELD_NUMBER: _ClassVar[int]
     data: bytes
-    offset: int
+    byte_offset: int
     total: int
     truncated: bool
     gaps: int
     tls: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, data: _Optional[bytes] = ..., offset: _Optional[int] = ..., total: _Optional[int] = ..., truncated: bool = ..., gaps: _Optional[int] = ..., tls: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, data: _Optional[bytes] = ..., byte_offset: _Optional[int] = ..., total: _Optional[int] = ..., truncated: bool = ..., gaps: _Optional[int] = ..., tls: _Optional[_Iterable[str]] = ...) -> None: ...

@@ -166,17 +166,17 @@ func TestAnnotations(t *testing.T) {
 	}
 }
 
-func TestWsMessagesRoundTrip(t *testing.T) {
+func TestMessagesRoundTrip(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 	sid, ids := seedFlows(t, st, 2)
 	fid := ids[0]
 
-	msgs := []*decode.WsMessage{
+	msgs := []*decode.Message{
 		{ID: uuid.NewString(), FlowID: fid, FrameNumber: 10, TSUnixMicros: 100, FromClient: true, Opcode: "text", Payload: []byte("hello")},
 		{ID: uuid.NewString(), FlowID: fid, FrameNumber: 11, TSUnixMicros: 200, FromClient: false, Opcode: "binary", Payload: []byte("world")},
 	}
-	if n, err := st.InsertWsMessages(ctx, sid, msgs); err != nil || n != 2 {
+	if n, err := st.InsertMessages(ctx, sid, msgs); err != nil || n != 2 {
 		t.Fatalf("insert ws: n=%d err=%v", n, err)
 	}
 
@@ -191,7 +191,7 @@ func TestWsMessagesRoundTrip(t *testing.T) {
 		t.Fatalf("msg1 = %+v", got[1])
 	}
 
-	body, err := st.GetWsMessageBody(ctx, sid, msgs[1].ID, false)
+	body, err := st.GetMessageBody(ctx, sid, msgs[1].ID, false)
 	if err != nil || string(body) != "world" {
 		t.Fatalf("get ws body = %q err=%v", body, err)
 	}
@@ -201,7 +201,7 @@ func TestWsMessagesRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get flow: %v", err)
 	}
-	if !f.Websocket || f.WsMessageCount != 2 {
-		t.Fatalf("flow ws=%v count=%d", f.Websocket, f.WsMessageCount)
+	if !f.Websocket || f.MessageCount != 2 {
+		t.Fatalf("flow ws=%v count=%d", f.Websocket, f.MessageCount)
 	}
 }

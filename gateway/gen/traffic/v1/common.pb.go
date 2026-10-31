@@ -611,32 +611,34 @@ func (*Body_ObjectRef) isBody_Content() {}
 
 // One decoded HTTP exchange (request + optional response).
 type Flow struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	SessionId       string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	AnalysisId      string                 `protobuf:"bytes,3,opt,name=analysis_id,json=analysisId,proto3" json:"analysis_id,omitempty"`
-	FrameNumber     uint64                 `protobuf:"varint,4,opt,name=frame_number,json=frameNumber,proto3" json:"frame_number,omitempty"`
-	TsUnixMicros    int64                  `protobuf:"varint,5,opt,name=ts_unix_micros,json=tsUnixMicros,proto3" json:"ts_unix_micros,omitempty"`
-	Method          string                 `protobuf:"bytes,6,opt,name=method,proto3" json:"method,omitempty"`
-	Scheme          string                 `protobuf:"bytes,7,opt,name=scheme,proto3" json:"scheme,omitempty"`
-	Authority       string                 `protobuf:"bytes,8,opt,name=authority,proto3" json:"authority,omitempty"`
-	Path            string                 `protobuf:"bytes,9,opt,name=path,proto3" json:"path,omitempty"`
-	Query           string                 `protobuf:"bytes,10,opt,name=query,proto3" json:"query,omitempty"`
-	Protocol        string                 `protobuf:"bytes,11,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	Status          uint32                 `protobuf:"varint,12,opt,name=status,proto3" json:"status,omitempty"`
-	SrcAddr         string                 `protobuf:"bytes,13,opt,name=src_addr,json=srcAddr,proto3" json:"src_addr,omitempty"`
-	DstAddr         string                 `protobuf:"bytes,14,opt,name=dst_addr,json=dstAddr,proto3" json:"dst_addr,omitempty"`
-	UserAgent       string                 `protobuf:"bytes,15,opt,name=user_agent,json=userAgent,proto3" json:"user_agent,omitempty"`
-	ContentType     string                 `protobuf:"bytes,16,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	RequestBytes    uint64                 `protobuf:"varint,17,opt,name=request_bytes,json=requestBytes,proto3" json:"request_bytes,omitempty"`
-	TlsDecrypted    bool                   `protobuf:"varint,18,opt,name=tls_decrypted,json=tlsDecrypted,proto3" json:"tls_decrypted,omitempty"`
-	TcpStream       string                 `protobuf:"bytes,19,opt,name=tcp_stream,json=tcpStream,proto3" json:"tcp_stream,omitempty"`
-	H2StreamId      string                 `protobuf:"bytes,20,opt,name=h2_stream_id,json=h2StreamId,proto3" json:"h2_stream_id,omitempty"`
-	RequestHeaders  []*Header              `protobuf:"bytes,21,rep,name=request_headers,json=requestHeaders,proto3" json:"request_headers,omitempty"`
-	ResponseHeaders []*Header              `protobuf:"bytes,22,rep,name=response_headers,json=responseHeaders,proto3" json:"response_headers,omitempty"`
-	RequestCookies  []*Cookie              `protobuf:"bytes,23,rep,name=request_cookies,json=requestCookies,proto3" json:"request_cookies,omitempty"`
-	RequestBody     *Body                  `protobuf:"bytes,24,opt,name=request_body,json=requestBody,proto3" json:"request_body,omitempty"`
-	ResponseBody    *Body                  `protobuf:"bytes,25,opt,name=response_body,json=responseBody,proto3" json:"response_body,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SessionId    string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	AnalysisId   string                 `protobuf:"bytes,3,opt,name=analysis_id,json=analysisId,proto3" json:"analysis_id,omitempty"`
+	FrameNumber  uint64                 `protobuf:"varint,4,opt,name=frame_number,json=frameNumber,proto3" json:"frame_number,omitempty"`
+	TsUnixMicros int64                  `protobuf:"varint,5,opt,name=ts_unix_micros,json=tsUnixMicros,proto3" json:"ts_unix_micros,omitempty"`
+	Method       string                 `protobuf:"bytes,6,opt,name=method,proto3" json:"method,omitempty"`
+	Scheme       string                 `protobuf:"bytes,7,opt,name=scheme,proto3" json:"scheme,omitempty"`
+	Authority    string                 `protobuf:"bytes,8,opt,name=authority,proto3" json:"authority,omitempty"`
+	Path         string                 `protobuf:"bytes,9,opt,name=path,proto3" json:"path,omitempty"`
+	Query        string                 `protobuf:"bytes,10,opt,name=query,proto3" json:"query,omitempty"`
+	Protocol     string                 `protobuf:"bytes,11,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Status       uint32                 `protobuf:"varint,12,opt,name=status,proto3" json:"status,omitempty"`
+	SrcAddr      string                 `protobuf:"bytes,13,opt,name=src_addr,json=srcAddr,proto3" json:"src_addr,omitempty"`
+	DstAddr      string                 `protobuf:"bytes,14,opt,name=dst_addr,json=dstAddr,proto3" json:"dst_addr,omitempty"`
+	UserAgent    string                 `protobuf:"bytes,15,opt,name=user_agent,json=userAgent,proto3" json:"user_agent,omitempty"`
+	ContentType  string                 `protobuf:"bytes,16,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	RequestBytes uint64                 `protobuf:"varint,17,opt,name=request_bytes,json=requestBytes,proto3" json:"request_bytes,omitempty"`
+	TlsDecrypted bool                   `protobuf:"varint,18,opt,name=tls_decrypted,json=tlsDecrypted,proto3" json:"tls_decrypted,omitempty"`
+	// The TCP stream number, or quic:<connection id> for HTTP/3.
+	ConnectionId string `protobuf:"bytes,19,opt,name=connection_id,json=connectionId,proto3" json:"connection_id,omitempty"`
+	// The HTTP/2 or HTTP/3 stream within that connection; empty for HTTP/1.
+	StreamId        string    `protobuf:"bytes,20,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	RequestHeaders  []*Header `protobuf:"bytes,21,rep,name=request_headers,json=requestHeaders,proto3" json:"request_headers,omitempty"`
+	ResponseHeaders []*Header `protobuf:"bytes,22,rep,name=response_headers,json=responseHeaders,proto3" json:"response_headers,omitempty"`
+	RequestCookies  []*Cookie `protobuf:"bytes,23,rep,name=request_cookies,json=requestCookies,proto3" json:"request_cookies,omitempty"`
+	RequestBody     *Body     `protobuf:"bytes,24,opt,name=request_body,json=requestBody,proto3" json:"request_body,omitempty"`
+	ResponseBody    *Body     `protobuf:"bytes,25,opt,name=response_body,json=responseBody,proto3" json:"response_body,omitempty"`
 	// Annotations. Summaries (ListFlows/StreamFlows) carry mark_color,
 	// favorite, tag_ids, group_ids so rows render/filter without a second call;
 	// GetFlow additionally fills comments.
@@ -645,10 +647,11 @@ type Flow struct {
 	TagIds    []string   `protobuf:"bytes,28,rep,name=tag_ids,json=tagIds,proto3" json:"tag_ids,omitempty"`
 	GroupIds  []string   `protobuf:"bytes,29,rep,name=group_ids,json=groupIds,proto3" json:"group_ids,omitempty"`
 	Comments  []*Comment `protobuf:"bytes,30,rep,name=comments,proto3" json:"comments,omitempty"`
-	// WebSocket: set when this flow is an HTTP Upgrade that carries
-	// WebSocket frames; the frames are WsMessages fetched via ListMessages.
-	Websocket      bool   `protobuf:"varint,31,opt,name=websocket,proto3" json:"websocket,omitempty"`
-	WsMessageCount uint32 `protobuf:"varint,32,opt,name=ws_message_count,json=wsMessageCount,proto3" json:"ws_message_count,omitempty"`
+	// Set when this flow owns Messages, fetched via ListMessages: an HTTP Upgrade
+	// carrying WebSocket frames, or the synthetic flow of a custom-protocol connection
+	// (ADR-0005). The name predates custom decoders and is kept for compatibility.
+	Websocket    bool   `protobuf:"varint,31,opt,name=websocket,proto3" json:"websocket,omitempty"`
+	MessageCount uint32 `protobuf:"varint,32,opt,name=message_count,json=messageCount,proto3" json:"message_count,omitempty"`
 	// Proxy: set when this connection went through an HTTP CONNECT or SOCKS proxy,
 	// detected from the captured handshake.
 	Proxy *Proxy `protobuf:"bytes,33,opt,name=proxy,proto3" json:"proxy,omitempty"`
@@ -859,16 +862,16 @@ func (x *Flow) GetTlsDecrypted() bool {
 	return false
 }
 
-func (x *Flow) GetTcpStream() string {
+func (x *Flow) GetConnectionId() string {
 	if x != nil {
-		return x.TcpStream
+		return x.ConnectionId
 	}
 	return ""
 }
 
-func (x *Flow) GetH2StreamId() string {
+func (x *Flow) GetStreamId() string {
 	if x != nil {
-		return x.H2StreamId
+		return x.StreamId
 	}
 	return ""
 }
@@ -950,9 +953,9 @@ func (x *Flow) GetWebsocket() bool {
 	return false
 }
 
-func (x *Flow) GetWsMessageCount() uint32 {
+func (x *Flow) GetMessageCount() uint32 {
 	if x != nil {
-		return x.WsMessageCount
+		return x.MessageCount
 	}
 	return 0
 }
@@ -1125,13 +1128,15 @@ func (x *Proxy) GetPassword() string {
 	return ""
 }
 
-// One decoded WebSocket frame — a message-shaped record, distinct from
-// the request/response Flow. Belongs to the Upgrade flow (flow_id) on its connection.
-type WsMessage struct {
+// One decoded frame — a WebSocket frame or a custom-protocol message — as a
+// message-shaped record, distinct from the request/response Flow (ADR-0005). Belongs to
+// its connection's parent flow (flow_id): the Upgrade flow for WebSocket, the synthetic
+// flow for a custom protocol.
+type Message struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	Id           string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	SessionId    string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	FlowId       string                 `protobuf:"bytes,3,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // parent Upgrade flow
+	FlowId       string                 `protobuf:"bytes,3,opt,name=flow_id,json=flowId,proto3" json:"flow_id,omitempty"` // parent flow (Upgrade or synthetic)
 	FrameNumber  uint64                 `protobuf:"varint,4,opt,name=frame_number,json=frameNumber,proto3" json:"frame_number,omitempty"`
 	TsUnixMicros int64                  `protobuf:"varint,5,opt,name=ts_unix_micros,json=tsUnixMicros,proto3" json:"ts_unix_micros,omitempty"`
 	FromClient   bool                   `protobuf:"varint,6,opt,name=from_client,json=fromClient,proto3" json:"from_client,omitempty"` // direction: true = client→server
@@ -1156,20 +1161,20 @@ type WsMessage struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *WsMessage) Reset() {
-	*x = WsMessage{}
+func (x *Message) Reset() {
+	*x = Message{}
 	mi := &file_traffic_v1_common_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *WsMessage) String() string {
+func (x *Message) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*WsMessage) ProtoMessage() {}
+func (*Message) ProtoMessage() {}
 
-func (x *WsMessage) ProtoReflect() protoreflect.Message {
+func (x *Message) ProtoReflect() protoreflect.Message {
 	mi := &file_traffic_v1_common_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1181,110 +1186,110 @@ func (x *WsMessage) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use WsMessage.ProtoReflect.Descriptor instead.
-func (*WsMessage) Descriptor() ([]byte, []int) {
+// Deprecated: Use Message.ProtoReflect.Descriptor instead.
+func (*Message) Descriptor() ([]byte, []int) {
 	return file_traffic_v1_common_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *WsMessage) GetId() string {
+func (x *Message) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *WsMessage) GetSessionId() string {
+func (x *Message) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
 	}
 	return ""
 }
 
-func (x *WsMessage) GetFlowId() string {
+func (x *Message) GetFlowId() string {
 	if x != nil {
 		return x.FlowId
 	}
 	return ""
 }
 
-func (x *WsMessage) GetFrameNumber() uint64 {
+func (x *Message) GetFrameNumber() uint64 {
 	if x != nil {
 		return x.FrameNumber
 	}
 	return 0
 }
 
-func (x *WsMessage) GetTsUnixMicros() int64 {
+func (x *Message) GetTsUnixMicros() int64 {
 	if x != nil {
 		return x.TsUnixMicros
 	}
 	return 0
 }
 
-func (x *WsMessage) GetFromClient() bool {
+func (x *Message) GetFromClient() bool {
 	if x != nil {
 		return x.FromClient
 	}
 	return false
 }
 
-func (x *WsMessage) GetOpcode() string {
+func (x *Message) GetOpcode() string {
 	if x != nil {
 		return x.Opcode
 	}
 	return ""
 }
 
-func (x *WsMessage) GetPayload() *Body {
+func (x *Message) GetPayload() *Body {
 	if x != nil {
 		return x.Payload
 	}
 	return nil
 }
 
-func (x *WsMessage) GetRaw() *Body {
+func (x *Message) GetRaw() *Body {
 	if x != nil {
 		return x.Raw
 	}
 	return nil
 }
 
-func (x *WsMessage) GetMarkColor() string {
+func (x *Message) GetMarkColor() string {
 	if x != nil {
 		return x.MarkColor
 	}
 	return ""
 }
 
-func (x *WsMessage) GetFavorite() bool {
+func (x *Message) GetFavorite() bool {
 	if x != nil {
 		return x.Favorite
 	}
 	return false
 }
 
-func (x *WsMessage) GetTagIds() []string {
+func (x *Message) GetTagIds() []string {
 	if x != nil {
 		return x.TagIds
 	}
 	return nil
 }
 
-func (x *WsMessage) GetGroupIds() []string {
+func (x *Message) GetGroupIds() []string {
 	if x != nil {
 		return x.GroupIds
 	}
 	return nil
 }
 
-func (x *WsMessage) GetComments() []*Comment {
+func (x *Message) GetComments() []*Comment {
 	if x != nil {
 		return x.Comments
 	}
 	return nil
 }
 
-func (x *WsMessage) GetMetadata() map[string]string {
+func (x *Message) GetMetadata() map[string]string {
 	if x != nil {
 		return x.Metadata
 	}
@@ -1637,7 +1642,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRef\x12 \n" +
 	"\ttruncated\x18\x05 \x01(\bB\x02\x18\x01R\ttruncated\x12)\n" +
 	"\x10content_encoding\x18\x06 \x01(\tR\x0fcontentEncodingB\t\n" +
-	"\acontent\"\xb9\r\n" +
+	"\acontent\"\xb5\r\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1660,11 +1665,9 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"user_agent\x18\x0f \x01(\tR\tuserAgent\x12!\n" +
 	"\fcontent_type\x18\x10 \x01(\tR\vcontentType\x12#\n" +
 	"\rrequest_bytes\x18\x11 \x01(\x04R\frequestBytes\x12#\n" +
-	"\rtls_decrypted\x18\x12 \x01(\bR\ftlsDecrypted\x12\x1d\n" +
-	"\n" +
-	"tcp_stream\x18\x13 \x01(\tR\ttcpStream\x12 \n" +
-	"\fh2_stream_id\x18\x14 \x01(\tR\n" +
-	"h2StreamId\x12;\n" +
+	"\rtls_decrypted\x18\x12 \x01(\bR\ftlsDecrypted\x12#\n" +
+	"\rconnection_id\x18\x13 \x01(\tR\fconnectionId\x12\x1b\n" +
+	"\tstream_id\x18\x14 \x01(\tR\bstreamId\x12;\n" +
 	"\x0frequest_headers\x18\x15 \x03(\v2\x12.traffic.v1.HeaderR\x0erequestHeaders\x12=\n" +
 	"\x10response_headers\x18\x16 \x03(\v2\x12.traffic.v1.HeaderR\x0fresponseHeaders\x12;\n" +
 	"\x0frequest_cookies\x18\x17 \x03(\v2\x12.traffic.v1.CookieR\x0erequestCookies\x123\n" +
@@ -1676,8 +1679,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\atag_ids\x18\x1c \x03(\tR\x06tagIds\x12\x1b\n" +
 	"\tgroup_ids\x18\x1d \x03(\tR\bgroupIds\x12/\n" +
 	"\bcomments\x18\x1e \x03(\v2\x13.traffic.v1.CommentR\bcomments\x12\x1c\n" +
-	"\twebsocket\x18\x1f \x01(\bR\twebsocket\x12(\n" +
-	"\x10ws_message_count\x18  \x01(\rR\x0ewsMessageCount\x12'\n" +
+	"\twebsocket\x18\x1f \x01(\bR\twebsocket\x12#\n" +
+	"\rmessage_count\x18  \x01(\rR\fmessageCount\x12'\n" +
 	"\x05proxy\x18! \x01(\v2\x11.traffic.v1.ProxyR\x05proxy\x12:\n" +
 	"\bmetadata\x18\" \x03(\v2\x1e.traffic.v1.Flow.MetadataEntryR\bmetadata\x12\x14\n" +
 	"\x05error\x18# \x01(\tR\x05error\x12'\n" +
@@ -1699,8 +1702,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x04addr\x18\x01 \x01(\tR\x04addr\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1a\n" +
 	"\busername\x18\x03 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xc5\x04\n" +
-	"\tWsMessage\x12\x0e\n" +
+	"\bpassword\x18\x04 \x01(\tR\bpassword\"\xc1\x04\n" +
+	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x17\n" +
@@ -1718,8 +1721,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\bfavorite\x18\v \x01(\bR\bfavorite\x12\x17\n" +
 	"\atag_ids\x18\f \x03(\tR\x06tagIds\x12\x1b\n" +
 	"\tgroup_ids\x18\r \x03(\tR\bgroupIds\x12/\n" +
-	"\bcomments\x18\x0e \x03(\v2\x13.traffic.v1.CommentR\bcomments\x12?\n" +
-	"\bmetadata\x18\x0f \x03(\v2#.traffic.v1.WsMessage.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bcomments\x18\x0e \x03(\v2\x13.traffic.v1.CommentR\bcomments\x12=\n" +
+	"\bmetadata\x18\x0f \x03(\v2!.traffic.v1.Message.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
@@ -1790,14 +1793,14 @@ var file_traffic_v1_common_proto_goTypes = []any{
 	(*Body)(nil),           // 6: traffic.v1.Body
 	(*Flow)(nil),           // 7: traffic.v1.Flow
 	(*Proxy)(nil),          // 8: traffic.v1.Proxy
-	(*WsMessage)(nil),      // 9: traffic.v1.WsMessage
+	(*Message)(nil),        // 9: traffic.v1.Message
 	(*Tag)(nil),            // 10: traffic.v1.Tag
 	(*Comment)(nil),        // 11: traffic.v1.Comment
 	(*Group)(nil),          // 12: traffic.v1.Group
 	(*DecodeProgress)(nil), // 13: traffic.v1.DecodeProgress
 	nil,                    // 14: traffic.v1.Session.MetadataEntry
 	nil,                    // 15: traffic.v1.Flow.MetadataEntry
-	nil,                    // 16: traffic.v1.WsMessage.MetadataEntry
+	nil,                    // 16: traffic.v1.Message.MetadataEntry
 }
 var file_traffic_v1_common_proto_depIdxs = []int32{
 	2,  // 0: traffic.v1.Session.status:type_name -> traffic.v1.SessionStatus
@@ -1811,10 +1814,10 @@ var file_traffic_v1_common_proto_depIdxs = []int32{
 	8,  // 8: traffic.v1.Flow.proxy:type_name -> traffic.v1.Proxy
 	15, // 9: traffic.v1.Flow.metadata:type_name -> traffic.v1.Flow.MetadataEntry
 	5,  // 10: traffic.v1.Flow.response_cookies:type_name -> traffic.v1.Cookie
-	6,  // 11: traffic.v1.WsMessage.payload:type_name -> traffic.v1.Body
-	6,  // 12: traffic.v1.WsMessage.raw:type_name -> traffic.v1.Body
-	11, // 13: traffic.v1.WsMessage.comments:type_name -> traffic.v1.Comment
-	16, // 14: traffic.v1.WsMessage.metadata:type_name -> traffic.v1.WsMessage.MetadataEntry
+	6,  // 11: traffic.v1.Message.payload:type_name -> traffic.v1.Body
+	6,  // 12: traffic.v1.Message.raw:type_name -> traffic.v1.Body
+	11, // 13: traffic.v1.Message.comments:type_name -> traffic.v1.Comment
+	16, // 14: traffic.v1.Message.metadata:type_name -> traffic.v1.Message.MetadataEntry
 	15, // [15:15] is the sub-list for method output_type
 	15, // [15:15] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name

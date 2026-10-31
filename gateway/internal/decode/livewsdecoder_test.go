@@ -30,10 +30,10 @@ func TestLiveWebSocketCustomDecoder(t *testing.T) {
 	decoders.RegisterWS(fakeWSDecoder{})
 
 	var mu sync.Mutex
-	var msgs []*WsMessage
+	var msgs []*Message
 	lt := &liveTCP{
 		onFlow: func(f *Flow, _ bool) {},
-		onMsg:  func(m *WsMessage) { mu.Lock(); msgs = append(msgs, m); mu.Unlock() },
+		onMsg:  func(m *Message) { mu.Lock(); msgs = append(msgs, m); mu.Unlock() },
 	}
 	s := &tcpStream{
 		lt: lt, serverHost: "203.0.113.5", serverPort: "443", clientAddr: "198.51.100.2:51000",
@@ -65,7 +65,7 @@ func TestLiveWebSocketCustomDecoder(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("got %d ws messages, want 2: %+v", len(msgs), msgs)
 	}
-	var decoded, text *WsMessage
+	var decoded, text *Message
 	for _, m := range msgs {
 		if m.FromClient {
 			decoded = m

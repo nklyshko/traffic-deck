@@ -51,7 +51,7 @@ type ViewerServiceClient interface {
 	ListMessages(ctx context.Context, in *ListMessagesRequest, opts ...grpc.CallOption) (*MessageList, error)
 	// GetMessage returns one message with its annotations (for refreshing a row after an
 	// annotation change), the message-side counterpart of GetFlow.
-	GetMessage(ctx context.Context, in *GetMessageRequest, opts ...grpc.CallOption) (*WsMessage, error)
+	GetMessage(ctx context.Context, in *GetMessageRequest, opts ...grpc.CallOption) (*Message, error)
 	// StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
 	// and the session is live) streams new frames as they're decoded, until the
 	// session closes or the client disconnects — the live WebSocket timeline.
@@ -163,9 +163,9 @@ func (c *viewerServiceClient) ListMessages(ctx context.Context, in *ListMessages
 	return out, nil
 }
 
-func (c *viewerServiceClient) GetMessage(ctx context.Context, in *GetMessageRequest, opts ...grpc.CallOption) (*WsMessage, error) {
+func (c *viewerServiceClient) GetMessage(ctx context.Context, in *GetMessageRequest, opts ...grpc.CallOption) (*Message, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(WsMessage)
+	out := new(Message)
 	err := c.cc.Invoke(ctx, ViewerService_GetMessage_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -259,7 +259,7 @@ type ViewerServiceServer interface {
 	ListMessages(context.Context, *ListMessagesRequest) (*MessageList, error)
 	// GetMessage returns one message with its annotations (for refreshing a row after an
 	// annotation change), the message-side counterpart of GetFlow.
-	GetMessage(context.Context, *GetMessageRequest) (*WsMessage, error)
+	GetMessage(context.Context, *GetMessageRequest) (*Message, error)
 	// StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
 	// and the session is live) streams new frames as they're decoded, until the
 	// session closes or the client disconnects — the live WebSocket timeline.
@@ -311,7 +311,7 @@ func (UnimplementedViewerServiceServer) GetBody(*GetBodyRequest, grpc.ServerStre
 func (UnimplementedViewerServiceServer) ListMessages(context.Context, *ListMessagesRequest) (*MessageList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMessages not implemented")
 }
-func (UnimplementedViewerServiceServer) GetMessage(context.Context, *GetMessageRequest) (*WsMessage, error) {
+func (UnimplementedViewerServiceServer) GetMessage(context.Context, *GetMessageRequest) (*Message, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMessage not implemented")
 }
 func (UnimplementedViewerServiceServer) StreamMessages(*StreamMessagesRequest, grpc.ServerStreamingServer[MessageEvent]) error {

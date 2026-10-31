@@ -82,13 +82,13 @@ func readConn(r io.Reader, u *UndecodedConn, maxBytes int, out *ConnBytes, mustS
 			continue
 		}
 		ts := ci.Timestamp.UnixMicro()
-		if first && mustStartHere && ts != u.FirstTS {
+		if first && mustStartHere && ts != u.FirstTSMicros {
 			return false, nil // the offset no longer holds this connection's first packet
 		}
-		if ts > u.LastTS+slack {
+		if ts > u.LastTSMicros+slack {
 			break
 		}
-		if ts < u.FirstTS-slack {
+		if ts < u.FirstTSMicros-slack {
 			first = false
 			continue
 		}

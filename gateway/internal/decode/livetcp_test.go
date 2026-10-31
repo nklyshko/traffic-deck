@@ -3,6 +3,7 @@ package decode
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -54,11 +55,11 @@ func frameMsg(p []byte) []byte {
 	return append(binary.BigEndian.AppendUint16(nil, uint16(len(p))), p...)
 }
 
-// TestLiveTCPDecodeEndToEnd runs a real TLS 1.3 exchange of the echo protocol over
+// TestLiveDecodeEndToEnd runs a real TLS 1.3 exchange of the echo protocol over
 // localhost, writes the wire bytes into a synthetic Ethernet/IPv4/TCP pcap, and runs
-// LiveTCPDecode over it (gopacket reassembly + Go TLS decryption + decoder), asserting
+// LiveDecode over it (gopacket reassembly + Go TLS decryption + decoder), asserting
 // the decoded messages match what was sent.
-func TestLiveTCPDecodeEndToEnd(t *testing.T) {
+func TestLiveDecodeEndToEnd(t *testing.T) {
 	decoders.Register(echoDecoder{})
 
 	clientMsgs := [][]byte{[]byte("alpha"), []byte("beta"), []byte("gamma")}
@@ -84,7 +85,7 @@ func TestLiveTCPDecodeEndToEnd(t *testing.T) {
 	var mu sync.Mutex
 	var flows []*Flow
 	var got [][2]string // {direction, payload}
-	err := LiveTCPDecode(bytes.NewReader(pcap), klPath,
+	err := liveDecodeFlows(bytes.NewReader(pcap), klPath,
 		func(f *Flow, isNew bool) {
 			if isNew {
 				mu.Lock()
@@ -92,7 +93,7 @@ func TestLiveTCPDecodeEndToEnd(t *testing.T) {
 				mu.Unlock()
 			}
 		},
-		func(m *WsMessage) {
+		func(m *Message) {
 			mu.Lock()
 			d := "S"
 			if m.FromClient {
@@ -102,7 +103,7 @@ func TestLiveTCPDecodeEndToEnd(t *testing.T) {
 			mu.Unlock()
 		})
 	if err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 
 	if len(flows) != 1 || flows[0].Protocol != "ECHOTEST" || flows[0].Authority != "svc.echo.test" {
@@ -174,9 +175,9 @@ func buildPcap(t *testing.T, c2s, s2c []byte) []byte {
 	return out.Bytes()
 }
 
-// TestLiveTCPDecodeNFLOG is the Android path: the same TLS 1.3 echo exchange wrapped in
-// LINKTYPE_NFLOG records (as `tcpdump -i nflog:` produces), decoded by LiveTCPDecode.
-func TestLiveTCPDecodeNFLOG(t *testing.T) {
+// TestLiveDecodeNFLOG is the Android path: the same TLS 1.3 echo exchange wrapped in
+// LINKTYPE_NFLOG records (as `tcpdump -i nflog:` produces), decoded by LiveDecode.
+func TestLiveDecodeNFLOG(t *testing.T) {
 	decoders.Register(echoDecoder{})
 	clientApp := frameMsg([]byte("ping"))
 	serverApp := append(frameMsg([]byte("pong")), frameMsg(bytes.Repeat([]byte("Q"), 20000))...)
@@ -189,9 +190,9 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 	}
 
 	var got [][2]string
-	err := LiveTCPDecode(bytes.NewReader(buildNflogPcap(t, c2s, s2c)), klPath,
+	err := liveDecodeFlows(bytes.NewReader(buildNflogPcap(t, c2s, s2c)), klPath,
 		func(*Flow, bool) {},
-		func(m *WsMessage) {
+		func(m *Message) {
 			d := "S"
 			if m.FromClient {
 				d = "C"
@@ -199,7 +200,7 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 			got = append(got, [2]string{d, string(m.Payload)})
 		})
 	if err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 	want := [][2]string{{"C", "ping"}, {"S", "pong"}, {"S", string(bytes.Repeat([]byte("Q"), 20000))}}
 	if len(got) != len(want) {
@@ -212,11 +213,11 @@ func TestLiveTCPDecodeNFLOG(t *testing.T) {
 	}
 }
 
-// TestLiveTCPDecodePlaintextHTTP decodes a cleartext (non-TLS) HTTP/1.1 exchange straight
+// TestLiveDecodePlaintextHTTP decodes a cleartext (non-TLS) HTTP/1.1 exchange straight
 // off the pcap — the tshark-free path for plaintext traffic. The connection never begins
 // with a TLS handshake, so it must be parsed as HTTP rather than dropped, and marked
 // http:// / not-decrypted.
-func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
+func TestLiveDecodePlaintextHTTP(t *testing.T) {
 	req := []byte("GET /hello?x=1 HTTP/1.1\r\nHost: plain.example.com\r\n" +
 		"User-Agent: probe/1\r\n\r\n")
 	resp := []byte("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n" +
@@ -225,11 +226,11 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 
 	var mu sync.Mutex
 	latest := map[string]*Flow{}
-	err := LiveTCPDecode(bytes.NewReader(pcap), "",
+	err := liveDecodeFlows(bytes.NewReader(pcap), "",
 		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
-		func(*WsMessage) {})
+		func(*Message) {})
 	if err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 
 	// The HTTP parser runs in a goroutine that finishes draining after FlushAll closes the
@@ -263,8 +264,8 @@ func TestLiveTCPDecodePlaintextHTTP(t *testing.T) {
 		t.Errorf("resp: status=%d body=%q", f.Status, f.ResponseBody)
 	}
 	// The connection this rode on, numbered in first-seen order; this pcap has just the one.
-	if f.TCPStream != "0" {
-		t.Errorf("tcp stream=%q, want %q (the first connection)", f.TCPStream, "0")
+	if f.ConnectionID != "0" {
+		t.Errorf("tcp stream=%q, want %q (the first connection)", f.ConnectionID, "0")
 	}
 }
 
@@ -306,9 +307,9 @@ func TestLiveConnIDNumbersConnectionsInOrder(t *testing.T) {
 	}
 }
 
-// TestLiveTCPDecodePlaintextHTTPReset covers the TCP-reset failure signal: a request with
+// TestLiveDecodePlaintextHTTPReset covers the TCP-reset failure signal: a request with
 // no response whose connection ends in a RST is marked "connection reset (TCP RST)".
-func TestLiveTCPDecodePlaintextHTTPReset(t *testing.T) {
+func TestLiveDecodePlaintextHTTPReset(t *testing.T) {
 	req := []byte("GET /gone HTTP/1.1\r\nHost: plain.example.com\r\n\r\n")
 
 	var out bytes.Buffer
@@ -337,10 +338,10 @@ func TestLiveTCPDecodePlaintextHTTPReset(t *testing.T) {
 
 	var mu sync.Mutex
 	latest := map[string]*Flow{}
-	if err := LiveTCPDecode(bytes.NewReader(out.Bytes()), "",
+	if err := liveDecodeFlows(bytes.NewReader(out.Bytes()), "",
 		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
-		func(*WsMessage) {}); err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		func(*Message) {}); err != nil {
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 
 	var f *Flow
@@ -386,7 +387,7 @@ func TestClassifyPrefersHTTPOverHostCustomDecoder(t *testing.T) {
 	decoders.Register(hostEchoDecoder{})
 	newStream := func() *tcpStream {
 		return &tcpStream{
-			lt:         &liveTCP{onFlow: func(*Flow, bool) {}, onMsg: func(*WsMessage) {}},
+			lt:         &liveTCP{onFlow: func(*Flow, bool) {}, onMsg: func(*Message) {}},
 			serverHost: "203.0.113.9", // matches hostEchoDecoder by host
 			serverPort: "443",
 			clientAddr: "198.51.100.2:52000",
@@ -473,10 +474,10 @@ func nflogWrap(ipPacket []byte) []byte {
 	return rec
 }
 
-// TestLiveTCPDecodePKTAP is the macOS per-process path: the same TLS 1.3 echo exchange
+// TestLiveDecodePKTAP is the macOS per-process path: the same TLS 1.3 echo exchange
 // wrapped in LINKTYPE_PKTAP records (as `tcpdump -i pktap,en0 -Q 'proc = "…"'` produces),
-// decoded by LiveTCPDecode.
-func TestLiveTCPDecodePKTAP(t *testing.T) {
+// decoded by LiveDecode.
+func TestLiveDecodePKTAP(t *testing.T) {
 	decoders.Register(echoDecoder{})
 	clientApp := frameMsg([]byte("ping"))
 	serverApp := append(frameMsg([]byte("pong")), frameMsg(bytes.Repeat([]byte("Q"), 20000))...)
@@ -489,9 +490,9 @@ func TestLiveTCPDecodePKTAP(t *testing.T) {
 	}
 
 	var got [][2]string
-	err := LiveTCPDecode(bytes.NewReader(buildPktapPcap(t, c2s, s2c)), klPath,
+	err := liveDecodeFlows(bytes.NewReader(buildPktapPcap(t, c2s, s2c)), klPath,
 		func(*Flow, bool) {},
-		func(m *WsMessage) {
+		func(m *Message) {
 			d := "S"
 			if m.FromClient {
 				d = "C"
@@ -499,7 +500,7 @@ func TestLiveTCPDecodePKTAP(t *testing.T) {
 			got = append(got, [2]string{d, string(m.Payload)})
 		})
 	if err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 	want := [][2]string{{"C", "ping"}, {"S", "pong"}, {"S", string(bytes.Repeat([]byte("Q"), 20000))}}
 	if len(got) != len(want) {
@@ -571,12 +572,12 @@ func pktapWrap(frame []byte) []byte {
 	return append(hdr, frame...)
 }
 
-// TestLiveTCPDecodePKTAPNg is what the macOS per-process source actually produces:
+// TestLiveDecodePKTAPNg is what the macOS per-process source actually produces:
 // pcap-**ng** carrying DLT_PKTAP. tcpdump(1) gives no choice — the metadata filter the
 // capture relies on "is meaningful only with capture files in the Pcap-ng file format or
 // for interfaces supporting the PKTAP data link type" — so this format is the live path,
 // and the classic-pcap case above is only for imported files.
-func TestLiveTCPDecodePKTAPNg(t *testing.T) {
+func TestLiveDecodePKTAPNg(t *testing.T) {
 	decoders.Register(echoDecoder{})
 	clientApp := frameMsg([]byte("ping"))
 	serverApp := append(frameMsg([]byte("pong")), frameMsg(bytes.Repeat([]byte("Q"), 20000))...)
@@ -589,9 +590,9 @@ func TestLiveTCPDecodePKTAPNg(t *testing.T) {
 	}
 
 	var got [][2]string
-	err := LiveTCPDecode(bytes.NewReader(buildPktapNgPcap(t, c2s, s2c)), klPath,
+	err := liveDecodeFlows(bytes.NewReader(buildPktapNgPcap(t, c2s, s2c)), klPath,
 		func(*Flow, bool) {},
-		func(m *WsMessage) {
+		func(m *Message) {
 			d := "S"
 			if m.FromClient {
 				d = "C"
@@ -599,7 +600,7 @@ func TestLiveTCPDecodePKTAPNg(t *testing.T) {
 			got = append(got, [2]string{d, string(m.Payload)})
 		})
 	if err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 	want := [][2]string{{"C", "ping"}, {"S", "pong"}, {"S", string(bytes.Repeat([]byte("Q"), 20000))}}
 	if len(got) != len(want) {
@@ -661,4 +662,10 @@ func buildPktapNgPcap(t *testing.T, c2s, s2c []byte) []byte {
 	}
 	binary.LittleEndian.PutUint16(b[shbLen+8:shbLen+10], uint16(linkTypePKTAP))
 	return b
+}
+
+// liveDecodeFlows is LiveDecode without the undecoded-connection index, which most tests
+// here do not look at.
+func liveDecodeFlows(r io.Reader, keylogPath string, onFlow func(*Flow, bool), onMsg func(*Message)) error {
+	return LiveDecode(r, keylogPath, Sinks{OnFlow: onFlow, OnMsg: onMsg})
 }

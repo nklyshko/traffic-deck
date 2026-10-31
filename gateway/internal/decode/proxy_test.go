@@ -32,7 +32,7 @@ func feedProxyTunnel(t *testing.T, wantFlows int, chunks []tunnelChunk) []*Flow 
 			}
 			latest[f.ID] = f
 		},
-		onMsg: func(*WsMessage) {},
+		onMsg: func(*Message) {},
 	}
 	s := &tcpStream{
 		lt:         lt,
@@ -77,7 +77,7 @@ type tunnelChunk struct {
 // the flows it emits.
 func feedTunnelStream(t *testing.T, chunks []tunnelChunk) *tcpStream {
 	t.Helper()
-	lt := &liveTCP{onFlow: func(*Flow, bool) {}, onMsg: func(*WsMessage) {}}
+	lt := &liveTCP{onFlow: func(*Flow, bool) {}, onMsg: func(*Message) {}}
 	s := &tcpStream{
 		lt:         lt,
 		connID:     "0",
@@ -133,10 +133,10 @@ func buildTunnelPcap(t *testing.T, chunks []tunnelChunk) []byte {
 	return out.Bytes()
 }
 
-// TestLiveTCPDecodeSocks5EndToEnd runs a SOCKS5 tunnel through the whole live pipeline —
+// TestLiveDecodeSocks5EndToEnd runs a SOCKS5 tunnel through the whole live pipeline —
 // pcap reader, gopacket reassembly, the packet loop — rather than driving the stream
 // directly, so the handshake is parsed from real per-segment reassembly.
-func TestLiveTCPDecodeSocks5EndToEnd(t *testing.T) {
+func TestLiveDecodeSocks5EndToEnd(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	at := func(ms int) time.Time { return base.Add(time.Duration(ms) * time.Millisecond) }
 	pcap := buildTunnelPcap(t, []tunnelChunk{
@@ -152,10 +152,10 @@ func TestLiveTCPDecodeSocks5EndToEnd(t *testing.T) {
 
 	var mu sync.Mutex
 	latest := map[string]*Flow{}
-	if err := LiveTCPDecode(bytes.NewReader(pcap), "",
+	if err := liveDecodeFlows(bytes.NewReader(pcap), "",
 		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
-		func(*WsMessage) {}); err != nil {
-		t.Fatalf("LiveTCPDecode: %v", err)
+		func(*Message) {}); err != nil {
+		t.Fatalf("liveDecodeFlows: %v", err)
 	}
 
 	// The HTTP parser drains in its own goroutine after the stream closes; wait for the
@@ -367,7 +367,7 @@ func TestLiveSocks5PlainIPv4Target(t *testing.T) {
 func TestLiveSocks5Refused(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
 	var flows []*Flow
-	lt := &liveTCP{onFlow: func(f *Flow, _ bool) { flows = append(flows, f) }, onMsg: func(*WsMessage) {}}
+	lt := &liveTCP{onFlow: func(f *Flow, _ bool) { flows = append(flows, f) }, onMsg: func(*Message) {}}
 	s := &tcpStream{lt: lt, connID: "0", serverHost: "10.0.0.9", serverPort: "8080", clientAddr: "10.0.0.1:55000"}
 	s.conn = tlsdecrypt.NewConn(tlsdecrypt.NewKeylog(""), s.onApp)
 	for _, c := range []tunnelChunk{

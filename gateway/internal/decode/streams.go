@@ -38,10 +38,10 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 			continue
 		}
 		meta := decoders.StreamMeta{
-			TCPStream:  tcp,
-			ServerHost: info.serverHost,
-			ServerPort: info.serverPort,
-			SNI:        info.sni,
+			ConnectionID: tcp,
+			ServerHost:   info.serverHost,
+			ServerPort:   info.serverPort,
+			SNI:          info.sni,
 		}
 		matched := decoders.Match(meta)
 		if len(matched) == 0 || info.tlsStreamIdx == "" {
@@ -68,7 +68,7 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 		f.RequestBytes = uint64(len(f.RequestBody))
 		st.ds.Flows = append(st.ds.Flows, f)
 		for _, m := range msgs {
-			st.ds.Messages = append(st.ds.Messages, &WsMessage{
+			st.ds.Messages = append(st.ds.Messages, &Message{
 				ID:           uuid.NewString(),
 				FlowID:       f.ID,
 				TSUnixMicros: m.TSUnixMicros,
@@ -89,11 +89,11 @@ func decodeCustomStreams(ctx context.Context, tsharkPath, pcapPath, keylogPath s
 func httpStreamSet(ds *Dataset) map[string]bool {
 	out := map[string]bool{}
 	for _, f := range ds.Flows {
-		if f.TCPStream == "" {
+		if f.ConnectionID == "" {
 			continue
 		}
 		if f.Protocol == "HTTP/1.1" || f.Protocol == "HTTP/2" {
-			out[f.TCPStream] = true
+			out[f.ConnectionID] = true
 		}
 	}
 	return out
@@ -101,7 +101,7 @@ func httpStreamSet(ds *Dataset) map[string]bool {
 
 // customFlowMeta builds the synthetic Flow representing a decoded custom-protocol
 // connection (shared by the batch and live Go paths). Websocket=true so it reuses the
-// message-timeline UI; on the stored path attachWsCounts recomputes that on read.
+// message-timeline UI; on the stored path attachMessageCounts recomputes that on read.
 func customFlowMeta(sni, serverHost, serverPort, clientAddr, name string) *Flow {
 	host := sni
 	if host == "" {
@@ -123,7 +123,7 @@ func customFlowMeta(sni, serverHost, serverPort, clientAddr, name string) *Flow 
 // so without this the flow would sort to the top of the list with a blank time column).
 func customFlow(info *tlsStream, tcp, name string) *Flow {
 	f := customFlowMeta(info.sni, info.serverHost, info.serverPort, info.clientAddr, name)
-	f.TCPStream = tcp
+	f.ConnectionID = tcp
 	f.TSUnixMicros = info.tsMicros
 	f.FrameNumber = info.frameNumber
 	return f

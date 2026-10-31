@@ -187,6 +187,9 @@ go to `ListMessages`/`GetWsMessageBody` exactly as they do for a closed session,
 live subscriber fan-out is untouched — a frame is published to followers when it arrives,
 independent of when it is written.
 
+*(Amended later: `ws_messages`, `InsertWsMessages` and `GetWsMessageBody` are now
+`messages`, `InsertMessages` and `GetMessageBody`; see 0005.)*
+
 **5. A flush that fails errors the session and stops the capture.** The memory bound holds
 only while writes succeed, so the failure path is part of the decision rather than an
 implementation detail. On a flush error the session is marked

@@ -9,10 +9,10 @@ import "sort"
 
 // StreamMeta identifies a TCP connection so a decoder can decide if it handles it.
 type StreamMeta struct {
-	TCPStream  string
-	ServerHost string // server IP (or resolved host)
-	ServerPort string
-	SNI        string // TLS ClientHello server name, if any
+	ConnectionID string
+	ServerHost   string // server IP (or resolved host)
+	ServerPort   string
+	SNI          string // TLS ClientHello server name, if any
 	// Host is the best name a capture source knows for the server when it is neither the
 	// SNI nor ServerHost — a Host header, or a name inferred from the device's DNS answer
 	// for the IP it connected to. "" when nothing names the server.

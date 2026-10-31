@@ -243,7 +243,7 @@ def _undecoded_counts(session_metadata: Mapping[str, str]) -> dict[str, int] | N
     return counts or None
 
 
-def _annotations(rec: common_pb2.Flow | common_pb2.WsMessage, tagnames: dict[str, str],
+def _annotations(rec: common_pb2.Flow | common_pb2.Message, tagnames: dict[str, str],
                  groupnames: dict[str, str]) -> Annotations:
     """Annotation fields shared by flows and messages (both are record_id-keyed records):
     favorite, color mark, tag/group names, and comment bodies."""
@@ -284,8 +284,8 @@ def _flow_summary(f: common_pb2.Flow, tagnames: dict[str, str],
         "request_bytes": f.request_bytes,
         "tls_decrypted": f.tls_decrypted,
         "websocket": f.websocket,
-        "message_count": f.ws_message_count,
-        "connection_id": f.tcp_stream or None,
+        "message_count": f.message_count,
+        "connection_id": f.connection_id or None,
         # Why a connection is recorded without decoded traffic (tls_rejected — likely
         # certificate pinning —, no_request, udp_undecoded, tcp_passthrough); None for a
         # decoded flow. The same value is conn.outcome in `metadata`.
@@ -393,7 +393,7 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     d["src_addr"] = f.src_addr or None
     d["dst_addr"] = f.dst_addr or None
     d["user_agent"] = f.user_agent or None
-    d["stream_id"] = f.h2_stream_id or None
+    d["stream_id"] = f.stream_id or None
     if f.proxy.addr:
         d["proxy"] = {"addr": f.proxy.addr, "type": f.proxy.type,
                       "username": f.proxy.username or None, "password": f.proxy.password or None}
@@ -708,7 +708,7 @@ def _timeline_row(seq: int, f, t0: int) -> dict:
         "request_bytes": f.request_bytes,
         "protocol": f.protocol,
         "websocket": f.websocket or None,
-        "message_count": f.ws_message_count or None,
+        "message_count": f.message_count or None,
     }
 
 
@@ -1351,7 +1351,7 @@ _UNDECODED_NOTE = (
 
 def _undecoded_row(c) -> dict:
     return {
-        "connection_id": c.conn_id, "transport": c.transport, "reason": c.reason,
+        "connection_id": c.connection_id, "transport": c.transport, "reason": c.reason,
         "detail": c.detail or None, "sni": c.sni or None, "server": c.server,
         "client": c.client, "ja4": c.ja4 or None,
         "bytes_up": c.bytes_up, "bytes_down": c.bytes_down,
@@ -1416,8 +1416,8 @@ async def get_connection_bytes(session_id: str, connection_id: str,
             raise ValueError(e.details()) from None
         raise
     out = _bytes_payload(bytes(resp.data), as_hex=as_hex)
-    out["size"], out["byte_offset"] = resp.total, resp.offset
-    out["truncated"] = resp.offset + len(resp.data) < resp.total or resp.truncated
+    out["size"], out["byte_offset"] = resp.total, resp.byte_offset
+    out["truncated"] = resp.byte_offset + len(resp.data) < resp.total or resp.truncated
     out |= {"session_id": sid, "connection_id": connection_id, "sender": sender}
     if resp.truncated:
         out["note"] = "the read stopped at its cap: size is a floor"
@@ -1795,7 +1795,7 @@ async def get_flow_headers(session_id: str, flow_id: str) -> dict:
         },
     }
     if f.websocket:
-        out["websocket"] = {"message_count": f.ws_message_count}
+        out["websocket"] = {"message_count": f.message_count}
     return out
 
 

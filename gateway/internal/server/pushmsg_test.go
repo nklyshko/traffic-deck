@@ -81,7 +81,7 @@ func TestPushFlowsWithMessages(t *testing.T) {
 				{Id: fid, Protocol: "HTTP/1.1", Authority: "ws.example.com", Websocket: true},
 			}},
 			// Batch 2: two frames on that flow (client binary, server binary).
-			{SessionId: sid, Messages: []*trafficv1.WsMessage{
+			{SessionId: sid, Messages: []*trafficv1.Message{
 				{Id: uuid.NewString(), FlowId: fid, FromClient: true, Opcode: "binary",
 					Payload: &trafficv1.Body{Size: 3, Content: &trafficv1.Body_Inline{Inline: []byte("req")}}},
 				{Id: uuid.NewString(), FlowId: fid, FromClient: false, Opcode: "binary",
@@ -137,7 +137,7 @@ func TestPushFlowsCustomWSDecode(t *testing.T) {
 		{SessionId: sid, Flows: []*trafficv1.Flow{
 			{Id: fid, Protocol: "HTTP/1.1", Authority: "ws.custom.test", Websocket: true},
 		}},
-		{SessionId: sid, Messages: []*trafficv1.WsMessage{
+		{SessionId: sid, Messages: []*trafficv1.Message{
 			{Id: uuid.NewString(), FlowId: fid, FromClient: true, Opcode: "binary",
 				Payload: &trafficv1.Body{Size: 5, Content: &trafficv1.Body_Inline{Inline: []byte("hello")}}},
 		}},

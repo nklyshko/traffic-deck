@@ -19,7 +19,7 @@ service ViewerService {
   rpc ListMessages(ListMessagesRequest) returns (MessageList);
   // GetMessage returns one message with its annotations (for refreshing a row after an
   // annotation change), the message-side counterpart of GetFlow.
-  rpc GetMessage(GetMessageRequest) returns (WsMessage);
+  rpc GetMessage(GetMessageRequest) returns (Message);
   // StreamMessages replays an Upgrade flow's stored frames, then (if follow is set
   // and the session is live) streams new frames as they're decoded, until the
   // session closes or the client disconnects — the live WebSocket timeline.
@@ -169,7 +169,7 @@ message ListMessagesRequest {
 }
 
 message MessageList {
-  repeated WsMessage messages = 1;
+  repeated Message messages = 1;
   // Advisory diagnostics for the request's filter, like FlowPage.hints.
   repeated string hints = 2;
 }
@@ -185,7 +185,7 @@ message StreamMessagesRequest {
 
 message MessageEvent {
   oneof event {
-    WsMessage message_added = 1;
+    Message message_added = 1;
     SessionEvent session_event = 2; // session closed — live stream ended
     // Advisory diagnostics for this subscription's filter, sent once before any frame.
     // A stream has no page to carry them on, and they are part of the language rather
@@ -238,7 +238,7 @@ message QuerySQLResponse {
 }
 
 message UndecodedConnection {
-  string conn_id = 1;
+  string connection_id = 1;
   string transport = 2;      // tcp | udp
   string client = 3;         // host:port that opened it
   string server = 4;         // host:port it went to
@@ -274,15 +274,15 @@ message UndecodedList {
 
 message GetConnectionBytesRequest {
   string session_id = 1;
-  string conn_id = 2;
+  string connection_id = 2;
   bool from_client = 3;      // which direction's bytes
-  uint64 offset = 4;         // into that direction's stream
+  uint64 byte_offset = 4;    // into that direction's stream
   uint32 limit = 5;          // default and max 256 KiB
 }
 
 message ConnectionBytes {
   bytes data = 1;
-  uint64 offset = 2;
+  uint64 byte_offset = 2;
   uint64 total = 3;          // that direction's length as read (see truncated)
   bool truncated = 4;        // the read stopped at its cap; total is a floor
   uint32 gaps = 5;           // holes the capture left in the TCP stream

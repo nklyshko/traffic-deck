@@ -902,13 +902,13 @@ _EXTRA_CELL_MAX = 24
 _STATUS_OPEN = 1
 
 # Optional flow-field columns: off by default, toggled from the column picker (C).
-# tcp_stream identifies the transport connection (a tcp.stream index, or "quic:<conn-id>")
-# and h2_stream_id the stream multiplexed onto it, so showing both makes HTTP/2 connection
+# connection_id identifies the transport connection (a tcp.stream index, or "quic:<conn-id>")
+# and stream_id the stream multiplexed onto it, so showing both makes HTTP/2 connection
 # reuse legible in the table: one Conn value across many rows, each with its own Stream.
 # Values are read straight off the Flow, unlike metadata columns (keyed into f.metadata).
 _FIELD_COLUMNS = {
-    "conn": ("Conn", lambda f: f.tcp_stream or ""),
-    "stream": ("Stream", lambda f: f.h2_stream_id or ""),
+    "conn": ("Conn", lambda f: f.connection_id or ""),
+    "stream": ("Stream", lambda f: f.stream_id or ""),
 }
 
 
@@ -933,7 +933,7 @@ def _extra_col_label(cid: str) -> str:
 
 class AnnotatableTable:
     """Shared annotation behavior for a record table — flows (SessionPane) or messages
-    (WsMessagesScreen). The annotation store is keyed on record_id, so the same mark / tag /
+    (MessagesScreen). The annotation store is keyed on record_id, so the same mark / tag /
     comment / favorite / group actions and bulk-selection work for both, given a few hooks
     the host supplies. Mixed into a Textual widget/screen (so self.app, self.notify, and
     @work are available).
@@ -1203,7 +1203,7 @@ class SessionPane(AnnotatableTable, Vertical):
         Binding("n", "comment", "Comment"),
         Binding("g", "group", "Group"),
         Binding("C", "columns", "Columns"),
-        Binding("M", "messages", "WS msgs"),
+        Binding("M", "messages", "Messages"),
         Binding("W", "wireshark", "Wireshark"),
         Binding("l", "follow", "Follow new"),
         Binding("h", "toggle_hidden", "Hidden"),
@@ -1853,7 +1853,7 @@ class SessionPane(AnnotatableTable, Vertical):
         if not (f and f.websocket):
             self.notify("not a WebSocket flow", severity="warning")
             return
-        self.app.push_screen(WsMessagesScreen(self.session_id, fid))
+        self.app.push_screen(MessagesScreen(self.session_id, fid))
 
     @work(exclusive=True, group="wireshark")
     async def action_wireshark(self) -> None:
@@ -2034,7 +2034,7 @@ class FlowDetailScreen(Screen):
         Binding("x", "export_curl", "Export curl"),
         Binding("w", "export_raw", "Export raw"),
         Binding("H", "export_client_hellos", "Export CHs"),
-        Binding("M", "messages", "WS msgs"),
+        Binding("M", "messages", "Messages"),
         Binding("W", "wireshark", "Wireshark"),
         Binding("q", "quit", "Quit"),
     ]
@@ -2079,7 +2079,7 @@ class FlowDetailScreen(Screen):
         if not (self._flow and self._flow.websocket):
             self.notify("not a WebSocket flow", severity="warning")
             return
-        self.app.push_screen(WsMessagesScreen(self.session_id, self.flow_id))
+        self.app.push_screen(MessagesScreen(self.session_id, self.flow_id))
 
     @work(exclusive=True, group="wireshark")
     async def action_wireshark(self) -> None:
@@ -2229,12 +2229,12 @@ class FlowDetailScreen(Screen):
             lines.append(Content.from_markup("[dim]on the wire: $v[/dim]", v=f.authority))
         # Connection identity, appended to the transport line: which connection carried this
         # request and — for HTTP/2/3 — which multiplexed stream on it. Omitted per-part when
-        # unknown (a pushed proxy flow has no tcp_stream; HTTP/1.1 has no stream id).
+        # unknown (a pushed proxy flow has no connection_id; HTTP/1.1 has no stream id).
         conn, conn_kw = "", {}
-        if f.tcp_stream:
-            conn, conn_kw["conn"] = conn + "  conn=$conn", f.tcp_stream
-        if f.h2_stream_id:
-            conn, conn_kw["stream"] = conn + "  stream=$stream", f.h2_stream_id
+        if f.connection_id:
+            conn, conn_kw["conn"] = conn + "  conn=$conn", f.connection_id
+        if f.stream_id:
+            conn, conn_kw["stream"] = conn + "  stream=$stream", f.stream_id
         lines.append(Content.from_markup(
             "[dim]$proto  status=$status  tls=$tls  $src → $dst" + conn + "[/dim]",
             proto=f.protocol, status=str(f.status),
@@ -2402,6 +2402,12 @@ class _PayloadView(Screen):
     def _file_stem(self) -> str:  # base name for temp + saved files
         return "payload"
 
+    @property
+    def _safe_stem(self) -> str:
+        # The stem comes from ids a pushing client controls; a separator in it would put
+        # the file outside the directory it is meant for.
+        return self._file_stem.replace(os.sep, "_")
+
     def _meta_content(self) -> "Content | None":
         """Optional content shown above the payload (e.g. a message's annotations).
         None hides the block."""
@@ -2457,10 +2463,7 @@ class _PayloadView(Screen):
             return
         content = body_for_editor(self._content_type, self._data)
         suffix = editor_suffix(self._content_type, self._data)
-        # The stem comes from ids a pushing client controls; a separator in mkstemp's prefix
-        # would put the file outside the temp dir.
-        stem = self._file_stem.replace(os.sep, "_")
-        fd, path = tempfile.mkstemp(prefix=f"trafficdeck-{stem}-", suffix=suffix)
+        fd, path = tempfile.mkstemp(prefix=f"trafficdeck-{self._safe_stem}-", suffix=suffix)
         with os.fdopen(fd, "wb") as fp:
             fp.write(content)
         cmd, terminal = editor_command(path)
@@ -2480,15 +2483,12 @@ class _PayloadView(Screen):
             return
         # Kept until the TUI exits, even after a terminal $EDITOR returns: `code`, `subl`
         # or `gvim` fork and return at once, and the window they open reads the file later.
-        temp_files = getattr(self.app, "temp_files", None)
-        if temp_files is not None:
-            temp_files.append(path)
+        self.app.temp_files.append(path)
         self.notify(f"opened {self._what} → {path}")
 
     @work(exclusive=True)
     async def action_save(self) -> None:
-        stem = self._file_stem.replace(os.sep, "_")
-        path = os.path.abspath(f"{stem}.bin")
+        path = os.path.abspath(f"{self._safe_stem}.bin")
         try:
             with open(path, "wb") as fp:
                 fp.write(self._data)
@@ -2531,7 +2531,7 @@ class BodyScreen(_PayloadView):
         return f"{self._id_prefix}-{self._label}"
 
 
-class WsMessagesScreen(AnnotatableTable, Screen):
+class MessagesScreen(AnnotatableTable, Screen):
     """WebSocket / TCP-parsed message timeline for a flow — directional frames in time
     order, distinct from the request/response view. Messages are annotatable records: the
     same mark/comment/tag/favorite/group actions as the flow table (via AnnotatableTable).
@@ -2626,8 +2626,8 @@ class WsMessagesScreen(AnnotatableTable, Screen):
 
     def _update_subtitle(self) -> None:
         n = len(self._msgs)
-        base = f"websocket · {self.flow_id[:8]} · "
-        base += f"{n} matching" if self._filter else f"{n} frames"
+        base = f"messages · {self.flow_id[:8]} · "
+        base += f"{n} matching" if self._filter else f"{n} total"
         if self._selected:
             base += f" · {len(self._selected)} selected"
         if self.query_one("#msgs", NavDataTable).follow:
@@ -2776,7 +2776,7 @@ class WsMessagesScreen(AnnotatableTable, Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         mid = str(event.row_key.value)
-        self.app.push_screen(WsPayloadScreen(
+        self.app.push_screen(MessagePayloadScreen(
             self.session_id, self._msgs[mid], self._tagnames, self._groupnames))
 
     # --- annotation hooks (see AnnotatableTable) -------------------
@@ -2805,7 +2805,7 @@ class WsMessagesScreen(AnnotatableTable, Screen):
             self.load()
 
 
-class WsPayloadScreen(_PayloadView):
+class MessagePayloadScreen(_PayloadView):
     """Full payload of a single WebSocket frame — formatted + syntax-highlighted
     like an HTTP body (text), or hex-dumped (binary), with the same editor handoff
     for payloads too large to view in the TUI."""
@@ -2844,7 +2844,7 @@ class WsPayloadScreen(_PayloadView):
 
     @property
     def _file_stem(self) -> str:
-        return f"{self.msg.id[:8]}.ws"
+        return f"message-{self.msg.id[:8]}"
 
 
 class CompareScreen(Screen):

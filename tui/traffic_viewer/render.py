@@ -290,7 +290,7 @@ def duration_cell(f, live: bool = True) -> Text:
 def flags_cell(f, selected: bool) -> Text:
     """Compact annotation indicators, shared by the flow table and the message timeline:
     selection ✓, favorite ★, color mark ●, tag count #N, comment 💬, group ⬡. The tail
-    (WebSocket ⇅N, proxy ⇄, redirect ↪) is flow-only and guarded, so a WsMessage — which
+    (WebSocket ⇅N, proxy ⇄, redirect ↪) is flow-only and guarded, so a Message — which
     carries the same annotation fields but not those — renders cleanly too."""
     t = Text()
     if selected:
@@ -306,7 +306,7 @@ def flags_cell(f, selected: bool) -> Text:
     if f.group_ids:
         t.append("⬡ ", style="blue")
     if getattr(f, "websocket", False):
-        t.append(f"⇅{f.ws_message_count} ", style="bold magenta")
+        t.append(f"⇅{f.message_count} ", style="bold magenta")
     if getattr(getattr(f, "proxy", None), "addr", ""):
         t.append("⇄ ", style="yellow")  # went through a proxy
     if getattr(f, "redirect_location", "") or getattr(f, "redirected_from_id", ""):

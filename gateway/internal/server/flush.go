@@ -31,7 +31,7 @@ const (
 // easy to inject in tests.
 type flushSink interface {
 	InsertFlowWrites(ctx context.Context, sessionID, analysisID string, writes []store.FlowWrite) (int, error)
-	InsertWsMessages(ctx context.Context, sessionID string, msgs []*decode.WsMessage) (int, error)
+	InsertMessages(ctx context.Context, sessionID string, msgs []*decode.Message) (int, error)
 }
 
 // storedBody remembers where a flow's released bodies went, so a later re-flush of that
@@ -179,11 +179,11 @@ func (ls *liveSession) flush(ctx context.Context, final bool) error {
 	// Frames are immutable once decoded and the slice is append-only, so the batch is
 	// simply everything seen so far; it is trimmed after the write succeeds.
 	nmsgs := len(ls.messages)
-	var msgs []*decode.WsMessage
+	var msgs []*decode.Message
 	if nmsgs > 0 {
-		msgs = make([]*decode.WsMessage, 0, nmsgs)
+		msgs = make([]*decode.Message, 0, nmsgs)
 		for _, pm := range ls.messages[:nmsgs] {
-			msgs = append(msgs, protoToDecodeWsMessage(pm))
+			msgs = append(msgs, protoToDecodeMessage(pm))
 		}
 	}
 	sessionID, analysisID, sink := ls.sessionID, ls.analysisID, ls.sink
@@ -198,7 +198,7 @@ func (ls *liveSession) flush(ctx context.Context, final bool) error {
 		}
 	}
 	if nmsgs > 0 {
-		if _, err := sink.InsertWsMessages(ctx, sessionID, msgs); err != nil {
+		if _, err := sink.InsertMessages(ctx, sessionID, msgs); err != nil {
 			return err
 		}
 	}

@@ -224,8 +224,8 @@ func filterFlowFromProto(f *trafficv1.Flow, tagNames, groupNames map[string]stri
 	ff := filter.Flow{
 		Scheme: f.GetScheme(), Method: f.GetMethod(), Authority: f.GetAuthority(),
 		Path: f.GetPath(), Query: f.GetQuery(), Status: f.GetStatus(),
-		ContentTyp: f.GetContentType(), TCPStream: f.GetTcpStream(),
-		H2StreamID: f.GetH2StreamId(), Protocol: f.GetProtocol(),
+		ContentTyp: f.GetContentType(), ConnectionID: f.GetConnectionId(),
+		StreamID: f.GetStreamId(), Protocol: f.GetProtocol(),
 		MarkColor: f.GetMarkColor(), Favorite: f.GetFavorite(),
 		TagNames: f.GetTagIds(), GroupNames: f.GetGroupIds(),
 		Metadata: f.GetMetadata(),

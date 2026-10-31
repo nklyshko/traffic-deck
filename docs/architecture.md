@@ -99,9 +99,9 @@ Both decoders produce the same model:
 - Custom decoders are compiled-in Go modules that self-register; each is a stateful
   framer fed the connection's decrypted byte stream. See
   [ADR-0004](adr/0004-compiled-in-go-decoders.md).
-- A flow records the connection it rode on (`tcp_stream`, or `quic:<n>` for HTTP/3) and,
-  for HTTP/2 and HTTP/3, its stream within that connection (`h2_stream_id`) — so
-  multiplexed requests can be grouped back onto their connection.
+- A flow records the connection it rode on (`connection_id`: a TCP stream number, or
+  `quic:<n>` for HTTP/3) and, for HTTP/2 and HTTP/3, its stream within that connection
+  (`stream_id`) — so multiplexed requests can be grouped back onto their connection.
 
 In the batch decoder specifically, one PDML `<proto>` element becomes one stitcher
 record, so multiplexed HTTP/2 frames in a single packet keep their own stream id. See

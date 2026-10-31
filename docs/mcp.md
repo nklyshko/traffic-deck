@@ -65,8 +65,12 @@ registered at all, so they never appear in the tool list.
 - `connection_id` is the connection a flow rode on — a TCP stream number or `quic:<n>` —
   and the same id `list_undecoded_connections` and `get_connection_bytes` use. Flows that
   share it were multiplexed; `stream_id` (in `get_flow`) is the HTTP/2 or HTTP/3 stream.
-- `undecoded_reason` says why a connection recorded no decoded request; `message_count` is
-  a flow's WebSocket frames or decoder messages.
+- Why a connection recorded no decoded request is `undecoded_reason` on a flow (a
+  mitmproxy capture records such connections as hidden flows: `tls_rejected`,
+  `no_request`, …) and `reason` on a `list_undecoded_connections` row (a packet capture's
+  index: `no_key`, `unparsed`, …). The row drops the prefix because everything in that
+  tool is undecoded; the two value sets differ because two different decoders assign them.
+- `message_count` is a flow's WebSocket frames or decoder messages.
 - `metadata` is every key the capture source recorded on the flow, unfiltered
   ([metadata-keys.md](metadata-keys.md) lists them). `hostname.source` says where the
   hostname in `url` came from: `host` / `authority` (the request named it), `sni` (the

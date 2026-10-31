@@ -128,8 +128,8 @@ class GatewayClient:
                                    byte_offset: int = 0, limit: int = 0):
         """One undecoded connection's bytes, read back from the session's capture."""
         return await self._v().GetConnectionBytes(viewer_pb2.GetConnectionBytesRequest(
-            session_id=session_id, conn_id=connection_id, from_client=sender == "client",
-            offset=byte_offset, limit=limit))
+            session_id=session_id, connection_id=connection_id, from_client=sender == "client",
+            byte_offset=byte_offset, limit=limit))
 
     async def list_messages(self, session_id: str, flow_id: str, filter_expr: str = ""):
         """A flow's frames, filtered by the gateway. Returns (messages, hints)."""

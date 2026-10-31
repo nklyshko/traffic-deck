@@ -19,7 +19,7 @@ func allocatedBy(fn func()) uint64 {
 func decodeAll(t *testing.T, capture []byte) {
 	t.Helper()
 	_ = LiveDecode(bytes.NewReader(capture), "", Sinks{
-		OnFlow: func(*Flow, bool) {}, OnMsg: func(*WsMessage) {}, OnUndecoded: func(*UndecodedConn) {}})
+		OnFlow: func(*Flow, bool) {}, OnMsg: func(*Message) {}, OnUndecoded: func(*UndecodedConn) {}})
 }
 
 // A classic pcap whose snap length and record length both say 4 GiB made pcapgo allocate a

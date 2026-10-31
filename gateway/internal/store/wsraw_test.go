@@ -10,9 +10,9 @@ import (
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
 
-// TestWsMessageRawRoundTrip checks that a WebSocket message's original (undecoded) bytes
-// persist in the raw field and are retrievable via ListMessages + GetWsMessageBody(raw).
-func TestWsMessageRawRoundTrip(t *testing.T) {
+// TestMessageRawRoundTrip checks that a WebSocket message's original (undecoded) bytes
+// persist in the raw field and are retrievable via ListMessages + GetMessageBody(raw).
+func TestMessageRawRoundTrip(t *testing.T) {
 	st := openTestStore(t)
 	ctx := context.Background()
 
@@ -35,7 +35,7 @@ func TestWsMessageRawRoundTrip(t *testing.T) {
 	}
 
 	decodedID := uuid.NewString()
-	if _, err := st.InsertWsMessages(ctx, sid, []*decode.WsMessage{
+	if _, err := st.InsertMessages(ctx, sid, []*decode.Message{
 		// decoder-produced: decoded Payload + original Raw
 		{ID: decodedID, FlowID: fid, TSUnixMicros: 100, FromClient: true, Opcode: "cmd", Payload: []byte("decoded"), Raw: []byte("RAWBYTES")},
 		// plain frame: no Raw
@@ -58,11 +58,11 @@ func TestWsMessageRawRoundTrip(t *testing.T) {
 		t.Errorf("plain frame should have no raw: %+v", msgs[1].GetRaw())
 	}
 
-	// GetWsMessageBody: decoded vs raw.
-	if b, err := st.GetWsMessageBody(ctx, sid, decodedID, false); err != nil || string(b) != "decoded" {
+	// GetMessageBody: decoded vs raw.
+	if b, err := st.GetMessageBody(ctx, sid, decodedID, false); err != nil || string(b) != "decoded" {
 		t.Fatalf("get decoded = %q err=%v", b, err)
 	}
-	if b, err := st.GetWsMessageBody(ctx, sid, decodedID, true); err != nil || string(b) != "RAWBYTES" {
+	if b, err := st.GetMessageBody(ctx, sid, decodedID, true); err != nil || string(b) != "RAWBYTES" {
 		t.Fatalf("get raw = %q err=%v", b, err)
 	}
 }

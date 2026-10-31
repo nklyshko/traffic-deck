@@ -109,8 +109,8 @@ class FlowBatch(_message.Message):
     MESSAGES_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     flows: _containers.RepeatedCompositeFieldContainer[_common_pb2.Flow]
-    messages: _containers.RepeatedCompositeFieldContainer[_common_pb2.WsMessage]
-    def __init__(self, session_id: _Optional[str] = ..., flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., messages: _Optional[_Iterable[_Union[_common_pb2.WsMessage, _Mapping]]] = ...) -> None: ...
+    messages: _containers.RepeatedCompositeFieldContainer[_common_pb2.Message]
+    def __init__(self, session_id: _Optional[str] = ..., flows: _Optional[_Iterable[_Union[_common_pb2.Flow, _Mapping]]] = ..., messages: _Optional[_Iterable[_Union[_common_pb2.Message, _Mapping]]] = ...) -> None: ...
 
 class PushAck(_message.Message):
     __slots__ = ("accepted",)

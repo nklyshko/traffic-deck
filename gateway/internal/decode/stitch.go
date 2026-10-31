@@ -50,7 +50,7 @@ type stitcher struct {
 	// onChange, if set, fires after each flow is created (isNew=true) or updated.
 	onChange func(f *Flow, isNew bool)
 	// onMessage, if set, fires for each WebSocket frame as it's decoded (live path).
-	onMessage func(m *WsMessage)
+	onMessage func(m *Message)
 
 	// WebSocket binary decoders (e.g. MAX over WebSocket): per Upgrade flow, the
 	// matched decoder (nil = none, cached) and its stateful framing session. Binary
@@ -139,7 +139,7 @@ func firstNonEmpty(a, b string) string {
 
 func (s *stitcher) emit(f *Flow, isNew bool) {
 	if f.Proxy == nil {
-		if p := s.proxyByStream[f.TCPStream]; p != nil {
+		if p := s.proxyByStream[f.ConnectionID]; p != nil {
 			f.Proxy = p // attach the connection's proxy to every flow on the stream
 		}
 	}
@@ -266,7 +266,7 @@ func (s *stitcher) addHTTP1(l layers, tcp string) {
 	s.emit(f, created)
 }
 
-// addWebsocket records one WebSocket frame as a WsMessage on the Upgrade flow that
+// addWebsocket records one WebSocket frame as a Message on the Upgrade flow that
 // owns this TCP stream. Frames whose stream has no known HTTP flow (e.g. the Upgrade
 // handshake wasn't captured) are dropped.
 func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
@@ -288,7 +288,7 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 	if opName == "binary" {
 		if frames, ok := s.decodeWSBinary(f, fromClient, payload); ok {
 			for _, fr := range frames {
-				s.emitWsMessage(f, &WsMessage{
+				s.emitMessage(f, &Message{
 					ID:           uuid.NewString(),
 					FlowID:       f.ID,
 					FrameNumber:  frameNum,
@@ -307,7 +307,7 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 		}
 	}
 
-	s.emitWsMessage(f, &WsMessage{
+	s.emitMessage(f, &Message{
 		ID:           uuid.NewString(),
 		FlowID:       f.ID,
 		FrameNumber:  frameNum,
@@ -318,8 +318,8 @@ func (s *stitcher) addWebsocket(l layers, tcp, opcode string) {
 	})
 }
 
-func (s *stitcher) emitWsMessage(f *Flow, msg *WsMessage) {
-	f.WsMessageCount++
+func (s *stitcher) emitMessage(f *Flow, msg *Message) {
+	f.MessageCount++
 	s.ds.Messages = append(s.ds.Messages, msg)
 	if s.onMessage != nil {
 		s.onMessage(msg)
@@ -388,8 +388,8 @@ func (s *stitcher) addHTTP3(l layers, conn string) {
 			FrameNumber:  parseUint(l.first(fFrameNum)),
 			TSUnixMicros: epochToMicros(l.first(fFrameTime)),
 			Protocol:     "HTTP/3",
-			TCPStream:    "quic:" + conn, // reuse the column for the QUIC connection id
-			H2StreamID:   sid,
+			ConnectionID: "quic:" + conn, // reuse the column for the QUIC connection id
+			StreamID:     sid,
 			SrcAddr:      addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fUDPSrcPort)),
 			DstAddr:      addr(l.first(fIPDst), l.first(fIP6Dst), l.first(fUDPDstPort)),
 			TLSDecrypted: true, // decoded h3 means QUIC/TLS was decrypted
@@ -470,8 +470,8 @@ func (s *stitcher) newFlow(l layers, tcp, sid string) *Flow {
 		FrameNumber:  parseUint(l.first(fFrameNum)),
 		TSUnixMicros: epochToMicros(l.first(fFrameTime)),
 		Protocol:     proto,
-		TCPStream:    tcp,
-		H2StreamID:   sid,
+		ConnectionID: tcp,
+		StreamID:     sid,
 		SrcAddr:      addr(l.first(fIPSrc), l.first(fIP6Src), l.first(fTCPSrcPort)),
 		DstAddr:      addr(l.first(fIPDst), l.first(fIP6Dst), l.first(fTCPDstPort)),
 		// If we can see HTTP inside a TLS stack, the TLS was decrypted (h1 or h2).

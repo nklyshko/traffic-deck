@@ -37,14 +37,14 @@ func TestGetLiveRecordAnnotations(t *testing.T) {
 		flows:   map[string]*trafficv1.Flow{},
 		dflows:  map[string]*decode.Flow{},
 		subs:    map[int]*flowSub{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		msgSubs: map[int]chan *trafficv1.Message{},
 	}
 	hub.sessions[sid] = ls
 
 	fid := uuid.NewString()
 	ls.publish(&trafficv1.Flow{Id: fid, Authority: "example.com", Method: "GET"}, true)
 	mid := uuid.NewString()
-	ls.publishMessage(&trafficv1.WsMessage{Id: mid, FlowId: fid, Opcode: "text"})
+	ls.publishMessage(&trafficv1.Message{Id: mid, FlowId: fid, Opcode: "text"})
 
 	// Annotate both while the session is still open (comment persists to the bundle DB).
 	if _, err := st.AddComment(ctx, sid, fid, "suspicious"); err != nil {

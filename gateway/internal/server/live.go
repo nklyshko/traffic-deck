@@ -88,8 +88,8 @@ type liveSession struct {
 	// WebSocket frames decoded so far and not yet written, plus their subscribers. Frames
 	// are immutable once decoded, so this is append-only until the flusher trims what it
 	// has persisted; with no flusher it holds the whole session, as before.
-	messages []*trafficv1.WsMessage
-	msgSubs  map[int]chan *trafficv1.WsMessage
+	messages []*trafficv1.Message
+	msgSubs  map[int]chan *trafficv1.Message
 
 	// Incremental persistence (ADR-0011), active only when sink is set. Without it the
 	// session accumulates until close — the pushed path, which persists itself.
@@ -140,7 +140,7 @@ func (h *liveHub) start(sessionID, keylogPath string) {
 		flows:     map[string]*trafficv1.Flow{},
 		dflows:    map[string]*decode.Flow{},
 		subs:      map[int]*flowSub{},
-		msgSubs:   map[int]chan *trafficv1.WsMessage{},
+		msgSubs:   map[int]chan *trafficv1.Message{},
 		sessionID: sessionID,
 		dirty:     map[string]struct{}{},
 		pending:   map[string]struct{}{},
@@ -200,7 +200,7 @@ func (h *liveHub) startPassive(sessionID string) *liveSession {
 	ls := &liveSession{
 		flows:   map[string]*trafficv1.Flow{},
 		subs:    map[int]*flowSub{},
-		msgSubs: map[int]chan *trafficv1.WsMessage{},
+		msgSubs: map[int]chan *trafficv1.Message{},
 	}
 	h.sessions[sessionID] = ls
 	return ls
@@ -253,7 +253,7 @@ func (h *liveHub) stop(sessionID string) *liveSession {
 // snapshotForRecord returns the final full-body decode flows (in arrival order) and the
 // WebSocket messages, for persisting a live-decoded session on close. WS message payloads
 // are carried inline in the proto, uncapped.
-func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.WsMessage) {
+func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.Message) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	flows := make([]*decode.Flow, 0, len(ls.order))
@@ -262,9 +262,9 @@ func (ls *liveSession) snapshotForRecord() ([]*decode.Flow, []*decode.WsMessage)
 			flows = append(flows, f)
 		}
 	}
-	msgs := make([]*decode.WsMessage, 0, len(ls.messages))
+	msgs := make([]*decode.Message, 0, len(ls.messages))
 	for _, pm := range ls.messages {
-		msgs = append(msgs, protoToDecodeWsMessage(pm))
+		msgs = append(msgs, protoToDecodeMessage(pm))
 	}
 	return flows, msgs
 }
@@ -305,13 +305,13 @@ func (ls *liveSession) liveFlows() []*trafficv1.Flow {
 
 // messagesForFlow returns clones of the frames decoded so far for one flow, in order —
 // the live counterpart of store.ListMessages.
-func (ls *liveSession) messagesForFlow(flowID string) []*trafficv1.WsMessage {
+func (ls *liveSession) messagesForFlow(flowID string) []*trafficv1.Message {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
-	var out []*trafficv1.WsMessage
+	var out []*trafficv1.Message
 	for _, m := range ls.messages {
 		if m.GetFlowId() == flowID {
-			out = append(out, proto.Clone(m).(*trafficv1.WsMessage))
+			out = append(out, proto.Clone(m).(*trafficv1.Message))
 		}
 	}
 	return out
@@ -395,12 +395,12 @@ func (ls *liveSession) messageBody(messageID string, raw bool) ([]byte, bool) {
 
 // message returns a clone of the live WebSocket/parsed message with the given id, or nil.
 // Cloned for the same reason as flow: the live proto is shared with subscribers.
-func (ls *liveSession) message(id string) *trafficv1.WsMessage {
+func (ls *liveSession) message(id string) *trafficv1.Message {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	for _, m := range ls.messages {
 		if m.Id == id {
-			return proto.Clone(m).(*trafficv1.WsMessage)
+			return proto.Clone(m).(*trafficv1.Message)
 		}
 	}
 	return nil
@@ -450,11 +450,11 @@ func (ls *liveSession) undecodedSnapshot(foreign map[decode.ConnKey]bool) []*dec
 	return out
 }
 
-func (ls *liveSession) onMessage(m *decode.WsMessage) {
+func (ls *liveSession) onMessage(m *decode.Message) {
 	ls.publishMessage(wsMsgToProto(m))
 }
 
-func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
+func (ls *liveSession) publishMessage(pm *trafficv1.Message) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if ls.closed {
@@ -472,7 +472,7 @@ func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
 	// separately, so bump it here) and re-publish the flow as an update.
 	if f := ls.flows[pm.GetFlowId()]; f != nil {
 		f.Websocket = true
-		f.WsMessageCount++
+		f.MessageCount++
 		ls.markDirtyLocked(pm.GetFlowId())
 		ev := &trafficv1.FlowEvent{Event: &trafficv1.FlowEvent_FlowUpdated{FlowUpdated: f}}
 		for _, sub := range ls.subs {
@@ -483,7 +483,7 @@ func (ls *liveSession) publishMessage(pm *trafficv1.WsMessage) {
 
 // subscribeMessages returns the frames seen so far for one flow, a channel of
 // subsequent frames (for that flow), and a cancel func. ch is nil if already closed.
-func (ls *liveSession) subscribeMessages(flowID string) (snapshot []*trafficv1.WsMessage, ch chan *trafficv1.WsMessage, cancel func()) {
+func (ls *liveSession) subscribeMessages(flowID string) (snapshot []*trafficv1.Message, ch chan *trafficv1.Message, cancel func()) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if ls.closed {
@@ -494,7 +494,7 @@ func (ls *liveSession) subscribeMessages(flowID string) (snapshot []*trafficv1.W
 			snapshot = append(snapshot, m)
 		}
 	}
-	ch = make(chan *trafficv1.WsMessage, liveEventBuffer)
+	ch = make(chan *trafficv1.Message, liveEventBuffer)
 	id := ls.nextID
 	ls.nextID++
 	ls.msgSubs[id] = ch
@@ -522,12 +522,12 @@ func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
 	if old := ls.flows[pf.Id]; old != nil {
 		// A pushed flow is re-sent whole as it progresses (mitmproxy re-pushes on
 		// response and again on websocket_end), and build_flow carries no
-		// WsMessageCount — the pushed path accumulates it here from frames (see
+		// MessageCount — the pushed path accumulates it here from frames (see
 		// publishMessage). Without this, the websocket_end re-push resets the live ⇅
 		// count to zero. Carry the accumulated count/flag forward on any re-publish;
 		// for the native decode path the count only grows, so max() is a no-op there.
-		if old.WsMessageCount > pf.WsMessageCount {
-			pf.WsMessageCount = old.WsMessageCount
+		if old.MessageCount > pf.MessageCount {
+			pf.MessageCount = old.MessageCount
 		}
 		pf.Websocket = pf.Websocket || old.Websocket
 	}
@@ -591,10 +591,10 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		ContentType:      f.ContentType,
 		RequestBytes:     f.RequestBytes,
 		TlsDecrypted:     f.TLSDecrypted,
-		TcpStream:        f.TCPStream,
-		H2StreamId:       f.H2StreamID,
+		ConnectionId:     f.ConnectionID,
+		StreamId:         f.StreamID,
 		Websocket:        f.Websocket,
-		WsMessageCount:   f.WsMessageCount,
+		MessageCount:     f.MessageCount,
 		Error:            f.Error,
 		DurationMicros:   f.DurationMicros,
 		Http2Fingerprint: f.Http2Fingerprint,
@@ -628,8 +628,8 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 // wsMsgToProto converts a decoded WebSocket frame to the proto type for live events,
 // inlining the payload (frames are small; the stored path serves large ones via
 // GetMessageBody after persistence).
-func wsMsgToProto(m *decode.WsMessage) *trafficv1.WsMessage {
-	pm := &trafficv1.WsMessage{
+func wsMsgToProto(m *decode.Message) *trafficv1.Message {
+	pm := &trafficv1.Message{
 		Id:           m.ID,
 		FlowId:       m.FlowID,
 		FrameNumber:  m.FrameNumber,

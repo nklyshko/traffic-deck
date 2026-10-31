@@ -229,7 +229,7 @@ func (i *Ingest) claimPushedTCP(pf *trafficv1.Flow) {
 // pushedStreamMeta describes a pushed raw-TCP flow to the decoder registry. Its authority
 // is a name only when the source says one named it; a bare address is ServerHost alone.
 func pushedStreamMeta(pf *trafficv1.Flow) decoders.StreamMeta {
-	m := decoders.StreamMeta{TCPStream: pf.GetTcpStream(), SNI: pf.GetMetadata()[tlsSNIKey]}
+	m := decoders.StreamMeta{ConnectionID: pf.GetConnectionId(), SNI: pf.GetMetadata()[tlsSNIKey]}
 	if host, port, err := net.SplitHostPort(pf.GetDstAddr()); err == nil {
 		m.ServerHost, m.ServerPort = host, port
 	}
@@ -433,8 +433,8 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 		// WSDecoder reframes binary frames into protocol messages (carrying the original
 		// bytes in Raw); unclaimed frames are stored as-is.
 		msgs := batch.GetMessages()
-		var store []*decode.WsMessage
-		var pub []*trafficv1.WsMessage
+		var store []*decode.Message
+		var pub []*trafficv1.Message
 		for _, pm := range msgs {
 			if pm.GetId() == "" {
 				pm.Id = uuid.NewString()
@@ -443,7 +443,7 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 			if pm.GetOpcode() == "binary" {
 				if frames, name, ok := i.decodePushedTCP(pm.GetFlowId(), pm.GetFromClient(), payload); ok {
 					for _, fr := range frames {
-						dm := &decode.WsMessage{
+						dm := &decode.Message{
 							ID: uuid.NewString(), FlowID: pm.GetFlowId(),
 							// A raw stream has no frame types of its own, so the transport's
 							// opcode is the decoder's name — as the pcap path records it.
@@ -458,7 +458,7 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 				}
 				if frames, ok := i.decodePushedWSBinary(pm.GetFlowId(), pm.GetFromClient(), payload); ok {
 					for _, fr := range frames {
-						dm := &decode.WsMessage{
+						dm := &decode.Message{
 							ID: uuid.NewString(), FlowID: pm.GetFlowId(),
 							// The WebSocket opcode the protocol frame arrived in ("binary"),
 							// not the protocol's own — that is in Metadata, which this path
@@ -473,11 +473,11 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 					continue
 				}
 			}
-			store = append(store, protoToDecodeWsMessage(pm))
+			store = append(store, protoToDecodeMessage(pm))
 			pub = append(pub, pm)
 		}
 		if len(store) > 0 {
-			if _, err := i.st.InsertWsMessages(ctx, sid, store); err != nil {
+			if _, err := i.st.InsertMessages(ctx, sid, store); err != nil {
 				return status.Errorf(codes.Internal, "insert ws messages: %v", err)
 			}
 			for _, pm := range pub {
@@ -509,8 +509,8 @@ func protoToDecodeFlow(pf *trafficv1.Flow) *decode.Flow {
 		ContentType:  pf.GetContentType(),
 		RequestBytes: pf.GetRequestBytes(),
 		TLSDecrypted: pf.GetTlsDecrypted(),
-		TCPStream:    pf.GetTcpStream(),
-		H2StreamID:   pf.GetH2StreamId(),
+		ConnectionID: pf.GetConnectionId(),
+		StreamID:     pf.GetStreamId(),
 		RequestBody:  pf.GetRequestBody().GetInline(),
 		ResponseBody: pf.GetResponseBody().GetInline(),
 		// What the source says the bytes it pushed were encoded as on the wire (it did
@@ -798,7 +798,7 @@ func (i *Ingest) persistLive(ctx context.Context, sid string, ls *liveSession, f
 	if _, err := i.st.InsertFlows(ctx, sid, aid, flows); err != nil {
 		return fmt.Errorf("insert flows: %w", err)
 	}
-	if _, err := i.st.InsertWsMessages(ctx, sid, msgs); err != nil {
+	if _, err := i.st.InsertMessages(ctx, sid, msgs); err != nil {
 		return fmt.Errorf("insert ws messages: %w", err)
 	}
 	i.dropForeignFlows(ctx, sid, foreign)
@@ -833,10 +833,10 @@ func (i *Ingest) dropForeignFlows(ctx context.Context, sid string, foreign map[d
 	}
 }
 
-// protoToDecodeWsMessage converts a live proto WebSocket frame to the decode type the
+// protoToDecodeMessage converts a live proto WebSocket frame to the decode type the
 // store persists (payloads are inline on the live path).
-func protoToDecodeWsMessage(pm *trafficv1.WsMessage) *decode.WsMessage {
-	return &decode.WsMessage{
+func protoToDecodeMessage(pm *trafficv1.Message) *decode.Message {
+	return &decode.Message{
 		ID:           pm.GetId(),
 		FlowID:       pm.GetFlowId(),
 		FrameNumber:  pm.GetFrameNumber(),
@@ -847,7 +847,7 @@ func protoToDecodeWsMessage(pm *trafficv1.WsMessage) *decode.WsMessage {
 		Raw:          pm.GetRaw().GetInline(),
 		// The decoder's header fields, which every live frame reaches the bundle through:
 		// the flusher converts back to the decode type to write, so a field dropped here is
-		// a field the session never gets. The batch path writes decode.WsMessage directly
+		// a field the session never gets. The batch path writes decode.Message directly
 		// and so never showed it — a live capture came out with named opcodes and no
 		// columns at all.
 		Metadata: pm.GetMetadata(),

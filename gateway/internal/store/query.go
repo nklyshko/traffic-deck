@@ -246,18 +246,18 @@ func whereClause(q FlowQuery) (string, []any) {
 
 func scanQueryRow(rows *sql.Rows) (*scanRow, error) {
 	var r scanRow
-	var scheme, method, authority, path, query, contentType, tcpStream, h2 sql.NullString
+	var scheme, method, authority, path, query, contentType, connectionID, streamID sql.NullString
 	var reqRef, respRef, protocol sql.NullString
 	var status sql.NullInt64
 	if err := rows.Scan(&r.id, &r.ts, &r.frame, &scheme, &method, &authority, &path, &query,
-		&status, &contentType, &tcpStream, &h2, &reqRef, &respRef, &protocol); err != nil {
+		&status, &contentType, &connectionID, &streamID, &reqRef, &respRef, &protocol); err != nil {
 		return nil, err
 	}
 	r.reqBodyRef, r.respRef = reqRef.String, respRef.String
 	r.f = filter.Flow{
 		Scheme: scheme.String, Method: method.String, Authority: authority.String,
 		Path: path.String, Query: query.String, Status: uint32(status.Int64),
-		ContentTyp: contentType.String, TCPStream: tcpStream.String, H2StreamID: h2.String,
+		ContentTyp: contentType.String, ConnectionID: connectionID.String, StreamID: streamID.String,
 		Protocol: protocol.String,
 	}
 	return &r, nil
@@ -366,7 +366,7 @@ func (s *Store) hydrateFlows(ctx context.Context, sessionID string, ids []string
 	if err := s.attachAnnotations(ctx, db, flowRecords(byID)); err != nil {
 		return nil, err
 	}
-	if err := s.attachWsCounts(ctx, db, byID); err != nil {
+	if err := s.attachMessageCounts(ctx, db, byID); err != nil {
 		return nil, err
 	}
 	if err := s.attachMetadata(ctx, db, byID); err != nil {

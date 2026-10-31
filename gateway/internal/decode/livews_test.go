@@ -47,10 +47,10 @@ func wsFrame(opcode byte, payload []byte, maskKey []byte) []byte {
 func TestLiveWebSocketUpgradeAndFrames(t *testing.T) {
 	var mu sync.Mutex
 	var flow *Flow
-	var msgs []*WsMessage
+	var msgs []*Message
 	lt := &liveTCP{
 		onFlow: func(f *Flow, _ bool) { mu.Lock(); flow = f; mu.Unlock() },
-		onMsg:  func(m *WsMessage) { mu.Lock(); msgs = append(msgs, m); mu.Unlock() },
+		onMsg:  func(m *Message) { mu.Lock(); msgs = append(msgs, m); mu.Unlock() },
 	}
 	s := &tcpStream{
 		lt:         lt,
@@ -92,7 +92,7 @@ func TestLiveWebSocketUpgradeAndFrames(t *testing.T) {
 	}
 	// The two directions are read by concurrent goroutines, so order isn't fixed —
 	// match by direction.
-	var c, srv *WsMessage
+	var c, srv *Message
 	for _, m := range msgs {
 		if m.FromClient {
 			c = m

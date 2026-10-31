@@ -28,10 +28,10 @@ func (v *Viewer) undecodedOf(ctx context.Context, sid string) ([]*decode.Undecod
 	if ls := v.hub.get(sid); ls != nil {
 		seen := make(map[string]bool, len(conns))
 		for _, c := range conns {
-			seen[c.ConnID] = true
+			seen[c.ConnectionID] = true
 		}
 		for _, c := range ls.undecodedSnapshot(nil) {
-			if !seen[c.ConnID] {
+			if !seen[c.ConnectionID] {
 				conns = append(conns, c)
 			}
 		}
@@ -88,12 +88,12 @@ func (v *Viewer) GetConnectionBytes(ctx context.Context, req *trafficv1.GetConne
 	}
 	var conn *decode.UndecodedConn
 	for _, c := range conns {
-		if c.ConnID == req.GetConnId() {
+		if c.ConnectionID == req.GetConnectionId() {
 			conn = c
 		}
 	}
 	if conn == nil {
-		return nil, status.Errorf(codes.NotFound, "no undecoded connection %q in session %s", req.GetConnId(), sid)
+		return nil, status.Errorf(codes.NotFound, "no undecoded connection %q in session %s", req.GetConnectionId(), sid)
 	}
 	if v.obj == nil {
 		return nil, status.Error(codes.Unavailable, "this gateway has no capture store to read from")
@@ -104,7 +104,7 @@ func (v *Viewer) GetConnectionBytes(ctx context.Context, req *trafficv1.GetConne
 	}
 	b, err := decode.ReadConnection(path, conn, connBytesCap)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "read connection %s: %v", conn.ConnID, err)
+		return nil, status.Errorf(codes.Internal, "read connection %s: %v", conn.ConnectionID, err)
 	}
 	data := b.Down
 	if req.GetFromClient() {
@@ -114,9 +114,9 @@ func (v *Viewer) GetConnectionBytes(ctx context.Context, req *trafficv1.GetConne
 	if limit <= 0 || limit > connBytesPage {
 		limit = connBytesPage
 	}
-	start := min(int(req.GetOffset()), len(data))
+	start := min(int(req.GetByteOffset()), len(data))
 	out := &trafficv1.ConnectionBytes{
-		Data: data[start:min(start+limit, len(data))], Offset: uint64(start),
+		Data: data[start:min(start+limit, len(data))], ByteOffset: uint64(start),
 		Total: uint64(len(data)), Truncated: b.Truncated, Gaps: uint32(b.Gaps),
 	}
 	if conn.Transport == "tcp" {
@@ -129,7 +129,7 @@ func sortByVolume(cs []*decode.UndecodedConn) {
 	vol := func(c *decode.UndecodedConn) uint64 { return c.BytesUp + c.BytesDown }
 	for i := 1; i < len(cs); i++ { // insertion sort: the list is nearly sorted already
 		for j := i; j > 0 && (vol(cs[j]) > vol(cs[j-1]) ||
-			vol(cs[j]) == vol(cs[j-1]) && cs[j].FirstTS < cs[j-1].FirstTS); j-- {
+			vol(cs[j]) == vol(cs[j-1]) && cs[j].FirstTSMicros < cs[j-1].FirstTSMicros); j-- {
 			cs[j], cs[j-1] = cs[j-1], cs[j]
 		}
 	}
@@ -137,9 +137,9 @@ func sortByVolume(cs []*decode.UndecodedConn) {
 
 func undecodedToProto(c *decode.UndecodedConn) *trafficv1.UndecodedConnection {
 	return &trafficv1.UndecodedConnection{
-		ConnId: c.ConnID, Transport: c.Transport, Client: c.Client, Server: c.Server,
+		ConnectionId: c.ConnectionID, Transport: c.Transport, Client: c.Client, Server: c.Server,
 		Sni: c.SNI, Ja4: c.JA4, Reason: c.Reason, Detail: c.Detail,
 		BytesUp: c.BytesUp, BytesDown: c.BytesDown,
-		FirstTsMicros: c.FirstTS, LastTsMicros: c.LastTS,
+		FirstTsMicros: c.FirstTSMicros, LastTsMicros: c.LastTSMicros,
 	}
 }

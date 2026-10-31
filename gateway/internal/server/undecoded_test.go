@@ -100,7 +100,7 @@ func TestUndecodedConnectionsAreListedAndReadBack(t *testing.T) {
 		t.Fatalf("host filter kept %d", l.GetTotal())
 	}
 
-	up, err := v.GetConnectionBytes(ctx, &trafficv1.GetConnectionBytesRequest{SessionId: sid, ConnId: c.GetConnId(), FromClient: true})
+	up, err := v.GetConnectionBytes(ctx, &trafficv1.GetConnectionBytesRequest{SessionId: sid, ConnectionId: c.GetConnectionId(), FromClient: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,14 +110,14 @@ func TestUndecodedConnectionsAreListedAndReadBack(t *testing.T) {
 	if tls := strings.Join(up.GetTls(), "\n"); !strings.Contains(tls, `sni="pinned.example"`) {
 		t.Fatalf("tls = %s", tls)
 	}
-	down, err := v.GetConnectionBytes(ctx, &trafficv1.GetConnectionBytesRequest{SessionId: sid, ConnId: c.GetConnId(), Offset: 10, Limit: 5})
+	down, err := v.GetConnectionBytes(ctx, &trafficv1.GetConnectionBytesRequest{SessionId: sid, ConnectionId: c.GetConnectionId(), ByteOffset: 10, Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(down.GetData(), s2c[10:15]) || down.GetOffset() != 10 {
-		t.Fatalf("server window = %x at %d", down.GetData(), down.GetOffset())
+	if !bytes.Equal(down.GetData(), s2c[10:15]) || down.GetByteOffset() != 10 {
+		t.Fatalf("server window = %x at %d", down.GetData(), down.GetByteOffset())
 	}
-	if _, err := v.GetConnectionBytes(ctx, &trafficv1.GetConnectionBytesRequest{SessionId: sid, ConnId: "nope"}); err == nil {
+	if _, err := v.GetConnectionBytes(ctx, &trafficv1.GetConnectionBytesRequest{SessionId: sid, ConnectionId: "nope"}); err == nil {
 		t.Fatal("an unknown connection was read")
 	}
 }

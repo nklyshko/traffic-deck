@@ -310,7 +310,7 @@ func (v *Viewer) ListMessages(ctx context.Context, req *trafficv1.ListMessagesRe
 	}, nil
 }
 
-func (v *Viewer) GetMessage(ctx context.Context, req *trafficv1.GetMessageRequest) (*trafficv1.WsMessage, error) {
+func (v *Viewer) GetMessage(ctx context.Context, req *trafficv1.GetMessageRequest) (*trafficv1.Message, error) {
 	m, err := v.st.GetMessage(ctx, req.GetSessionId(), req.GetMessageId())
 	if errors.Is(err, store.ErrNotFound) {
 		// Like GetFlow: a live WebSocket/parsed message isn't persisted until close, so
@@ -329,7 +329,7 @@ func (v *Viewer) GetMessage(ctx context.Context, req *trafficv1.GetMessageReques
 
 // liveMessage is the message-side counterpart of liveFlow: the in-progress message from the
 // live hub with the bundle's annotations folded in, or nil if it isn't live.
-func (v *Viewer) liveMessage(ctx context.Context, sessionID, messageID string) *trafficv1.WsMessage {
+func (v *Viewer) liveMessage(ctx context.Context, sessionID, messageID string) *trafficv1.Message {
 	ls := v.hub.get(sessionID)
 	if ls == nil {
 		return nil
@@ -351,7 +351,7 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 		return err
 	}
 	match := v.messageMatcher(srv.Context(), req.GetSessionId(), pred)
-	send := func(m *trafficv1.WsMessage) error {
+	send := func(m *trafficv1.Message) error {
 		if !match(m) {
 			return nil
 		}
@@ -372,8 +372,8 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 	// is recoverable, a gap in a live timeline is not.
 	var (
 		ls       *liveSession
-		snapshot []*trafficv1.WsMessage
-		ch       chan *trafficv1.WsMessage
+		snapshot []*trafficv1.Message
+		ch       chan *trafficv1.Message
 	)
 	if req.GetFollow() {
 		if ls = v.waitForLive(srv.Context(), req.GetSessionId()); ls != nil {
@@ -437,7 +437,7 @@ func (v *Viewer) StreamMessages(req *trafficv1.StreamMessagesRequest, srv grpc.S
 }
 
 func (v *Viewer) GetMessageBody(req *trafficv1.GetMessageBodyRequest, srv grpc.ServerStreamingServer[trafficv1.BodyChunk]) error {
-	body, err := v.st.GetWsMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId(), req.GetRaw())
+	body, err := v.st.GetMessageBody(srv.Context(), req.GetSessionId(), req.GetMessageId(), req.GetRaw())
 	if errors.Is(err, store.ErrNotFound) {
 		// Unpersisted live frame: its payload (and raw bytes) are inline in the hub. Frames
 		// are small and kept whole, so nothing here is ever a prefix.

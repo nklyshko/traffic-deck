@@ -118,7 +118,7 @@ class Body(_message.Message):
     def __init__(self, size: _Optional[int] = ..., content_type: _Optional[str] = ..., inline: _Optional[bytes] = ..., object_ref: _Optional[str] = ..., truncated: bool = ..., content_encoding: _Optional[str] = ...) -> None: ...
 
 class Flow(_message.Message):
-    __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "tcp_stream", "h2_stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "ws_message_count", "proxy", "metadata", "error", "duration_micros", "http2_fingerprint", "ja3", "ja4", "tls_client_hello", "tls_client_name", "response_cookies", "redirect_location", "redirected_from_id", "client_hellos", "tls_hrr")
+    __slots__ = ("id", "session_id", "analysis_id", "frame_number", "ts_unix_micros", "method", "scheme", "authority", "path", "query", "protocol", "status", "src_addr", "dst_addr", "user_agent", "content_type", "request_bytes", "tls_decrypted", "connection_id", "stream_id", "request_headers", "response_headers", "request_cookies", "request_body", "response_body", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "websocket", "message_count", "proxy", "metadata", "error", "duration_micros", "http2_fingerprint", "ja3", "ja4", "tls_client_hello", "tls_client_name", "response_cookies", "redirect_location", "redirected_from_id", "client_hellos", "tls_hrr")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -144,8 +144,8 @@ class Flow(_message.Message):
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     REQUEST_BYTES_FIELD_NUMBER: _ClassVar[int]
     TLS_DECRYPTED_FIELD_NUMBER: _ClassVar[int]
-    TCP_STREAM_FIELD_NUMBER: _ClassVar[int]
-    H2_STREAM_ID_FIELD_NUMBER: _ClassVar[int]
+    CONNECTION_ID_FIELD_NUMBER: _ClassVar[int]
+    STREAM_ID_FIELD_NUMBER: _ClassVar[int]
     REQUEST_HEADERS_FIELD_NUMBER: _ClassVar[int]
     RESPONSE_HEADERS_FIELD_NUMBER: _ClassVar[int]
     REQUEST_COOKIES_FIELD_NUMBER: _ClassVar[int]
@@ -157,7 +157,7 @@ class Flow(_message.Message):
     GROUP_IDS_FIELD_NUMBER: _ClassVar[int]
     COMMENTS_FIELD_NUMBER: _ClassVar[int]
     WEBSOCKET_FIELD_NUMBER: _ClassVar[int]
-    WS_MESSAGE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    MESSAGE_COUNT_FIELD_NUMBER: _ClassVar[int]
     PROXY_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
@@ -190,8 +190,8 @@ class Flow(_message.Message):
     content_type: str
     request_bytes: int
     tls_decrypted: bool
-    tcp_stream: str
-    h2_stream_id: str
+    connection_id: str
+    stream_id: str
     request_headers: _containers.RepeatedCompositeFieldContainer[Header]
     response_headers: _containers.RepeatedCompositeFieldContainer[Header]
     request_cookies: _containers.RepeatedCompositeFieldContainer[Cookie]
@@ -203,7 +203,7 @@ class Flow(_message.Message):
     group_ids: _containers.RepeatedScalarFieldContainer[str]
     comments: _containers.RepeatedCompositeFieldContainer[Comment]
     websocket: bool
-    ws_message_count: int
+    message_count: int
     proxy: Proxy
     metadata: _containers.ScalarMap[str, str]
     error: str
@@ -218,7 +218,7 @@ class Flow(_message.Message):
     redirected_from_id: str
     client_hellos: _containers.RepeatedScalarFieldContainer[bytes]
     tls_hrr: bool
-    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: bool = ..., tcp_stream: _Optional[str] = ..., h2_stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: bool = ..., ws_message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ..., duration_micros: _Optional[int] = ..., http2_fingerprint: _Optional[str] = ..., ja3: _Optional[str] = ..., ja4: _Optional[str] = ..., tls_client_hello: _Optional[str] = ..., tls_client_name: _Optional[str] = ..., response_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., redirect_location: _Optional[str] = ..., redirected_from_id: _Optional[str] = ..., client_hellos: _Optional[_Iterable[bytes]] = ..., tls_hrr: bool = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., session_id: _Optional[str] = ..., analysis_id: _Optional[str] = ..., frame_number: _Optional[int] = ..., ts_unix_micros: _Optional[int] = ..., method: _Optional[str] = ..., scheme: _Optional[str] = ..., authority: _Optional[str] = ..., path: _Optional[str] = ..., query: _Optional[str] = ..., protocol: _Optional[str] = ..., status: _Optional[int] = ..., src_addr: _Optional[str] = ..., dst_addr: _Optional[str] = ..., user_agent: _Optional[str] = ..., content_type: _Optional[str] = ..., request_bytes: _Optional[int] = ..., tls_decrypted: bool = ..., connection_id: _Optional[str] = ..., stream_id: _Optional[str] = ..., request_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., response_headers: _Optional[_Iterable[_Union[Header, _Mapping]]] = ..., request_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., request_body: _Optional[_Union[Body, _Mapping]] = ..., response_body: _Optional[_Union[Body, _Mapping]] = ..., mark_color: _Optional[str] = ..., favorite: bool = ..., tag_ids: _Optional[_Iterable[str]] = ..., group_ids: _Optional[_Iterable[str]] = ..., comments: _Optional[_Iterable[_Union[Comment, _Mapping]]] = ..., websocket: bool = ..., message_count: _Optional[int] = ..., proxy: _Optional[_Union[Proxy, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., error: _Optional[str] = ..., duration_micros: _Optional[int] = ..., http2_fingerprint: _Optional[str] = ..., ja3: _Optional[str] = ..., ja4: _Optional[str] = ..., tls_client_hello: _Optional[str] = ..., tls_client_name: _Optional[str] = ..., response_cookies: _Optional[_Iterable[_Union[Cookie, _Mapping]]] = ..., redirect_location: _Optional[str] = ..., redirected_from_id: _Optional[str] = ..., client_hellos: _Optional[_Iterable[bytes]] = ..., tls_hrr: bool = ...) -> None: ...
 
 class Proxy(_message.Message):
     __slots__ = ("addr", "type", "username", "password")
@@ -232,7 +232,7 @@ class Proxy(_message.Message):
     password: str
     def __init__(self, addr: _Optional[str] = ..., type: _Optional[str] = ..., username: _Optional[str] = ..., password: _Optional[str] = ...) -> None: ...
 
-class WsMessage(_message.Message):
+class Message(_message.Message):
     __slots__ = ("id", "session_id", "flow_id", "frame_number", "ts_unix_micros", "from_client", "opcode", "payload", "raw", "mark_color", "favorite", "tag_ids", "group_ids", "comments", "metadata")
     class MetadataEntry(_message.Message):
         __slots__ = ("key", "value")

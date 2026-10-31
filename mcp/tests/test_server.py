@@ -404,7 +404,7 @@ def test_timeline_row_relative_time():
 
 
 def test_timeline_row_unstamped_flow_has_null_time():
-    f = _flow(id="ws", authority="h", websocket=True, ws_message_count=70,
+    f = _flow(id="ws", authority="h", websocket=True, message_count=70,
               protocol="MAX", ts_unix_micros=0)
     row = S._timeline_row(0, f, 0)
     assert row["t_ms"] is None
@@ -465,7 +465,7 @@ def test_annotations_shared_by_flows_and_messages():
     tagnames = {"t1": "auth"}
     groupnames = {"g1": "login"}
     # A message carries the same annotation fields as a flow (record_id-keyed store).
-    m = cp.WsMessage(id="m1", mark_color="red", favorite=True, tag_ids=["t1"], group_ids=["g1"])
+    m = cp.Message(id="m1", mark_color="red", favorite=True, tag_ids=["t1"], group_ids=["g1"])
     m.comments.append(cp.Comment(id="c1", record_id="m1", body="look"))
     a = S._annotations(m, tagnames, groupnames)
     assert a == {
@@ -484,7 +484,7 @@ def test_annotations_shared_by_flows_and_messages():
 def test_list_messages_includes_annotations(monkeypatch):
     import asyncio
 
-    m = cp.WsMessage(id="m1", from_client=True, opcode="text", ts_unix_micros=5,
+    m = cp.Message(id="m1", from_client=True, opcode="text", ts_unix_micros=5,
                      mark_color="red", tag_ids=["t1"])
     m.comments.append(cp.Comment(id="c1", record_id="m1", body="note"))
     m.payload.CopyFrom(cp.Body(size=2, inline=b"hi"))
@@ -1628,14 +1628,14 @@ def test_a_flow_carries_all_its_source_metadata(monkeypatch):
 
 def _undecoded_fixture():
     return [
-        vp.UndecodedConnection(conn_id="7", transport="tcp", client="10.0.0.1:40001",
+        vp.UndecodedConnection(connection_id="7", transport="tcp", client="10.0.0.1:40001",
                                server="155.212.204.68:443", sni="api.oneme.ru", ja4="t13d_app",
                                reason="no_key", bytes_up=4000, bytes_down=90000,
                                first_ts_micros=1_000_000, last_ts_micros=3_500_000),
-        vp.UndecodedConnection(conn_id="9", transport="tcp", client="10.0.0.1:40002",
+        vp.UndecodedConnection(connection_id="9", transport="tcp", client="10.0.0.1:40002",
                                server="155.212.204.68:443", sni="api.oneme.ru", reason="handshake_incomplete",
                                bytes_up=500, first_ts_micros=4_000_000, last_ts_micros=4_100_000),
-        vp.UndecodedConnection(conn_id="udp:0", transport="udp", client="10.0.0.1:50000",
+        vp.UndecodedConnection(connection_id="udp:0", transport="udp", client="10.0.0.1:50000",
                                server="10.0.0.3:3478", reason="udp", bytes_up=20, bytes_down=10,
                                first_ts_micros=5_000_000, last_ts_micros=5_000_100),
     ]
@@ -1656,7 +1656,7 @@ class _UndecodedClient:
     async def get_connection_bytes(self, sid, connection_id, sender, byte_offset=0, limit=0):
         self.reads.append((connection_id, sender, byte_offset))
         data = b"\x16\x03\x01" + b"x" * 97
-        return vp.ConnectionBytes(data=data[byte_offset:], offset=byte_offset, total=len(data),
+        return vp.ConnectionBytes(data=data[byte_offset:], byte_offset=byte_offset, total=len(data),
                                   tls=['ClientHello: sni="api.oneme.ru" version=TLS1.3'])
 
     async def query_flows(self, sid, filter_expr="", limit=100, **kw):

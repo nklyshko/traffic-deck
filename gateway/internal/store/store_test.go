@@ -28,11 +28,11 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 
 	sid := uuid.NewString()
 	if err := st.CreateSession(ctx, NewSession{
-		ID:         sid,
-		Label:      "test",
-		Source: "import",
-		Status:     trafficv1.SessionStatus_SESSION_STATUS_DECODING,
-		PcapBytes:  123,
+		ID:        sid,
+		Label:     "test",
+		Source:    "import",
+		Status:    trafficv1.SessionStatus_SESSION_STATUS_DECODING,
+		PcapBytes: 123,
 	}); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestSessionFlowRoundTrip(t *testing.T) {
 	flows := []*decode.Flow{{
 		FrameNumber: 7, TSUnixMicros: 1700000000000000,
 		Method: "GET", Scheme: "https", Authority: "example.com", Path: "/a", Query: "x=1",
-		Protocol: "HTTP/2", Status: 200, TLSDecrypted: true, TCPStream: "3", H2StreamID: "1",
+		Protocol: "HTTP/2", Status: 200, TLSDecrypted: true, ConnectionID: "3", StreamID: "1",
 		RequestHeaders:  []decode.Header{{Name: "user-agent", Value: "probe"}, {Name: "content-type", Value: "application/json"}},
 		ResponseHeaders: []decode.Header{{Name: "content-type", Value: "text/html"}},
 		RequestBody:     []byte(`{"q":1}`),

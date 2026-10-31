@@ -119,8 +119,10 @@ message Flow {
   string content_type = 16;
   uint64 request_bytes = 17;
   bool tls_decrypted = 18;
-  string tcp_stream = 19;
-  string h2_stream_id = 20;
+  // The TCP stream number, or quic:<connection id> for HTTP/3.
+  string connection_id = 19;
+  // The HTTP/2 or HTTP/3 stream within that connection; empty for HTTP/1.
+  string stream_id = 20;
   repeated Header request_headers = 21;
   repeated Header response_headers = 22;
   repeated Cookie request_cookies = 23;
@@ -136,10 +138,11 @@ message Flow {
   repeated string group_ids = 29;
   repeated Comment comments = 30;
 
-  // WebSocket: set when this flow is an HTTP Upgrade that carries
-  // WebSocket frames; the frames are WsMessages fetched via ListMessages.
+  // Set when this flow owns Messages, fetched via ListMessages: an HTTP Upgrade
+  // carrying WebSocket frames, or the synthetic flow of a custom-protocol connection
+  // (ADR-0005). The name predates custom decoders and is kept for compatibility.
   bool websocket = 31;
-  uint32 ws_message_count = 32;
+  uint32 message_count = 32;
 
   // Proxy: set when this connection went through an HTTP CONNECT or SOCKS proxy,
   // detected from the captured handshake.
@@ -211,12 +214,14 @@ message Proxy {
   string password = 4;
 }
 
-// One decoded WebSocket frame — a message-shaped record, distinct from
-// the request/response Flow. Belongs to the Upgrade flow (flow_id) on its connection.
-message WsMessage {
+// One decoded frame — a WebSocket frame or a custom-protocol message — as a
+// message-shaped record, distinct from the request/response Flow (ADR-0005). Belongs to
+// its connection's parent flow (flow_id): the Upgrade flow for WebSocket, the synthetic
+// flow for a custom protocol.
+message Message {
   string id = 1;
   string session_id = 2;
-  string flow_id = 3;            // parent Upgrade flow
+  string flow_id = 3;            // parent flow (Upgrade or synthetic)
   uint64 frame_number = 4;
   int64 ts_unix_micros = 5;
   bool from_client = 6;          // direction: true = client→server

@@ -156,8 +156,8 @@ func TestLiveHTTP3RequestResponse(t *testing.T) {
 	if flow == nil {
 		t.Fatal("no flow emitted")
 	}
-	if flow.Protocol != "HTTP/3" || flow.H2StreamID != "0" {
-		t.Errorf("proto=%q stream=%q", flow.Protocol, flow.H2StreamID)
+	if flow.Protocol != "HTTP/3" || flow.StreamID != "0" {
+		t.Errorf("proto=%q stream=%q", flow.Protocol, flow.StreamID)
 	}
 	if flow.Method != "GET" || flow.Path != "/h3" || flow.Query != "q=1" || flow.Authority != "example.com" {
 		t.Errorf("req: method=%q path=%q query=%q authority=%q", flow.Method, flow.Path, flow.Query, flow.Authority)

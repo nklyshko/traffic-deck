@@ -104,7 +104,7 @@ func TestUndecodedConnectionsAreIndexed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	sort.Slice(got, func(i, j int) bool { return got[i].FirstTS < got[j].FirstTS })
+	sort.Slice(got, func(i, j int) bool { return got[i].FirstTSMicros < got[j].FirstTSMicros })
 
 	want := []struct{ reason, transport, server, sni string }{
 		{UndecodedNoKey, "tcp", "10.0.0.2:443", "pinned.example"},
@@ -126,15 +126,15 @@ func TestUndecodedConnectionsAreIndexed(t *testing.T) {
 		if u.Reason != w.reason || u.Transport != w.transport || u.Server != w.server || u.SNI != w.sni {
 			t.Errorf("#%d = %s %s %s sni=%q, want %+v", i, u.Reason, u.Transport, u.Server, u.SNI, w)
 		}
-		if u.BytesUp == 0 || u.BytesDown == 0 || u.LastTS < u.FirstTS {
-			t.Errorf("#%d tallied up=%d down=%d first=%d last=%d", i, u.BytesUp, u.BytesDown, u.FirstTS, u.LastTS)
+		if u.BytesUp == 0 || u.BytesDown == 0 || u.LastTSMicros < u.FirstTSMicros {
+			t.Errorf("#%d tallied up=%d down=%d first=%d last=%d", i, u.BytesUp, u.BytesDown, u.FirstTSMicros, u.LastTSMicros)
 		}
 		// The offset names the record of the connection's first packet: its timestamp is
 		// the connection's first.
 		rec := pcap[u.PcapOffset:]
 		sec, usec := binary.LittleEndian.Uint32(rec[0:4]), binary.LittleEndian.Uint32(rec[4:8])
-		if ts := int64(sec)*1_000_000 + int64(usec); ts != u.FirstTS {
-			t.Errorf("#%d offset %d holds a packet at %d, want its first at %d", i, u.PcapOffset, ts, u.FirstTS)
+		if ts := int64(sec)*1_000_000 + int64(usec); ts != u.FirstTSMicros {
+			t.Errorf("#%d offset %d holds a packet at %d, want its first at %d", i, u.PcapOffset, ts, u.FirstTSMicros)
 		}
 	}
 	if got[0].JA4 == "" {

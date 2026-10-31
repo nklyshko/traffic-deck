@@ -31,8 +31,8 @@ from traffic_viewer.screens import (
     LogsScreen,
     LogViewScreen,
     CompareScreen,
-    WsMessagesScreen,
-    WsPayloadScreen,
+    MessagesScreen,
+    MessagePayloadScreen,
 )
 
 
@@ -46,16 +46,16 @@ def _session():
                       pcap_bytes=1024, created_at_unix_ms=1_700_000_000_000)
 
 
-def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id="", frame=204):
+def _flow(fid, method, status, websocket=False, connection_id="", stream_id="", frame=204):
     # frame defaults to a fixed number for the small fixtures, but paging keys off
     # (ts_micros, frame_number) and needs it distinct per flow — as it is on the wire,
     # where a frame number identifies a packet.
     f = cp.Flow(id=fid, method=method, scheme="https", authority="api.example.com",
                 path="/" + fid, protocol="HTTP/2", status=status, ts_unix_micros=1,
-                tcp_stream=tcp_stream, h2_stream_id=h2_stream_id, frame_number=frame,
+                connection_id=connection_id, stream_id=stream_id, frame_number=frame,
                 # The 4-tuple the Wireshark hand-off filters on; a shared connection
-                # (tcp_stream 12) shares the client port, as on the wire.
-                src_addr="192.168.1.5:5100" + (tcp_stream[-1] if tcp_stream else "0"),
+                # (connection_id 12) shares the client port, as on the wire.
+                src_addr="192.168.1.5:5100" + (connection_id[-1] if connection_id else "0"),
                 dst_addr="93.184.216.34:443")
     if method:
         f.request_headers.append(cp.Header(name="content-type", value="application/json"))
@@ -64,7 +64,7 @@ def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id="", 
         f.response_headers.append(cp.Header(name="server", value="nginx"))
     if websocket:
         f.websocket = True
-        f.ws_message_count = 2
+        f.message_count = 2
     if fid == "f1":  # a TLS flow with two captured ClientHellos (as after a HelloRetryRequest)
         f.ja3 = "a" * 32
         f.tls_hrr = True
@@ -78,9 +78,9 @@ def _flow(fid, method, status, websocket=False, tcp_stream="", h2_stream_id="", 
 # f1 and f2 are multiplexed onto one HTTP/2 connection (tcp stream 12, h2 streams 1 and 3);
 # f3 sits on a second connection — enough to exercise the Conn/Stream columns and ~conn/~stream.
 _FLOWS = [
-    _flow("f1", "GET", 200, tcp_stream="12", h2_stream_id="1"),
-    _flow("f2", "POST", 201, tcp_stream="12", h2_stream_id="3"),
-    _flow("f3", "", 0, websocket=True, tcp_stream="13", h2_stream_id="1"),
+    _flow("f1", "GET", 200, connection_id="12", stream_id="1"),
+    _flow("f2", "POST", 201, connection_id="12", stream_id="3"),
+    _flow("f3", "", 0, websocket=True, connection_id="13", stream_id="1"),
 ]
 
 SESSION_ID2 = "sess-2"
@@ -95,15 +95,15 @@ def _session2():
 _BY_SESSION = {SESSION_ID: _FLOWS, SESSION_ID2: _FLOWS2}
 
 
-def _ws_messages():
+def _sample_messages():
     # metadata is whatever the custom decoder pulled out of the frame header — opaque
     # key/value pairs the viewer shows as columns without knowing what they mean.
     return [
-        cp.WsMessage(id="m1", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=2,
+        cp.Message(id="m1", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=2,
                      payload=cp.Body(size=9, inline=b"subscribe"),
                      metadata={"max.cmd": "Request(0)", "max.seq": "7",
                                "max.opcode": "Auth(19)"}),
-        cp.WsMessage(id="m2", flow_id="f3", from_client=False, opcode="binary", ts_unix_micros=3,
+        cp.Message(id="m2", flow_id="f3", from_client=False, opcode="binary", ts_unix_micros=3,
                      payload=cp.Body(size=2, inline=b"\x01\x02"),
                      metadata={"max.cmd": "Response(1)", "max.seq": "7",
                                "max.opcode": "Auth(19)"}),
@@ -386,12 +386,12 @@ class FakeClient:
             # not an error, and the gateway says so before sending any frame.
             yield vp.MessageEvent(filter_hints=vp.FilterHints(
                 hints=["`&` is not an operator — terms are ANDed automatically."]))
-        for m in _ws_messages():
+        for m in _sample_messages():
             if self._msg_matches(m, filter_expr):
                 yield vp.MessageEvent(message_added=m)
 
     async def get_message(self, session_id, message_id):
-        for m in _ws_messages():
+        for m in _sample_messages():
             if m.id == message_id:
                 return m
         raise KeyError(message_id)
@@ -863,7 +863,7 @@ async def test_detail_view_omits_stream_for_non_multiplexed_flow():
     app = make_app()
     async with app.run_test() as pilot:
         await settle(pilot)
-        f = _flow("h1", "GET", 200, tcp_stream="7")
+        f = _flow("h1", "GET", 200, connection_id="7")
         f.protocol = "HTTP/1.1"
         app.push_screen(FlowDetailScreen(SESSION_ID, "h1", f, {}, {}))
         await settle(pilot)
@@ -878,7 +878,7 @@ async def test_detail_view_says_what_metadata_means_and_keeps_the_raw_entry():
     app = make_app()
     async with app.run_test() as pilot:
         await settle(pilot)
-        f = _flow("h1", "GET", 200, tcp_stream="7")
+        f = _flow("h1", "GET", 200, connection_id="7")
         f.metadata["hostname.source"] = "dns"
         f.metadata["max.cmd"] = "Request(0)"
         app.push_screen(FlowDetailScreen(SESSION_ID, "h1", f, {}, {}))
@@ -1107,52 +1107,52 @@ async def test_a_returning_editor_still_finds_its_temp_copy(monkeypatch):
     assert not os.path.exists(path)  # removed when the TUI exits
 
 
-async def test_ws_payload_formats_json_inline():
+async def test_message_payload_formats_json_inline():
     app = make_app()
 
     async def json_body(session_id, message_id):
         return b'{"a":1,"b":2}'
 
     app.client.get_message_body = json_body
-    msg = _ws_messages()[0]
+    msg = _sample_messages()[0]
     async with app.run_test() as pilot:
         await settle(pilot)
-        app.push_screen(WsPayloadScreen(SESSION_ID, msg))
+        app.push_screen(MessagePayloadScreen(SESSION_ID, msg))
         await settle(pilot)
-        assert isinstance(app.screen, WsPayloadScreen)
+        assert isinstance(app.screen, MessagePayloadScreen)
         rendered = app.screen.query_one("#pbody", Static).render()
         assert '"a"' in rendered.plain and "\n" in rendered.plain  # reindented JSON
         # No annotations on this frame → the meta block stays hidden.
         assert app.screen.query_one("#pmeta", Static).display is False
 
 
-async def test_ws_payload_shows_comment():
+async def test_message_payload_shows_comment():
     app = make_app()
-    msg = _ws_messages()[0]
+    msg = _sample_messages()[0]
     msg.comments.append(cp.Comment(id="c1", record_id=msg.id, body="look here"))
     async with app.run_test() as pilot:
         await settle(pilot)
-        app.push_screen(WsPayloadScreen(SESSION_ID, msg))
+        app.push_screen(MessagePayloadScreen(SESSION_ID, msg))
         await settle(pilot)
         meta = app.screen.query_one("#pmeta", Static)
         assert meta.display is True
         assert "look here" in meta.render().plain  # comment shown above the payload
 
 
-async def test_ws_payload_opens_editor_for_large_body(monkeypatch):
+async def test_message_payload_opens_editor_for_large_body(monkeypatch):
     opened = []
-    monkeypatch.setattr(WsPayloadScreen, "_open_external", lambda self: opened.append(self._what))
-    big = b"y" * (WsPayloadScreen._VIEW_LIMIT + 10)
+    monkeypatch.setattr(MessagePayloadScreen, "_open_external", lambda self: opened.append(self._what))
+    big = b"y" * (MessagePayloadScreen._VIEW_LIMIT + 10)
 
     async def big_msg_body(session_id, message_id):
         return big
 
     app = make_app()
     app.client.get_message_body = big_msg_body
-    msg = _ws_messages()[0]
+    msg = _sample_messages()[0]
     async with app.run_test() as pilot:
         await settle(pilot)
-        app.push_screen(WsPayloadScreen(SESSION_ID, msg))
+        app.push_screen(MessagePayloadScreen(SESSION_ID, msg))
         await settle(pilot)
         assert opened == ["payload"]  # large payload handed off to the editor
 
@@ -1167,11 +1167,11 @@ async def test_open_ws_message_timeline():
         await focus(pilot, "#flows")
         await pilot.press("down", "down", "M")  # move to the ws flow (f3), open timeline
         await settle(pilot)
-        assert isinstance(app.screen, WsMessagesScreen)
-        assert app.screen.query_one("#msgs", DataTable).row_count == len(_ws_messages())
+        assert isinstance(app.screen, MessagesScreen)
+        assert app.screen.query_one("#msgs", DataTable).row_count == len(_sample_messages())
 
 
-async def _open_ws_timeline(pilot):
+async def _open_message_timeline(pilot):
     """Navigate sessions → flows → the WebSocket flow (f3) → its message timeline."""
     await settle(pilot)
     await focus(pilot, "#sessions")
@@ -1182,11 +1182,11 @@ async def _open_ws_timeline(pilot):
     await settle(pilot)
 
 
-async def test_ws_message_mark():
+async def test_message_mark():
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
-        assert isinstance(app.screen, WsMessagesScreen)
+        await _open_message_timeline(pilot)
+        assert isinstance(app.screen, MessagesScreen)
         await focus(pilot, "#msgs")
         await pilot.press("m")        # mark → opens the color SelectPrompt
         await settle(pilot)
@@ -1197,11 +1197,11 @@ async def test_ws_message_mark():
         assert app.client.marks[0][1] is not None  # a color, not a clear
 
 
-async def test_ws_message_comment():
+async def test_message_comment():
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
-        assert isinstance(app.screen, WsMessagesScreen)
+        await _open_message_timeline(pilot)
+        assert isinstance(app.screen, MessagesScreen)
         await focus(pilot, "#msgs")
         await pilot.press("n")        # comment → opens the text prompt
         await settle(pilot)
@@ -1211,14 +1211,14 @@ async def test_ws_message_comment():
         assert app.client.comments == [("m1", "look here")]
 
 
-async def test_ws_messages_filter_by_opcode_and_payload():
+async def test_messages_filter_by_opcode_and_payload():
     """A chatty connection is tens of thousands of frames, so the timeline filters like
     the flow table does — by opcode, by payload, and by direction."""
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         screen = app.screen
-        assert isinstance(screen, WsMessagesScreen)
+        assert isinstance(screen, MessagesScreen)
         table = screen.query_one("#msgs", DataTable)
         assert table.row_count == 2
 
@@ -1231,13 +1231,13 @@ async def test_ws_messages_filter_by_opcode_and_payload():
             assert table.row_count == want, f"{expr!r} kept {table.row_count} frames"
             # The status line counts what matched, not what the flow has.
             assert f"{want} matching" in screen.sub_title if expr else \
-                f"{want} frames" in screen.sub_title
+                f"{want} total" in screen.sub_title
 
 
-async def test_ws_messages_filter_help_shown_only_while_focused():
+async def test_messages_filter_help_shown_only_while_focused():
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         help_ = app.screen.query_one("#filter-help", Static)
         assert help_.display is False
         await pilot.press("f")             # focus the filter input
@@ -1246,17 +1246,17 @@ async def test_ws_messages_filter_help_shown_only_while_focused():
         # Escape leaves the filter for the table — it does not leave the screen.
         await pilot.press("escape")
         await settle(pilot)
-        assert isinstance(app.screen, WsMessagesScreen)
+        assert isinstance(app.screen, MessagesScreen)
         assert help_.display is False
 
 
-async def test_ws_messages_filter_help_names_the_live_meta_keys():
+async def test_messages_filter_help_names_the_live_meta_keys():
     """The cheat sheet documents ~meta, and the example is the keys these frames carry —
     the viewer cannot know a decoder's fields ahead of time, so it shows the ones on
     screen rather than a protocol nobody here is looking at."""
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         await pilot.press("f")
         await settle(pilot)
         text = str(app.screen.query_one("#filter-help", Static).content)
@@ -1264,13 +1264,13 @@ async def test_ws_messages_filter_help_names_the_live_meta_keys():
         assert "max.cmd" in text and "max.opcode" in text and "max.seq" in text
 
 
-async def test_ws_messages_filter_error_is_reported():
+async def test_messages_filter_error_is_reported():
     """A flow term is not a message term. The gateway refuses it, and the timeline says so
     rather than showing an empty table that reads as "no frames"."""
     app = make_app()
     notes = []
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         screen = app.screen
         screen.notify = lambda msg, **kw: notes.append((str(msg), kw.get("severity")))
         await focus(pilot, "#filter")
@@ -1280,13 +1280,13 @@ async def test_ws_messages_filter_error_is_reported():
         assert any("~m" in m and sev == "error" for m, sev in notes), notes
 
 
-async def test_ws_messages_filter_hints_are_surfaced():
+async def test_messages_filter_hints_are_surfaced():
     """`&` parses as a payload regex rather than failing, so the gateway's advisory hint is
     the only thing that says the filter does not mean what it looks like."""
     app = make_app()
     notes = []
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         screen = app.screen
         screen.notify = lambda msg, **kw: notes.append((str(msg), kw.get("severity")))
         await focus(pilot, "#filter")
@@ -1296,12 +1296,12 @@ async def test_ws_messages_filter_hints_are_surfaced():
         assert any("not an operator" in m and sev == "warning" for m, sev in notes), notes
 
 
-async def test_ws_messages_annotating_under_a_filter_requeries():
+async def test_messages_annotating_under_a_filter_requeries():
     """The viewer no longer holds the predicate, so an annotation that could move a frame
     out of a filtered view is answered by re-running the query (ADR-0012 §7)."""
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         screen = app.screen
         await focus(pilot, "#filter")
         screen.query_one("#filter", Input).value = "~op text"
@@ -1321,13 +1321,13 @@ def _column_labels(table):
     return [str(table.columns[k].label) for k in table.columns]
 
 
-async def test_ws_messages_show_decoder_fields_as_columns():
+async def test_messages_show_decoder_fields_as_columns():
     """A custom decoder hands each frame its own header fields (MAX's command, sequence
     and opcode). They arrive as opaque key/value pairs and become columns without the
     viewer knowing what any of them mean."""
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         table = app.screen.query_one("#msgs", DataTable)
         labels = _column_labels(table)
         assert labels[:6] == ["", "Time", "Dir", "Opcode", "Len", "Preview"]
@@ -1336,10 +1336,10 @@ async def test_ws_messages_show_decoder_fields_as_columns():
         assert "Request(0)" in [str(c) for c in table.get_row_at(0)]
 
 
-async def test_ws_message_column_toggles_off_and_stays_off():
+async def test_message_column_toggles_off_and_stays_off():
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         screen = app.screen
         table = screen.query_one("#msgs", DataTable)
         assert "max.seq" in _column_labels(table)
@@ -1354,27 +1354,27 @@ async def test_ws_message_column_toggles_off_and_stays_off():
         assert "max.seq" not in _column_labels(table)
 
         # A frame arriving after the toggle must not put the column back.
-        screen._upsert_msg(_ws_messages()[0])
+        screen._upsert_msg(_sample_messages()[0])
         await pilot.pause()
         assert "max.seq" not in _column_labels(table)
 
 
-async def test_ws_message_columns_can_be_pinned_by_env(monkeypatch):
+async def test_message_columns_can_be_pinned_by_env(monkeypatch):
     """TRAFFICDECK_MSG_COLUMNS narrows the timeline to the fields worth watching, for a
     decoder that emits more than fit on screen."""
     monkeypatch.setenv("TRAFFICDECK_MSG_COLUMNS", "max.seq")
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         assert _column_labels(app.screen.query_one("#msgs", DataTable))[6:] == ["max.seq"]
 
 
-async def test_ws_messages_filter_on_a_decoder_field():
+async def test_messages_filter_on_a_decoder_field():
     """The fields are filterable with ~meta, the same term a flow's source metadata uses —
     so "every response frame" is a filter, not a scroll."""
     app = make_app()
     async with app.run_test() as pilot:
-        await _open_ws_timeline(pilot)
+        await _open_message_timeline(pilot)
         screen = app.screen
         table = screen.query_one("#msgs", DataTable)
         await focus(pilot, "#filter")
@@ -1495,7 +1495,7 @@ async def test_nav_table_jump_keys_reach_first_and_last_row():
             assert table.cursor_coordinate.row == 0, f"{first} -> row {table.cursor_coordinate.row}, want 0"
 
 
-async def test_ws_messages_jump_keys():
+async def test_messages_jump_keys():
     app = make_app()
     async with app.run_test() as pilot:
         await _open_flows(pilot)
@@ -1826,7 +1826,7 @@ async def test_flags_column_widens_when_a_row_is_annotated():
         assert flags_col.content_width > before
 
 
-async def test_ws_flags_column_widens_when_a_message_is_annotated():
+async def test_message_flags_column_widens_when_a_message_is_annotated():
     """Same for the message timeline — it was only visible after leaving and re-entering
     the screen, which rebuilds the rows and so re-measures the column."""
     app = make_app()
@@ -1848,7 +1848,7 @@ async def test_ws_flags_column_widens_when_a_message_is_annotated():
         assert flags_col.content_width > 0
 
 
-async def test_ws_messages_follow_mode():
+async def test_messages_follow_mode():
     app = make_app()
     async with app.run_test() as pilot:
         await _open_flows(pilot)
@@ -1857,21 +1857,21 @@ async def test_ws_messages_follow_mode():
         await pilot.press("M")
         await settle(pilot)
         screen = pilot.app.screen
-        assert isinstance(screen, WsMessagesScreen)
+        assert isinstance(screen, MessagesScreen)
         table = screen.query_one("#msgs", DataTable)
         assert table.cursor_coordinate.row == 0
 
         await pilot.press("l")     # enable follow: jump to the newest frame
         await pilot.pause()
         assert table.follow and table.cursor_coordinate.row == 1
-        screen._upsert_msg(cp.WsMessage(
+        screen._upsert_msg(cp.Message(
             id="m3", flow_id="f3", from_client=True, opcode="text", ts_unix_micros=4))
         await pilot.pause()
         assert table.cursor_coordinate.row == 2
 
         await pilot.press("l")     # disable: new frames no longer move the cursor
         await pilot.pause()
-        screen._upsert_msg(cp.WsMessage(
+        screen._upsert_msg(cp.Message(
             id="m4", flow_id="f3", from_client=False, opcode="text", ts_unix_micros=5))
         await pilot.pause()
         assert table.cursor_coordinate.row == 2

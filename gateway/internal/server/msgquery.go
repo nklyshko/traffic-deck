@@ -38,12 +38,12 @@ func (v *Viewer) compileMessageFilter(ctx context.Context, sessionID, expr strin
 
 // messageMatcher adapts a compiled predicate to the protos both message paths carry. The
 // returned func matches everything when pred is nil, so neither caller needs a branch.
-func (v *Viewer) messageMatcher(ctx context.Context, sessionID string, pred *filter.MessagePredicate) func(*trafficv1.WsMessage) bool {
+func (v *Viewer) messageMatcher(ctx context.Context, sessionID string, pred *filter.MessagePredicate) func(*trafficv1.Message) bool {
 	if pred == nil {
-		return func(*trafficv1.WsMessage) bool { return true }
+		return func(*trafficv1.Message) bool { return true }
 	}
 	readsPayloads := pred.ReadsPayloads()
-	return func(m *trafficv1.WsMessage) bool {
+	return func(m *trafficv1.Message) bool {
 		fm := filter.Message{
 			Opcode: m.GetOpcode(), FromClient: m.GetFromClient(),
 			MarkColor: m.GetMarkColor(), Favorite: m.GetFavorite(),
@@ -64,7 +64,7 @@ func (v *Viewer) messageMatcher(ctx context.Context, sessionID string, pred *fil
 // already inline in the proto; a large one is an object_ref, and is read from the bundle
 // (or, for a frame the flusher has not written yet, from the live hub). Memoized because a
 // frame is tested once but an expression can hold several payload terms.
-func (v *Viewer) payloadLoader(ctx context.Context, sessionID string, m *trafficv1.WsMessage) func() string {
+func (v *Viewer) payloadLoader(ctx context.Context, sessionID string, m *trafficv1.Message) func() string {
 	var cached *string
 	return func() string {
 		if cached != nil {
@@ -75,7 +75,7 @@ func (v *Viewer) payloadLoader(ctx context.Context, sessionID string, m *traffic
 			if inline := b.GetInline(); len(inline) > 0 {
 				out = string(inline)
 			} else if b.GetSize() > 0 {
-				if data, err := v.st.GetWsMessageBody(ctx, sessionID, m.GetId(), false); err == nil {
+				if data, err := v.st.GetMessageBody(ctx, sessionID, m.GetId(), false); err == nil {
 					out = string(data)
 				} else if ls := v.hub.get(sessionID); ls != nil {
 					if data, ok := ls.messageBody(m.GetId(), false); ok {

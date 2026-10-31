@@ -455,7 +455,7 @@ func (s *Store) InsertFlowWrites(ctx context.Context, sessionID, analysisID stri
 			id, sessionID, analysisID, int64(f.FrameNumber), f.TSUnixMicros,
 			f.Method, f.Scheme, f.Authority, f.Path, f.Query, f.Protocol, int64(f.Status),
 			f.SrcAddr, f.DstAddr, f.UserAgent, f.ContentType, int64(f.RequestBytes),
-			boolToInt(f.TLSDecrypted), f.TCPStream, f.H2StreamID,
+			boolToInt(f.TLSDecrypted), f.ConnectionID, f.StreamID,
 			nullIfEmpty(reqRef), nullIfEmpty(respRef),
 			nullIfEmpty(pAddr), nullIfEmpty(pType), nullIfEmpty(pUser), nullIfEmpty(pPass),
 			f.Error, int64(f.DurationMicros), f.Http2Fingerprint,
@@ -770,7 +770,7 @@ func (s *Store) ListFlows(ctx context.Context, sessionID string) ([]*trafficv1.F
 	if err := s.attachAnnotations(ctx, db, flowRecords(byID)); err != nil {
 		return nil, err
 	}
-	if err := s.attachWsCounts(ctx, db, byID); err != nil {
+	if err := s.attachMessageCounts(ctx, db, byID); err != nil {
 		return nil, err
 	}
 	if err := s.attachMetadata(ctx, db, byID); err != nil {
@@ -961,7 +961,7 @@ func (s *Store) GetFlow(ctx context.Context, sessionID, flowID string) (*traffic
 	if err := s.attachAnnotations(ctx, db, flowRecords(single)); err != nil {
 		return nil, err
 	}
-	if err := s.attachWsCounts(ctx, db, single); err != nil {
+	if err := s.attachMessageCounts(ctx, db, single); err != nil {
 		return nil, err
 	}
 	if err := s.attachMetadata(ctx, db, single); err != nil {
@@ -1085,18 +1085,18 @@ type scannable interface {
 
 func scanFlow(row scannable) (*trafficv1.Flow, error) {
 	var (
-		id, sessionID, analysisID                                  string
-		frameNumber, tsMicros, requestBytes, status                int64
-		durationMicros                                             int64
-		method, scheme, authority, path, query, protocol           sql.NullString
-		srcAddr, dstAddr, userAgent, contentType, tcpStream, h2sid sql.NullString
-		proxyAddr, proxyType, proxyUser, proxyPass, flowError      sql.NullString
-		h2Fingerprint, ja3, ja4, tlsClientHello, redirectLocation  sql.NullString
-		tlsDecrypted, tlsHRR                                       int64
+		id, sessionID, analysisID                                        string
+		frameNumber, tsMicros, requestBytes, status                      int64
+		durationMicros                                                   int64
+		method, scheme, authority, path, query, protocol                 sql.NullString
+		srcAddr, dstAddr, userAgent, contentType, connectionID, streamID sql.NullString
+		proxyAddr, proxyType, proxyUser, proxyPass, flowError            sql.NullString
+		h2Fingerprint, ja3, ja4, tlsClientHello, redirectLocation        sql.NullString
+		tlsDecrypted, tlsHRR                                             int64
 	)
 	if err := row.Scan(&id, &sessionID, &analysisID, &frameNumber, &tsMicros, &method, &scheme,
 		&authority, &path, &query, &protocol, &status, &srcAddr, &dstAddr,
-		&userAgent, &contentType, &requestBytes, &tlsDecrypted, &tcpStream, &h2sid,
+		&userAgent, &contentType, &requestBytes, &tlsDecrypted, &connectionID, &streamID,
 		&proxyAddr, &proxyType, &proxyUser, &proxyPass, &flowError, &durationMicros, &h2Fingerprint,
 		&ja3, &ja4, &tlsClientHello, &redirectLocation, &tlsHRR); err != nil {
 		return nil, err
@@ -1120,8 +1120,8 @@ func scanFlow(row scannable) (*trafficv1.Flow, error) {
 		ContentType:      contentType.String,
 		RequestBytes:     uint64(requestBytes),
 		TlsDecrypted:     tlsDecrypted != 0,
-		TcpStream:        tcpStream.String,
-		H2StreamId:       h2sid.String,
+		ConnectionId:     connectionID.String,
+		StreamId:         streamID.String,
 		Error:            flowError.String,
 		DurationMicros:   uint64(durationMicros),
 		Http2Fingerprint: h2Fingerprint.String,
