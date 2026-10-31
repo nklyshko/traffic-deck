@@ -30,7 +30,8 @@ func feedProxyTunnel(t *testing.T, wantFlows int, chunks []tunnelChunk) []*Flow 
 			if _, ok := latest[f.ID]; !ok {
 				order = append(order, f.ID)
 			}
-			latest[f.ID] = f
+			snap := *f // the decoder goes on writing to f once onFlow returns
+			latest[f.ID] = &snap
 		},
 		onMsg: func(*Message) {},
 	}
@@ -153,7 +154,7 @@ func TestLiveDecodeSocks5EndToEnd(t *testing.T) {
 	var mu sync.Mutex
 	latest := map[string]*Flow{}
 	if err := liveDecodeFlows(bytes.NewReader(pcap), "",
-		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
+		func(f *Flow, _ bool) { mu.Lock(); snap := *f; latest[f.ID] = &snap; mu.Unlock() },
 		func(*Message) {}); err != nil {
 		t.Fatalf("liveDecodeFlows: %v", err)
 	}

@@ -70,7 +70,8 @@ func feedH2Until(t *testing.T, client, server []byte, ready func([]*Flow) bool) 
 		if _, ok := latest[f.ID]; !ok {
 			order = append(order, f.ID)
 		}
-		latest[f.ID] = f
+		snap := *f // the decoder goes on writing to f once onFlow returns
+		latest[f.ID] = &snap
 	}}
 	s := &tcpStream{
 		lt:         lt,
@@ -216,7 +217,8 @@ func TestLiveHTTP2DurationFromPacketTime(t *testing.T) {
 		if _, ok := latest[f.ID]; !ok {
 			order = append(order, f.ID)
 		}
-		latest[f.ID] = f
+		snap := *f // the decoder goes on writing to f once onFlow returns
+		latest[f.ID] = &snap
 	}}
 	s := &tcpStream{lt: lt, connID: "7", serverHost: "203.0.113.5", serverPort: "443",
 		clientAddr: "198.51.100.2:51000", conn: tlsdecrypt.NewConn(tlsdecrypt.NewKeylog(""), nil)}

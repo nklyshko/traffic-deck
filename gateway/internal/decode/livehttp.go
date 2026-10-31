@@ -160,13 +160,16 @@ func (h *httpStream) close() {
 }
 
 func (h *httpStream) run() {
-	reqBr := bufio.NewReader(h.req)
-	respBr := bufio.NewReader(h.resp)
+	reqHead, respHead := &wireHead{r: h.req}, &wireHead{r: h.resp}
+	reqBr := bufio.NewReader(reqHead)
+	respBr := bufio.NewReader(respHead)
 	for {
+		reqHead.start(reqBr)
 		req, err := http.ReadRequest(reqBr)
 		if err != nil {
 			return
 		}
+		reqHeaders := reqHead.headers(reqBr)
 		reqBody := readBody(req.Body)
 		f := h.owner.newHTTPFlow()
 		// Time the request from the packet that carried its last byte, not wall-clock at
@@ -178,12 +181,13 @@ func (h *httpStream) run() {
 		}
 		f.Path = req.URL.Path
 		f.Query = req.URL.RawQuery
-		f.RequestHeaders = headersOf(req.Header)
+		f.RequestHeaders = reqHeaders
 		f.UserAgent = req.Header.Get("User-Agent")
 		f.RequestBody = reqBody
 		f.RequestBytes = uint64(len(reqBody))
 		h.onFlow(f, true)
 
+		respHead.start(respBr)
 		resp, err := http.ReadResponse(respBr, req)
 		if err != nil {
 			// Request seen but no parseable response. A TCP reset explains the failure;
@@ -197,7 +201,7 @@ func (h *httpStream) run() {
 			return
 		}
 		f.Status = uint32(resp.StatusCode)
-		f.ResponseHeaders = headersOf(resp.Header)
+		f.ResponseHeaders = respHead.headers(respBr)
 		f.ContentType = resp.Header.Get("Content-Type")
 		// Response time is the packet that carried the response's last-read byte, so the
 		// duration is the real request→response latency from the capture, not decode timing.
@@ -248,7 +252,7 @@ func parseConnect(head []byte) (target string, headers []Header, ua string) {
 	if target == "" {
 		target = req.RequestURI
 	}
-	return target, headersOf(req.Header), req.Header.Get("User-Agent")
+	return target, parseWireHeaders(head), req.Header.Get("User-Agent")
 }
 
 func isWSUpgrade(resp *http.Response) bool {
@@ -374,12 +378,64 @@ func readRespBody(resp *http.Response) (body []byte, encoding string, cut bool) 
 	return data, enc, cut
 }
 
-func headersOf(h http.Header) []Header {
-	out := make([]Header, 0, len(h))
-	for k, vs := range h {
-		for _, v := range vs {
-			out = append(out, Header{Name: k, Value: v})
+// wireHeadKeep is the largest buffer a wireHead holds on to between messages, so one huge
+// head doesn't stay allocated for the life of a kept-alive connection.
+const wireHeadKeep = 64 << 10
+
+// wireHead sits under the parser's bufio.Reader and keeps the bytes of one message head.
+// net/http hands back a map, which loses what a fingerprint is made of — the order and the
+// spelling of the headers — and lifts Host and Transfer-Encoding out of it altogether.
+type wireHead struct {
+	r   io.Reader
+	buf []byte
+	on  bool
+}
+
+func (w *wireHead) Read(p []byte) (int, error) {
+	n, err := w.r.Read(p)
+	if w.on {
+		w.buf = append(w.buf, p[:n]...)
+	}
+	return n, err
+}
+
+// start begins a head at br's read position, which may already be inside its buffer.
+func (w *wireHead) start(br *bufio.Reader) {
+	unread, _ := br.Peek(br.Buffered())
+	w.buf = append(w.buf[:0], unread...)
+	w.on = true
+}
+
+// headers ends the head, which must be called before the body is read: net/http stops
+// reading right after the head, so what br still holds of the kept bytes is not part of it.
+func (w *wireHead) headers(br *bufio.Reader) []Header {
+	w.on = false
+	out := parseWireHeaders(w.buf[:len(w.buf)-br.Buffered()])
+	if cap(w.buf) > wireHeadKeep {
+		w.buf = nil
+	}
+	return out
+}
+
+// parseWireHeaders reads the header lines of a message head net/http has already accepted,
+// in order and as spelled. A folded line joins the header before it, as net/http joins it.
+func parseWireHeaders(head []byte) []Header {
+	var out []Header
+	lines := strings.Split(string(head), "\n")
+	for _, raw := range lines[1:] { // lines[0] is the request or status line
+		line := strings.TrimSuffix(raw, "\r")
+		if line == "" {
+			break
 		}
+		if line[0] == ' ' || line[0] == '\t' {
+			if len(out) > 0 {
+				last := &out[len(out)-1]
+				last.Value = strings.TrimSpace(last.Value + " " + strings.Trim(line, " \t"))
+			}
+			continue
+		}
+		name, value, _ := strings.Cut(line, ":")
+		out = append(out, Header{Name: name, Value: strings.Trim(value, " \t")})
 	}
 	return out
 }

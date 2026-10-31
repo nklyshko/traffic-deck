@@ -227,7 +227,7 @@ func TestLiveDecodePlaintextHTTP(t *testing.T) {
 	var mu sync.Mutex
 	latest := map[string]*Flow{}
 	err := liveDecodeFlows(bytes.NewReader(pcap), "",
-		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
+		func(f *Flow, _ bool) { mu.Lock(); snap := *f; latest[f.ID] = &snap; mu.Unlock() },
 		func(*Message) {})
 	if err != nil {
 		t.Fatalf("liveDecodeFlows: %v", err)
@@ -339,7 +339,7 @@ func TestLiveDecodePlaintextHTTPReset(t *testing.T) {
 	var mu sync.Mutex
 	latest := map[string]*Flow{}
 	if err := liveDecodeFlows(bytes.NewReader(out.Bytes()), "",
-		func(f *Flow, _ bool) { mu.Lock(); latest[f.ID] = f; mu.Unlock() },
+		func(f *Flow, _ bool) { mu.Lock(); snap := *f; latest[f.ID] = &snap; mu.Unlock() },
 		func(*Message) {}); err != nil {
 		t.Fatalf("liveDecodeFlows: %v", err)
 	}
