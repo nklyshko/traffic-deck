@@ -81,6 +81,22 @@ class PktapCapture(ChromeCapture):
         print(f"pktap: filtering {iface} on [{expr}]", flush=True)
         return pktap.capture_command(iface, expr, tcpdump=self.tcpdump)
 
+    def _start_recording(self) -> None:
+        # Handing the key-log dir over, spawning tcpdump and demoting the browser all need
+        # root, so none may run inside another thread's as_user window. The launch-grace
+        # wait after it is left out, so describe is not blocked for it.
+        with privdrop.PRIV_LOCK:
+            super()._start_recording()
+
+    def _stop_backend(self) -> None:
+        # Signalling the root-owned tcpdump must not race an as_user window, from
+        # stop_capture or from the watcher thread that saw the browser close. Only this step:
+        # the browser runs as the user, so stopping it needs no root, and holding the lock
+        # through the browser's exit, the upload drain and CloseSession blocked describe and
+        # start for as long as a close took.
+        with privdrop.PRIV_LOCK:
+            super()._stop_backend()
+
     def launch(self, keylog: str) -> subprocess.Popen:
         proc = self._launch_browser(keylog)
         # Start watching only now: before this there is no browser, and the pids matching
@@ -98,9 +114,22 @@ class PktapCapture(ChromeCapture):
         pw = pwd.getpwuid(uid)
         # user/group demote the child itself (stdlib, 3.9+); HOME has to come along or
         # Chrome resolves its default profile against root's home despite running as them.
+        #
+        # extra_groups is required for a real demotion: with user=/group= but no
+        # extra_groups, Python does not call setgroups, so the browser keeps root's
+        # supplementary groups (wheel, admin, …) and is not actually unprivileged. Pass only
+        # the user's primary group: the browser reaches its files by uid, so it needs none of
+        # the user's other groups (admin, access_bpf, …), and their full list can exceed
+        # NGROUPS_MAX (16 on macOS), which Popen refuses. The env is scrubbed of the sudo
+        # bookkeeping and of root's TMPDIR (a /var/folders dir the user cannot traverse) so
+        # nothing of root's session leaks into the browser.
+        child_env = {k: v for k, v in os.environ.items()
+                     if not k.startswith("SUDO_") and k != "TMPDIR"}
+        child_env.update(HOME=pw.pw_dir, USER=pw.pw_name, LOGNAME=pw.pw_name)
         return subprocess.Popen(
             cmd, user=uid, group=gid,
-            env={**os.environ, "HOME": pw.pw_dir, "USER": pw.pw_name, "LOGNAME": pw.pw_name})
+            extra_groups=[gid],
+            env=child_env)
 
     def _watch_helpers(self, browser_pid: int) -> None:
         """Collect this browser's NetworkService pids for as long as the capture runs.

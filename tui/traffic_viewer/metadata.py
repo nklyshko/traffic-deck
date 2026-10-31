@@ -3,7 +3,9 @@ reads as "Hostname from: DNS answer (inferred)". Display only: the stored values
 untouched, and the raw `key=value` stays beside the readable one in the detail view,
 because that is what a `~meta` filter matches.
 
-A key not listed here (a decoder's or another source's own) is shown as it is.
+A key not listed here (a decoder's or another source's own) is shown as it is. The keys are
+a cross-component contract; docs/metadata-keys.md lists who writes and reads each one, and
+the capture tools name them in capture_sdk/metadata_keys.py.
 """
 
 from __future__ import annotations

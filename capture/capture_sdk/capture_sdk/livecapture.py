@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import abc
 import collections
+import math
 import os
 import queue
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,6 +30,7 @@ import time
 import grpc
 
 from capture_sdk import dumpcap as dumpcap_mod
+from capture_sdk import metadata_keys as mk
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
@@ -109,7 +113,22 @@ def _keylog_thread(path: str, q: queue.Queue, stop: threading.Event) -> None:
         time.sleep(0.1)
     if not os.path.exists(path):
         return
-    with open(path, "rb") as f:
+    # Under pktap this tail runs as root, inside a directory the invoking user owns (it was
+    # handed to them so the browser can write the key-log). Open no-follow and insist on a
+    # regular file: otherwise the user could swap key.log for a symlink to a root-only file
+    # (which would be read and uploaded) or for a FIFO/device that blocks or never ends.
+    try:
+        # O_NONBLOCK so opening a FIFO returns instead of waiting for a writer; it does not
+        # change reads of the regular file we then insist on.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        print(f"key-log: not reading {path}: {exc}", file=sys.stderr, flush=True)
+        return
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        print(f"key-log: not reading {path}: not a regular file", file=sys.stderr, flush=True)
+        return
+    with os.fdopen(fd, "rb") as f:
         while True:
             b = f.read()
             if b:
@@ -148,11 +167,15 @@ class KeylogCapture(abc.ABC):
         self.iface = iface
         self.dumpcap = dumpcap
         self.capture_filter = capture_filter
-        self.duration = duration
+        # A non-finite duration (nan/inf, which float("nan")/float("inf") produce from a
+        # param) silently disables auto-stop: the deadline comparison is never true. Treat
+        # anything not finite and positive as "no limit" so the behaviour is explicit.
+        self.duration = duration if (duration and math.isfinite(duration) and duration > 0) else None
         self.keylog_dir = keylog_dir
 
         self.session_id: str | None = None
         self.keylog: str | None = None
+        self._proc: subprocess.Popen | None = None  # the launched program; None until launch()
         self._stop = threading.Event()
         self._q: queue.Queue = queue.Queue()
         self._ack: dict = {}
@@ -188,7 +211,7 @@ class KeylogCapture(abc.ABC):
         one exception, and it is reported at close). Subclasses add their own and keep these."""
         md = {}
         if self.duration:
-            md["capture.duration_s"] = f"{self.duration:g}"
+            md[mk.CAPTURE_DURATION_S] = f"{self.duration:g}"
         return md
 
     def close_metadata(self) -> dict[str, str]:
@@ -208,12 +231,31 @@ class KeylogCapture(abc.ABC):
     def start(self) -> str:
         """Open the session, spawn dumpcap + upload threads, launch the program. Returns
         the session id while capture continues."""
+        self._start_recording()
+        self._fail_if_program_died()
+        return self.session_id
+
+    def _start_recording(self) -> None:
+        """The part of start that spawns the processes. Kept apart because it is the only
+        part a privileged subclass must serialize (pktap's root work); the launch-grace
+        wait after it needs no privilege."""
         iface = self.iface or dumpcap_mod.default_interface()
         keydir = tempfile.mkdtemp(prefix=f"{self.name}-keylog-", dir=self.keylog_dir)
         if self.run_as:
             # The program writes the keylog as that user; we tail it as ourselves. mkdtemp
             # made it 0700 and ours, so hand it over or the secrets never get written.
-            os.chown(keydir, *self.run_as)
+            #
+            # fchown through an O_NOFOLLOW|O_DIRECTORY handle, not os.chown(path): under
+            # pktap this runs as root and keylog_dir is the invoking user's own temp dir,
+            # which they can write to. A path-based chown there is a TOCTOU — the user can
+            # swap the fresh dir for a symlink to a root-owned target between mkdtemp and
+            # the chown and have root chown that target to them. Opening the dir handle
+            # no-follow refuses the swapped symlink instead of following it.
+            dfd = os.open(keydir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fchown(dfd, *self.run_as)
+            finally:
+                os.close(dfd)
         self.keylog = os.path.join(keydir, "key.log")
 
         self._chan = grpc.insecure_channel(self.gateway)
@@ -221,7 +263,7 @@ class KeylogCapture(abc.ABC):
         handle = self._ing.OpenSession(ip.OpenSessionRequest(
             label=self.label, source=self.name, shape=cp.SOURCE_SHAPE_PCAP,
             metadata={VIEWER_COLUMNS_KEY: PCAP_VIEWER_COLUMNS,
-                      "capture.iface": iface, **self.open_metadata()}))
+                      mk.CAPTURE_IFACE: iface, **self.open_metadata()}))
         self.session_id = handle.session_id
         max_chunk = handle.max_chunk_bytes or (1 << 20)
 
@@ -251,9 +293,16 @@ class KeylogCapture(abc.ABC):
         self._ut = threading.Thread(target=upload, daemon=True)
         self._ut.start()
 
-        self._proc = self.launch(self.keylog)
-        self._fail_if_program_died()
-        return self.session_id
+        try:
+            self._proc = self.launch(self.keylog)
+        except BaseException:
+            # dumpcap, the reader/keylog threads and the upload are all already running. If
+            # the program fails to launch (a stale binary path, no permission), tear them
+            # down and close the session — otherwise a whole-interface capture would stream
+            # to an open session forever with no way to stop it (serve mode never registered
+            # this capture, so nothing else can).
+            self.stop()
+            raise
 
     def _fail_if_program_died(self) -> None:
         """Refuse a capture whose program exited instead of running under it.
@@ -322,6 +371,28 @@ class KeylogCapture(abc.ABC):
         """Ask a `wait` in progress to return (without tearing down)."""
         self._stop.set()
 
+    def _stop_recording(self) -> None:
+        """The part of stop that signals the processes: the program, then the capture
+        backend."""
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        self._stop_backend()
+
+    def _stop_backend(self) -> None:
+        """Stop the capture backend. Kept apart because it is the only step a privileged
+        subclass must serialize (pktap's root-owned tcpdump); waiting on the program before
+        it, and the upload drain and CloseSession after, can take half a minute."""
+        self._stop.set()
+        self._dump.terminate()
+        try:
+            self._dump.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._dump.kill()
+
     def stop(self) -> tuple:
         """Stop the program + dumpcap first (so nothing keeps recording), then drain the
         upload and close the session. Idempotent — safe to call from both the stop path and
@@ -331,18 +402,7 @@ class KeylogCapture(abc.ABC):
                 return self._ack.get("ack"), getattr(self, "_summary", None)
             self._stopped = True
 
-        if self._proc.poll() is None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
-        self._stop.set()
-        self._dump.terminate()
-        try:
-            self._dump.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._dump.kill()
+        self._stop_recording()
         self._rt.join(timeout=5)
         self._kt.join(timeout=5)
         self._q.put(SENTINEL)
@@ -353,4 +413,8 @@ class KeylogCapture(abc.ABC):
                 session_id=self.session_id, metadata=self.close_metadata()))
         finally:
             self._chan.close()
+            # The key-log holds live TLS secrets; delete its directory once the capture is
+            # over rather than leaving it in a temp dir indefinitely.
+            if self.keylog:
+                shutil.rmtree(os.path.dirname(self.keylog), ignore_errors=True)
         return ack, self._summary

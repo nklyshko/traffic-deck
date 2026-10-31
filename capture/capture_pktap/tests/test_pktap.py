@@ -306,6 +306,106 @@ def test_user_tempdir_falls_back_to_tmp(monkeypatch):
     assert privdrop.user_tempdir((501, 20)) == "/tmp"
 
 
+def test_browser_launch_drops_root_groups_and_sudo_env(monkeypatch):
+    # Demoting with user=/group= alone keeps root's supplementary groups (Python only calls
+    # setgroups when extra_groups is given), and passing os.environ through hands the
+    # browser root's sudo bookkeeping and an untraversable TMPDIR. Pin all three.
+    import pwd
+    import subprocess
+
+    from capture_pktap import capture as pktap_capture
+
+    uid, gid = os.getuid(), os.getgid()
+    name = pwd.getpwuid(uid).pw_name
+    seen = {}
+
+    def fake_popen(cmd, **kw):
+        seen.update(kw, cmd=cmd)
+        return object()
+
+    monkeypatch.setattr(pktap_capture.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("SUDO_UID", str(uid))
+    monkeypatch.setenv("SUDO_COMMAND", "/usr/bin/capture")
+    monkeypatch.setenv("TMPDIR", "/var/folders/zz/root/T")
+
+    cap = object.__new__(pktap_capture.PktapCapture)
+    cap.run_as = (uid, gid)
+    monkeypatch.setattr(cap, "launch_command", lambda keylog: ["chrome", keylog], raising=False)
+    cap._launch_browser("/tmp/key.log")
+
+    assert seen["user"] == uid and seen["group"] == gid
+    # Only the primary group: the user's full list can exceed NGROUPS_MAX, which Popen refuses.
+    assert seen["extra_groups"] == [gid]
+    env = seen["env"]
+    assert not any(k.startswith("SUDO_") for k in env)
+    assert "TMPDIR" not in env
+    assert env["HOME"] == pwd.getpwuid(uid).pw_dir and env["USER"] == name
+
+
+def test_as_user_excludes_other_threads_from_root_work(monkeypatch):
+    # euid is process-wide, so while one thread is inside as_user no other thread may do
+    # work that needs root (stopping a capture signals the root-owned tcpdump).
+    import threading
+
+    monkeypatch.setattr(privdrop.os, "seteuid", lambda _id: None)
+    monkeypatch.setattr(privdrop.os, "setegid", lambda _id: None)
+    got = []
+    with privdrop.as_user((os.getuid(), os.getgid())):
+        t = threading.Thread(target=lambda: got.append(privdrop.PRIV_LOCK.acquire(blocking=False)))
+        t.start()
+        t.join()
+    assert got == [False]
+    assert privdrop.PRIV_LOCK.acquire(blocking=False)  # released on exit
+    privdrop.PRIV_LOCK.release()
+
+
+class _FakeCreds:
+    """Process credentials as the kernel keeps them: a root process can drop and regain."""
+
+    def __init__(self):
+        self.euid, self.egid = 0, 0
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(privdrop.os, "geteuid", lambda: self.euid)
+        monkeypatch.setattr(privdrop.os, "getegid", lambda: self.egid)
+        monkeypatch.setattr(privdrop.os, "seteuid", lambda v: setattr(self, "euid", v))
+        monkeypatch.setattr(privdrop.os, "setegid", lambda v: setattr(self, "egid", v))
+        return self
+
+
+def test_nested_as_user_keeps_the_outer_window_dropped(monkeypatch):
+    # Restoring root on the inner exit would run the rest of the outer window as root.
+    creds = _FakeCreds().install(monkeypatch)
+    with privdrop.as_user((501, 20)):
+        with privdrop.as_user((501, 20)):
+            assert creds.euid == 501
+        assert (creds.euid, creds.egid) == (501, 20)
+    assert (creds.euid, creds.egid) == (0, 0)
+
+
+def test_profile_is_created_as_the_user_after_a_state_write(monkeypatch):
+    # _resolve_profile remembers choices, then creates the profile dir: the dir must not be
+    # created as root, or the browser (running as the user) cannot write to it.
+    from capture_chrome import source as chrome_source
+    from capture_pktap.source import PktapSource
+
+    creds = _FakeCreds().install(monkeypatch)
+    seen = {}
+
+    class Store:
+        def remember(self, key, value):
+            with privdrop.as_user((501, 20)):  # any write path that drops on its own
+                return value
+
+    monkeypatch.setattr(chrome_source.profiles, "temp_profile",
+                        lambda chrome: seen.setdefault("euid", creds.euid) or "/tmp/p")
+    src = PktapSource.__new__(PktapSource)
+    src._run_as, src._store = (501, 20), Store()
+    src._resolve_profile("chrome", {"profile_kind": "temp"})
+    assert seen["euid"] == 501
+    assert creds.euid == 0
+
+
 def test_describe_lists_profiles_as_the_user(monkeypatch):
     # Describe creates ~/.traffic-deck/chrome-profiles on first use; done as root, no
     # later "new profile" can be made in it.
@@ -333,3 +433,57 @@ def test_describe_lists_profiles_as_the_user(monkeypatch):
     src._run_as = (501, 20)
     src.describe({})
     assert state["seen"] is True
+
+
+def _other_thread_gets_priv_lock():
+    import threading
+
+    got = []
+
+    def try_lock():
+        got.append(privdrop.PRIV_LOCK.acquire(blocking=False))
+        if got[0]:
+            privdrop.PRIV_LOCK.release()
+
+    t = threading.Thread(target=try_lock)
+    t.start()
+    t.join()
+    return got[0]
+
+
+def test_only_signalling_tcpdump_holds_the_priv_lock(monkeypatch):
+    # Holding PRIV_LOCK through the whole stop (upload drain, CloseSession) blocked describe
+    # and start for as long as a close took. Only the signalling step needs it.
+    from capture_pktap.capture import PktapCapture
+    from capture_sdk.livecapture import KeylogCapture
+
+    other_thread_gets_lock = _other_thread_gets_priv_lock
+    seen = []
+    monkeypatch.setattr(KeylogCapture, "_stop_backend", lambda self: seen.append(other_thread_gets_lock()))
+    PktapCapture._stop_backend(object.__new__(PktapCapture))
+    assert seen == [False]  # locked while signalling
+    assert other_thread_gets_lock()  # and released after
+    assert PktapCapture.stop is KeylogCapture.stop  # the drain and close run unlocked
+    assert PktapCapture._stop_recording is KeylogCapture._stop_recording  # so does the browser's exit
+
+
+def test_a_start_holds_the_priv_lock_for_its_root_work_only(monkeypatch):
+    # Spawning tcpdump and demoting the browser need root; the launch-grace wait after them
+    # does not, and holding the lock through it blocked describe.
+    from capture_pktap.capture import PktapCapture
+    from capture_pktap.source import PktapSource
+    from capture_chrome.source import ChromeSource
+    from capture_sdk.livecapture import KeylogCapture
+
+    seen = []
+    monkeypatch.setattr(KeylogCapture, "_start_recording",
+                        lambda self: seen.append(_other_thread_gets_priv_lock()))
+    monkeypatch.setattr(KeylogCapture, "_fail_if_program_died",
+                        lambda self: seen.append(_other_thread_gets_priv_lock()))
+    cap = object.__new__(PktapCapture)
+    cap.session_id = "s"
+    assert KeylogCapture.start(cap) == "s"
+    assert seen == [False, True]  # locked while spawning, not while waiting
+    monkeypatch.setattr(ChromeSource, "start_capture",
+                        lambda self, label, params: _other_thread_gets_priv_lock())
+    assert PktapSource.start_capture(object.__new__(PktapSource), "", {})  # source holds none

@@ -12,7 +12,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 
 from traffic_viewer.client import GatewayClient
-from traffic_viewer.screens import ConfirmScreen, QuitConfirmScreen, SessionsScreen
+from traffic_viewer.screens import ConfirmScreen, QuitConfirmScreen, SessionsScreen, remove_quietly
 
 
 class TrafficViewerApp(App):
@@ -43,6 +43,9 @@ class TrafficViewerApp(App):
         self.address = address
         self.client = GatewayClient(address)
         self.compare_a: tuple[str, str] | None = None  # (session_id, flow_id) for compare slot A
+        # Body copies handed to a GUI opener, which reads them after we return; removed at
+        # exit since a body can hold credentials. (Terminal-editor copies go immediately.)
+        self.temp_files: list[str] = []
 
     def get_default_screen(self) -> Screen:
         return SessionsScreen()
@@ -69,6 +72,8 @@ class TrafficViewerApp(App):
         self._open_quit_dialog()
 
     async def on_unmount(self) -> None:
+        for path in self.temp_files:
+            remove_quietly(path)
         await self.client.close()
 
 

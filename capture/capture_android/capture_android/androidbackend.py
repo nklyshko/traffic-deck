@@ -24,7 +24,7 @@ from typing import Mapping
 from capture_android import frida_versions
 from capture_android import chromeproxy
 from capture_android.adb import AdbClient
-from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices
+from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices, quick_run
 
 _PROJECT = str(Path(__file__).resolve().parents[1])  # the capture_android project dir
 _CREATE = "__create__"  # provision-choice value: create + boot a new emulator
@@ -46,7 +46,7 @@ class RealAndroidBackend:
     def _running_serials(self) -> list[str]:
         # adb only (no full SDK needed): serials in the "device" state.
         adb = AdbClient().adb
-        out = subprocess.run([adb, "devices", "-l"], text=True, capture_output=True).stdout
+        out = quick_run([adb, "devices", "-l"]).stdout
         return [d.serial for d in parse_devices(out) if d.state == "device"]
 
     def provision_options(self) -> list[tuple[str, str]]:

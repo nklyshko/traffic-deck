@@ -277,6 +277,23 @@ def test_an_unknown_source_name_is_refused():
         server.stop(None)
 
 
+def test_a_backend_that_fails_before_opening_is_reported_at_once():
+    """A capture whose backend raises before any session opens (a package not installed, a
+    device error) must fail now with that error — it used to wait out the whole 120 s and
+    then report a generic "device not ready?"."""
+    import pytest
+
+    class FailingBackend(FakeBackend):
+        def start(self, package, label, params, on_session, stop_event):
+            raise LookupError(f"package {package} is not installed")
+
+    src = two_sources(FailingBackend())["android"]
+    t0 = time.monotonic()
+    with pytest.raises(RuntimeError, match="com.missing is not installed"):
+        src.start_capture("run", {"provision": "attach", "package": "com.missing"})
+    assert time.monotonic() - t0 < 5
+
+
 def test_stop_capture_waits_for_the_session_to_close():
     """Stop returns only once the capture has finished tearing down (its CloseSession has
     run) — not while a detached capture is still racing to close. This is the fix for

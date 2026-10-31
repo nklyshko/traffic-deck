@@ -27,6 +27,36 @@ from traffic.v1 import (  # noqa: E402
 Session = viewer_pb2  # re-exported module for callers that need message types
 Flow = viewer_pb2
 
+#: Deadline for a unary call that names none. Without one, a gateway that accepts the
+#: connection but stops answering (wedged, or paused in a debugger) leaves the call — and
+#: the action that made it — waiting forever. Above QuerySQL's 60 s server-side ceiling.
+DEFAULT_UNARY_TIMEOUT = 90.0
+
+#: Unary calls that legitimately run long on the gateway — decoding a capture, launching or
+#: tearing down a capture tool or service — get no default deadline. Streams get none
+#: either: a follow stream is meant to stay open.
+_LONG_RUNNING = frozenset({
+    "/traffic.v1.ControlService/ImportCapture",
+    "/traffic.v1.ControlService/StartCapture",
+    "/traffic.v1.ControlService/StopCapture",
+    "/traffic.v1.ControlService/DescribeCaptureSource",  # may provision a device
+    "/traffic.v1.ControlService/StartService",
+    "/traffic.v1.ControlService/StopService",
+    "/traffic.v1.IngestService/ForceCloseSession",       # finalizes (decodes) the capture
+})
+
+
+class _DefaultDeadline(grpc.aio.UnaryUnaryClientInterceptor):
+    """Give a unary call DEFAULT_UNARY_TIMEOUT unless it set its own or is long-running."""
+
+    async def intercept_unary_unary(self, continuation, client_call_details, request):
+        method = client_call_details.method
+        if isinstance(method, bytes):
+            method = method.decode()
+        if client_call_details.timeout is None and method not in _LONG_RUNNING:
+            client_call_details = client_call_details._replace(timeout=DEFAULT_UNARY_TIMEOUT)
+        return await continuation(client_call_details, request)
+
 
 class GatewayClient:
     """Thin async wrapper over ViewerServiceStub + ControlServiceStub."""
@@ -41,7 +71,8 @@ class GatewayClient:
     def _ensure(self) -> viewer_pb2_grpc.ViewerServiceStub:
         # Lazily create the aio channel/stub on first use (inside the event loop).
         if self._stub is None:
-            self._channel = grpc.aio.insecure_channel(self._address)
+            self._channel = grpc.aio.insecure_channel(
+                self._address, interceptors=[_DefaultDeadline()])
             self._stub = viewer_pb2_grpc.ViewerServiceStub(self._channel)
         return self._stub
 
@@ -109,10 +140,10 @@ class GatewayClient:
             viewer_pb2.GetFlowRequest(session_id=session_id, flow_id=flow_id)
         )
 
-    async def get_body(self, session_id: str, flow_id: str, response: bool) -> bytes:
+    async def get_body(self, session_id: str, flow_id: str, is_response: bool) -> bytes:
         """Fetch a full body (any size) via the streaming GetBody RPC."""
         call = self._ensure().GetBody(
-            viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=response)
+            viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=is_response)
         )
         return b"".join([c.payload async for c in call])
 

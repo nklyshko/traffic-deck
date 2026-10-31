@@ -177,7 +177,13 @@ def editor_command(path: str) -> tuple[list[str], bool]:
     separate program and must NOT suspend the TUI."""
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
     if editor:
-        return shlex.split(editor) + [path], True
+        try:
+            argv = shlex.split(editor)
+        except ValueError:
+            # An unbalanced quote in $EDITOR must not crash the TUI: fall back to treating
+            # the value as a single command token.
+            argv = [editor]
+        return argv + [path], True
     opener = "open" if sys.platform == "darwin" else "xdg-open"
     return [opener, path], False
 
@@ -311,7 +317,7 @@ def flags_cell(f, selected: bool) -> Text:
 def curl(flow, idprefix: str, body: bytes):
     """Build a curl command reproducing the request. Returns (command, bodyfile|None);
     a non-empty body is referenced as `--data-binary @<bodyfile>`."""
-    parts = [f"curl -X {flow.method or 'GET'} {shlex.quote(url(flow))}"]
+    parts = [f"curl -X {shlex.quote(flow.method or 'GET')} {shlex.quote(url(flow))}"]
     if flow.protocol == "HTTP/2":
         parts.append("--http2")
     elif flow.protocol == "HTTP/1.1":
@@ -327,10 +333,11 @@ def curl(flow, idprefix: str, body: bytes):
     return " \\\n  ".join(parts), bodyfile
 
 
-def raw_message(flow, body: bytes, response: bool) -> bytes:
-    """Reconstruct a raw HTTP message (start line + headers in wire order + body).
-    For HTTP/2 the pseudo-headers are kept as-is, preserving order for fingerprinting."""
-    if response:
+def raw_message(flow, body: bytes, is_response: bool) -> bytes:
+    """Reconstruct a raw HTTP message (start line + headers in wire order + body):
+    the response side when `is_response`, else the request side. For HTTP/2 the
+    pseudo-headers are kept as-is, preserving order for fingerprinting."""
+    if is_response:
         start = f"{flow.protocol or 'HTTP/1.1'} {flow.status}"
         headers = flow.response_headers
     else:

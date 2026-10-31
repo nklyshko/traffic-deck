@@ -1088,6 +1088,33 @@ async def test_body_view_opens_editor_for_large_body(monkeypatch):
         assert opened == ["request"]  # auto-handed off to the editor
 
 
+async def test_a_returning_editor_still_finds_its_temp_copy(monkeypatch):
+    # EDITOR=code (no --wait) forks and returns at once; its window reads the file later.
+    # The copy has to outlive the editor process and go only when the TUI exits.
+    import contextlib
+    import os
+
+    from traffic_viewer import screens
+
+    monkeypatch.setattr(screens, "editor_command", lambda path: (["true", path], True))
+    big = b"x" * (BodyScreen._VIEW_LIMIT + 10)
+
+    async def big_body(session_id, flow_id, response):
+        return big
+
+    app = make_app()
+    app.client.get_body = big_body
+    monkeypatch.setattr(app, "suspend", contextlib.nullcontext)
+    async with app.run_test() as pilot:
+        await settle(pilot)
+        app.push_screen(BodyScreen(SESSION_ID, "f1", "text/plain", False, "f1"))
+        await settle(pilot)
+        await app.workers.wait_for_complete()
+        assert len(app.temp_files) == 1 and os.path.exists(app.temp_files[0])
+        path = app.temp_files[0]
+    assert not os.path.exists(path)  # removed when the TUI exits
+
+
 async def test_ws_payload_formats_json_inline():
     app = make_app()
 

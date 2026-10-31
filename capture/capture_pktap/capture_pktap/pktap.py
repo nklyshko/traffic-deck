@@ -26,13 +26,15 @@ import os
 import shutil
 import subprocess
 
+from capture_sdk import metadata_keys as mk
+
 #: MAXCOMLEN. The kernel stores a process name in `pth_comm[MAXCOMLEN+1]`, so anything
 #: longer is truncated — and the truncated form is what `-Q 'proc = "…"'` compares against.
 MAXCOMLEN = 16
 
 #: Session-metadata key carrying the pids this capture's browser actually used, reported at
-#: CloseSession. Mirrors gateway/internal/server/ingest.go.
-PIDS_KEY = "capture.pids"
+#: CloseSession. Mirrors gateway/internal/server/ingest.go (pidsCaptureKey).
+PIDS_KEY = mk.CAPTURE_PIDS
 
 #: The Chromium switch that marks the one child process owning the browser's sockets.
 #: Renderers, the GPU process and the rest never appear on the network.

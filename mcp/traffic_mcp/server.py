@@ -13,7 +13,9 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping
 from datetime import datetime
+from typing import TYPE_CHECKING, TypedDict
 
 import grpc
 from mcp.server.fastmcp import FastMCP
@@ -22,6 +24,62 @@ from pydantic import ConfigDict, model_validator
 
 from traffic_mcp.client import GatewayClient, control_pb2, viewer_pb2
 from traffic_mcp.filter import FILTER_SYNTAX, MSG_FILTER_SYNTAX, flow_url
+
+if TYPE_CHECKING:  # annotations only (they are lazy here); no runtime import
+    from traffic.v1 import common_pb2
+
+
+# Shapes of the dicts the tools return. Documentation for readers and type checkers: the
+# tools themselves stay annotated `-> dict`, so the schemas MCP clients see are unchanged.
+
+class Annotations(TypedDict):
+    """Annotation fields shared by flows and messages."""
+    favorite: bool
+    mark_color: str | None
+    tags: list[str]          # tag names (an id when the name is unknown)
+    groups: list[str]        # group names (likewise)
+    comments: list[str]      # comment bodies
+
+
+class SessionInfo(TypedDict):
+    """One session as list_sessions returns it."""
+    id: str
+    label: str
+    group: str | None
+    source: str | None
+    status: str              # open | decoding | closed | error | unspecified
+    created_at_unix_ms: int
+    closed_at_unix_ms: int | None
+    flow_count: int
+    pcap_bytes: int
+    keylog_bytes: int
+    metadata: dict[str, str] | None   # see docs/metadata-keys.md
+    undecoded: dict[str, int] | None  # reason -> count, nonzero only
+
+
+class FlowSummary(Annotations):
+    """One flow as the listing tools return it (get_flow adds headers and bodies)."""
+    id: str
+    ts_unix_micros: int
+    method: str
+    url: str
+    status: int | None
+    error: str | None
+    duration_ms: float | None
+    protocol: str
+    content_type: str | None
+    request_bytes: int
+    tls_decrypted: bool
+    websocket: bool
+    ws_message_count: int
+    conn: str | None         # connection id: tcp stream, or quic:<n> for HTTP/3
+    outcome: str | None      # conn.outcome for an undecoded connection, else None
+    http2_fingerprint: str | None
+    ja3: str | None
+    ja4: str | None
+    tls_client_hello: str | None
+    redirect_location: str | None
+    redirected_from_id: str | None
 
 
 class _StrictArgModel(_func_metadata.ArgModelBase):
@@ -147,7 +205,7 @@ async def _name_maps() -> tuple[dict, dict]:
 
 # --- serialization -------------------------------------------------------
 
-def _session_dict(s) -> dict:
+def _session_dict(s: common_pb2.Session) -> SessionInfo:
     return {
         "id": s.id,
         "label": s.label,
@@ -170,16 +228,20 @@ def _session_dict(s) -> dict:
     }
 
 
-def _undecoded_counts(md) -> dict | None:
+def _undecoded_counts(session_metadata: Mapping[str, str]) -> dict[str, int] | None:
+    """Per-reason counts of connections that produced no flow. The gateway's native decoder
+    writes them as `undecoded.<reason>`, the mitmproxy source as `conn.undecoded.<outcome>`
+    (docs/metadata-keys.md); both are read."""
     counts = {}
-    for k, v in md.items():
+    for k, v in session_metadata.items():
         for prefix in ("undecoded.", "conn.undecoded."):
             if k.startswith(prefix) and v.isdigit() and int(v):
                 counts[k[len(prefix):]] = int(v)
     return counts or None
 
 
-def _annotations(rec, tagnames: dict, groupnames: dict) -> dict:
+def _annotations(rec: common_pb2.Flow | common_pb2.WsMessage, tagnames: dict[str, str],
+                 groupnames: dict[str, str]) -> Annotations:
     """Annotation fields shared by flows and messages (both are record_id-keyed records):
     favorite, color mark, tag/group names, and comment bodies."""
     return {
@@ -204,7 +266,8 @@ def _note_hidden(out: dict, hidden: int) -> None:
         out["hidden_note"] = _HIDDEN_NOTE
 
 
-def _flow_summary(f, tagnames: dict, groupnames: dict) -> dict:
+def _flow_summary(f: common_pb2.Flow, tagnames: dict[str, str],
+                  groupnames: dict[str, str]) -> FlowSummary:
     return {
         "id": f.id,
         "ts_unix_micros": f.ts_unix_micros,
@@ -562,17 +625,17 @@ async def _match_previews(sid: str, flow_id: str, req_header: str, resp_header: 
     ):
         if needle and (hit := _snippet(hay, needle)):
             out[field] = hit
-    for field, needle, response in (("request_body", req_body, False),
-                                    ("response_body", resp_body, True)):
+    for field, needle, is_response in (("request_body", req_body, False),
+                                       ("response_body", resp_body, True)):
         if not needle:
             continue
         # The flow detail already carries small bodies inline; only a body stored out of
         # line costs a second fetch.
-        body = f.response_body if response else f.request_body
+        body = f.response_body if is_response else f.request_body
         data = bytes(body.inline)
         if not data and body.size:
             try:
-                data = await client().get_body(sid, flow_id, response)
+                data = await client().get_body(sid, flow_id, is_response)
             except grpc.aio.AioRpcError:
                 continue
         # The whole body, as the gateway matched it: a marker deep in a large page is
@@ -1625,8 +1688,12 @@ async def save_body(session_id: str, flow_id: str, response: bool = True) -> dic
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no body"}
         raise
-    path = os.path.join(tempfile.mkdtemp(prefix="trafficdeck-body-"),
-                        f"{flow_id}.{'response' if response else 'request'}")
+    # basename only: flow_id reaches here from the caller, and a flow pushed by any
+    # client can carry an id with "/" or ".." (or an absolute path, which os.path.join
+    # would honour outright), which would otherwise let the write escape the fresh temp
+    # dir the docstring promises it stays in.
+    name = os.path.basename(f"{flow_id}.{'response' if response else 'request'}")
+    path = os.path.join(tempfile.mkdtemp(prefix="trafficdeck-body-"), name)
     with open(path, "wb") as fh:
         fh.write(data)
     return {"path": path, "size": len(data)}

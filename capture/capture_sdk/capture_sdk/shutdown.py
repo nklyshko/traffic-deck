@@ -35,6 +35,7 @@ class GracefulInterrupt:
         self._message = message
         self._installed = False
         self._prev = None
+        self._prev_term = None
 
     @property
     def stopping(self) -> bool:
@@ -43,22 +44,29 @@ class GracefulInterrupt:
 
     def _handle(self, signum, frame) -> None:
         if not self.event.is_set():
-            self.event.set()  # first Ctrl-C: ask the capture to wind down
+            self.event.set()  # first signal: ask the capture to wind down
             print(f"\n{self._message}", file=sys.stderr, flush=True)
             return
-        # Second Ctrl-C: hand SIGINT back to the default handler and abort now.
+        # Second signal: hand both signals back to their previous handlers and abort now.
         signal.signal(signal.SIGINT, self._prev or signal.SIG_DFL)
+        signal.signal(signal.SIGTERM, self._prev_term or signal.SIG_DFL)
         raise KeyboardInterrupt
 
     def __enter__(self) -> "GracefulInterrupt":
         try:
             self._prev = signal.signal(signal.SIGINT, self._handle)
+            # Also catch SIGTERM: the gateway reaps a capture source by group-killing it
+            # with SIGTERM (then SIGKILL after a grace), and a standalone capture that
+            # dies on the default SIGTERM action runs no teardown — leaving the on-device
+            # tcpdump/frida, iptables rules and a half-open session behind.
+            self._prev_term = signal.signal(signal.SIGTERM, self._handle)
             self._installed = True
         except ValueError:
-            self._installed = False  # not the main thread — leave Ctrl-C as-is
+            self._installed = False  # not the main thread — leave the defaults as-is
         return self
 
     def __exit__(self, *exc) -> bool:
         if self._installed:
             signal.signal(signal.SIGINT, self._prev)
+            signal.signal(signal.SIGTERM, self._prev_term)
         return False

@@ -205,12 +205,21 @@ def _read_session(proc: subprocess.Popen) -> str:
     """Read mitmdump's output until its addon prints the session id, then keep draining so
     the pipe never fills. (The twin of capture_mitmproxy's own reader — duplicated rather
     than imported, to keep mitmproxy out of this module's dependencies.)"""
-    for line in proc.stdout:
-        if line.startswith("SESSION "):
-            sid = line[len("SESSION "):].strip()
-            threading.Thread(target=_drain, args=(proc,), daemon=True).start()
-            return sid
-    raise RuntimeError("mitmdump exited before opening a session (port taken? uv failed?)")
+    # Watchdog: if the addon never prints SESSION (its startup hook failed, the gateway is
+    # down) mitmdump keeps running and this read would block forever, holding the caller.
+    # Kill it after a grace so the pipe closes and we raise below instead of hanging.
+    watchdog = threading.Timer(30.0, lambda: proc.kill())
+    watchdog.start()
+    try:
+        for line in proc.stdout:
+            if line.startswith("SESSION "):
+                watchdog.cancel()
+                sid = line[len("SESSION "):].strip()
+                threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+                return sid
+    finally:
+        watchdog.cancel()
+    raise RuntimeError("mitmdump exited before opening a session (port taken? uv failed? gateway down?)")
 
 
 def _drain(proc: subprocess.Popen) -> None:

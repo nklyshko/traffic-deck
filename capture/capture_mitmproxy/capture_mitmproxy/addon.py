@@ -13,11 +13,13 @@ Config via env (set by the launcher): GATEWAY_ADDR, CAPTURE_LABEL, CAPTURE_METAD
 
 from __future__ import annotations
 
+import io
 import ipaddress
 import json
 import os
 import time
 import uuid
+import zlib
 from collections import Counter
 
 import grpc
@@ -33,6 +35,7 @@ from mitmproxy.proxy import layer as proxy_layer
 from capture_mitmproxy.hostnames import DnsNames, Hostname
 from capture_mitmproxy.socks_upstream import looks_like_socks5, SocksUpstreamLayer
 
+from capture_sdk import metadata_keys as mk
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
@@ -57,12 +60,58 @@ def _norm_proto(v: str) -> str:
     return {"HTTP/2.0": "HTTP/2", "HTTP/3.0": "HTTP/3"}.get(v, v or "HTTP/1.1")
 
 
+#: Cap on a single body pushed to the gateway. A malicious response can be a compression
+#: bomb (a kilobyte of gzip → gigabytes), and the whole body is embedded in the proto, so
+#: an uncapped one both pressures this proxy's memory and, past the gateway's 256 MiB gRPC
+#: limit, fails to send and loses the flow. Truncation records the bytes we kept.
+_MAX_BODY_BYTES = 64 * 1024 * 1024
+
+
+def _bounded_decode(raw: bytes, enc: str, cap: int) -> bytes | None:
+    """Undo one Content-Encoding without ever producing more than `cap` bytes — the decoded
+    prefix when the body is larger. None for an encoding not decoded here (a chain such as
+    "gzip, br", or something new), which is kept as it came, as mitmproxy itself would.
+
+    Bounded on purpose: mitmproxy's get_content() inflates the whole body first, so capping
+    after it did not stop a compression bomb from exhausting this proxy's memory."""
+    if enc in ("gzip", "x-gzip"):
+        return zlib.decompressobj(47).decompress(raw, cap)  # 47: gzip or zlib header
+    if enc == "deflate":  # zlib-wrapped per RFC 9110, raw deflate from some servers
+        try:
+            return zlib.decompressobj(zlib.MAX_WBITS).decompress(raw, cap)
+        except zlib.error:
+            return zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw, cap)
+    if enc == "br":
+        import brotli  # a mitmproxy dependency
+
+        d = brotli.Decompressor()
+        out = bytearray(d.process(raw, output_buffer_limit=cap))
+        while len(out) < cap and not d.is_finished():
+            more = d.process(b"", output_buffer_limit=cap - len(out))
+            if not more:
+                break
+            out += more
+        return bytes(out[:cap])
+    if enc == "zstd":
+        import zstandard  # a mitmproxy dependency
+
+        reader = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(raw), read_across_frames=True)
+        return reader.read(cap)
+    return None
+
+
 def _content(msg) -> bytes:
-    """Best-effort decoded body bytes (decompressed); falls back to raw/empty."""
-    try:
-        return msg.get_content(strict=False) or b""
-    except Exception:  # noqa: BLE001 (undecodable / streamed)
-        return msg.raw_content or b""
+    """Best-effort decoded body bytes (decompressed), capped; falls back to raw/empty."""
+    raw = msg.raw_content or b""  # None for a streamed body
+    enc = _wire_encoding(msg)
+    if raw and enc:
+        try:
+            decoded = _bounded_decode(raw, enc, _MAX_BODY_BYTES)
+        except Exception:  # noqa: BLE001 (not actually in that encoding: keep the wire bytes)
+            decoded = None
+        if decoded:
+            return decoded
+    return raw[:_MAX_BODY_BYTES]
 
 
 def _wire_encoding(msg) -> str:
@@ -135,15 +184,15 @@ def stream_hostname(flow, names: DnsNames | None = None) -> Hostname:
 
 
 def _hostname_metadata(pf: cp.Flow, hostname: Hostname, sni: str) -> None:
-    pf.metadata["hostname.source"] = hostname.source
+    pf.metadata[mk.HOSTNAME_SOURCE] = hostname.source
     if hostname.source == "dns":
-        pf.metadata["hostname.dns_flow"] = hostname.dns_flow
+        pf.metadata[mk.HOSTNAME_DNS_FLOW] = hostname.dns_flow
         if hostname.candidates:
-            pf.metadata["hostname.dns_candidates"] = ",".join(hostname.candidates)
+            pf.metadata[mk.HOSTNAME_DNS_CANDIDATES] = ",".join(hostname.candidates)
     if sni:
         # Recorded even when the Host header won: a Host that disagrees with the SNI (a
         # fronted domain) is worth seeing.
-        pf.metadata["tls.sni"] = sni
+        pf.metadata[mk.TLS_SNI] = sni
 
 
 def _is_ws_upgrade(resp) -> bool:
@@ -276,7 +325,7 @@ def build_stream_flow(flow, names: DnsNames | None = None) -> cp.Flow:
         tcp_stream=_conn_id(flow.client_conn),
     )
     _hostname_metadata(pf, hostname, _sni(flow))
-    pf.metadata["conn.outcome"] = UDP_UNDECODED if is_udp else TCP_PASSTHROUGH
+    pf.metadata[mk.CONN_OUTCOME] = UDP_UNDECODED if is_udp else TCP_PASSTHROUGH
     _byte_counts(pf, flow.messages)
     return pf
 
@@ -286,8 +335,8 @@ def _byte_counts(pf: cp.Flow, messages) -> None:
     up = sum(len(m.content or b"") for m in messages if m.from_client)
     down = sum(len(m.content or b"") for m in messages if not m.from_client)
     pf.request_bytes = up
-    pf.metadata["conn.bytes_up"] = str(up)
-    pf.metadata["conn.bytes_down"] = str(down)
+    pf.metadata[mk.CONN_BYTES_UP] = str(up)
+    pf.metadata[mk.CONN_BYTES_DOWN] = str(down)
 
 
 def build_dns_flow(flow: dns.DNSFlow) -> cp.Flow:
@@ -353,7 +402,7 @@ def build_conn_flow(client: connection.Client, outcome: str, error: str,
         error=error,
     )
     _hostname_metadata(pf, hostname, _s(client.sni or ""))
-    pf.metadata["conn.outcome"] = outcome
+    pf.metadata[mk.CONN_OUTCOME] = outcome
     return pf
 
 
@@ -363,7 +412,9 @@ def _ws_opcode(msg) -> str:
 
 
 def _message(flow_id: str, from_client: bool, opcode: str, content: bytes, ts: float) -> cp.WsMessage:
-    content = content or b""
+    # Same bound as bodies: one giant frame past the gateway's gRPC limit would fail the
+    # push and lose the message. The size describes the bytes kept, as for bodies.
+    content = (content or b"")[:_MAX_BODY_BYTES]
     return cp.WsMessage(
         id=str(uuid.uuid4()),
         flow_id=flow_id,
@@ -392,7 +443,7 @@ def outcome_counts(outcomes: Counter[str]) -> dict[str, str]:
     by reason — so "nothing else happened" can be told from "a lot went undecoded" without
     listing them. Every reason is present, 0 included: an absent key would read as "not
     counted"."""
-    return {f"conn.undecoded.{o}": str(outcomes.get(o, 0))
+    return {f"{mk.CONN_UNDECODED_PREFIX}{o}": str(outcomes.get(o, 0))
             for o in (TLS_REJECTED, NO_REQUEST, UDP_UNDECODED)}
 
 
@@ -446,7 +497,7 @@ class GatewayPusher:
         if ctx.options.listen_host:
             metadata["mitmproxy.listen_host"] = ctx.options.listen_host
         if self.viewer_columns:
-            metadata["viewer.columns"] = self.viewer_columns
+            metadata[mk.VIEWER_COLUMNS_KEY] = self.viewer_columns
         metadata.update(_extra_metadata(self.extra_metadata))
         handle = await self._stub.OpenSession(
             ip.OpenSessionRequest(label=self.label, source="mitmproxy",

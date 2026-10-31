@@ -73,11 +73,20 @@ class MitmproxySource(source.CaptureSource):
 
     def _read_session(self, proc: subprocess.Popen) -> str:
         """Read mitmdump's output until the addon prints its session id (SESSION <id>)."""
-        for line in proc.stdout:
-            _echo(line)
-            if line.startswith("SESSION "):
-                return line[len("SESSION "):].strip()
-        raise RuntimeError("mitmdump exited before opening a session (port in use? bad mode?)")
+        # Watchdog: if the addon's `running` hook fails (e.g. the gateway is down) mitmdump
+        # logs the error but keeps running and never prints SESSION, so this read would
+        # block forever and hold the calling gRPC thread. Kill mitmdump after a grace so the
+        # pipe closes and the loop ends with the error below.
+        watchdog = threading.Timer(30.0, lambda: proc.kill())
+        watchdog.start()
+        try:
+            for line in proc.stdout:
+                _echo(line)
+                if line.startswith("SESSION "):
+                    return line[len("SESSION "):].strip()
+        finally:
+            watchdog.cancel()
+        raise RuntimeError("mitmdump exited before opening a session (port in use? bad mode? gateway down?)")
 
     def _watch(self, sid: str, proc: subprocess.Popen) -> None:
         # Pass mitmdump's output on to ours, which the gateway writes to the source's log —

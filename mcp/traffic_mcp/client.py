@@ -25,6 +25,19 @@ from traffic.v1 import (  # noqa: E402
 )
 
 
+#: Deadline for a unary call that names none, so a gateway that accepts a call but never
+#: answers fails the tool call instead of hanging the agent. Above QuerySQL's 60 s ceiling.
+#: The capture-control calls below set their own; streams (wait_for_flows) set theirs.
+DEFAULT_UNARY_TIMEOUT = 90.0
+
+
+class _DefaultDeadline(grpc.aio.UnaryUnaryClientInterceptor):
+    async def intercept_unary_unary(self, continuation, client_call_details, request):
+        if client_call_details.timeout is None:
+            client_call_details = client_call_details._replace(timeout=DEFAULT_UNARY_TIMEOUT)
+        return await continuation(client_call_details, request)
+
+
 class GatewayClient:
     """Thin async wrapper over ViewerServiceStub (+ ControlService reads)."""
 
@@ -36,7 +49,8 @@ class GatewayClient:
 
     def _v(self) -> viewer_pb2_grpc.ViewerServiceStub:
         if self._viewer is None:
-            self._channel = grpc.aio.insecure_channel(self._address)
+            self._channel = grpc.aio.insecure_channel(
+                self._address, interceptors=[_DefaultDeadline()])
             self._viewer = viewer_pb2_grpc.ViewerServiceStub(self._channel)
         return self._viewer
 
@@ -99,9 +113,9 @@ class GatewayClient:
                 limit=limit, timeout_millis=timeout_millis)
         )
 
-    async def get_body(self, session_id: str, flow_id: str, response: bool) -> bytes:
+    async def get_body(self, session_id: str, flow_id: str, is_response: bool) -> bytes:
         call = self._v().GetBody(
-            viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=response)
+            viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=is_response)
         )
         return b"".join([c.payload async for c in call])
 

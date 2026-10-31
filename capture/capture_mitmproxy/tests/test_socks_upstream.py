@@ -334,9 +334,45 @@ class TestEdgeCases:
         _run(s._handle_event(events.DataReceived(server, bytes([0x05, 0x00]))))
         # CMD=0x02 (BIND), not CONNECT
         bind_req = bytes([0x05, 0x02, 0x00, 0x01, 1, 2, 3, 4]) + struct.pack("!H", 443)
-        _run(s._handle_event(events.DataReceived(client, bind_req)))
+        cmds = _run(s._handle_event(events.DataReceived(client, bind_req)))
         assert s._c_phase == _C_DONE
         assert s._target is None
+        # ...and actually relays: the BIND request reaches the proxy, and later bytes flow
+        # both ways unchanged (it used to buffer them forever and hang the connection).
+        sent = [c for c in cmds if isinstance(c, commands.SendData)]
+        assert [(c.connection, c.data) for c in sent] == [(server, bind_req)]
+        cmds = _run(s._handle_event(events.DataReceived(server, b"\x05\x00reply")))
+        assert [(c.connection, c.data) for c in cmds if isinstance(c, commands.SendData)] \
+            == [(client, b"\x05\x00reply")]
+        cmds = _run(s._handle_event(events.DataReceived(client, b"more")))
+        assert [(c.connection, c.data) for c in cmds if isinstance(c, commands.SendData)] \
+            == [(server, b"more")]
+        assert not s._client_buf and not s._server_buf
+
+    def test_connect_pipelined_in_a_second_segment(self):
+        """The CONNECT request arrives in its own segment before the proxy has picked an
+        auth method. It must wait for the method, not be re-parsed as a second greeting."""
+        ctx, client, server = _make_ctx()
+        s = SocksUpstreamLayer(ctx)
+        _run(s._handle_event(events.DataReceived(client, bytes([0x05, 0x01, 0x00]))))
+        req = _socks5_connect_req(b"ws-api.oneme.ru", 443)
+        cmds = _run(s._handle_event(events.DataReceived(client, req)))
+        assert not [c for c in cmds if isinstance(c, commands.SendData)]  # held, not relayed
+        cmds = _run(s._handle_event(events.DataReceived(server, bytes([0x05, 0x00]))))
+        assert s._target == ("ws-api.oneme.ru", 443)
+        assert (server, req) in [(c.connection, c.data) for c in cmds
+                                 if isinstance(c, commands.SendData)]
+
+    def test_oversized_handshake_relays_raw(self):
+        """A greeting that never completes must not grow the buffer without bound."""
+        ctx, client, server = _make_ctx()
+        s = SocksUpstreamLayer(ctx)
+        _run(s._handle_event(events.DataReceived(client, bytes([0x05, 0xFF]))))  # wants 255 methods
+        junk = b"\x00" * (64 * 1024)
+        cmds = _run(s._handle_event(events.DataReceived(client, junk)))
+        assert s._passthrough and not s._client_buf
+        sent = b"".join(c.data for c in cmds if isinstance(c, commands.SendData))
+        assert sent == bytes([0x05, 0xFF]) + junk  # everything buffered went out, in order
 
     def test_establish_feeds_leftover_to_child(self):
         """Leftover bytes after the SOCKS5 handshake (typically the inner TLS ClientHello)

@@ -75,8 +75,16 @@ def saved_profiles(root: str) -> list[str]:
 
 def persistent_path(root: str, name: str) -> str:
     """The profile dir for a saved persistent profile `name` under `root`, created on
-    demand. An empty name falls back to "default"."""
-    path = os.path.join(root, name or "default")
+    demand. An empty name falls back to "default".
+
+    `name` arrives from a capture request (new_profile_name / saved_profile), so it must be
+    a single path component: "../x" or an absolute path (which os.path.join honours
+    outright) would otherwise create and use an arbitrary directory as the browser's
+    --user-data-dir."""
+    name = name or "default"
+    if name in (".", "..") or os.path.basename(name) != name or (os.altsep and os.altsep in name):
+        raise ValueError(f"invalid profile name {name!r}: use a plain name, not a path")
+    path = os.path.join(root, name)
     os.makedirs(path, exist_ok=True)
     return path
 

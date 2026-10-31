@@ -24,13 +24,27 @@ def test_first_ctrl_c_requests_stop_without_raising(capsys):
 def test_second_ctrl_c_aborts_and_restores_default(monkeypatch):
     gi = GracefulInterrupt()
     gi._prev = signal.SIG_DFL
+    gi._prev_term = signal.SIG_DFL
     restored = []
-    monkeypatch.setattr(signal, "signal", lambda num, handler: restored.append(handler))
+    monkeypatch.setattr(signal, "signal", lambda num, handler: restored.append((num, handler)))
 
     gi._handle(signal.SIGINT, None)  # first: set the event
     with pytest.raises(KeyboardInterrupt):
         gi._handle(signal.SIGINT, None)  # second: abort
-    assert restored == [signal.SIG_DFL]  # default SIGINT handler put back
+    # both handlers put back, so a third signal of either kind takes the default action
+    assert restored == [(signal.SIGINT, signal.SIG_DFL), (signal.SIGTERM, signal.SIG_DFL)]
+
+
+def test_sigterm_requests_a_graceful_stop_too():
+    # The gateway reaps a source with SIGTERM; it must reach the same graceful stop as Ctrl-C.
+    before_int, before_term = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+    gi = GracefulInterrupt()
+    with gi:
+        assert signal.getsignal(signal.SIGTERM) == gi._handle
+        gi._handle(signal.SIGTERM, None)
+        assert gi.stopping
+    assert signal.getsignal(signal.SIGINT) == before_int
+    assert signal.getsignal(signal.SIGTERM) == before_term
 
 
 def test_context_manager_installs_and_restores_handler():

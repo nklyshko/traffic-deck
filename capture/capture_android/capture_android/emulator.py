@@ -17,6 +17,19 @@ from typing import Callable
 
 from capture_android.adb import find_adb
 
+
+def quick_run(args: list[str], timeout: float = 30.0, **kw) -> subprocess.CompletedProcess:
+    """subprocess.run for a query that should answer at once (list devices, a getprop).
+
+    adb and the emulator block indefinitely on a device that dropped off USB or an emulator
+    that hung, which left provisioning and boot polling spinning with no error. A timeout
+    comes back as an empty failed result rather than an exception, so a poll reads it as
+    "not ready yet" and a listing as "nothing found" — what those callers already handle."""
+    try:
+        return subprocess.run(args, text=True, capture_output=True, timeout=timeout, **kw)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, returncode=124, stdout="", stderr="timed out")
+
 # A rootable default (google_apis, not _playstore — only google_apis allows `adb root`).
 DEFAULT_IMAGE = "system-images;android-34;google_apis;x86_64"
 DEFAULT_AVD = "retools"
@@ -106,16 +119,16 @@ class Sdk:
         return self._tool("cmdline-tools/latest/bin/avdmanager", "cmdline-tools/bin/avdmanager")
 
     def list_avds(self) -> list[str]:
-        out = subprocess.run([self.emulator, "-list-avds"], text=True, capture_output=True).stdout
+        out = quick_run([self.emulator, "-list-avds"]).stdout
         return [l.strip() for l in out.splitlines() if l.strip()]
 
     def connected_devices(self) -> list[Device]:
-        out = subprocess.run([self.adb, "devices", "-l"], text=True, capture_output=True).stdout
+        out = quick_run([self.adb, "devices", "-l"]).stdout
         return parse_devices(out)
 
     def system_image_installed(self, image: str = DEFAULT_IMAGE) -> bool:
-        out = subprocess.run([self.sdkmanager, f"--sdk_root={self.root}", "--list_installed"],
-                             text=True, capture_output=True).stdout
+        out = quick_run([self.sdkmanager, f"--sdk_root={self.root}", "--list_installed"],
+                        timeout=180).stdout  # a JVM tool, slow to start
         return image in out
 
     def install_system_image(self, image: str = DEFAULT_IMAGE, log: Callable[[str], None] = print) -> None:
@@ -165,13 +178,11 @@ class Sdk:
 
     def stop_emulator(self, serial: str) -> None:
         """Shut a running emulator down (`adb emu kill`)."""
-        subprocess.run([self.adb, "-s", serial, "emu", "kill"],
-                       text=True, capture_output=True, check=False)
+        quick_run([self.adb, "-s", serial, "emu", "kill"])
 
     def avd_name(self, serial: str) -> str | None:
         """The AVD backing a running emulator (`adb emu avd name`), or None."""
-        out = subprocess.run([self.adb, "-s", serial, "emu", "avd", "name"],
-                             text=True, capture_output=True, check=False).stdout
+        out = quick_run([self.adb, "-s", serial, "emu", "avd", "name"]).stdout
         for line in out.splitlines():
             line = line.strip()
             if line and line != "OK":
@@ -180,17 +191,15 @@ class Sdk:
 
     def delete_avd(self, name: str) -> None:
         """Delete an AVD definition (`avdmanager delete avd`); stop it first."""
-        subprocess.run([self.avdmanager, "delete", "avd", "-n", name],
-                       text=True, capture_output=True, check=False)
+        quick_run([self.avdmanager, "delete", "avd", "-n", name], timeout=120)  # a JVM tool
 
     def _system_ready(self, serial: str) -> bool:
         """Whether the device has booted and its package manager is serving requests."""
         base = [self.adb, "-s", serial, "shell"]
-        booted = subprocess.run(base + ["getprop", "sys.boot_completed"],
-                                text=True, capture_output=True).stdout.strip()
+        booted = quick_run(base + ["getprop", "sys.boot_completed"]).stdout.strip()
         if booted != "1":
             return False
         # `pm path android` is a cheap probe that fails until pm is up (the framework
         # 'android' package always exists once it is).
-        pm = subprocess.run(base + ["pm", "path", "android"], text=True, capture_output=True)
+        pm = quick_run(base + ["pm", "path", "android"])
         return pm.returncode == 0 and pm.stdout.startswith("package:")

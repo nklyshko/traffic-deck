@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import queue
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -24,6 +25,7 @@ from capture_android.frida_server import frida_device
 from capture_sdk.proto import common_pb2 as cp
 from capture_sdk.proto import ingest_pb2 as ip
 from capture_sdk.proto import ingest_pb2_grpc as ig
+from capture_sdk import metadata_keys as mk
 from capture_sdk import terminal
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.upload import SENTINEL, capture_chunks
@@ -111,7 +113,7 @@ def run_capture(
     if url:
         md["android.url"] = url
     if duration:
-        md["capture.duration_s"] = f"{duration:g}"
+        md[mk.CAPTURE_DURATION_S] = f"{duration:g}"
     handle = ing.OpenSession(ip.OpenSessionRequest(
         label=label, source="android", shape=cp.SOURCE_SHAPE_PCAP, metadata=md))
     sid = handle.session_id
@@ -193,7 +195,13 @@ def run_capture(
                 device.resume(pid)
             if url:
                 time.sleep(1.0)
-                adb.shell("am", "start", "-a", "android.intent.action.VIEW", "-d", url, package)
+                # One pre-quoted string, not separate argv: `adb shell` concatenates its
+                # arguments and the *device* shell re-parses the result, so passing url as
+                # its own arg gives no quoting. An unquoted url like "http://x/;reboot" (or
+                # one containing &) would otherwise inject a command on the device.
+                adb.shell(
+                    f"am start -a android.intent.action.VIEW "
+                    f"-d {shlex.quote(url)} {shlex.quote(package)}")
 
             def watch_children() -> None:
                 while not stop.is_set():

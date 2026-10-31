@@ -39,6 +39,11 @@ _MethodNoAcceptable = 0xFF
 
 _RepSucceeded = 0x00
 
+# A SOCKS5 greeting + CONNECT request is a few hundred bytes. Past this much buffered on
+# either side without a parsed handshake, the layer stops decoding and relays raw, so a
+# handshake that never completes cannot grow the buffer without limit.
+_MAX_HANDSHAKE_BUF = 64 * 1024
+
 # Client-side phases (what the client sends, in wire order).
 _C_GREETING = 0   # method negotiation: VER, NMETHODS, METHODS
 _C_AUTH = 1        # RFC 1929 credentials: VER(0x01), ULEN, UNAME, PLEN, PASSWD
@@ -95,6 +100,8 @@ class SocksUpstreamLayer(layer.Layer):
         super().__init__(context)
         self._c_phase = _C_GREETING
         self._s_phase = _S_GREETING
+        self._greeted = False            # the client's greeting has been relayed
+        self._passthrough = False        # gave up decoding; relaying bytes unchanged
         self._method: int | None = None  # auth method chosen by the proxy
         self._client_buf = bytearray()   # client→server bytes not yet consumed by the parser
         self._server_buf = bytearray()   # server→client bytes not yet consumed by the parser
@@ -139,7 +146,13 @@ class SocksUpstreamLayer(layer.Layer):
                 events.DataReceived(self.context.client, data)
             )
             return
+        if self._passthrough:
+            yield commands.SendData(self.context.server, data)
+            return
         self._client_buf.extend(data)
+        if len(self._client_buf) > _MAX_HANDSHAKE_BUF:
+            yield from self._relay_raw()  # a handshake this large is not one we can parse
+            return
         yield from self._parse_client()
 
     def _on_server_data(self, data: bytes) -> layer.CommandGenerator[None]:
@@ -149,21 +162,50 @@ class SocksUpstreamLayer(layer.Layer):
                 events.DataReceived(self.context.server, data)
             )
             return
+        if self._passthrough:
+            yield commands.SendData(self.context.client, data)
+            return
         self._server_buf.extend(data)
+        if len(self._server_buf) > _MAX_HANDSHAKE_BUF:
+            yield from self._relay_raw()
+            return
         yield from self._parse_server()
+
+    def _relay_raw(self) -> layer.CommandGenerator[None]:
+        """Stop interpreting the handshake and become a transparent relay.
+
+        For what this layer does not decode — a BIND or UDP ASSOCIATE, an unknown version
+        or address type, a handshake past the size cap — the client's connection to its
+        proxy must keep working; it is just not decoded. The old behaviour marked the parse
+        done and then buffered every later byte without relaying it, so the connection hung
+        and the buffer grew without bound. Everything still buffered goes out first, in
+        order; from then on bytes are forwarded as they arrive."""
+        self._passthrough = True
+        self._c_phase = _C_DONE
+        if self._client_buf:
+            yield commands.SendData(self.context.server, bytes(self._client_buf))
+            self._client_buf.clear()
+        if self._server_buf:
+            yield commands.SendData(self.context.client, bytes(self._server_buf))
+            self._server_buf.clear()
 
     def _parse_client(self) -> layer.CommandGenerator[None]:
         if self._c_phase == _C_GREETING:
-            # VER, NMETHODS, METHODS
-            if len(self._client_buf) < 2:
-                return
-            n = self._client_buf[1]
-            if len(self._client_buf) < 2 + n:
-                return
-            yield commands.SendData(self.context.server, bytes(self._client_buf[: 2 + n]))
-            del self._client_buf[: 2 + n]
+            if not self._greeted:
+                # VER, NMETHODS, METHODS
+                if len(self._client_buf) < 2:
+                    return
+                n = self._client_buf[1]
+                if len(self._client_buf) < 2 + n:
+                    return
+                yield commands.SendData(self.context.server, bytes(self._client_buf[: 2 + n]))
+                del self._client_buf[: 2 + n]
+                self._greeted = True
             # Wait for the server to pick a method before advancing; _parse_server
-            # sets _method and re-drives us.
+            # sets _method and re-drives us. Until then, bytes the client pipelined after
+            # the greeting (its CONNECT request, even a ClientHello) stay buffered for the
+            # next phase — without the _greeted flag a second segment arriving now would
+            # be re-parsed here as another greeting, consuming the CONNECT request.
             if self._method is not None:
                 self._c_phase = _C_AUTH if self._method == _MethodUserPass else _C_REQUEST
                 yield from self._parse_client()
@@ -189,10 +231,11 @@ class SocksUpstreamLayer(layer.Layer):
             if len(self._client_buf) < 4:
                 return
             if self._client_buf[0] != _SocksV5:
-                self._c_phase = _C_DONE
+                yield from self._relay_raw()
                 return
             if self._client_buf[1] != _CmdConnect:
-                self._c_phase = _C_DONE
+                # Only CONNECT is decoded (not BIND / UDP ASSOCIATE): relay it untouched.
+                yield from self._relay_raw()
                 return
             atyp = self._client_buf[3]
             if atyp == _AtypIPv4:
@@ -205,7 +248,7 @@ class SocksUpstreamLayer(layer.Layer):
                 dlen = self._client_buf[4]
                 need = 4 + 1 + dlen + 2
             else:
-                self._c_phase = _C_DONE
+                yield from self._relay_raw()
                 return
             if len(self._client_buf) < need:
                 return

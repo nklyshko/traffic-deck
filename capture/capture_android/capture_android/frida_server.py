@@ -46,8 +46,17 @@ def fetch_frida_server(version: str, arch: str, log: Callable[[str], None] = pri
         url = (f"https://github.com/frida/frida/releases/download/{version}/"
                f"frida-server-{version}-android-{arch}.xz")
         log(f"downloading {url}")
-        with urllib.request.urlopen(url) as r:  # noqa: S310
-            local.write_bytes(lzma.decompress(r.read()))
+        with urllib.request.urlopen(url, timeout=120) as r:  # noqa: S310
+            data = lzma.decompress(r.read())
+        if not data:
+            raise RuntimeError(f"frida-server download from {url} decompressed to nothing")
+        # Write to a temp file and rename into place: a download interrupted partway must
+        # not leave a truncated binary that `local.exists()` then trusts forever and
+        # pushes+runs as root on the device. (A pinned checksum/signature per release would
+        # be stronger still; this at least makes the cached file all-or-nothing.)
+        tmp = local.with_name(local.name + ".partial")
+        tmp.write_bytes(data)
+        os.replace(tmp, local)
     return local
 
 

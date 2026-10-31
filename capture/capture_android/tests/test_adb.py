@@ -120,3 +120,19 @@ def test_parse_devices():
         ("emulator-5554", "device", True),
         ("2ccc4268251d7ece", "unauthorized", False),
     ]
+
+
+def test_a_hung_adb_call_fails_with_a_clear_error(monkeypatch):
+    # adb blocks forever on a device that dropped off USB; it must give up and say so.
+    monkeypatch.setattr(AdbClient, "TIMEOUT", 0.2)
+    client = AdbClient(serial=None, adb="sleep")  # `sleep shell 5` stands in for a hung adb
+    monkeypatch.setattr(client, "_base", lambda: ["sleep"])
+    with pytest.raises(RuntimeError, match="still connected"):
+        client.run("5")
+
+
+def test_quick_run_reports_a_hung_query_as_an_empty_failure():
+    from capture_android.emulator import quick_run
+
+    res = quick_run(["sleep", "5"], timeout=0.2)
+    assert res.returncode != 0 and res.stdout == ""

@@ -89,9 +89,19 @@ class AdbClient:
     def _base(self) -> list[str]:
         return [self.adb] + (["-s", self.serial] if self.serial else [])
 
+    #: Ceiling on one adb invocation. adb blocks indefinitely on a device that dropped off
+    #: USB or an emulator that hung, which left provisioning spinning with nothing said.
+    #: Even pushing frida-server finishes far inside this.
+    TIMEOUT = 120.0
+
     def run(self, *args: str, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run(self._base() + list(args), text=True,
-                              capture_output=capture, check=check)
+        try:
+            return subprocess.run(self._base() + list(args), text=True,
+                                  capture_output=capture, check=check, timeout=self.TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"adb {args[0] if args else ''} did not finish within {self.TIMEOUT:g}s — "
+                f"is the device still connected and responsive?") from None
 
     def shell(self, *args: str, check: bool = True) -> str:
         return self.run("shell", *args, check=check).stdout

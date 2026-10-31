@@ -63,6 +63,11 @@ def resolve_existing(chrome: str, dir_name: str) -> tuple[str, str]:
     for udd, dirn, _label in platform.chrome_profiles(chrome):
         if dirn == dir_name:
             return (udd, dirn)
+    # Not among the discovered profiles: still allowed (discovery can lag the picker), but
+    # Chrome resolves --profile-directory under the user-data dir, so a request-supplied
+    # "../x" would point it outside. Only a plain directory name falls through.
+    if dir_name in ("", ".", "..") or os.path.basename(dir_name) != dir_name:
+        raise ValueError(f"invalid profile directory {dir_name!r}")
     return (platform.chrome_user_data_dir(chrome) or "", dir_name)
 
 

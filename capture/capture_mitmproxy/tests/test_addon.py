@@ -112,3 +112,47 @@ def test_mitmdump_can_load_the_addon_as_a_script():
     m = load_script(str(Path(addon.__file__)))
     assert m is not None, "mitmdump could not load the addon (see the traceback above)"
     assert any(type(a).__name__ == "GatewayPusher" for a in m.addons)
+
+
+# --- body decoding -----------------------------------------------------------------------
+# Bodies are decoded with a bound: mitmproxy's get_content() inflated the whole body before
+# the cap applied, so a compression bomb could exhaust the proxy's memory first.
+
+import gzip as _gzip  # noqa: E402
+import tracemalloc  # noqa: E402
+
+import pytest  # noqa: E402
+
+from capture_mitmproxy import addon as _addon  # noqa: E402
+
+
+@pytest.mark.parametrize("enc", ["gzip", "deflate", "br", "zstd"])
+def test_compressed_bodies_decode_like_mitmproxy(enc):
+    f = tflow.tflow(resp=True)
+    body = b'{"hello": "world"} ' * 500
+    f.response.content = body
+    f.response.encode(enc)  # mitmproxy's own encoder sets content-encoding
+    assert f.response.raw_content != body
+    assert _addon._content(f.response) == body
+
+
+def test_an_unknown_or_chained_encoding_is_kept_as_it_came():
+    f = tflow.tflow(resp=True)
+    f.response.headers["content-encoding"] = "gzip, br"
+    f.response.raw_content = b"\x00\x01opaque"
+    assert _addon._content(f.response) == b"\x00\x01opaque"
+
+
+def test_a_compression_bomb_is_cut_off_at_the_cap(monkeypatch):
+    monkeypatch.setattr(_addon, "_MAX_BODY_BYTES", 1 << 20)
+    f = tflow.tflow(resp=True)
+    f.response.headers["content-encoding"] = "gzip"
+    f.response.raw_content = _gzip.compress(b"\x00" * (200 << 20))  # 200 MiB of zeros, ~200 KB
+    tracemalloc.start()
+    try:
+        out = _addon._content(f.response)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert len(out) == 1 << 20
+    assert peak < 32 << 20, f"decoding peaked at {peak} bytes"

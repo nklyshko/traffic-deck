@@ -17,6 +17,15 @@ import contextlib
 import os
 import pwd
 import subprocess
+import threading
+
+#: Serializes the process-wide effective-uid switch in as_user with everything that needs
+#: root while it is out: starting a capture (spawning tcpdump, handing the key-log dir
+#: over) and stopping one (signalling the root-owned tcpdump). The source serves captures
+#: from several gRPC threads, so without this a stop running while another thread is
+#: inside as_user got EPERM and left tcpdump running as root. Reentrant, because as_user
+#: nests (a state write inside profile resolution).
+PRIV_LOCK = threading.RLock()
 
 
 def invoking_user() -> tuple[int, int] | None:
@@ -61,20 +70,28 @@ def as_user(run_as: tuple[int, int] | None):
     one is both unusable by the browser and a hazard for the unprivileged source later.
 
     Drops the group first and restores euid before egid — the standard order, so the
-    window never has a uid that could refuse to take its privileges back."""
+    window never has a uid that could refuse to take its privileges back.
+
+    Nests: it restores the credentials it found, not root, so an inner call (a state write
+    inside profile resolution) leaves the outer window still running as the user."""
     if run_as is None:
         yield
         return
     uid, gid = run_as
-    # ponytail: euid is process-wide, so two captures resolving profiles at once could
-    # interleave. Fork a helper if this source ever starts captures concurrently.
-    os.setegid(gid)
-    os.seteuid(uid)
-    try:
-        yield
-    finally:
-        os.seteuid(0)
-        os.setegid(0)
+    # euid is process-wide: hold PRIV_LOCK so no other thread does root work meanwhile.
+    with PRIV_LOCK:
+        prev_uid, prev_gid = os.geteuid(), os.getegid()
+        if prev_uid != 0:
+            # Already dropped (nested): the outer call holds the lock and restores root.
+            yield
+            return
+        os.setegid(gid)
+        os.seteuid(uid)
+        try:
+            yield
+        finally:
+            os.seteuid(prev_uid)
+            os.setegid(prev_gid)
 
 
 def user_tempdir(run_as: tuple[int, int] | None) -> str | None:

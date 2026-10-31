@@ -220,14 +220,26 @@ class _AndroidSource(source.CaptureSource):
         closed = threading.Event()  # set once the capture has fully torn down + closed
         holder: dict[str, str] = {}
         opened = threading.Event()
+        # Set when the session opens *or* the run thread ends, whichever comes first, so a
+        # backend that fails before opening (a package not installed, a device error) is
+        # reported at once with its own message — not after waiting out the whole timeout
+        # as a generic "device not ready?".
+        settled = threading.Event()
+        failure: list[BaseException] = []
 
         def on_session(sid: str) -> None:
             holder["sid"] = sid
             opened.set()
+            settled.set()
 
         def run() -> None:
             try:
                 self._backend.start(package, label or package, params, on_session, stop)
+            except BaseException as exc:
+                failure.append(exc)
+                if opened.is_set():
+                    raise  # failed mid-capture: no caller is waiting, let the excepthook log it
+                # before opening, start_capture raises it with its own message
             finally:
                 sid = holder.get("sid")
                 if sid:
@@ -235,10 +247,14 @@ class _AndroidSource(source.CaptureSource):
                         self._captures.pop(sid, None)
                     self.session_ended(sid)  # capture ended (duration/stop/error)
                 closed.set()  # unblock a stop_capture / shutdown waiting on the close
+                settled.set()
 
         threading.Thread(target=run, daemon=True).start()
-        if not opened.wait(timeout=120):
+        settled.wait(timeout=120)
+        if not opened.is_set():
             stop.set()  # never opened — make sure the run thread unwinds
+            if failure:
+                raise RuntimeError(f"capture did not start: {failure[0]}") from failure[0]
             raise RuntimeError("capture did not start (device not ready?)")
         sid = holder["sid"]
         with self._caps_lock:

@@ -2089,9 +2089,9 @@ class FlowDetailScreen(Screen):
         """Open this flow's packets in Wireshark (pcap-based sessions)."""
         await open_flow_in_wireshark(self, self.session_id, self._flow or self.cached)
 
-    async def _full_body(self, response: bool) -> bytes:
+    async def _full_body(self, is_response: bool) -> bytes:
         try:
-            return await self.app.client.get_body(self.session_id, self.flow_id, response)
+            return await self.app.client.get_body(self.session_id, self.flow_id, is_response)
         except Exception:  # noqa: BLE001 (no body)
             return b""
 
@@ -2107,7 +2107,7 @@ class FlowDetailScreen(Screen):
         # The bodyfile (if any) lives next to the .curl and is referenced by the
         # command, so derive the id-prefix from the chosen destination.
         prefix = path[:-len(".curl")] if path.endswith(".curl") else path
-        body = await self._full_body(response=False)
+        body = await self._full_body(is_response=False)
         cmd, bodyfile = curl(self._flow, prefix, body)
         try:
             if bodyfile:
@@ -2129,8 +2129,8 @@ class FlowDetailScreen(Screen):
         if not dest:
             return
         prefix = os.path.abspath(os.path.expanduser(dest.strip()))
-        req = raw_message(self._flow, await self._full_body(response=False), response=False)
-        resp = raw_message(self._flow, await self._full_body(response=True), response=True)
+        req = raw_message(self._flow, await self._full_body(is_response=False), is_response=False)
+        resp = raw_message(self._flow, await self._full_body(is_response=True), is_response=True)
         rp = f"{prefix}-request.http"
         sp = f"{prefix}-response.http"
         try:
@@ -2170,41 +2170,48 @@ class FlowDetailScreen(Screen):
         self.notify(f"wrote {n} ClientHello{'' if n == 1 else 's'} → {path}")
 
     def action_view_request(self) -> None:
-        self._view_body(response=False)
+        self._view_body(is_response=False)
 
     def action_view_response(self) -> None:
-        self._view_body(response=True)
+        self._view_body(is_response=True)
 
-    def _view_body(self, response: bool) -> None:
+    def _view_body(self, is_response: bool) -> None:
         """Open the full, formatted+highlighted body in a dedicated viewer (which
         falls back to the system editor for bodies too large to show in the TUI)."""
         if self._flow is None:
             return
-        label = "response" if response else "request"
-        body = self._flow.response_body if response else self._flow.request_body
+        label = "response" if is_response else "request"
+        body = self._flow.response_body if is_response else self._flow.request_body
         if body is None or body.size == 0:
             self.notify(f"no {label} body", severity="warning")
             return
         self.app.push_screen(BodyScreen(
-            self.session_id, self.flow_id, body.content_type, response, self.flow_id[:8]))
+            self.session_id, self.flow_id, body.content_type, is_response, self.flow_id[:8]))
 
     @work(exclusive=True)
     async def action_save_request(self) -> None:
-        await self._save_body(response=False, label="request")
+        await self._save_body(is_response=False, label="request")
 
     @work(exclusive=True)
     async def action_save_response(self) -> None:
-        await self._save_body(response=True, label="response")
+        await self._save_body(is_response=True, label="response")
 
-    async def _save_body(self, response: bool, label: str) -> None:
+    async def _save_body(self, is_response: bool, label: str) -> None:
         try:
-            data = await self.app.client.get_body(self.session_id, self.flow_id, response)
+            data = await self.app.client.get_body(self.session_id, self.flow_id, is_response)
         except Exception as exc:  # noqa: BLE001
             self.notify(f"no {label} body to save ({exc})", severity="warning")
             return
-        path = os.path.abspath(f"{self.flow_id[:8]}-{label}.bin")
-        with open(path, "wb") as fp:
-            fp.write(data)
+        # basename the id before building the filename: a flow id is normally a uuid, but
+        # one pushed by a client can contain "/" or "..", which would escape the cwd.
+        stem = os.path.basename(self.flow_id)[:8] or "flow"
+        path = os.path.abspath(f"{stem}-{label}.bin")
+        try:
+            with open(path, "wb") as fp:
+                fp.write(data)
+        except OSError as exc:
+            self.notify(f"could not save ({exc})", severity="error")
+            return
         self.notify(f"saved {len(data)} bytes → {path}")
 
     # Cap body rendering so a large body doesn't choke the TUI.
@@ -2346,6 +2353,14 @@ class FlowDetailScreen(Screen):
         lines.append(format_body(body.content_type, data, cls._BODY_RENDER_LIMIT))
 
 
+def remove_quietly(path: str) -> None:
+    """Delete a temp file we created, ignoring one that is already gone."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 class _PayloadView(Screen):
     """Shared full-payload viewer for HTTP request/response bodies and WebSocket
     frames. Text under `_VIEW_LIMIT` is formatted + syntax-highlighted in place
@@ -2447,7 +2462,9 @@ class _PayloadView(Screen):
             return
         content = body_for_editor(self._content_type, self._data)
         suffix = editor_suffix(self._content_type, self._data)
-        fd, path = tempfile.mkstemp(prefix=f"trafficdeck-{self._file_stem}-", suffix=suffix)
+        # The stem is built from gateway-supplied ids, so no separators reach the filename.
+        stem = self._file_stem.replace(os.sep, "_")
+        fd, path = tempfile.mkstemp(prefix=f"trafficdeck-{stem}-", suffix=suffix)
         with os.fdopen(fd, "wb") as fp:
             fp.write(content)
         cmd, terminal = editor_command(path)
@@ -2462,15 +2479,26 @@ class _PayloadView(Screen):
                 await asyncio.create_subprocess_exec(
                     *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         except OSError as exc:
+            remove_quietly(path)
             self.notify(f"could not open editor ({cmd[0]}): {exc}", severity="error")
             return
+        # Kept until the TUI exits, even after a terminal $EDITOR returns: `code`, `subl`
+        # or `gvim` fork and return at once, and the window they open reads the file later.
+        temp_files = getattr(self.app, "temp_files", None)
+        if temp_files is not None:
+            temp_files.append(path)
         self.notify(f"opened {self._what} → {path}")
 
     @work(exclusive=True)
     async def action_save(self) -> None:
-        path = os.path.abspath(f"{self._file_stem}.bin")
-        with open(path, "wb") as fp:
-            fp.write(self._data)
+        stem = self._file_stem.replace(os.sep, "_")
+        path = os.path.abspath(f"{stem}.bin")
+        try:
+            with open(path, "wb") as fp:
+                fp.write(self._data)
+        except OSError as exc:
+            self.notify(f"could not save ({exc})", severity="error")
+            return
         self.notify(f"saved {len(self._data)} bytes → {path}")
 
 
@@ -2478,19 +2506,19 @@ class BodyScreen(_PayloadView):
     """Full, formatted + syntax-highlighted view of one HTTP request/response body."""
 
     def __init__(self, session_id: str, flow_id: str, content_type: str,
-                 response: bool, id_prefix: str) -> None:
+                 is_response: bool, id_prefix: str) -> None:
         super().__init__()
         self.session_id = session_id
         self.flow_id = flow_id
         self._content_type = content_type
-        self._response = response
+        self._is_response = is_response
         self._id_prefix = id_prefix
-        self._label = "response" if response else "request"
+        self._label = "response" if is_response else "request"
 
     async def _fetch(self) -> bytes:
         try:
             return await self.app.client.get_body(
-                self.session_id, self.flow_id, self._response)
+                self.session_id, self.flow_id, self._is_response)
         except Exception:  # noqa: BLE001 (no body / unpersisted)
             return b""
 

@@ -195,6 +195,14 @@ def test_editor_command_prefers_env_editor(monkeypatch):
     assert argv == ["vim", "-R", "/tmp/x.json"] and terminal is True
 
 
+def test_editor_command_survives_an_unbalanced_quote(monkeypatch):
+    # shlex.split raises on this; it used to propagate and crash the TUI.
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim '")
+    argv, terminal = render.editor_command("/tmp/x.json")
+    assert argv == ["vim '", "/tmp/x.json"] and terminal is True
+
+
 def test_editor_command_falls_back_to_gui_opener(monkeypatch):
     monkeypatch.delenv("VISUAL", raising=False)
     monkeypatch.delenv("EDITOR", raising=False)
@@ -237,13 +245,22 @@ def test_curl():
     assert bodyfile2 is None and "--data-binary" not in cmd2
 
 
+def test_curl_quotes_a_hostile_method():
+    # The method comes from captured traffic and may hold shell metacharacters (all valid
+    # HTTP token chars). Unquoted, running the exported .curl would execute them.
+    import shlex
+    cmd, _ = render.curl(flow(method="X;id|sh`whoami`"), "x", b"")
+    argv = shlex.split(cmd.replace("\\\n", " "))
+    assert argv[:3] == ["curl", "-X", "X;id|sh`whoami`"]  # one literal word, no injection
+
+
 def test_raw_message():
     f = flow(method="POST", path="/v1", query="a=1", protocol="HTTP/1.1",
              request_headers=[header("content-type", "text/plain")],
              response_headers=[header("server", "nginx")], status=201)
-    req = render.raw_message(f, b"body", response=False)
+    req = render.raw_message(f, b"body", is_response=False)
     assert req.startswith(b"POST /v1?a=1 HTTP/1.1\ncontent-type: text/plain\n\nbody")
-    resp = render.raw_message(f, b"ok", response=True)
+    resp = render.raw_message(f, b"ok", is_response=True)
     assert resp.startswith(b"HTTP/1.1 201\nserver: nginx\n\nok")
 
 
