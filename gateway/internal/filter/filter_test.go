@@ -307,3 +307,16 @@ func TestInternationalizedHostMatchesEitherForm(t *testing.T) {
 		}
 	}
 }
+
+// Terms are split on whitespace, so a space inside an argument has to be written as an RE2
+// escape: \x{20} stays one term and matches a literal space. (MCP's search writes its
+// substring criteria this way.)
+func TestAnEscapedSpaceStaysInsideOneTerm(t *testing.T) {
+	p, err := Compile(`~u a\x{20}b ~m GET`, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Match(&Flow{Method: "GET", Path: "/a b"}) || p.Match(&Flow{Method: "GET", Path: "/ab"}) {
+		t.Fatal(`\x{20} should match exactly a space`)
+	}
+}

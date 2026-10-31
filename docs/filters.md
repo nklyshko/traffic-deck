@@ -1,7 +1,7 @@
 # Filter syntax
 
 A mitmproxy-style filter language, used by the TUI's `f` prompt and by the MCP
-`search_flows` tool. The language lives in the **gateway** — viewers send the expression
+`filter_flows` tool. The language lives in the **gateway** — viewers send the expression
 as typed and render what comes back, so the TUI, MCP and any third-party viewer get
 identical results by construction ([ADR-0012](adr/0012-server-side-filtering-and-pagination.md)).
 
@@ -72,7 +72,7 @@ rows); when it is reached the reported count is a lower bound, which the TUI ren
 
 ## Filtering a message timeline
 
-The WebSocket / parsed-message timeline (the TUI's `M` screen, MCP's `list_ws_messages`)
+The WebSocket / parsed-message timeline (the TUI's `M` screen, MCP's `list_messages`)
 takes a filter too, in the **same grammar over a different record**. A frame has a payload,
 an opcode and a direction — no method, status, URL or headers — so it has its own terms:
 

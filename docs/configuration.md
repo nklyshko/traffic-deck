@@ -24,7 +24,7 @@ file for one run.
 | `DATA_ROOT` | `./data` | SQLite bundles + catalog |
 | `TRAFFIC_DECK_HOME` | `~/.traffic-deck` | per-user root, shared with the capture tools: `config.toml`, [plugin manifests](modules.md), profiles. Env only — a config file can't relocate the directory it lives in. |
 | `GATEWAY_ADDR` | `127.0.0.1:7331` | gRPC listen / viewer + tools connect addr |
-| `TRAFFICDECK_FP_DIR` | `~/.traffic-deck/fingerprints` | dir of user TLS-fingerprint `*.json` files (on top of the builtin set) — see [TLS client fingerprint names](fingerprints.md) |
+| `TRAFFICDECK_FP_DIR` | `$TRAFFIC_DECK_HOME/fingerprints` | dir of user TLS-fingerprint `*.json` files (on top of the builtin set) — see [TLS client fingerprint names](fingerprints.md) |
 | `TSHARK_PATH` | `tshark` | batch-decode / import binary (not used by the default live path) |
 | `GATEWAY_LIVE_DECODE` | `true` | decode a streaming capture live, fully in-process in Go. Set `0`/`false` to archive only and decode with the batch tshark pass on close. |
 | `GATEWAY_TSHARK_VERIFY` | `false` | on close, compare the live-decoded flows against a tshark decode and log the differences. |

@@ -258,41 +258,31 @@ def test_ctrl_c_exits_quietly(monkeypatch):
         S.main()
 
 
-# --- search matching ------------------------------------------------------
+# --- search criteria -----------------------------------------------------
+# search hands its structured criteria to the gateway as one filter expression; these pin
+# that translation, which is what decides what a search finds.
 
-CRIT0 = dict(domain="", method="", content_type="", status=0, path_contains="",
-             url_contains="", websocket=None, has_response=None)
-
-
-def crit(**over):
-    return {**CRIT0, **over}
-
-
-def test_search_combined_domain_method_content_type():
-    f = _flow(method="POST", authority="api.oneme.ru", path="/x", scheme="https",
-              status=200, content_type="application/json; charset=utf-8")
-    # All three criteria match (domain/content-type substring, method exact-ci).
-    assert S._matches(f, **crit(domain="oneme.ru", method="post", content_type="json"))
-    # One mismatch fails the AND.
-    assert not S._matches(f, **crit(domain="oneme.ru", method="GET"))
-    assert not S._matches(f, **crit(content_type="xml"))
+def test_search_criteria_become_one_gateway_filter():
+    assert S._criteria_filter(domain="api.oneme.ru", method="post", content_type="json") == \
+        r"~d api\.oneme\.ru ~m ^post$ ~t json"  # method exact, the rest substrings
+    assert S._criteria_filter(status=200, has_response=True) == "~c ^200$ ~s"
+    assert S._criteria_filter(has_response=False) == "~q"
+    assert S._criteria_filter(status_set={403, 401}) == "~c ^(401|403)$"
+    assert S._criteria_filter() == ""
 
 
-def test_search_status_and_tristate():
-    f = _flow(authority="h", status=0, websocket=True)
-    assert S._matches(f, **crit(status=0))            # 0 == any
-    assert not S._matches(f, **crit(status=200))
-    assert S._matches(f, **crit(websocket=True))
-    assert not S._matches(f, **crit(websocket=False))
-    assert S._matches(f, **crit(has_response=False))  # no status => no response
-    assert not S._matches(f, **crit(has_response=True))
+def test_search_criteria_are_escaped_as_literal_substrings():
+    # A space would split the expression into terms; regex metacharacters would match more.
+    f = S._criteria_filter(url_contains="a b?c=1", response_body_contains="x.y(\t")
+    assert f == r"~u a\x{20}b\?c=1 ~bs x\.y\(\x{9}"
+    assert len(f.split()) == 4  # the gateway splits on whitespace: still two terms
 
 
-def test_search_path_and_url_substring():
-    f = _flow(scheme="https", authority="api.oneme.ru", path="/v3/items", query="a=1")
-    assert S._matches(f, **crit(path_contains="/v3"))
-    assert S._matches(f, **crit(url_contains="oneme.ru/v3/items?a=1"))
-    assert not S._matches(f, **crit(path_contains="/v4"))
+def test_websocket_is_matched_on_the_page_the_gateway_returns():
+    ws, plain = _flow(websocket=True), _flow(websocket=False)
+    assert S._matches_post(ws, websocket=True) and not S._matches_post(plain, websocket=True)
+    assert S._matches_post(plain, websocket=False) and not S._matches_post(ws, websocket=False)
+    assert S._matches_post(ws) and S._matches_post(plain)  # tri-state: None = either
 
 
 # --- status sets ----------------------------------------------------------
@@ -319,15 +309,12 @@ def test_parse_status_set_rejects_nonsense():
         raise AssertionError(f"{bad!r} should not parse")
 
 
-def test_search_matches_status_set():
-    f403 = _flow(authority="h", status=403)
-    f200 = _flow(authority="h", status=200)
-    fnone = _flow(authority="h")
-    codes = S._parse_status_set("401,403")
-    assert S._matches(f403, **crit(status_set=codes))
-    assert not S._matches(f200, **crit(status_set=codes))
-    assert not S._matches(fnone, **crit(status_set=codes))  # no response, no code
-    assert S._matches(f200, **crit(status_set=S._parse_status_set("2xx")))
+def test_a_status_set_becomes_one_anchored_alternation():
+    # Anchored, so a set never matches a longer code and a response-less flow (status 0)
+    # matches none of it.
+    assert S._criteria_filter(status_set=S._parse_status_set("401,403")) == "~c ^(401|403)$"
+    assert S._criteria_filter(status_set=S._parse_status_set("20x")) == \
+        "~c ^(" + "|".join(str(c) for c in range(200, 210)) + ")$"
 
 
 # --- time window ----------------------------------------------------------
@@ -367,15 +354,19 @@ def test_parse_time_rejects_garbage():
         raise AssertionError(f"{bad!r} should not parse")
 
 
-def test_search_time_window_bounds_are_inclusive():
-    f = _flow(authority="h", ts_unix_micros=1_000_000)
-    assert S._matches(f, **crit(since=1_000_000, until=1_000_000))
-    assert not S._matches(f, **crit(since=1_000_001))
-    assert not S._matches(f, **crit(until=999_999))
-    # An unstamped flow can't be placed in time, so a window excludes it.
-    unstamped = _flow(authority="h")
-    assert S._matches(unstamped, **crit())
-    assert not S._matches(unstamped, **crit(since=1))
+def test_search_hands_its_time_window_to_the_gateway(monkeypatch):
+    # The window is applied by the gateway (since_micros/until_micros), inclusively there.
+    seen = {}
+    fake = _SearchClient({"s1": _seq(3, status=200)})
+    real = fake.query_flows
+
+    async def spy(*a, **kw):
+        seen.update(since=kw.get("since_micros"), until=kw.get("until_micros"))
+        return await real(*a, **kw)
+
+    fake.query_flows = spy
+    _run_search(monkeypatch, fake, since="1774000000", until="1774000060")
+    assert seen == {"since": 1_774_000_000_000_000, "until": 1_774_000_060_000_000}
 
 
 # --- match previews -------------------------------------------------------
@@ -393,9 +384,9 @@ def test_snippet_context_and_miss():
 
 def test_url_previews_only_for_matching_criteria():
     f = _flow(scheme="https", authority="api.oneme.ru", path="/v3/items", query="a=1")
-    prev = S._url_previews(f, crit(url_contains="v3/items", path_contains="/v3"))
+    prev = S._url_previews(f, {"url_contains": "v3/items", "path_contains": "/v3"})
     assert prev == {"url": "https://api.oneme.ru/v3/items?a=1", "path": "/v3/items"}
-    assert S._url_previews(f, crit()) == {}
+    assert S._url_previews(f, {"url_contains": "", "path_contains": ""}) == {}
 
 
 # --- timeline -------------------------------------------------------------
@@ -409,7 +400,7 @@ def test_timeline_row_relative_time():
     assert row["seq"] == 3
     assert row["t_ms"] == 500.0          # (1.5s - 1.0s) -> 500ms
     assert row["path"] == "/p?q=1"
-    assert row["type"] == "html"
+    assert row["content_subtype"] == "html"
 
 
 def test_timeline_row_unstamped_flow_has_null_time():
@@ -418,7 +409,7 @@ def test_timeline_row_unstamped_flow_has_null_time():
     row = S._timeline_row(0, f, 0)
     assert row["t_ms"] is None
     assert row["method"] == "WS"         # falls back to WS marker
-    assert row["ws"] is True
+    assert row["websocket"] is True and row["message_count"] == 70
 
 
 # --- serialization helpers ------------------------------------------------
@@ -463,10 +454,10 @@ def test_bytes_payload_hex_and_offset():
     data = b"\x0a\x00\x01\x02\x03\x04\x05"
     h = S._bytes_payload(data, as_hex=True)
     assert h["encoding"] == "hex" and h["hex"] == "0a000102030405"
-    assert h["size"] == 7 and h["offset"] == 0 and h["returned"] == 7
+    assert h["size"] == 7 and h["byte_offset"] == 0 and h["returned"] == 7
     # windowed hex from an offset
     w = S._bytes_payload(data, as_hex=True, start=2)
-    assert w["hex"] == "0102030405" and w["offset"] == 2 and w["size"] == 7
+    assert w["hex"] == "0102030405" and w["byte_offset"] == 2 and w["size"] == 7
 
 
 # --- message annotations --------------------------------------------------
@@ -491,7 +482,7 @@ def test_annotations_shared_by_flows_and_messages():
     assert S._annotations(f, tagnames, groupnames)["tags"] == ["auth"]
 
 
-def test_list_ws_messages_includes_annotations(monkeypatch):
+def test_list_messages_includes_annotations(monkeypatch):
     import asyncio
 
     m = cp.WsMessage(id="m1", from_client=True, opcode="text", ts_unix_micros=5,
@@ -522,19 +513,20 @@ def test_list_ws_messages_includes_annotations(monkeypatch):
     monkeypatch.setattr(S, "_resolve_session", _resolve)
     monkeypatch.setattr(S, "_name_maps", _names)
 
-    out = asyncio.run(S.list_ws_messages("s", "f"))
+    out = asyncio.run(S.list_messages("s", "f"))
     item = out["messages"][0]
     assert item["mark_color"] == "red"
     assert item["tags"] == ["auth"]
     assert item["comments"] == ["note"]
+    assert item["sender"] == "client"  # who sent it: what the ~from filter matches
 
     # The filter reaches the gateway as typed, and narrows what comes back.
-    out = asyncio.run(S.list_ws_messages("s", "f", filter="~op text"))
+    out = asyncio.run(S.list_messages("s", "f", filter="~op text"))
     assert fake.filters[-1] == "~op text" and out["total"] == 1
 
     # A filter that matches nothing says whether the flow had frames at all, and hands
     # back the message dialect — the flow one would send the caller further astray.
-    out = asyncio.run(S.list_ws_messages("s", "f", filter="~op binary"))
+    out = asyncio.run(S.list_messages("s", "f", filter="~op binary"))
     assert out["total"] == 0
     assert out["flow_message_count"] == 1
     assert "~op <re>" in out["filter_syntax"]
@@ -554,7 +546,7 @@ def test_flow_detail_notes_client_hellos_and_hrr():
     assert "client_hello_count" not in plain and "tls_hrr" not in plain
 
 
-def test_export_client_hellos_tool(monkeypatch):
+def test_get_client_hellos_tool(monkeypatch):
     import asyncio
 
     f = _flow(id="f1", tls_hrr=True)
@@ -571,7 +563,7 @@ def test_export_client_hellos_tool(monkeypatch):
     monkeypatch.setattr(S, "client", lambda: FakeClient())
     monkeypatch.setattr(S, "_resolve_session", _resolve)
 
-    out = asyncio.run(S.export_client_hellos("s1", "f1"))
+    out = asyncio.run(S.get_client_hellos("s1", "f1"))
     assert out == {
         "flow_id": "f1",
         "tls_hrr": True,
@@ -579,7 +571,7 @@ def test_export_client_hellos_tool(monkeypatch):
     }
 
 
-def test_export_client_hellos_empty_for_plaintext(monkeypatch):
+def test_get_client_hellos_empty_for_plaintext(monkeypatch):
     import asyncio
 
     class FakeClient:
@@ -592,7 +584,7 @@ def test_export_client_hellos_empty_for_plaintext(monkeypatch):
     monkeypatch.setattr(S, "client", lambda: FakeClient())
     monkeypatch.setattr(S, "_resolve_session", _resolve)
 
-    out = asyncio.run(S.export_client_hellos("s", "p"))
+    out = asyncio.run(S.get_client_hellos("s", "p"))
     assert out == {"flow_id": "p", "tls_hrr": False, "client_hellos": []}
 
 
@@ -606,7 +598,7 @@ def _rpc_error(code, details):
 def _with_body(monkeypatch, result):
     """Point the tools at a client whose get_body returns bytes — or raises."""
     class FakeClient:
-        async def get_body(self, sid, fid, response):
+        async def get_body(self, sid, fid, side):
             if isinstance(result, Exception):
                 raise result
             return result
@@ -675,7 +667,7 @@ class _SearchClient:
                           before=None, last=False, since_micros=0, until_micros=0,
                           include_hidden=False):
         """Stands in for the gateway's filtering and paging with the handful of terms
-        these tests exercise, so search_flows is driven the way the server drives it:
+        these tests exercise, so filter_flows is driven the way the server drives it:
         cursors rather than offsets, and hints supplied by whoever owns the language."""
         import re as _re
         rows = sorted(self.flows[sid], key=lambda f: (f.ts_unix_micros, f.frame_number))
@@ -701,9 +693,9 @@ class _SearchClient:
                         hays.append("\n".join(f"{h.name}: {h.value}"
                                                for h in det.response_headers))
                     if t in ("~b", "~bq"):
-                        hays.append(self._body_text(f.id, False))
+                        hays.append(self._body_text(f.id, "request"))
                     if t in ("~b", "~bs"):
-                        hays.append(self._body_text(f.id, True))
+                        hays.append(self._body_text(f.id, "response"))
                     if not any(_re.search(toks[i + 1], h or "", _re.I) for h in hays):
                         return False
                     i += 2
@@ -781,23 +773,23 @@ class _SearchClient:
                                   f"the quotes match literally.")
         return page
 
-    def _body_text(self, fid, response):
+    def _body_text(self, fid, side):
         """Body bytes as text, from the inline copy or the out-of-line fixture."""
         det = self.details.get(fid)
         if det is not None:
-            body = det.response_body if response else det.request_body
+            body = det.response_body if side == "response" else det.request_body
             if body.inline:
                 return body.inline.decode("utf-8", "replace")
-        raw = self.bodies.get((fid, response))
+        raw = self.bodies.get((fid, side))
         return raw.decode("utf-8", "replace") if raw else ""
 
     async def get_flow(self, sid, fid):
         self.get_flow_calls.append(fid)
         return self.details.get(fid, _flow(id=fid))
 
-    async def get_body(self, sid, fid, response):
-        self.get_body_calls.append((fid, response))
-        return self.bodies.get((fid, response), b"")
+    async def get_body(self, sid, fid, side):
+        self.get_body_calls.append((fid, side))
+        return self.bodies.get((fid, side), b"")
 
 
 def _run_search(monkeypatch, fake, **kw):
@@ -913,10 +905,10 @@ def test_search_response_header_contains_skips_body_fetch(monkeypatch):
 def test_search_fetches_an_out_of_line_body_to_match_it(monkeypatch):
     fake = _SearchClient({"s1": _seq(1, status=200)},
                          {"f0": _detail("f0", body=b"placeholder", body_ref=True)},
-                         {("f0", True): b"...servicepipe.tech/script.js..."})
+                         {("f0", "response"): b"...servicepipe.tech/script.js..."})
     out = _run_search(monkeypatch, fake, response_body_contains="servicepipe.tech")
     assert [f["id"] for f in out["flows"]] == ["f0"]
-    assert fake.get_body_calls == [("f0", True)]
+    assert fake.get_body_calls == [("f0", "response")]
 
 
 def test_search_preview_finds_a_match_deep_in_a_large_body(monkeypatch):
@@ -925,12 +917,12 @@ def test_search_preview_finds_a_match_deep_in_a_large_body(monkeypatch):
     body = b"x" * (200 * 1024) + b"autoplay_layer_movie_author_link" + b"y" * 100
     fake = _SearchClient({"s1": _seq(1, status=200)},
                          {"f0": _detail("f0", body=b"placeholder", body_ref=True)},
-                         {("f0", True): body})
+                         {("f0", "response"): body})
     out = _run_search(monkeypatch, fake, response_body_contains="author_link")
     prev = out["flows"][0]["match_preview"]
     assert "autoplay_layer_movie_author_link" in prev["response_body"]
-    # Where it is, so get_body(offset=…) can read around it without paging from 0.
-    assert prev["response_body_at"] == 200 * 1024 + len("autoplay_layer_movie_")
+    # Where it is, so get_body(byte_offset=…) can read around it without paging from 0.
+    assert prev["response_body_byte_offset"] == 200 * 1024 + len("autoplay_layer_movie_")
 
 
 def test_search_content_scan_is_bounded_by_max_scan(monkeypatch):
@@ -991,7 +983,7 @@ def test_search_rejects_a_bad_status_spec(monkeypatch):
         raise AssertionError("a bad status spec should raise")
 
 
-def test_search_flows_pages_and_reports_total(monkeypatch):
+def test_filter_flows_pages_and_reports_total(monkeypatch):
     import asyncio
 
     fake = _SearchClient({"s1": _seq(5, status=200)})
@@ -1006,14 +998,14 @@ def test_search_flows_pages_and_reports_total(monkeypatch):
     monkeypatch.setattr(S, "_name_maps", _names)
     monkeypatch.setattr(S, "_resolve_session", _resolve)
 
-    out = asyncio.run(S.search_flows("s1", "~c 200", limit=2))
+    out = asyncio.run(S.filter_flows("s1", "~c 200", limit=2))
     assert out["total"] == 5 and out["count"] == 2 and out["next_cursor"]
     assert [f["id"] for f in out["flows"]] == ["f0", "f1"]
     # Walk to the end by cursor rather than jumping to an offset — a live session grows
     # while it is read, so an offset would shift rows under the caller.
     page, cursor = out, out["next_cursor"]
     while cursor:
-        page = asyncio.run(S.search_flows("s1", "~c 200", limit=2, cursor=cursor))
+        page = asyncio.run(S.filter_flows("s1", "~c 200", limit=2, cursor=cursor))
         cursor = page.get("next_cursor")
     assert page["count"] == 1 and "next_cursor" not in page
     # A filter that matched carries no recovery payload.
@@ -1029,7 +1021,7 @@ def _pages(bodies: dict[str, bytes]):
     nothing can be inferred from one — plus the bodies get_body serves."""
     flows = [_flow(id=fid, authority="ok.ru", path="/video/1", scheme="https", status=200,
                    ts_unix_micros=(i + 1) * 1_000_000) for i, fid in enumerate(bodies)]
-    return _SearchClient({"s1": flows}, bodies={(k, True): v for k, v in bodies.items()})
+    return _SearchClient({"s1": flows}, bodies={(k, "response"): v for k, v in bodies.items()})
 
 
 def _run_grep(monkeypatch, fake, **kw):
@@ -1055,8 +1047,8 @@ def test_grep_bodies_counts_every_flow_including_the_ones_without_a_hit(monkeypa
     assert [by_id[k]["count"] for k in ("f0", "f1", "f2")] == [1, 0, 2]
     assert out["with_hits"] == 2 and out["without_hits"] == ["f1"]
     hit = by_id["f0"]["hits"][0]
-    # A byte offset get_body(offset=…) takes, and the text around it.
-    assert hit["at"] == page.index(b"author_link")
+    # The byte_offset get_body takes, and the text around it.
+    assert hit["byte_offset"] == page.index(b"author_link")
     assert "eremin" in hit["text"]
     assert by_id["f0"]["size"] == len(page)
 
@@ -1072,7 +1064,7 @@ def test_grep_bodies_fails_on_an_unreadable_body(monkeypatch):
     """A body file gone from a damaged session is not "no hit"; a flow with no body is."""
     fake = _pages({"f0": b"<html>author_link", "f1": b"", "f2": b"x"})
 
-    async def get_body(sid, fid, response):
+    async def get_body(sid, fid, side):
         if fid == "f1":
             raise grpc.aio.AioRpcError(grpc.StatusCode.NOT_FOUND, None, None, details="no")
         if fid == "f2":
@@ -1084,7 +1076,7 @@ def test_grep_bodies_fails_on_an_unreadable_body(monkeypatch):
     with pytest.raises(ValueError, match="flow f2.*no such file"):
         _run_grep(monkeypatch, fake, pattern="author_link")
 
-    del fake.bodies[("f2", True)]
+    del fake.bodies[("f2", "response")]
     fake.flows["s1"] = fake.flows["s1"][:2]
     out = _run_grep(monkeypatch, fake, pattern="author_link")
     assert out["without_hits"] == ["f1"]
@@ -1125,7 +1117,7 @@ def test_save_body_without_a_body_writes_nothing(monkeypatch):
     import asyncio
 
     class Fake:
-        async def get_body(self, sid, fid, response):
+        async def get_body(self, sid, fid, side):
             raise grpc.aio.AioRpcError(grpc.StatusCode.NOT_FOUND, None, None, details="x")
 
     async def _resolve(sid):
@@ -1136,7 +1128,7 @@ def test_save_body_without_a_body_writes_nothing(monkeypatch):
     assert asyncio.run(S.save_body("s1", "f0")) == {"size": 0, "note": "no body"}
 
 
-def _run_search_flows(monkeypatch, flows, expr):
+def _run_filter_flows(monkeypatch, flows, expr):
     import asyncio
 
     fake = _SearchClient({"s1": flows})
@@ -1150,50 +1142,50 @@ def _run_search_flows(monkeypatch, flows, expr):
     monkeypatch.setattr(S, "client", lambda: fake)
     monkeypatch.setattr(S, "_name_maps", _names)
     monkeypatch.setattr(S, "_resolve_session", _resolve)
-    return asyncio.run(S.search_flows("s1", expr))
+    return asyncio.run(S.filter_flows("s1", expr))
 
 
-def test_search_flows_empty_result_returns_the_syntax_reference(monkeypatch):
-    out = _run_search_flows(monkeypatch, _seq(5, status=200), "~d nosuchhost\\.example")
+def test_filter_flows_empty_result_returns_the_syntax_reference(monkeypatch):
+    out = _run_filter_flows(monkeypatch, _seq(5, status=200), "~d nosuchhost\\.example")
     assert out["total"] == 0
     assert out["session_flow_count"] == 5          # the session itself wasn't empty
     assert "no boolean operators" in " ".join(out["filter_syntax"].lower().split())
     assert out["hints"]                            # a nudge on how to narrow down
 
 
-def test_search_flows_empty_session_says_so_rather_than_blaming_the_filter(monkeypatch):
-    out = _run_search_flows(monkeypatch, [], "~c 200")
+def test_filter_flows_empty_session_says_so_rather_than_blaming_the_filter(monkeypatch):
+    out = _run_filter_flows(monkeypatch, [], "~c 200")
     assert out["session_flow_count"] == 0
     assert "no flows at all" in out["hints"][0]
 
 
-def test_search_flows_flags_ampersand_as_a_non_operator(monkeypatch):
+def test_filter_flows_flags_ampersand_as_a_non_operator(monkeypatch):
     """The mistake that motivated this: `&` parses fine (as a URL regex), so without a
     hint the caller just sees an empty result and retries the same shape."""
-    out = _run_search_flows(monkeypatch, _seq(3, status=200), "~d h & ~s 200")
+    out = _run_filter_flows(monkeypatch, _seq(3, status=200), "~d h & ~s 200")
     joined = " ".join(out["hints"])
     assert "`&` is not an operator" in joined
     assert "~c 200" in joined                      # the bare 200 is called out too
 
 
-def test_search_flows_hints_fire_even_when_the_filter_matched(monkeypatch):
+def test_filter_flows_hints_fire_even_when_the_filter_matched(monkeypatch):
     """`&` degrades into a URL regex, so a query string containing "&" still matches —
     a silently wrong result, which is exactly when the hint matters most."""
     flows = [_flow(id="f0", authority="h", path="/p", query="a=1&b=2", scheme="https")]
-    out = _run_search_flows(monkeypatch, flows, "~d h & ~q")
+    out = _run_filter_flows(monkeypatch, flows, "~d h & ~q")
     assert out["total"] == 1                       # matched, wrongly
     assert any("not an operator" in h for h in out["hints"])
     assert "filter_syntax" not in out              # only attached on an empty result
 
 
-def test_search_flows_flags_quoted_arguments(monkeypatch):
-    out = _run_search_flows(monkeypatch, _seq(3, status=200), "~d 'h'")
+def test_filter_flows_flags_quoted_arguments(monkeypatch):
+    out = _run_filter_flows(monkeypatch, _seq(3, status=200), "~d 'h'")
     assert any("quoted" in h for h in out["hints"])
 
 
-def test_search_flows_bad_expression_error_carries_the_syntax(monkeypatch):
+def test_filter_flows_bad_expression_error_carries_the_syntax(monkeypatch):
     try:
-        _run_search_flows(monkeypatch, _seq(1, status=200), "~d")
+        _run_filter_flows(monkeypatch, _seq(1, status=200), "~d")
     except ValueError as e:
         assert "~d needs an argument" in str(e)
         assert "Terms taking NO argument" in str(e)
@@ -1600,8 +1592,8 @@ def _hidden_session():
     ]
 
 
-def test_search_flows_counts_what_it_hid_and_says_how_to_see_it(monkeypatch):
-    out = _run_search_flows(monkeypatch, _hidden_session(), "~d api")
+def test_filter_flows_counts_what_it_hid_and_says_how_to_see_it(monkeypatch):
+    out = _run_filter_flows(monkeypatch, _hidden_session(), "~d api")
     assert [f["id"] for f in out["flows"]] == ["h1"]
     assert out["hidden_matched"] == 2
     assert "include_hidden" in out["hidden_note"] and "pinning" in out["hidden_note"]
@@ -1609,18 +1601,18 @@ def test_search_flows_counts_what_it_hid_and_says_how_to_see_it(monkeypatch):
 
 def test_an_empty_result_that_is_only_hidden_says_so_first(monkeypatch):
     flows = [f for f in _hidden_session() if f.id != "h1"]
-    out = _run_search_flows(monkeypatch, flows, "~d api")
+    out = _run_filter_flows(monkeypatch, flows, "~d api")
     assert out["total"] == 0
     assert "include_hidden" in out["hints"][0]
 
 
 def test_include_hidden_returns_them_with_their_outcome(monkeypatch):
     import asyncio
-    _run_search_flows(monkeypatch, _hidden_session(), "")  # installs the fakes
-    out = asyncio.run(S.search_flows("s1", "~d api", include_hidden=True))
+    _run_filter_flows(monkeypatch, _hidden_session(), "")  # installs the fakes
+    out = asyncio.run(S.filter_flows("s1", "~d api", include_hidden=True))
     assert [f["id"] for f in out["flows"]] == ["h1", "d1", "p1"]
     assert "hidden_matched" not in out
-    assert out["flows"][2]["outcome"] == "tls_rejected"
+    assert out["flows"][2]["undecoded_reason"] == "tls_rejected"
 
 
 # --- undecoded connections (pcap sessions) -----------------------------------
@@ -1652,10 +1644,10 @@ class _UndecodedClient:
             resp.by_reason[c.reason] += 1
         return resp
 
-    async def get_connection_bytes(self, sid, conn_id, from_client, offset=0, limit=0):
-        self.reads.append((conn_id, from_client, offset))
+    async def get_connection_bytes(self, sid, connection_id, sender, byte_offset=0, limit=0):
+        self.reads.append((connection_id, sender, byte_offset))
         data = b"\x16\x03\x01" + b"x" * 97
-        return vp.ConnectionBytes(data=data[offset:], offset=offset, total=len(data),
+        return vp.ConnectionBytes(data=data[byte_offset:], offset=byte_offset, total=len(data),
                                   tls=['ClientHello: sni="api.oneme.ru" version=TLS1.3'])
 
     async def query_flows(self, sid, filter_expr="", limit=100, **kw):
@@ -1685,7 +1677,7 @@ def test_list_undecoded_connections_rows_and_paging(monkeypatch):
     out = asyncio.run(S.list_undecoded_connections("s1", limit=2))
     assert out["indexed"] and out["total"] == 3 and out["next_offset"] == 2
     row = out["connections"][0]
-    assert (row["conn_id"], row["reason"], row["sni"], row["ja4"]) == ("7", "no_key", "api.oneme.ru", "t13d_app")
+    assert (row["connection_id"], row["reason"], row["sni"], row["ja4"]) == ("7", "no_key", "api.oneme.ru", "t13d_app")
     assert row["duration_ms"] == 2500.0
     assert out["by_reason"] == {"no_key": 1, "handshake_incomplete": 1, "udp": 1}
     assert "pinned" in out["note"]
@@ -1694,11 +1686,11 @@ def test_list_undecoded_connections_rows_and_paging(monkeypatch):
 def test_get_connection_bytes_pages_and_carries_the_handshake(monkeypatch):
     import asyncio
     fake = _undecoded_tools(monkeypatch)
-    out = asyncio.run(S.get_connection_bytes("s1", "7", from_client=True, offset=3, as_hex=True))
-    assert fake.reads == [("7", True, 3)]
-    assert out["size"] == 100 and out["offset"] == 3 and out["hex"] == ("78" * 97)
+    out = asyncio.run(S.get_connection_bytes("s1", "7", sender="client", byte_offset=3, as_hex=True))
+    assert fake.reads == [("7", "client", 3)]
+    assert out["size"] == 100 and out["byte_offset"] == 3 and out["hex"] == ("78" * 97)
     assert out["tls"] and "api.oneme.ru" in out["tls"][0]
-    assert out["direction"] == "client→server"
+    assert out["sender"] == "client" and out["connection_id"] == "7"
 
 
 def test_session_overview_names_what_went_undecoded(monkeypatch):
@@ -1712,3 +1704,31 @@ def test_session_overview_names_what_went_undecoded(monkeypatch):
     top = und["top_hosts"][0]
     assert top == {"host": "api.oneme.ru", "connections": 2, "bytes": 94500,
                    "reasons": ["handshake_incomplete", "no_key"]}
+
+
+# --- the published tool surface ------------------------------------------------------
+
+def test_body_side_and_sender_are_named_choices_in_the_schema():
+    import asyncio
+
+    tools = {t.name: t for t in asyncio.run(S.mcp.list_tools())}
+    for name in ("get_body", "save_body", "grep_bodies"):
+        props = tools[name].inputSchema["properties"]
+        assert props["side"]["enum"] == ["request", "response"]
+        assert props["side"]["default"] == "response"
+    conn = tools["get_connection_bytes"].inputSchema["properties"]
+    assert conn["sender"]["enum"] == ["client", "server"]
+    assert {"connection_id", "byte_offset"} <= conn.keys()
+
+
+def test_an_unknown_parameter_or_a_bad_side_is_refused():
+    import asyncio
+
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    with pytest.raises(ToolError, match="unknown parameter.*response.*side"):
+        asyncio.run(S.mcp.call_tool("get_body", {"session_id": "s", "flow_id": "f",
+                                                 "response": False}))
+    with pytest.raises(ToolError, match="side"):
+        asyncio.run(S.mcp.call_tool("get_body", {"session_id": "s", "flow_id": "f",
+                                                 "side": "body"}))

@@ -30,14 +30,15 @@ MCP_TRANSPORT=stdio mcp/run.sh
 `gateway_status` (is it up, and how much does it hold), `list_sessions` +
 `list_session_groups`, `network_timeline` (the request sequence, like
 the DevTools Network tab), `search` (structured, combined domain/method/content-type/
-status/… in one query), `search_flows` (the [filter DSL](filters.md)), `get_flow`,
+status/… in one query), `filter_flows` (the [filter DSL](filters.md)), `get_flow`,
 `get_body` (text/base64/`as_hex`), `grep_bodies` (a regex over the bodies a filter
 selects: per-flow counts, hits with byte offsets, and which flows have none),
 `save_body` (a whole body to a fresh temp file, for another program), `compare_flows` (diff two requests, across sessions),
-`export_request` (request+response headers, no bodies), `export_client_hellos` (a flow's
-raw TLS ClientHello bytes), `list_ws_messages` + `get_ws_message_body` (WebSocket frames;
-`filter` takes the [message dialect](filters.md#filtering-a-message-timeline), `as_hex`
-for byte inspection), `wait_for_flows` (block until a live capture decodes new requests),
+`get_flow_headers` (request+response headers, no bodies), `get_client_hellos` (a flow's
+raw TLS ClientHello bytes), `list_messages` + `get_message_body` (WebSocket frames, or the
+messages a custom decoder framed; `filter` takes the
+[message dialect](filters.md#filtering-a-message-timeline), `as_hex` for byte
+inspection), `wait_for_flows` (block until a live capture decodes new requests),
 `sqlite_query` + `sqlite_schema` (read-only SQL over a session bundle),
 `session_overview` (a session's hosts, protocols and counts at a glance),
 `list_undecoded_connections` (connections the live decoder could not decode, with the
@@ -49,6 +50,23 @@ It runs **read-only by default**: only the inspection tools above are exposed. S
 `set_session_group` (relabel / regroup a recorded session), and the four capture-control
 tools below, which start real processes on this machine. In read-only mode they are not
 registered at all, so they never appear in the tool list.
+
+### Naming conventions
+
+- `side` = `"request"` | `"response"` picks which body of a flow (`get_body`,
+  `save_body`, `grep_bodies`). It is unrelated to `search`'s `has_response`, which filters
+  on whether a response arrived.
+- `sender` = `"client"` | `"server"` is who sent the bytes — on each message from
+  `list_messages`, as the `get_connection_bytes` argument, and what the message filter's
+  `~from` matches.
+- `byte_offset` is a position inside one body or payload (`get_body`, `get_message_body`,
+  `get_connection_bytes`, and the hits of `grep_bodies` / `search`). `offset` pages a list
+  of rows (`list_messages`, `list_undecoded_connections`); `cursor` pages flows.
+- `connection_id` is the connection a flow rode on — a TCP stream number or `quic:<n>` —
+  and the same id `list_undecoded_connections` and `get_connection_bytes` use. Flows that
+  share it were multiplexed; `stream_id` (in `get_flow`) is the HTTP/2 or HTTP/3 stream.
+- `undecoded_reason` says why a connection recorded no decoded request; `message_count` is
+  a flow's WebSocket frames or decoder messages.
 
 ## Driving a capture
 
@@ -157,18 +175,18 @@ slightly behind `search`), and a body is only inline in `blobs` when it was smal
 `blobs.bytes` means it spilled to a file, so bodies come from `get_body`. A statement
 that reads `bytes` gets `bodies_stored_as_files` with the count it could not see — a
 `LIKE` over `bytes` misses precisely the large pages, and zero rows must not read as
-"absent". For content questions use `search`, `search_flows` or `grep_bodies`. Prefer
-`search`/`search_flows` for "which flows match": they page by cursor and return bodies,
+"absent". For content questions use `search`, `filter_flows` or `grep_bodies`. Prefer
+`search`/`filter_flows` for "which flows match": they page by cursor and return bodies,
 annotations and the live tail.
 
 ## Paging
 
-`network_timeline`, `search` and `search_flows` page by **cursor**, not offset: pass the
+`network_timeline`, `search` and `filter_flows` page by **cursor**, not offset: pass the
 returned `next_cursor` back to continue, or omit it to start at the beginning. A cursor is
 stable while a live session grows under it, which an offset is not.
 
 `total` is how many flows match, and is a **lower bound** when the result says so
-(`count_capped` on `search_flows`, `complete: false` / `scan_limited` on `search`) —
+(`count_capped` on `filter_flows`, `complete: false` / `scan_limited` on `search`) —
 counting stops at the gateway's scan budget rather than scanning a whole session to
 produce an exact number. See [ADR-0012 §5](adr/0012-server-side-filtering-and-pagination.md).
 
@@ -187,10 +205,10 @@ The one to reach for on a large capture. Criteria are ANDed in a single query:
 
 Leave `session_id` empty to search **every session** at once; each hit carries its
 `session_id`/`session_label`. Every hit also carries a `match_preview` showing the matched
-substring in context; a body hit adds `<field>_at`, its byte offset, for
-`get_body(offset=…)`. Body criteria read the whole body, however large.
+substring in context; a body hit adds `<field>_byte_offset`, where the match is, for
+`get_body(byte_offset=…)`. Body criteria read the whole body, however large.
 
-`search` only says "contains". For "lacks" use `search_flows` with a negated term
+`search` only says "contains". For "lacks" use `filter_flows` with a negated term
 (`!~bs marker`), or `grep_bodies`, which lists every selected flow with its hit count —
 zero included — so "which of these page loads lack the marker" is one call.
 
@@ -206,7 +224,7 @@ many pages.
 Bodies are stored decoded, whatever the protocol carried them: a body sent `gzip`, `br`,
 `deflate` or `zstd` is searchable as text and `get_body` returns it readable. What it
 arrived as is kept alongside it as `content_encoding` on the body metadata (`get_flow`,
-`export_request`), so a readable body still says where it came from — the field is
+`get_flow_headers`), so a readable body still says where it came from — the field is
 provenance, not a statement about the bytes you are holding.
 
 Two cases are left compressed, both of them deliberate. A **chain** (`gzip, br`) is
@@ -218,7 +236,7 @@ would be worse than a body that is merely unsearchable.
 
 Body search reads the stored bytes, so it cannot match inside what stayed compressed. That
 used to be silent: a `response_body_contains` over a brotli page reported *no match* for
-text that was sitting right there. `search` and `search_flows` now report it when the
+text that was sitting right there. `search` and `filter_flows` now report it when the
 criteria read a body:
 
 ```json

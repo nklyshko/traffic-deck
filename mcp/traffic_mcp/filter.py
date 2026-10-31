@@ -75,7 +75,7 @@ Examples:
 """
 
 MSG_FILTER_SYNTAX = """\
-Message filter syntax (list_ws_messages `filter`)
+Message filter syntax (list_messages `filter`)
 
 The same grammar — space-separated terms, ANDed, `!` to negate, unquoted RE2 regexes —
 over a different record. A WebSocket/parsed frame has a payload, an opcode and a
@@ -84,7 +84,7 @@ matched against the payload.
 
   ~b <re>        payload text
   ~op <re>       opcode: text | binary | ping | pong | close | continuation
-  ~from <re>     direction, matched against "client" or "server"
+  ~from <re>     sender, matched against "client" or "server" (a message's `sender`)
   ~meta <key>=<re>   a header field the decoder read off the frame, e.g.
                      ~meta max.cmd=Response — `~meta <key>` alone matches presence
   ~mark <re>     color mark      ~tag <re>      tag name

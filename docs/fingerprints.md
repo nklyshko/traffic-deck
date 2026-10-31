@@ -13,7 +13,7 @@ registry re-labels flows you already captured — no re-decode.
 ## Register your own
 
 Like [`plugins/`](modules.md), it's just a drop-in dir: put `*.json` in
-`~/.traffic-deck/fingerprints/` (override with `TRAFFICDECK_FP_DIR`). Same schema as the
+`$TRAFFIC_DECK_HOME/fingerprints/` (default `~/.traffic-deck/fingerprints/`; override with `TRAFFICDECK_FP_DIR`). Same schema as the
 builtin; **later files win ties**, so a row can add a new name or override a builtin one:
 
 ```json

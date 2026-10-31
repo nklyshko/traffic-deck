@@ -15,7 +15,7 @@ import re
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 import grpc
 from mcp.server.fastmcp import FastMCP
@@ -71,9 +71,9 @@ class FlowSummary(Annotations):
     request_bytes: int
     tls_decrypted: bool
     websocket: bool
-    ws_message_count: int
-    conn: str | None         # connection id: tcp stream, or quic:<n> for HTTP/3
-    outcome: str | None      # conn.outcome for an undecoded connection, else None
+    message_count: int
+    connection_id: str | None     # tcp stream number, or quic:<n> for HTTP/3
+    undecoded_reason: str | None  # conn.outcome for an undecoded connection, else None
     http2_fingerprint: str | None
     ja3: str | None
     ja4: str | None
@@ -258,7 +258,7 @@ def _annotations(rec: common_pb2.Flow | common_pb2.WsMessage, tagnames: dict[str
 _HIDDEN_NOTE = ("matching flows left out as hidden by default — DNS lookups and connections "
                 "nothing decoded: a client that rejected the TLS handshake (likely certificate "
                 "pinning), one closed before any request, UDP no decoder reads. Pass "
-                "include_hidden=true to see them; `outcome` on each says why it is undecoded")
+                "include_hidden=true to see them; `undecoded_reason` on each says why")
 
 
 def _note_hidden(out: dict, hidden: int) -> None:
@@ -282,12 +282,16 @@ def _flow_summary(f: common_pb2.Flow, tagnames: dict[str, str],
         "request_bytes": f.request_bytes,
         "tls_decrypted": f.tls_decrypted,
         "websocket": f.websocket,
-        "ws_message_count": f.ws_message_count,
-        "conn": f.tcp_stream or None,
+        # WebSocket frames, or messages a custom decoder framed: see list_messages.
+        "message_count": f.ws_message_count,
+        # The connection the flow rode on: a TCP stream number, or quic:<n> for HTTP/3.
+        # Flows sharing it were multiplexed on one connection; list_undecoded_connections
+        # and get_connection_bytes use the same id.
+        "connection_id": f.tcp_stream or None,
         # Why a connection is recorded without decoded traffic (tls_rejected — likely
         # certificate pinning —, no_request, udp_undecoded, tcp_passthrough); None for a
         # decoded flow. The rest of its metadata (hostname.source, tls.sni) is in get_flow.
-        "outcome": f.metadata.get("conn.outcome") or None,
+        "undecoded_reason": f.metadata.get("conn.outcome") or None,
         **_annotations(f, tagnames, groupnames),
         "http2_fingerprint": f.http2_fingerprint or None,
         "ja3": f.ja3 or None,
@@ -390,8 +394,8 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     d["src_addr"] = f.src_addr or None
     d["dst_addr"] = f.dst_addr or None
     d["user_agent"] = f.user_agent or None
-    d["tcp_stream"] = f.tcp_stream or None
-    d["h2_stream_id"] = f.h2_stream_id or None
+    # The stream within `connection_id`, for HTTP/2 and HTTP/3 (multiplexed) flows.
+    d["stream_id"] = f.h2_stream_id or None
     if f.proxy.addr:
         d["proxy"] = {"addr": f.proxy.addr, "type": f.proxy.type,
                       "username": f.proxy.username or None, "password": f.proxy.password or None}
@@ -402,7 +406,7 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
     d["request_body"] = _body_meta(f.request_body)
     d["response_body"] = _body_meta(f.response_body)
     # Raw ClientHello(s): note their presence + the HelloRetryRequest flag here; fetch the
-    # bytes (hex) with export_client_hellos. More than one only after a HelloRetryRequest.
+    # bytes (hex) with get_client_hellos. More than one only after a HelloRetryRequest.
     if f.client_hellos:
         d["client_hello_count"] = len(f.client_hellos)
     if f.tls_hrr:
@@ -413,12 +417,12 @@ def _flow_detail(f, tagnames: dict, groupnames: dict) -> dict:
 def _bytes_payload(data: bytes, *, as_hex: bool = False, start: int = 0) -> dict:
     """Encode fetched body/payload bytes for the model. A window of up to _BODY_MAX bytes
     starting at `start` is returned as UTF-8 text when decodable, else base64; pass
-    `as_hex` for a hex dump (for protocol/byte inspection). `offset`+`returned` vs `size`
-    show where the window sits, so large payloads can be paged."""
+    `as_hex` for a hex dump (for protocol/byte inspection). `byte_offset`+`returned` vs
+    `size` show where the window sits, so large payloads can be paged."""
     total = len(data)
     start = max(0, start)
     window = data[start:start + _BODY_MAX]
-    out: dict = {"size": total, "offset": start, "returned": len(window),
+    out: dict = {"size": total, "byte_offset": start, "returned": len(window),
                  "truncated": start + len(window) < total}
     if as_hex:
         out["encoding"] = "hex"
@@ -512,42 +516,6 @@ def _snippet(hay: str, needle: str, ctx: int = 60) -> str | None:
     return ("…" if start else "") + text + ("…" if end < len(hay) else "")
 
 
-def _matches(f, *, domain: str, method: str, content_type: str, status: int,
-             path_contains: str, url_contains: str, websocket, has_response,
-             status_set: set[int] | None = None,
-             since: int | None = None, until: int | None = None) -> bool:
-    """Predicate for `search` over a flow *summary*: all given criteria ANDed. Substring
-    fields are case-insensitive; method/status are exact; `status_set` matches any code in
-    it; `since`/`until` bound ts_unix_micros (inclusive); websocket/has_response are
-    tri-state."""
-    if domain and domain.lower() not in (f.authority or "").lower():
-        return False
-    if method and method.upper() != (f.method or "").upper():
-        return False
-    if content_type and content_type.lower() not in (f.content_type or "").lower():
-        return False
-    if status and f.status != status:
-        return False
-    if status_set is not None and f.status not in status_set:
-        return False
-    if path_contains and path_contains.lower() not in (f.path or "").lower():
-        return False
-    if url_contains and url_contains.lower() not in flow_url(f).lower():
-        return False
-    if websocket is not None and bool(f.websocket) != websocket:
-        return False
-    if has_response is not None and bool(f.status) != has_response:
-        return False
-    # An unstamped flow (ts 0) can't be placed in time, so a time window excludes it.
-    if (since is not None or until is not None) and not f.ts_unix_micros:
-        return False
-    if since is not None and f.ts_unix_micros < since:
-        return False
-    if until is not None and f.ts_unix_micros > until:
-        return False
-    return True
-
-
 _LIMIT_MAX = 500
 
 
@@ -559,8 +527,10 @@ def _header_text(hs) -> str:
 def _rx(text: str) -> str:
     """A substring criterion as a regex term argument. Escaped, because these criteria are
     substrings — a dot in a domain must not match any character — and the DSL is
-    case-insensitive already, so no flag is needed."""
-    return re.escape(text)
+    case-insensitive already, so no flag is needed. Whitespace is written as \\x{..}: the
+    gateway splits an expression on whitespace (strings.Fields), escaped or not, so a
+    re.escape'd space would cut the term in two."""
+    return "".join(f"\\x{{{ord(c):x}}}" if c.isspace() else re.escape(c) for c in text)
 
 
 def _criteria_filter(*, domain="", method="", content_type="", status=0, status_set=None,
@@ -626,27 +596,27 @@ async def _match_previews(sid: str, flow_id: str, req_header: str, resp_header: 
     ):
         if needle and (hit := _snippet(hay, needle)):
             out[field] = hit
-    for field, needle, is_response in (("request_body", req_body, False),
-                                       ("response_body", resp_body, True)):
+    for field, needle, side in (("request_body", req_body, "request"),
+                                ("response_body", resp_body, "response")):
         if not needle:
             continue
         # The flow detail already carries small bodies inline; only a body stored out of
         # line costs a second fetch.
-        body = f.response_body if is_response else f.request_body
+        body = f.response_body if side == "response" else f.request_body
         data = bytes(body.inline)
         if not data and body.size:
             try:
-                data = await client().get_body(sid, flow_id, is_response)
+                data = await client().get_body(sid, flow_id, side)
             except grpc.aio.AioRpcError:
                 continue
         # The whole body, as the gateway matched it: a marker deep in a large page is
         # the common case, not an edge one.
         if hit := _snippet(data.decode("utf-8", "replace"), needle):
             out[field] = hit
-            # A byte offset, which is what get_body's `offset` takes. ASCII-only folding,
-            # so a non-ASCII needle may find no offset even though the snippet did.
+            # What get_body's `byte_offset` takes. ASCII-only folding, so a non-ASCII
+            # needle may find no offset even though the snippet did.
             if (at := data.lower().find(needle.encode().lower())) >= 0:
-                out[f"{field}_at"] = at
+                out[f"{field}_byte_offset"] = at
     return out
 
 
@@ -736,11 +706,11 @@ def _timeline_row(seq: int, f, t0: int) -> dict:
         "error": f.error or None,
         "domain": f.authority,
         "path": path[:120],
-        "type": _short_type(f.content_type),
+        "content_subtype": _short_type(f.content_type),
         "request_bytes": f.request_bytes,
         "protocol": f.protocol,
-        "ws": f.websocket or None,
-        "ws_messages": f.ws_message_count or None,
+        "websocket": f.websocket or None,
+        "message_count": f.ws_message_count or None,
     }
 
 
@@ -974,9 +944,9 @@ async def network_timeline(session_id: str, limit: int = 200, cursor: str = "",
     """The request sequence for a session, like the Chrome DevTools Network tab.
 
     One compact row per flow ordered by time: relative start (t_ms = ms from the first
-    request), method, status, domain, path, type (content-type), request bytes, protocol
-    and websocket flags. Use `search`/`search_flows` to narrow and `get_flow` for full
-    detail.
+    request), method, status, domain, path, content_subtype ('json', 'html'), request
+    bytes, protocol, websocket and message_count. Use `search`/`filter_flows` to narrow
+    and `get_flow` for full detail.
 
     Paged by cursor, not offset: pass the returned `next_cursor` back to continue, or omit
     it to start at the beginning. `total` is the session's flow count. (t_ms is relative to
@@ -1018,7 +988,7 @@ async def wait_for_flows(session_id: str, filter: str = "", count: int = 1,
     `note` telling a closed capture apart from a pcap import that is still decoding — so
     this never spends the timeout on a session that cannot produce a flow.
 
-    `filter` waits for a *particular* request, in the same DSL as `search_flows`: with one
+    `filter` waits for a *particular* request, in the same DSL as `filter_flows`: with one
     set, only matching flows count, and a flow that only starts matching once its response
     arrives counts then — so `~c 200` waits for a success and `~u /api/login ~s` waits for
     that endpoint to answer. An expression the gateway rejects comes back with the syntax
@@ -1131,12 +1101,12 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     — prefer one query with a bigger `limit` over walking many pages.
 
     These criteria only say "contains". For "does NOT contain" — which loads of a page
-    lack a marker — use search_flows with a negated term, e.g.
+    lack a marker — use filter_flows with a negated term, e.g.
     `~d ok.ru ~u /video/ !~bs autoplay_layer`.
 
     Every hit carries `match_preview` — {field: matched substring in context} for the
     substring criteria — so you can see *why* it matched without a get_flow. A body hit
-    also carries `<field>_at`, the byte offset of the match, for get_body(offset=…).
+    also carries `<field>_byte_offset`, where the match is, for get_body(byte_offset=…).
 
     DNS lookups and connections nothing decoded (rejected TLS — likely pinning —, no
     request, undecoded UDP) are left out unless `include_hidden`; `hidden_matched` counts
@@ -1144,7 +1114,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
     Leave `session_id` empty to search across every session (each result carries its
     `session_id`/`session_label`). Returns time-ordered flow summaries (no headers/bodies
-    — use get_flow / get_body / export_request for those):
+    — use get_flow / get_body / get_flow_headers for those):
     {count, total, complete, scanned, scan_limited, flows:[…]}, plus `next_cursor` when
     there is more to read. `total` is the number of matches found; `complete` says whether
     every candidate was examined (so `total` is exact and an absent `next_cursor` means the
@@ -1269,7 +1239,7 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
 
 
 @mcp.tool()
-async def search_flows(session_id: str, filter: str = "", limit: int = 100,
+async def filter_flows(session_id: str, filter: str = "", limit: int = 100,
                        cursor: str = "", include_hidden: bool = False) -> dict:
     """Search a session's flows with a mitmproxy-style filter expression.
 
@@ -1373,20 +1343,20 @@ async def search_flows(session_id: str, filter: str = "", limit: int = 100,
 # produced no flow out of the flow list — most are other programs' — but indexes them, so
 # a missing request can be told apart from one that went somewhere the decoder could not
 # follow: certificate pinning, a key-log secret that never arrived, a protocol nothing
-# parses. A mitmproxy capture records its own as hidden flows instead (search_flows
+# parses. A mitmproxy capture records its own as hidden flows instead (filter_flows
 # include_hidden=true).
 
 _UNDECODED_NOTE = (
     "Connections the capture carried that produced no flow. On an interface-wide capture "
     "most belong to other programs; one can still be the app under test — pinned TLS (no "
     "key-log secret, or a handshake that did not complete), or a protocol nothing parses "
-    "(unparsed). Compare its sni and ja4 with the app's own flows (search_flows returns "
+    "(unparsed). Compare its sni and ja4 with the app's own flows (filter_flows returns "
     "their ja4), and read it with get_connection_bytes.")
 
 
 def _undecoded_row(c) -> dict:
     return {
-        "conn_id": c.conn_id, "transport": c.transport, "reason": c.reason,
+        "connection_id": c.conn_id, "transport": c.transport, "reason": c.reason,
         "detail": c.detail or None, "sni": c.sni or None, "server": c.server,
         "client": c.client, "ja4": c.ja4 or None,
         "bytes_up": c.bytes_up, "bytes_down": c.bytes_down,
@@ -1400,7 +1370,8 @@ async def list_undecoded_connections(session_id: str, reason: str = "", host: st
                                      limit: int = 50, offset: int = 0) -> dict:
     """The connections a packet capture carried that produced no flow, largest first.
 
-    Each row: conn_id (for get_connection_bytes), transport, reason — no_key (TLS handshake
+    Each row: connection_id (the same id a flow's `connection_id` carries; pass it to
+    get_connection_bytes), transport, reason — no_key (TLS handshake
     complete but no key-log secret: certificate pinning, or a program that does not write
     the key log), handshake_incomplete, unsupported (detail names the version/suite),
     unparsed (bytes in hand, no parser recognised them), udp (not QUIC) — plus sni, server,
@@ -1411,8 +1382,8 @@ async def list_undecoded_connections(session_id: str, reason: str = "", host: st
     false means the session was decoded without this index (a tshark import, or recorded
     before it existed) — an empty list there is not "nothing went undecoded".
 
-    For a mitmproxy capture, undecoded connections are flows instead: search_flows with
-    include_hidden=true and `~meta conn.outcome=.`."""
+    For a mitmproxy capture, undecoded connections are flows instead, each with an
+    `undecoded_reason`: filter_flows with include_hidden=true and `~meta conn.outcome=.`."""
     sid = await _resolve_session(session_id)
     resp = await client().list_undecoded(sid, reason, host, max(1, min(limit, _LIMIT_MAX)),
                                          max(0, offset))
@@ -1427,13 +1398,14 @@ async def list_undecoded_connections(session_id: str, reason: str = "", host: st
 
 
 @mcp.tool()
-async def get_connection_bytes(session_id: str, conn_id: str, from_client: bool = False,
-                               offset: int = 0, as_hex: bool = False) -> dict:
+async def get_connection_bytes(session_id: str, connection_id: str,
+                               sender: Literal["client", "server"] = "server",
+                               byte_offset: int = 0, as_hex: bool = False) -> dict:
     """One undecoded connection's bytes, read back from the session's capture.pcap on
     demand — TCP reassembled by sequence number, UDP datagrams back to back.
-    `from_client=True` for client→server, else server→client. A window of up to 256 KiB
-    from `offset` comes back as text, base64, or hex with `as_hex`; `size` is that
-    direction's length.
+    `sender` picks the direction: the bytes the client sent, or the bytes the server sent
+    (default). A window of up to 256 KiB from `byte_offset` comes back as text, base64, or
+    hex with `as_hex`; `size` is that direction's length.
 
     `tls` is what the handshake says in the clear: the ClientHello's SNI, ALPN and JA4,
     the ServerHello's version and cipher, and — TLS 1.2 only — the server certificate's
@@ -1442,16 +1414,16 @@ async def get_connection_bytes(session_id: str, conn_id: str, from_client: bool 
     `gaps` counts holes the capture left in the stream."""
     sid = await _resolve_session(session_id)
     try:
-        resp = await client().get_connection_bytes(sid, conn_id, from_client, max(0, offset), _BODY_MAX)
+        resp = await client().get_connection_bytes(sid, connection_id, sender,
+                                                   max(0, byte_offset), _BODY_MAX)
     except grpc.aio.AioRpcError as e:
         if e.code() in (grpc.StatusCode.NOT_FOUND, grpc.StatusCode.FAILED_PRECONDITION):
             raise ValueError(e.details()) from None
         raise
     out = _bytes_payload(bytes(resp.data), as_hex=as_hex)
-    out["size"], out["offset"] = resp.total, resp.offset
+    out["size"], out["byte_offset"] = resp.total, resp.offset
     out["truncated"] = resp.offset + len(resp.data) < resp.total or resp.truncated
-    out |= {"session_id": sid, "conn_id": conn_id,
-            "direction": "client→server" if from_client else "server→client"}
+    out |= {"session_id": sid, "connection_id": connection_id, "sender": sender}
     if resp.truncated:
         out["note"] = "the read stopped at its cap: size is a floor"
     if resp.gaps:
@@ -1470,7 +1442,7 @@ async def session_overview(session_id: str) -> dict:
     lookups and undecoded connections from a mitmproxy capture), and — for a packet
     capture — an `undecoded` section: counts by reason and the top hosts by bytes, with a
     note on what they may be. Drill in with list_undecoded_connections /
-    get_connection_bytes, or search_flows include_hidden=true for a mitmproxy capture."""
+    get_connection_bytes, or filter_flows include_hidden=true for a mitmproxy capture."""
     session = await _resolve_session_row(session_id)
     sid = session.id
     out = {"session": _session_dict(session)}
@@ -1572,20 +1544,20 @@ async def compare_flows(session_a: str, flow_a: str, session_b: str, flow_b: str
 
 
 @mcp.tool()
-async def get_body(session_id: str, flow_id: str, response: bool = True,
-                   as_hex: bool = False, offset: int = 0) -> dict:
-    """Fetch a request or response body. Returns UTF-8 text when decodable, else base64;
-    pass `as_hex=True` for a hex dump (byte inspection). A window of up to 256 KiB from
-    `offset` is returned (page large bodies with `offset`). Bodies are stored
-    decompressed and whole, on a session still capturing too. `response=False` for the
-    request body.
+async def get_body(session_id: str, flow_id: str,
+                   side: Literal["request", "response"] = "response",
+                   as_hex: bool = False, byte_offset: int = 0) -> dict:
+    """Fetch a flow's request or response body (`side`, default the response). Returns
+    UTF-8 text when decodable, else base64; pass `as_hex=True` for a hex dump (byte
+    inspection). A window of up to 256 KiB from `byte_offset` is returned (page large
+    bodies with `byte_offset`). Bodies are stored decompressed and whole, on a session
+    still capturing too.
 
     For a custom-protocol flow (a decoded raw-TCP connection), this returns the original
-    *undecoded* bytes: `response=False` = the raw client->server stream, `response=True` =
+    *undecoded* bytes: side="request" = the raw client->server stream, side="response" =
     the raw server->client stream — the bytes that were fed to the decoder."""
     try:
-        data = await client().get_body(
-            await _resolve_session(session_id), flow_id, response)
+        data = await client().get_body(await _resolve_session(session_id), flow_id, side)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no body"}
@@ -1594,12 +1566,13 @@ async def get_body(session_id: str, flow_id: str, response: bool = True,
             # gateway's own reason instead of an empty body that reads as "no body".
             return {"size": 0, "note": e.details() or "body not available"}
         raise
-    return _bytes_payload(data, as_hex=as_hex, start=offset)
+    return _bytes_payload(data, as_hex=as_hex, start=byte_offset)
 
 
 @mcp.tool()
 async def grep_bodies(session_id: str, pattern: str, filter: str = "",
-                      response: bool = True, max_hits: int = 3, context: int = 80,
+                      side: Literal["request", "response"] = "response",
+                      max_hits: int = 3, context: int = 80,
                       limit: int = 50, cursor: str = "", include_hidden: bool = False) -> dict:
     """Run a regex over the bodies of the flows a filter selects and report, for EVERY
     one of them, how often it occurs — including the flows where it does not. That is the
@@ -1608,15 +1581,15 @@ async def grep_bodies(session_id: str, pattern: str, filter: str = "",
     1 MB page is it".
 
     `pattern` is a case-insensitive regex over the raw (decompressed) body bytes.
-    `filter` is the search_flows expression choosing the flows — narrow it with
+    `filter` is the filter_flows expression choosing the flows — narrow it with
     metadata (`~d ok.ru ~u /video/ ~t html`), since each selected body is read in full.
-    `response=False` greps request bodies instead.
+    `side="request"` greps request bodies instead of responses.
 
     Returns {count, with_hits, without_hits:[ids], flows:[…]}; each flow is
-    {id, url, status, size, count, hits:[{at, text}]}, where `at` is the byte offset
-    get_body(offset=…) takes and `text` is up to `context` bytes either side. Only the
+    {id, url, status, size, count, hits:[{byte_offset, text}]}, where `byte_offset` is what
+    get_body(byte_offset=…) takes and `text` is up to `context` bytes either side. Only the
     first `max_hits` hits are listed; `count` is always the full number. Paged by cursor
-    like search_flows (limit default 50, max 500).
+    like filter_flows (limit default 50, max 500).
 
     Fails as a whole, naming the flow, when a selected body cannot be read — a damaged
     session, a gateway gone mid-call — rather than reporting that flow as a miss."""
@@ -1644,7 +1617,7 @@ async def grep_bodies(session_id: str, pattern: str, filter: str = "",
         row = {"id": f.id, "url": flow_url(f), "status": f.status, "size": 0, "count": 0}
         async with gate:
             try:
-                data = await client().get_body(sid, f.id, response)
+                data = await client().get_body(sid, f.id, side)
             except grpc.aio.AioRpcError as e:
                 if e.code() is grpc.StatusCode.NOT_FOUND:
                     return row  # no body
@@ -1653,7 +1626,7 @@ async def grep_bodies(session_id: str, pattern: str, filter: str = "",
         row["size"] = len(data)
         hits = list(rx.finditer(data))
         row["count"] = len(hits)
-        row["hits"] = [{"at": m.start(),
+        row["hits"] = [{"byte_offset": m.start(),
                         "text": re.sub(r"\s+", " ", data[max(0, m.start() - context):
                                                           m.end() + context]
                                        .decode("utf-8", "replace"))}
@@ -1672,8 +1645,10 @@ async def grep_bodies(session_id: str, pattern: str, filter: str = "",
 
 
 @mcp.tool()
-async def save_body(session_id: str, flow_id: str, response: bool = True) -> dict:
-    """Write a whole request or response body to a file and return its path — for a body
+async def save_body(session_id: str, flow_id: str,
+                    side: Literal["request", "response"] = "response") -> dict:
+    """Write a flow's whole request or response body (`side`, default the response) to a
+    file and return its path — for a body
     you want to hand to another program (a parser under test, diff, a fixture) rather than
     read: get_body pages it 256 KiB at a time through the conversation.
 
@@ -1683,8 +1658,7 @@ async def save_body(session_id: str, flow_id: str, response: bool = True) -> dic
     import tempfile
 
     try:
-        data = await client().get_body(
-            await _resolve_session(session_id), flow_id, response)
+        data = await client().get_body(await _resolve_session(session_id), flow_id, side)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no body"}
@@ -1693,7 +1667,7 @@ async def save_body(session_id: str, flow_id: str, response: bool = True) -> dic
     # client can carry an id with "/" or ".." (or an absolute path, which os.path.join
     # would honour outright), which would otherwise let the write escape the fresh temp
     # dir the docstring promises it stays in.
-    name = os.path.basename(f"{flow_id}.{'response' if response else 'request'}")
+    name = os.path.basename(f"{flow_id}.{side}")
     path = os.path.join(tempfile.mkdtemp(prefix="trafficdeck-body-"), name)
     with open(path, "wb") as fh:
         fh.write(data)
@@ -1701,12 +1675,14 @@ async def save_body(session_id: str, flow_id: str, response: bool = True) -> dic
 
 
 @mcp.tool()
-async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
-                           offset: int = 0, filter: str = "") -> dict:
-    """WebSocket message timeline for an Upgrade flow: directional frames in order
-    (direction, opcode, size, text/hex preview). Paginated — `total` is the frame count;
-    page with `offset`/`limit` (default 100) to avoid huge responses. Large payloads
-    carry a note; fetch them in full with get_ws_message_body using the message `id`.
+async def list_messages(session_id: str, flow_id: str, limit: int = 100,
+                        offset: int = 0, filter: str = "") -> dict:
+    """A flow's message timeline, in order: WebSocket frames for an Upgrade flow, or the
+    messages a custom decoder framed out of a raw TCP/TLS connection. Each message has its
+    sender (client|server), opcode, size and a text/hex preview. Paginated — `total` is
+    the message count; page with `offset`/`limit` (default 100; offset counts messages).
+    Large payloads carry a note; fetch them in full with get_message_body using the
+    message `id`.
 
     `filter` narrows the timeline server-side, which is how to work with a chatty
     connection instead of paging through it. It is the MESSAGE dialect, not the flow one:
@@ -1716,14 +1692,14 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
       a bare regex matches the payload
 
     Flow terms (~m, ~c, ~d, ~h, ~u …) do not exist here and are rejected by name — the
-    full reference comes back with that error. `total` is how many frames match.
+    full reference comes back with that error. `total` is how many messages match.
 
-    Each frame carries its annotations (favorite, mark_color, tags, groups, comments) —
+    Each message carries its annotations (favorite, mark_color, tags, groups, comments) —
     messages are annotatable records just like flows.
 
     When a custom decoder handled the connection, a message's payload is the decoded form
     and `has_raw` is true — fetch the original undecoded bytes with
-    get_ws_message_body(message_id, raw=True). Such a frame also carries `fields`: what the
+    get_message_body(message_id, raw=True). Such a message also carries `fields`: what the
     decoder read out of its header (e.g. MAX's `max.cmd`, `max.seq`, `max.opcode`), which
     ~meta filters on."""
     sid = await _resolve_session(session_id)
@@ -1743,7 +1719,7 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
         item = {
             "id": m.id,
             "ts_unix_micros": m.ts_unix_micros,
-            "direction": "client->server" if m.from_client else "server->client",
+            "sender": "client" if m.from_client else "server",  # what ~from matches
             "opcode": m.opcode,
             "size": size,
             # Messages are annotatable records, like flows.
@@ -1755,7 +1731,7 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
             # flow's source metadata: filter them with ~meta <key>=<regex>.
             item["fields"] = dict(m.metadata)
         if m.raw and m.raw.size:
-            item["has_raw"] = True  # original undecoded bytes; fetch with get_ws_message_body(raw=True)
+            item["has_raw"] = True  # original undecoded bytes; fetch with get_message_body(raw=True)
         if m.payload and m.payload.WhichOneof("content") == "inline":
             data = m.payload.inline
             try:
@@ -1763,7 +1739,7 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
             except UnicodeDecodeError:
                 item["hex_preview"] = data[:64].hex()
         elif size:
-            item["note"] = "large payload — fetch with get_ws_message_body"
+            item["note"] = "large payload — fetch with get_message_body"
         out.append(item)
     resp = {"session_id": sid, "flow_id": flow_id, "total": total,
             "count": len(out), "messages": out}
@@ -1779,31 +1755,31 @@ async def list_ws_messages(session_id: str, flow_id: str, limit: int = 100,
 
 
 @mcp.tool()
-async def get_ws_message_body(session_id: str, message_id: str,
-                              as_hex: bool = False, offset: int = 0,
-                              raw: bool = False) -> dict:
-    """Fetch a full WebSocket message payload by message `id` (from list_ws_messages).
+async def get_message_body(session_id: str, message_id: str,
+                           as_hex: bool = False, byte_offset: int = 0,
+                           raw: bool = False) -> dict:
+    """Fetch one message's full payload by message `id` (from list_messages).
     Returns UTF-8 text when decodable, else base64; pass `as_hex=True` for a hex dump
-    (byte inspection). Page large payloads with `offset`.
+    (byte inspection). Page large payloads with `byte_offset`.
 
-    Pass `raw=True` to fetch the original *undecoded* frame bytes instead of the decoded
+    Pass `raw=True` to fetch the original *undecoded* bytes instead of the decoded
     payload — available for messages a custom decoder produced (those have `has_raw` in
-    list_ws_messages)."""
+    list_messages)."""
     try:
         data = await client().get_message_body(await _resolve_session(session_id), message_id, raw=raw)
     except grpc.aio.AioRpcError as e:
         if e.code() == grpc.StatusCode.NOT_FOUND:
             return {"size": 0, "note": "no raw bytes" if raw else "no payload"}
         raise
-    return _bytes_payload(data, as_hex=as_hex, start=offset)
+    return _bytes_payload(data, as_hex=as_hex, start=byte_offset)
 
 
 @mcp.tool()
-async def export_request(session_id: str, flow_id: str) -> dict:
-    """Export a flow's request and response *without* bodies.
+async def get_flow_headers(session_id: str, flow_id: str) -> dict:
+    """A flow's request and response headers and cookies, *without* bodies.
 
     Returns the request (method, url, protocol, headers in wire order, cookies) and the
-    response (status, protocol, headers), each with body metadata only
+    response (status, protocol, headers, Set-Cookies), each with body metadata only
     ({content_type, size}) — no body bytes. Fetch actual bytes with get_body.
     """
     f = await client().get_flow(await _resolve_session(session_id), flow_id)
@@ -1830,8 +1806,8 @@ async def export_request(session_id: str, flow_id: str) -> dict:
 
 
 @mcp.tool()
-async def export_client_hellos(session_id: str, flow_id: str) -> dict:
-    """Export a flow's raw TLS ClientHello handshake message(s) as hex, in wire order.
+async def get_client_hellos(session_id: str, flow_id: str) -> dict:
+    """A flow's raw TLS ClientHello handshake message(s) as hex, in wire order.
 
     Each entry is one ClientHello (handshake header + body) exactly as captured —
     suitable for replay/fingerprinting. There is more than one entry only when the server
@@ -1864,7 +1840,7 @@ async def sqlite_query(sql: str, session_id: str = "", params: list[str] | None 
       SELECT name, COUNT(*) FROM flow_headers WHERE direction = 0 GROUP BY name
       SELECT status, COUNT(*) FROM flows GROUP BY status ORDER BY 2 DESC
 
-    Prefer `search`/`search_flows` for "which flows match" — they page by cursor, return
+    Prefer `search`/`filter_flows` for "which flows match" — they page by cursor, return
     bodies and annotations, and merge in a live capture's newest flows, none of which
     this does.
 
@@ -1928,7 +1904,7 @@ async def _files_caveat(sid: str) -> dict:
                 f"{n} blob(s) in this session are stored as files, with blobs.bytes NULL, "
                 f"so this query cannot see their content — a miss on them is 'unknown', "
                 f"not 'absent'. For content use search(response_body_contains=…) or "
-                f"search_flows with ~bs / !~bs, which read every body."}
+                f"filter_flows with ~bs / !~bs, which read every body."}
 
 
 @mcp.tool()

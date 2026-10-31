@@ -113,10 +113,9 @@ class GatewayClient:
                 limit=limit, timeout_millis=timeout_millis)
         )
 
-    async def get_body(self, session_id: str, flow_id: str, is_response: bool) -> bytes:
-        call = self._v().GetBody(
-            viewer_pb2.GetBodyRequest(session_id=session_id, flow_id=flow_id, response=is_response)
-        )
+    async def get_body(self, session_id: str, flow_id: str, side: str) -> bytes:
+        call = self._v().GetBody(viewer_pb2.GetBodyRequest(
+            session_id=session_id, flow_id=flow_id, response=side == "response"))
         return b"".join([c.payload async for c in call])
 
     async def list_undecoded(self, session_id: str, reason: str = "", host: str = "",
@@ -125,12 +124,12 @@ class GatewayClient:
         return await self._v().ListUndecodedConnections(viewer_pb2.ListUndecodedRequest(
             session_id=session_id, reason=reason, host=host, limit=limit, offset=offset))
 
-    async def get_connection_bytes(self, session_id: str, conn_id: str, from_client: bool,
-                                   offset: int = 0, limit: int = 0):
+    async def get_connection_bytes(self, session_id: str, connection_id: str, sender: str,
+                                   byte_offset: int = 0, limit: int = 0):
         """One undecoded connection's bytes, read back from the session's capture."""
         return await self._v().GetConnectionBytes(viewer_pb2.GetConnectionBytesRequest(
-            session_id=session_id, conn_id=conn_id, from_client=from_client,
-            offset=offset, limit=limit))
+            session_id=session_id, conn_id=connection_id, from_client=sender == "client",
+            offset=byte_offset, limit=limit))
 
     async def list_messages(self, session_id: str, flow_id: str, filter_expr: str = ""):
         """A flow's frames, filtered by the gateway. Returns (messages, hints)."""
