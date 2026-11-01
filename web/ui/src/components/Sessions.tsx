@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Pencil, Plus, RefreshCw, Square, Trash2, Upload } from 'lucide-react'
+import { Activity, Check, Copy, Download, Pencil, Plus, RefreshCw, Square, Trash2, Upload, Zap } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { formatBytes, formatDateTime, num, type Tone } from '../lib/format'
@@ -177,9 +177,12 @@ interface Props {
   onStuck: (id: string, stuck: boolean) => void
   onOpen: (s: Session) => void
   onNewCapture: () => void
+  onServices: () => void
+  onUpdates: () => void
+  checkingUpdates: boolean
 }
 
-export function SessionsScreen({ sessions, loaded, loadError, refresh, stuck, onStuck, onOpen, onNewCapture }: Props) {
+export function SessionsScreen({ sessions, loaded, loadError, refresh, stuck, onStuck, onOpen, onNewCapture, onServices, onUpdates, checkingUpdates }: Props) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [dismissedLoad, setDismissedLoad] = useState('')
@@ -234,6 +237,8 @@ export function SessionsScreen({ sessions, loaded, loadError, refresh, stuck, on
           if (f) void act('importing…', () => api.importBundle(f)).catch(() => {})
         }} />
         <Button icon={<Upload size={13} />} onClick={() => setImporting(true)}>Import pcap</Button>
+        <Button icon={<Activity size={13} />} onClick={onServices}>Services</Button>
+        <Button icon={<Zap size={13} />} disabled={checkingUpdates} onClick={onUpdates}>{checkingUpdates ? 'Checking…' : 'Updates'}</Button>
         <IconButton label="Refresh" className="border border-edge" onClick={() => void refresh()}><RefreshCw size={14} /></IconButton>
       </div>
       {shownError && <div className="mb-3"><Banner onDismiss={() => (error ? setError('') : setDismissedLoad(loadError))}>{shownError}</Banner></div>}

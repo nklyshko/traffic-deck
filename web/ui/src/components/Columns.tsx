@@ -59,7 +59,8 @@ export function Popover({ label, icon, children }: { label: string; icon: React.
   return (
     <div ref={root} className="relative">
       <Button aria-label={label} aria-expanded={open} title={label} onClick={() => setOpen(!open)} className="px-2!">{icon}</Button>
-      {open && <div className="absolute z-30 right-0 top-[calc(100%+6px)] w-48 max-h-96 overflow-auto p-2 rounded-lg border border-edge bg-toast text-xs text-body space-y-1.5" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>{children}</div>}
+      {/* A child that opens a dialog says so, or this stays open behind the scrim. */}
+      {open && <div onClick={(e) => { if ((e.target as Element).closest('[data-closes-popover]')) setOpen(false) }} className="absolute z-30 right-0 top-[calc(100%+6px)] w-48 max-h-96 overflow-auto p-2 rounded-lg border border-edge bg-toast text-xs text-body space-y-1.5" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>{children}</div>}
     </div>
   )
 }

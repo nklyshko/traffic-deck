@@ -58,3 +58,8 @@ export interface Param {
 export interface SourceDescriptor { params?: Param[]; readiness?: 'READINESS_READY' | 'READINESS_PROVISION_REQUIRED'; message?: string }
 export interface CaptureSourceInfo { name: string; label?: string; keepWarm?: boolean }
 export interface SessionArtifacts { pcapPath?: string; keylogPath?: string; pcapBytes?: Str64; keylogBytes?: Str64; hostname?: string }
+
+export interface ComponentUpdate { name?: string; updateAvailable?: boolean; localRev?: string; remoteRev?: string; updateHint?: string; error?: string }
+export interface UpdateStatus { components?: ComponentUpdate[]; checkedUnixMs?: Str64 }
+export interface ServiceInfo { name: string; label?: string; running?: boolean; url?: string; detail?: string }
+export interface LogInfo { name: string; label?: string; sizeBytes?: Str64; modifiedUnixMs?: Str64 }

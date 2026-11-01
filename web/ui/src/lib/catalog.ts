@@ -30,4 +30,8 @@ export function useCatalog(): Catalog {
   }, () => catalog)
 }
 
+// A deleted tag or group stays on its records, and the gateway no longer knows its name, so
+// such an id is shown as itself rather than hidden: it still matches ~tag and ~group.
+export const unknownIds = (ids: string[] | undefined, catalog: Map<string, unknown>) => (ids ?? []).filter((id) => !catalog.has(id))
+
 export const userTags = (ids?: string[]) => (ids ?? []).filter((id) => id !== FAVORITE_TAG)

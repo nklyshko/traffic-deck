@@ -14,11 +14,13 @@ export interface Settings {
   detailsCollapsed: boolean
   annotationsOpen: boolean
   sessionScope: string
+  'updates.checkedAt': number
+  'updates.dismissed': string
 }
 
 const systemDark = () => typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
 const DEFAULTS = (): Settings => ({
-  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all',
+  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all', 'updates.checkedAt': 0, 'updates.dismissed': '',
 })
 
 // typeof alone would let null and arrays through, and those crash whoever indexes them.
@@ -44,6 +46,8 @@ function load(): Settings {
 
 let state = load()
 const listeners = new Set<() => void>()
+
+export const setting = <K extends keyof Settings>(key: K): Settings[K] => state[key]
 
 export function update<K extends keyof Settings>(key: K, value: Settings[K] | ((cur: Settings[K]) => Settings[K])): void {
   const next = typeof value === 'function' ? (value as (c: Settings[K]) => Settings[K])(state[key]) : value

@@ -1,11 +1,11 @@
-import { ChevronDown, ChevronRight, ChevronUp, Copy, Download, Star, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, Copy, Download, Pencil, Star, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as api from '../lib/api'
-import { FAVORITE_TAG, loadCatalog, useCatalog, userTags } from '../lib/catalog'
+import { FAVORITE_TAG, loadCatalog, unknownIds, useCatalog, userTags } from '../lib/catalog'
 import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies, saveBlob } from '../lib/http'
 import { formatBytes, num, preciseDuration, reasonPhrase } from '../lib/format'
 import { useSetting } from '../lib/settings'
-import type { Body, Flow, Header } from '../lib/types'
+import type { Body, Comment, Flow, Header } from '../lib/types'
 import { DecodeAffordance, Decoded } from './Decode'
 import { JsonTree } from './Json'
 import { Badge, Button, Card, cx, DurationBadge, IconButton, inputClass, MethodBadge, Spinner, StatusBadge } from './ui'
@@ -143,7 +143,30 @@ function MetaTab({ f }: { f: Flow }) {
   return <Card title="Meta"><div style={nameColumn(shown.map(([n]) => n))}>{shown.map(([n, v]) => <NameValue key={n} name={n} value={v!} decode={false} />)}</div></Card>
 }
 
-function Annotations({ flow, session, onChanged }: { flow: Flow; session: string; onChanged: () => void }) {
+const without = (ids: string[] | undefined, id: string, add: boolean) => (add ? [...new Set([...(ids ?? []), id])] : (ids ?? []).filter((x) => x !== id))
+
+function CommentRow({ comment: c, onSave, onDelete }: { comment: Comment; onSave: (body: string) => Promise<void>; onDelete: () => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  const save = () => {
+    const body = draft?.trim()
+    if (body && body !== c.body) void onSave(body).then(() => setDraft(null))
+    else setDraft(null)
+  }
+  if (draft !== null) return (
+    <form onSubmit={(e) => { e.preventDefault(); save() }}>
+      <input autoFocus aria-label="Edit comment" value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={save} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setDraft(null) } }} className={inputClass} />
+    </form>
+  )
+  return (
+    <div className="flex items-start gap-2 text-[11px] text-body">
+      <span className="flex-1 break-words whitespace-pre-wrap">{c.body}</span>
+      <IconButton label="Edit comment" size={20} onClick={() => setDraft(c.body ?? '')}><Pencil size={11} /></IconButton>
+      <IconButton label="Delete comment" size={20} onClick={onDelete}><X size={11} /></IconButton>
+    </div>
+  )
+}
+
+function Annotations({ flow, targets, session, onChanged, onPatch }: { flow: Flow; targets: Flow[]; session: string; onChanged: () => void; onPatch: (flows: Flow[]) => void }) {
   const { tags, groups } = useCatalog()
   const [open, setOpen] = useSetting('annotationsOpen')
   const [error, setError] = useState('')
@@ -152,12 +175,18 @@ function Annotations({ flow, session, onChanged }: { flow: Flow; session: string
   const flowTags = userTags(flow.tagIds)
   const flowGroups = flow.groupIds ?? []
   const comments = flow.comments ?? []
-  const ids = [flow.id]
-  const run = async (op: () => Promise<unknown>) => {
+  const ids = targets.map((t) => t.id)
+  const many = targets.length > 1
+  const every = (test: (f: Flow) => boolean) => targets.every(test)
+  const hasTag = (id: string) => every((f) => !!f.tagIds?.includes(id))
+  const hasGroup = (id: string) => every((f) => !!f.groupIds?.includes(id))
+  const run = async (op: () => Promise<unknown>, change?: (f: Flow) => Partial<Flow>) => {
     try {
       await op()
       setError('')
       onChanged()
+      // Only the anchor is re-read; a closed session has no stream to bring the others.
+      if (many && change) onPatch(targets.filter((t) => t.id !== flow.id).map((t) => ({ markColor: t.markColor, favorite: t.favorite, tagIds: t.tagIds, groupIds: t.groupIds, comments: t.comments, ...change(t), id: t.id })))
     } catch (e) {
       setError((e as Error).message)
     }
@@ -167,15 +196,21 @@ function Annotations({ flow, session, onChanged }: { flow: Flow; session: string
   return (
     <div className="shrink-0 border-t border-line bg-panel">
       <div className="flex items-center gap-2.5 h-10 px-3">
-        <IconButton label="Favorite" size={26} aria-pressed={!!flow.favorite} onClick={() => void run(() => api.toggleFavorite(session, ids))}>
+        <IconButton label="Favorite" size={26} aria-pressed={!!flow.favorite} onClick={() => {
+          // The gateway's rule: every record favorite clears them all, anything else sets them all.
+          const favorite = !every((f) => !!f.favorite)
+          void run(() => api.toggleFavorite(session, ids), () => ({ favorite }))
+        }}>
           <Star size={15} className={flow.favorite ? 'text-amber-fg fill-current' : ''} />
         </IconButton>
-        {MARKS.map((m) => (
-          <button key={m} type="button" title={`Mark ${m}`} aria-label={`Mark ${m}`} aria-pressed={flow.markColor === m}
-            onClick={() => void run(() => (flow.markColor === m ? api.clearMark(session, ids) : api.setMark(session, ids, m)))}
-            className={cx(`mark-${m} w-3.5 h-3.5 rounded-full`, flow.markColor === m && 'ring-2 ring-offset-1 ring-offset-[var(--panel)] ring-[var(--t)]')} style={{ background: 'var(--t)' }} />
-        ))}
-        {flow.markColor && <IconButton label="Clear mark" size={22} onClick={() => void run(() => api.clearMark(session, ids))}><X size={12} /></IconButton>}
+        {MARKS.map((m) => {
+          const on = every((f) => f.markColor === m)
+          return <button key={m} type="button" title={`Mark ${m}`} aria-label={`Mark ${m}`} aria-pressed={on}
+            onClick={() => void run(() => (on ? api.clearMark(session, ids) : api.setMark(session, ids, m)), () => ({ markColor: on ? undefined : m }))}
+            className={cx(`mark-${m} w-3.5 h-3.5 rounded-full`, on && 'ring-2 ring-offset-1 ring-offset-[var(--panel)] ring-[var(--t)]')} style={{ background: 'var(--t)' }} />
+        })}
+        {targets.some((f) => f.markColor) && <IconButton label="Clear mark" size={22} onClick={() => void run(() => api.clearMark(session, ids), () => ({ markColor: undefined }))}><X size={12} /></IconButton>}
+        {many && <span className="text-[11px] text-muted">{targets.length} flows</span>}
         <span className="flex-1" />
         <Button size="sm" aria-expanded={open} onClick={() => setOpen(!open)}>{summary}{open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}</Button>
       </div>
@@ -184,33 +219,36 @@ function Annotations({ flow, session, onChanged }: { flow: Flow; session: string
         <div className="px-3 pb-3 space-y-2 max-h-56 overflow-auto">
           <div className="flex flex-wrap items-center gap-1.5">
             {[...tags.values()].filter((t) => !t.isFavorite && t.id !== FAVORITE_TAG).map((t) => {
-              const on = flowTags.includes(t.id)
-              return <button key={t.id} type="button" aria-pressed={on} className={chip(on)} onClick={() => void run(() => api.setTags(session, ids, on ? [] : [t.id], on ? [t.id] : []))}># {t.name}</button>
+              const on = hasTag(t.id)
+              return <button key={t.id} type="button" aria-pressed={on} className={chip(on)} onClick={() => void run(() => api.setTags(session, ids, on ? [] : [t.id], on ? [t.id] : []), (f) => ({ tagIds: without(f.tagIds, t.id, !on) }))}># {t.name}</button>
             })}
+            {unknownIds(flowTags, tags).map((id) => <button key={id} type="button" aria-pressed title="A deleted tag; click to remove it" className={chip(true)}
+              onClick={() => void run(() => api.setTags(session, ids, [], [id]), (f) => ({ tagIds: without(f.tagIds, id, false) }))}># {id}</button>)}
             <form onSubmit={(e) => {
               e.preventDefault()
               const name = newTag.trim()
+              let created = ''
               if (name) void run(async () => {
                 const t = await api.createTag(name, 'blue')
+                created = t.id
                 await loadCatalog(true)
                 await api.setTags(session, ids, [t.id], [])
                 setNewTag('')
-              })
+              }, (f) => ({ tagIds: without(f.tagIds, created, true) }))
             }}><input aria-label="New tag" value={newTag} onChange={(e) => setNewTag(e.target.value)} placeholder="new tag" className={cx(inputClass, 'h-[22px]! w-28 text-[11px]!')} /></form>
           </div>
-          {groups.size > 0 && (
+          {groups.size + unknownIds(flowGroups, groups).length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5">
               {[...groups.values()].map((g) => {
-                const on = flowGroups.includes(g.id)
-                return <button key={g.id} type="button" aria-pressed={on} className={chip(on)} onClick={() => void run(() => api.setGroups(session, ids, on ? [] : [g.id], on ? [g.id] : []))}>⬡ {g.name}</button>
+                const on = hasGroup(g.id)
+                return <button key={g.id} type="button" aria-pressed={on} className={chip(on)} onClick={() => void run(() => api.setGroups(session, ids, on ? [] : [g.id], on ? [g.id] : []), (f) => ({ groupIds: without(f.groupIds, g.id, !on) }))}>⬡ {g.name}</button>
               })}
+              {unknownIds(flowGroups, groups).map((id) => <button key={id} type="button" aria-pressed title="A deleted group; click to remove it" className={chip(true)}
+                onClick={() => void run(() => api.setGroups(session, ids, [], [id]), (f) => ({ groupIds: without(f.groupIds, id, false) }))}>⬡ {id}</button>)}
             </div>
           )}
           {comments.map((c) => (
-            <div key={c.id} className="flex items-start gap-2 text-[11px] text-body">
-              <span className="flex-1 break-words whitespace-pre-wrap">{c.body}</span>
-              <IconButton label="Delete comment" size={20} onClick={() => void run(() => api.deleteComment(session, c.id))}><X size={11} /></IconButton>
-            </div>
+            <CommentRow key={c.id} comment={c} onSave={(body) => run(() => api.editComment(session, c.id, body))} onDelete={() => void run(() => api.deleteComment(session, c.id))} />
           ))}
           <form onSubmit={(e) => {
             e.preventDefault()
@@ -219,7 +257,7 @@ function Annotations({ flow, session, onChanged }: { flow: Flow; session: string
               await api.addComment(session, flow.id, body)
               setComment('')
             })
-          }}><input aria-label="Add a comment" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="add a comment" className={inputClass} /></form>
+          }}><input aria-label="Add a comment" value={comment} onChange={(e) => setComment(e.target.value)} placeholder={many ? 'add a comment to the anchor row' : 'add a comment'} className={inputClass} /></form>
         </div>
       )}
     </div>
@@ -271,8 +309,8 @@ function Footer({ flow, session, onOpenMessages }: { flow: Flow; session: string
 
 type TabName = 'Request' | 'Cookies' | 'Response' | 'Meta'
 
-export function DetailsPanel({ session, summary, onClose, onPatch, onDecode, onOpenMessages }: {
-  session: string; summary: Flow; onClose: () => void; onPatch: (f: Flow) => void; onDecode: (text: string) => void; onOpenMessages: (f: Flow) => void
+export function DetailsPanel({ session, summary, targets, onClose, onPatch, onDecode, onOpenMessages }: {
+  session: string; summary: Flow; targets: Flow[]; onClose: () => void; onPatch: (flows: Flow[]) => void; onDecode: (text: string) => void; onOpenMessages: (f: Flow) => void
 }) {
   const [full, setFull] = useState<Flow | null>(null)
   const [tab, setTab] = useState<TabName>('Response')
@@ -281,7 +319,7 @@ export function DetailsPanel({ session, summary, onClose, onPatch, onDecode, onO
     try {
       const f = await api.getFlow(session, summary.id)
       setFull(f)
-      onPatch(f)
+      onPatch([f])
     } catch (e) {
       setError((e as Error).message)
     }
@@ -353,7 +391,7 @@ export function DetailsPanel({ session, summary, onClose, onPatch, onDecode, onO
         </>}
         {tab === 'Meta' && <MetaTab f={f} />}
       </div>
-      <Annotations flow={f} session={session} onChanged={() => void reread()} />
+      <Annotations flow={f} targets={targets} session={session} onChanged={() => void reread()} onPatch={onPatch} />
       <Footer flow={f} session={session} onOpenMessages={() => onOpenMessages(f)} />
     </div>
   )

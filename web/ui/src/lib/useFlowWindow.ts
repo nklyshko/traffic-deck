@@ -212,14 +212,11 @@ export function useFlowWindow({ session, filter, hidden, live, follow, onClosed,
     }
   }, [session, filter, hidden, live, applyEvents, refill])
 
-  const patchRow = useCallback((flow: Flow) => {
+  const patchRows = useCallback((flows: Flow[]) => {
     const s = stateRef.current
-    const at = s.rows.findIndex((r) => r.id === flow.id)
-    if (at < 0) return
-    const rows = s.rows.slice()
-    rows[at] = patchFlow(rows[at], flow)
-    commit({ ...s, rows })
+    const fresh = new Map(flows.map((f) => [f.id, f]))
+    commit({ ...s, rows: s.rows.map((r) => (fresh.has(r.id) ? patchFlow(r, fresh.get(r.id)!) : r)) })
   }, [commit])
 
-  return useMemo(() => ({ ...state, flashed, scrollTo, refill, extend, patchRow }), [state, flashed, scrollTo, refill, extend, patchRow])
+  return useMemo(() => ({ ...state, flashed, scrollTo, refill, extend, patchRows }), [state, flashed, scrollTo, refill, extend, patchRows])
 }

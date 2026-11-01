@@ -8,6 +8,7 @@ import { EDGE_ROWS } from '../lib/window'
 import { columnStyle, HeaderCell } from './Columns'
 import { Button, cx, DurationBadge, MethodBadge, Spinner, StatusBadge } from './ui'
 
+export interface SelectMods { shift: boolean; toggle: boolean }
 export interface Column { id: string; label: string; width: number | null; default: boolean; meta?: string }
 export const COLUMNS: Column[] = [
   // The messages chip and two more flags, the most the three slots can show.
@@ -42,7 +43,8 @@ export function flagsOf(f: Flow, tags: Map<string, Tag>, groups: Map<string, Gro
   const ts = userTags(f.tagIds)
   if (ts.length) out.push({ glyph: '#', title: ts.map((id) => tags.get(id)?.name ?? id).join(', '), tone: 'text-purple-fg' })
   if (f.comments?.length) out.push({ glyph: '✎', title: f.comments.map((c) => c.body).join('\n'), tone: 'text-muted' })
-  if (f.groupIds?.length) out.push({ glyph: '⬡', title: f.groupIds.map((id) => groups.get(id)?.name ?? id).join(', '), tone: 'text-cyan-fg' })
+  const gs = f.groupIds ?? []
+  if (gs.length) out.push({ glyph: '⬡', title: gs.map((id) => groups.get(id)?.name ?? id).join(', '), tone: 'text-cyan-fg' })
   return out
 }
 
@@ -71,7 +73,7 @@ function Rail({ flow }: { flow: Flow }) {
 
 interface RowProps {
   flow: Flow; columns: Column[]; selected: boolean; picked: boolean; flash: boolean; zebra: boolean
-  onSelect: (id: string) => void; onPick: (f: Flow) => void; onOpenMessages: (f: Flow) => void
+  onSelect: (id: string, mods: SelectMods) => void; onPick: (f: Flow) => void; onOpenMessages: (f: Flow) => void
 }
 
 function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f: Flow) => void }) {
@@ -94,7 +96,9 @@ function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f
 const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra, onSelect, onPick, onOpenMessages }: RowProps) {
   const mark = f.markColor
   return (
-    <div role="row" aria-selected={selected} onClick={() => onSelect(f.id)}
+    <div role="row" aria-selected={selected} onClick={(e) => onSelect(f.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
+      // Shift would otherwise drag a text selection across the rows.
+      onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
       className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-xs cursor-default', flash && 'row-new', mark && `mark-${mark} tint [--a:10%]`,
         !mark && selected && 'tone-blue tint [--a:12%]', !mark && !selected && (zebra ? 'bg-panel hover:bg-rowhover' : 'hover:bg-rowhover'))}>
       {(mark || selected) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
@@ -110,15 +114,15 @@ const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra
 
 
 interface Props {
-  rows: Flow[]; columns: Column[]; selected: string | null; picks: Set<string>; flashed: ReadonlySet<string>
+  rows: Flow[]; columns: Column[]; selected: string | null; multi: ReadonlySet<string>; picks: Set<string>; flashed: ReadonlySet<string>
   compact: boolean; hasOlder: boolean; hasNewer: boolean; loading: boolean; filtered: boolean; follow: boolean
   active: boolean; scrollTo: { kind: 'bottom' | 'top' | 'delta'; delta?: number; seq: number }
-  onSelect: (id: string) => void; onPick: (f: Flow) => void; onExtend: (dir: 'older' | 'newer') => void; onClearFilter: () => void
+  onSelect: (id: string, mods: SelectMods) => void; onPick: (f: Flow) => void; onExtend: (dir: 'older' | 'newer') => void; onClearFilter: () => void
   onOpenMessages: (f: Flow) => void
   onColumnWidth: (id: string, width: number | null) => void
 }
 
-export function FlowTable({ rows, columns, selected, picks, flashed, compact, hasOlder, hasNewer, loading, filtered, follow, active, scrollTo, onSelect, onPick, onOpenMessages, onExtend, onClearFilter, onColumnWidth }: Props) {
+export function FlowTable({ rows, columns, selected, multi, picks, flashed, compact, hasOlder, hasNewer, loading, filtered, follow, active, scrollTo, onSelect, onPick, onOpenMessages, onExtend, onClearFilter, onColumnWidth }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const rowHeight = compact ? 30 : 44
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => rowHeight, overscan: 12 })
@@ -184,7 +188,7 @@ export function FlowTable({ rows, columns, selected, picks, flashed, compact, ha
               const f = rows[v.index]
               return (
                 <div key={f.id} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: rowHeight, transform: `translateY(${v.start}px)` }}>
-                  <Row flow={f} columns={columns} selected={f.id === selected} picked={picks.has(f.id)} flash={flashed.has(f.id)} zebra={v.index % 2 === 1} onSelect={onSelect} onPick={onPick} onOpenMessages={onOpenMessages} />
+                  <Row flow={f} columns={columns} selected={f.id === selected || multi.has(f.id)} picked={picks.has(f.id)} flash={flashed.has(f.id)} zebra={v.index % 2 === 1} onSelect={onSelect} onPick={onPick} onOpenMessages={onOpenMessages} />
                 </div>
               )
             })}

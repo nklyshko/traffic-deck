@@ -110,6 +110,27 @@ func (s *server) messageBody(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *server) log(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	maxBytes, err := queryInt(r, "max")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	stream, err := s.control.GetLog(r.Context(), &trafficv1.GetLogRequest{Name: q.Get("name"), MaxBytes: maxBytes})
+	if err != nil {
+		rpcError(w, "GetLog", err)
+		return
+	}
+	streamBytes(w, "GetLog", func(h http.Header) {
+		h.Set("Content-Type", "text/plain; charset=utf-8")
+		h.Set("X-Content-Type-Options", "nosniff")
+	}, func() ([]byte, error) {
+		c, err := stream.Recv()
+		return c.GetPayload(), err
+	})
+}
+
 func (s *server) exportSession(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("session")
 	stream, err := s.control.ExportSession(r.Context(), &trafficv1.ExportSessionRequest{SessionId: id})

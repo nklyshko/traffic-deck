@@ -60,6 +60,7 @@ func TestSanitizeFilename(t *testing.T) {
 type fakeControl struct {
 	trafficv1.ControlServiceClient
 	label string
+	log   *trafficv1.GetLogRequest
 }
 
 func (f *fakeControl) SetSessionLabel(_ context.Context, in *trafficv1.SetSessionLabelRequest, _ ...grpc.CallOption) (*trafficv1.Empty, error) {
@@ -69,6 +70,25 @@ func (f *fakeControl) SetSessionLabel(_ context.Context, in *trafficv1.SetSessio
 
 func (f *fakeControl) DeleteSession(context.Context, *trafficv1.DeleteSessionRequest, ...grpc.CallOption) (*trafficv1.Empty, error) {
 	return nil, status.Error(codes.Internal, "boom")
+}
+
+type fakeLogStream struct {
+	grpc.ServerStreamingClient[trafficv1.LogChunk]
+	lines []string
+}
+
+func (f *fakeLogStream) Recv() (*trafficv1.LogChunk, error) {
+	if len(f.lines) == 0 {
+		return nil, io.EOF
+	}
+	l := f.lines[0]
+	f.lines = f.lines[1:]
+	return &trafficv1.LogChunk{Payload: []byte(l)}, nil
+}
+
+func (f *fakeControl) GetLog(_ context.Context, in *trafficv1.GetLogRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[trafficv1.LogChunk], error) {
+	f.log = in
+	return &fakeLogStream{lines: []string{"<b>line</b>\n"}}, nil
 }
 
 type fakeBodyStream struct {
@@ -147,7 +167,7 @@ func TestContentTypeGate(t *testing.T) {
 
 func TestRPCAllowListAndErrors(t *testing.T) {
 	h := testServer(&fakeControl{}, &fakeViewer{})
-	if w := post(h, "/api/rpc/StartService", "application/json", ""); w.Code != http.StatusNotFound {
+	if w := post(h, "/api/rpc/ExportSession", "application/json", ""); w.Code != http.StatusNotFound {
 		t.Errorf("unlisted method: %d", w.Code)
 	}
 	if w := post(h, "/api/rpc/DeleteSession", "application/json", "{"); w.Code != http.StatusBadRequest {
@@ -208,6 +228,31 @@ func TestHiddenFlowsAreOptIn(t *testing.T) {
 	get("/api/stream?session=s&hidden=1")
 	if !v.query.IncludeHidden || !v.follow.IncludeHidden {
 		t.Fatal("hidden=1 did not reach the gateway")
+	}
+}
+
+func TestLogIsPlainTextAndBounded(t *testing.T) {
+	c := &fakeControl{}
+	h := testServer(c, &fakeViewer{})
+	r := httptest.NewRequest("GET", "/api/log?name=gateway&max=200000", nil)
+	r.Host = "127.0.0.1:18890"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if c.log.GetName() != "gateway" || c.log.GetMaxBytes() != 200000 {
+		t.Errorf("request = %v", c.log)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Body.String() != "<b>line</b>\n" {
+		t.Errorf("headers %v body %q", w.Header(), w.Body.String())
+	}
+	bad := httptest.NewRequest("GET", "/api/log?name=gateway&max=lots", nil)
+	bad.Host = "127.0.0.1:18890"
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, bad)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("bad max = %d", w.Code)
 	}
 }
 

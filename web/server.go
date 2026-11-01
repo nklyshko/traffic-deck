@@ -58,6 +58,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/messages", s.messages)
 	mux.HandleFunc("GET /api/messages/stream", s.streamMessages)
 	mux.HandleFunc("GET /api/message/body", s.messageBody)
+	mux.HandleFunc("GET /api/log", s.log)
 	mux.HandleFunc("GET /api/session/export", s.exportSession)
 	mux.HandleFunc("POST /api/session/import", s.importSession)
 	for name, h := range s.rpcMethods() {
@@ -262,13 +263,18 @@ func (s *server) rpcMethods() map[string]http.Handler {
 
 		"ListTags":       unary("ListTags", c.ListTags),
 		"CreateTag":      unary("CreateTag", c.CreateTag),
+		"DeleteTag":      unary("DeleteTag", c.DeleteTag),
 		"SetTags":        unary("SetTags", c.SetTags),
 		"ToggleFavorite": unary("ToggleFavorite", c.ToggleFavorite),
 		"SetMark":        unary("SetMark", c.SetMark),
 		"ClearMark":      unary("ClearMark", c.ClearMark),
 		"AddComment":     unary("AddComment", c.AddComment),
+		"EditComment":    unary("EditComment", c.EditComment),
 		"DeleteComment":  unary("DeleteComment", c.DeleteComment),
 		"ListGroups":     unary("ListGroups", c.ListGroups),
+		"CreateGroup":    unary("CreateGroup", c.CreateGroup),
+		"UpdateGroup":    unary("UpdateGroup", c.UpdateGroup),
+		"DeleteGroup":    unary("DeleteGroup", c.DeleteGroup),
 		"SetGroups":      unary("SetGroups", c.SetGroups),
 
 		"SetSessionLabel":     unary("SetSessionLabel", c.SetSessionLabel),
@@ -276,5 +282,12 @@ func (s *server) rpcMethods() map[string]http.Handler {
 		"DeleteSession":       unary("DeleteSession", c.DeleteSession),
 		"ImportCapture":       unary("ImportCapture", c.ImportCapture),
 		"GetSessionArtifacts": unary("GetSessionArtifacts", c.GetSessionArtifacts),
+
+		"CheckUpdates": unary("CheckUpdates", c.CheckUpdates),
+
+		"ListServices": unary("ListServices", c.ListServices),
+		"StartService": unary("StartService", c.StartService),
+		"StopService":  unary("StopService", c.StopService),
+		"ListLogs":     unary("ListLogs", c.ListLogs),
 	}
 }

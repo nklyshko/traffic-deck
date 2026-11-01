@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowLeft, ArrowRight, Columns3 } from 'lucide-react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import { ArrowDown, ArrowLeft, ArrowRight, Check as Tick, Columns3, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { MESSAGE_EXAMPLES, MESSAGE_TERMS } from '../lib/filter'
@@ -10,10 +11,12 @@ import { Check, columnStyle, HeaderCell, Popover, ResetColumns } from './Columns
 import { FilterInput } from './FilterInput'
 import { JsonTree } from './Json'
 import { NameValue, nameColumn, parseJson } from './Details'
-import { Banner, Button, Card, CopyButton, cx, Modal, Pill, Spinner } from './ui'
+import type { Pick } from './Workspace'
+import { Banner, Button, Card, CopyButton, cx, IconButton, Modal, Pill, Spinner } from './ui'
 
 const TEXT_CAP = 50_000
 const HEX_CAP = 4096
+const FRAME_ROW = 30
 
 function preview(m: WsMessage): string {
   const bytes = base64Bytes(m.payload?.inline)
@@ -93,7 +96,9 @@ function Payload({ session, message }: { session: string; message: WsMessage }) 
   )
 }
 
-export function TimelineModal({ session, flow, onClose }: { session: string; flow: Flow; onClose: () => void }) {
+export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick, onCompare, onClearPicks, onClose }: {
+  session: string; sessionLabel: string; flow: Flow; picks: Pick[]; onTogglePick: (p: Pick) => void; onCompare: () => void; onClearPicks: () => void; onClose: () => void
+}) {
   const [text, setText] = useState('')
   const [filter, setFilter] = useState('')
   const [rows, setRows] = useState<WsMessage[]>([])
@@ -168,6 +173,12 @@ export function TimelineModal({ session, flow, onClose }: { session: string; flo
   ], [metaKeys, rows])
   const columns = useMemo(() => allColumns.filter((c) => overrides[c.id] ?? true).map((c) => (c.width === null ? c : { ...c, width: widths[c.id] ?? c.width })), [allColumns, overrides, widths])
   const message = rows.find((m) => m.id === selected)
+  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => list.current, estimateSize: () => FRAME_ROW, overscan: 20 })
+  const framePicks = picks.filter((p) => p.message)
+  const pick = (m: WsMessage) => onTogglePick({
+    session, sessionLabel, id: m.id, label: `${flow.method ?? ''} ${flow.authority ?? ''} ${flow.path ?? ''}`.trim(),
+    message: { flowId: flow.id, openMicros: num(flow.tsUnixMicros), frame: m },
+  })
   const metaHelp = `~meta key alone: the key is present${metaKeys.length ? ` · keys here: ${metaKeys.join(', ')}` : ''}`
   return (
     <Modal flush title="Messages" width={1360} height="min(860px, 100%)" onClose={onClose} headerExtra={<>
@@ -176,6 +187,8 @@ export function TimelineModal({ session, flow, onClose }: { session: string; flo
       <FilterInput value={text} onChange={setText} onSubmit={() => setFilter(text)} terms={MESSAGE_TERMS} examples={MESSAGE_EXAMPLES} bareMatches="payload" extraHelp={metaHelp}
         placeholder={metaKeys[0] ? `~meta ${metaKeys[0]}=` : '~from client'} trailing={<span className="text-[10px] text-faint shrink-0">↵ to apply</span>} />
       <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={13} />} onClick={() => setFollow(!follow)}>Follow</Button>
+      <Button disabled={framePicks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-[11px]">{framePicks.length}/2</span></Button>
+      {framePicks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={12} /></IconButton>}
       <Popover label="Columns" icon={<Columns3 size={14} />}>
         {allColumns.map((c) => <Check key={c.id} label={c.label} checked={overrides[c.id] ?? true} onChange={(v) => setOverrides((o) => ({ ...o, [c.id]: v }))} />)}
         <ResetColumns onReset={() => { setOverrides({}); setWidths({}) }} />
@@ -186,15 +199,26 @@ export function TimelineModal({ session, flow, onClose }: { session: string; flo
       <div className="flex flex-1 min-h-0">
         <div className="flex-1 min-w-0 flex flex-col">
           <div role="row" className="flex items-center h-8 px-3 shrink-0 bg-head border-b border-line text-[11px] font-medium text-muted">
+            <span className="w-6 shrink-0" />
             {columns.map((c) => <HeaderCell key={c.id} label={c.label} title={c.label} width={c.width} className={c.meta !== undefined ? 'text-purple-fg' : undefined} onResize={(w) => setWidth(c.id, w)} onReset={() => setWidth(c.id, null)} />)}
           </div>
           <div ref={list} className="flex-1 min-h-0 overflow-auto font-mono text-[11px]">
-            {rows.map((m) => (
-              <div key={m.id} role="row" aria-selected={m.id === selected} onClick={() => setSelected(m.id)}
-                className={cx('flex items-center h-[30px] px-3 cursor-default', m.id === selected ? 'tone-blue tint [--a:12%]' : 'hover:bg-rowhover text-body')}>
-                {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><FrameCell c={c} m={m} /></div>)}
-              </div>
-            ))}
+            <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
+              {virtual.getVirtualItems().map((v) => {
+                const m = rows[v.index]
+                const picked = framePicks.some((p) => p.id === m.id)
+                return (
+                  <div key={m.id} role="row" aria-selected={m.id === selected} onClick={() => setSelected(m.id)} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: FRAME_ROW, transform: `translateY(${v.start}px)` }}
+                    className={cx('flex items-center px-3 cursor-default', m.id === selected ? 'tone-blue tint [--a:12%]' : 'hover:bg-rowhover text-body')}>
+                    <button type="button" role="checkbox" aria-checked={picked} aria-label="Pick for compare" onClick={(e) => { e.stopPropagation(); pick(m) }}
+                      className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
+                      {picked && <Tick size={12} strokeWidth={3} />}
+                    </button>
+                    {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><FrameCell c={c} m={m} /></div>)}
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
         <div className="shrink-0 w-[42%] border-l border-line overflow-auto p-3">

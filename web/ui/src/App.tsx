@@ -1,11 +1,14 @@
 import { List, Moon, Sun, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { CatalogModal } from './components/Catalog'
 import { CompareModal } from './components/Compare'
 import { DecoderModal } from './components/Decode'
 import { NewCaptureDialog } from './components/NewCapture'
+import { ServicesModal } from './components/Services'
 import { SessionsScreen } from './components/Sessions'
 import { TimelineModal } from './components/Timeline'
 import { IconButton, cx } from './components/ui'
+import { UpdateToast, useUpdates } from './components/Updates'
 import { isLive, Workspace, type Pick } from './components/Workspace'
 import { listSessions } from './lib/api'
 import { useSetting } from './lib/settings'
@@ -61,20 +64,26 @@ export function App() {
 
   const [picks, setPicks] = useState<Pick[]>([])
   const togglePick = useCallback((p: Pick) => {
-    setPicks((cur) => (cur.some((x) => x.id === p.id) ? cur.filter((x) => x.id !== p.id) : [...cur, p].slice(-2)))
+    // One kind at a time: a flow and a frame have nothing to compare.
+    setPicks((cur) => (cur.some((x) => x.id === p.id) ? cur.filter((x) => x.id !== p.id) : [...cur.filter((x) => !x.message === !p.message), p].slice(-2)))
   }, [])
 
   const [comparing, setComparing] = useState(false)
   const [decoder, setDecoder] = useState<string | null>(null)
   const [newCapture, setNewCapture] = useState(false)
+  const [services, setServices] = useState(false)
+  const [managing, setManaging] = useState(false)
+  const updates = useUpdates()
   const [timeline, setTimeline] = useState<{ session: string; flow: Flow } | null>(null)
   const onDecoder = useCallback((initial?: string) => setDecoder(initial ?? ''), [])
   const onOpenMessages = useCallback((session: string, flow: Flow) => setTimeline({ session, flow }), [])
 
   const toSessions = useCallback(() => setActive(null), [])
   const startCompare = useCallback(() => setComparing(true), [])
+  const manageCatalog = useCallback(() => setManaging(true), [])
   const clearPicks = useCallback(() => setPicks([]), [])
 
+  const sessionLabel = (id: string) => { const s = sessions.find((x) => x.id === id); return s?.label || id }
   const current = (t: Session) => sessions.find((s) => s.id === t.id) ?? t
   return (
     <div className="flex flex-col h-full">
@@ -99,19 +108,24 @@ export function App() {
       </nav>
       <main className="flex-1 min-h-0 relative">
         <div className="h-full" style={{ display: active === null ? undefined : 'none' }}>
-          <SessionsScreen sessions={sessions} loaded={loaded} loadError={loadError} refresh={refresh} stuck={stuck} onStuck={markStuck} onOpen={open} onNewCapture={() => setNewCapture(true)} />
+          <SessionsScreen sessions={sessions} loaded={loaded} loadError={loadError} refresh={refresh} stuck={stuck} onStuck={markStuck} onOpen={open} onNewCapture={() => setNewCapture(true)}
+            onServices={() => setServices(true)} onUpdates={updates.check} checkingUpdates={updates.checking} />
         </div>
         {/* Every tab stays mounted: a hidden one keeps its filter, scroll and live subscription. */}
         {tabs.map((tab) => (
           <div key={tab.id} className="h-full" style={{ display: active === tab.id ? undefined : 'none' }}>
             <Workspace session={current(tab)} active={active === tab.id} picks={picks} onBack={toSessions} onTogglePick={togglePick}
-              onCompare={startCompare} onClearPicks={clearPicks} onDecoder={onDecoder} onOpenMessages={onOpenMessages} onSessionsChanged={refresh} onStuck={markStuck} />
+              onCompare={startCompare} onClearPicks={clearPicks} onDecoder={onDecoder} onManageCatalog={manageCatalog} onOpenMessages={onOpenMessages} onSessionsChanged={refresh} onStuck={markStuck} />
           </div>
         ))}
       </main>
-      {comparing && picks.length === 2 && <CompareModal picks={picks} onClose={() => setComparing(false)} onClear={() => { setPicks([]); setComparing(false) }} />}
       {decoder !== null && <DecoderModal initial={decoder} onClose={() => setDecoder(null)} />}
-      {timeline && <TimelineModal session={timeline.session} flow={timeline.flow} onClose={() => setTimeline(null)} />}
+      {timeline && <TimelineModal session={timeline.session} sessionLabel={sessionLabel(timeline.session)} flow={timeline.flow} picks={picks} onTogglePick={togglePick} onCompare={startCompare} onClearPicks={clearPicks} onClose={() => setTimeline(null)} />}
+      {/* After the timeline: its Compare opens over it. */}
+      {comparing && picks.length === 2 && <CompareModal picks={picks} onClose={() => setComparing(false)} onClear={() => { setPicks([]); setComparing(false) }} />}
+      {services && <ServicesModal onClose={() => setServices(false)} />}
+      {managing && <CatalogModal onClose={() => setManaging(false)} />}
+      {updates.notice && <UpdateToast notice={updates.notice} checking={updates.checking} onCheck={updates.check} onHide={updates.hide} />}
       {newCapture && <NewCaptureDialog onClose={() => setNewCapture(false)} onStarted={(id) => {
         setNewCapture(false)
         void listSessions().then((list) => {

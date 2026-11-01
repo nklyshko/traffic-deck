@@ -3,20 +3,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { dropTerm, FLOW_EXAMPLES, halfTyped, FLOW_TERMS, parseFilter, readStatus, readTerm, STATUS_OPTIONS, termLabel, writeStatus, writeTerm } from '../lib/filter'
 import { fitWidth, formatMatched } from '../lib/format'
+import { NOTHING, select, type Selection } from '../lib/selection'
 import { declaredColumns } from '../lib/sessions'
 import { useSetting } from '../lib/settings'
-import type { DecodeProgress, Flow, Session } from '../lib/types'
+import type { DecodeProgress, Flow, Session, WsMessage } from '../lib/types'
 import { useFlowWindow } from '../lib/useFlowWindow'
 import { MAX_ROWS } from '../lib/window'
 import { MARKS, DetailsPanel } from './Details'
 import { FilterInput } from './FilterInput'
 import { Check, Popover, ResetColumns } from './Columns'
-import { FlowTable, tableColumns, type Column } from './FlowTable'
+import { FlowTable, tableColumns, type Column, type SelectMods } from './FlowTable'
 import { Button, cx, IconButton, Pill } from './ui'
 
 export const isLive = (s?: Session) => s?.status === 'SESSION_STATUS_OPEN' || s?.status === 'SESSION_STATUS_DECODING'
 
-export interface Pick { session: string; sessionLabel: string; id: string; label: string }
+export interface Pick {
+  session: string; sessionLabel: string; id: string; label: string
+  // Set on a message pick; the two kinds never mix.
+  message?: { flowId: string; openMicros: number; frame: WsMessage }
+}
 
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS', 'CONNECT', 'TRACE']
 const TYPES: [string, string][] = [['JSON', 'json'], ['HTML', 'html'], ['JavaScript', 'javascript'], ['CSS', 'css'], ['Image', 'image/'], ['Font', 'font'], ['XML', 'xml']]
@@ -40,12 +45,13 @@ interface Props {
   onCompare: () => void
   onClearPicks: () => void
   onDecoder: (initial?: string) => void
+  onManageCatalog: () => void
   onOpenMessages: (session: string, flow: Flow) => void
   onSessionsChanged: () => void
   onStuck: (id: string, stuck: boolean) => void
 }
 
-export function Workspace({ session, active, picks, onBack, onTogglePick, onCompare, onClearPicks, onDecoder, onOpenMessages, onSessionsChanged, onStuck }: Props) {
+export function Workspace({ session, active, picks, onBack, onTogglePick, onCompare, onClearPicks, onDecoder, onManageCatalog, onOpenMessages, onSessionsChanged, onStuck }: Props) {
   const id = session.id
   const [text, setText] = useState('')
   const [filter, setFilter] = useState('')
@@ -59,7 +65,9 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
   const live = isLive(session) && !closed
   const [follow, setFollow] = useState(live)
   const [progress, setProgress] = useState<DecodeProgress | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selection, setSelection] = useState<Selection>({ anchor: null, set: NOTHING })
+  const selected = selection.anchor
+  const setSelected = useCallback((anchor: string | null) => setSelection({ anchor, set: NOTHING }), [])
   const [stopError, setStopError] = useState('')
   // Stable: a table row is memoized.
   const openMessages = useCallback((f: Flow) => onOpenMessages(id, f), [onOpenMessages, id])
@@ -69,7 +77,12 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
   }, [onSessionsChanged])
   const [showHidden, setShowHidden] = useSetting('showHidden')
   const win = useFlowWindow({ session: id, filter, hidden: showHidden, live, follow, onClosed, onProgress: setProgress })
-  const { rows, refill, extend, patchRow } = win
+  const { rows, refill, extend, patchRows } = win
+  // A row that leaves and later rejoins the filter must not come back still selected.
+  useEffect(() => setSelection((cur) => (cur.set.size ? { ...cur, set: NOTHING } : cur)), [filter, showHidden])
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
+  const onSelect = useCallback((row: string, mods: SelectMods) => setSelection((cur) => select(rowsRef.current.map((r) => r.id), cur, row, mods)), [])
 
   const [compact, setCompact] = useSetting('compact')
   const [overrides, setOverrides] = useSetting('columnOverrides')
@@ -87,6 +100,8 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
   const setWidth = useCallback((id: string, width: number | null) => setWidths(({ [id]: _, ...rest }) => (width === null ? rest : { ...rest, [id]: width })), [setWidths])
 
   const flow = useMemo(() => rows.find((r) => r.id === selected), [rows, selected])
+  // Rows only: a flow filtered out since it was selected is no longer a target.
+  const targets = useMemo(() => (selection.set.size ? rows.filter((r) => selection.set.has(r.id)) : flow ? [flow] : []), [rows, selection.set, flow])
   const pickedHere = useMemo(() => new Set(picks.filter((p) => p.session === id).map((p) => p.id)), [picks, id])
   const togglePick = useCallback((f: Flow) => {
     onTogglePick({ session: id, sessionLabel: session.label || id, id: f.id, label: `${f.method ?? ''} ${f.authority ?? ''} ${f.path ?? ''}`.trim() })
@@ -105,6 +120,11 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
     setFollow(on)
     if (on) void refill('last')
   }
+  const [idCopied, setIdCopied] = useState(false)
+  const copyId = () => void navigator.clipboard.writeText(id).then(() => {
+    setIdCopied(true)
+    setTimeout(() => setIdCopied(false), 1200)
+  })
   const stop = async () => {
     try {
       await api.stopCapture(id)
@@ -118,8 +138,6 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
   }
 
   // Keyboard, for the visible tab only and never while typing.
-  const rowsRef = useRef(rows)
-  rowsRef.current = rows
   useEffect(() => {
     if (!active) return
     const onKey = (e: KeyboardEvent) => {
@@ -142,7 +160,7 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [active, selected, extend])
+  }, [active, selected, setSelected, extend])
 
   const split = useRef<HTMLDivElement>(null)
   const startDrag = (e: React.MouseEvent) => {
@@ -171,9 +189,14 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2.5 h-[52px] px-3 shrink-0 border-b border-line">
         <IconButton label="Back to sessions" className="border border-edge" onClick={onBack}><ArrowLeft size={15} /></IconButton>
-        <div className="min-w-0 max-w-52">
+        {/* Sized by the id, which must stay whole: it is what the CLI and agent tools call the session. */}
+        <div className="shrink-0 max-w-[260px]">
           <div className="text-[13px] font-semibold text-ink truncate">{session.label || id.slice(0, 8)}</div>
-          <div className="font-mono text-[10px] text-faint truncate">{id}</div>
+          <button type="button" title="Copy session id" onClick={copyId} className="relative block font-mono text-[10px] text-faint hover:text-ink whitespace-nowrap">
+            {/* Stays in the layout, or the filter input would resize with the shorter text. */}
+            <span className={cx(idCopied && 'invisible')}>{id}</span>
+            {idCopied && <span className="absolute inset-0 text-left text-green-fg">✓ copied</span>}
+          </button>
         </div>
         {live && <Pill tone="green" dot>Live</Pill>}
         {live && <Button variant="danger" icon={<Square size={9} fill="currentColor" />} onClick={() => void stop()} title={stopError}>Stop</Button>}
@@ -184,7 +207,10 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
         {picks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={12} /></IconButton>}
         <IconButton label="Refetch" className="border border-edge" onClick={() => void refill(follow ? 'last' : 'first')}><RefreshCw size={14} /></IconButton>
         <Button onMouseDown={(e) => e.preventDefault()} onClick={() => onDecoder(getSelection()?.toString().slice(0, 20000))} className="font-mono" icon={<span>{'{ }'}</span>}><span className="font-sans">Decoder</span></Button>
-        <Popover label="Settings" icon={<Gear size={14} />}><Check label="Compact rows" checked={compact} onChange={setCompact} /></Popover>
+        <Popover label="Settings" icon={<Gear size={14} />}>
+          <Check label="Compact rows" checked={compact} onChange={setCompact} />
+          <button type="button" data-closes-popover onClick={onManageCatalog} className="w-full pt-1.5 border-t border-line text-left text-muted hover:text-ink">Manage tags &amp; groups</button>
+        </Popover>
         <Popover label="Columns" icon={<Columns3 size={14} />}>
           {allColumns.map((c) => <Check key={c.id} label={c.label} checked={visible(c)} onChange={(v) => setOverrides((o) => ({ ...o, [c.id]: v }))} />)}
           <ResetColumns onReset={() => { setOverrides({}); setWidths({}) }} />
@@ -224,12 +250,12 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
       {win.error && <div className="px-3 py-1 shrink-0 tint tone-red text-[11px]">{win.error}</div>}
       {stopError && <div className="px-3 py-1 shrink-0 tint tone-red text-[11px]">Stop failed: {stopError}. Force close is on the Sessions screen.</div>}
       <div ref={split} className="flex flex-1 min-h-0">
-        <FlowTable rows={rows} columns={columns} selected={selected} picks={pickedHere} flashed={win.flashed} compact={compact} hasOlder={win.hasOlder} hasNewer={win.hasNewer}
-          loading={win.loading} filtered={!!filter} follow={follow} active={active} scrollTo={win.scrollTo} onSelect={setSelected} onPick={togglePick} onOpenMessages={openMessages} onExtend={extend} onClearFilter={() => setText('')} onColumnWidth={setWidth} />
+        <FlowTable rows={rows} columns={columns} selected={selected} multi={selection.set} picks={pickedHere} flashed={win.flashed} compact={compact} hasOlder={win.hasOlder} hasNewer={win.hasNewer}
+          loading={win.loading} filtered={!!filter} follow={follow} active={active} scrollTo={win.scrollTo} onSelect={onSelect} onPick={togglePick} onOpenMessages={openMessages} onExtend={extend} onClearFilter={() => setText('')} onColumnWidth={setWidth} />
         {showDetails && <>
           <div role="separator" aria-orientation="vertical" onMouseDown={startDrag} className="w-[5px] shrink-0 cursor-col-resize bg-head hover:bg-accent" />
           <div className="shrink-0 min-w-0" style={{ width: `${detailsWidth}%` }}>
-            {flow ? <DetailsPanel key={flow.id} session={id} summary={flow} onClose={() => setSelected(null)} onPatch={patchRow} onDecode={onDecoder} onOpenMessages={openMessages} />
+            {flow ? <DetailsPanel key={flow.id} session={id} summary={flow} targets={targets} onClose={() => setSelected(null)} onPatch={patchRows} onDecode={onDecoder} onOpenMessages={openMessages} />
               : <div className="flex items-center justify-center h-full bg-panel text-muted">Select a flow</div>}
           </div>
         </>}
@@ -237,6 +263,7 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
       <div className="flex items-center gap-3 h-7 px-3 shrink-0 border-t border-line bg-chrome font-mono text-[11px] text-muted">
         <span>showing {rows.length.toLocaleString('en-US')} of {formatMatched(win.matched, win.capped)}</span>
         {follow && <span className="text-blue-fg">⇣ follow</span>}
+        {selection.set.size > 1 && <span className="text-body">{selection.set.size.toLocaleString('en-US')} selected</span>}
         {win.pending > 0 && <button type="button" onClick={jumpEnd} className="h-[18px] px-2 rounded-full bg-primary text-white font-sans font-semibold text-[10px]">{win.pending} new</button>}
         <span className="flex-1" />
         <button type="button" onClick={jumpStart} className="inline-flex items-center gap-1 hover:text-ink"><ArrowUp size={11} />first</button>

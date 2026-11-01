@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { compareFlows, diffLines, goSlice, MISSING, pairValues } from './compare'
+import { compareFlows, compareMessages, diffLines, diffText, goSlice, messagePosition, MISSING, pairValues, positionLines, prettyJson, prettyPayload, prettyXml, unifiedDiff } from './compare'
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
 import { bodyExt, cookiePairs, curlCommand, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
+import { classifyLogLine } from './logs'
+import { select, NOTHING } from './selection'
 import { accepts } from './settings'
+import { unknownIds } from './catalog'
 import { declaredColumns, groupScope, inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionScopes } from './sessions'
+import { checkedAgo, lastEightAm, refreshDue, updateNotice } from './updates'
 import { cursorOf, extendWindow, patchFlow } from './window'
-import type { Flow, Session } from './types'
+import type { Flow, Session, WsMessage } from './types'
+
+declare const process: { env: Record<string, string | undefined> }
 
 const b64 = (s: string) => btoa(s)
 const b64url = (s: string) => btoa(s).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -299,11 +305,160 @@ describe('compare sizes', () => {
   })
 })
 
+describe('update notices', () => {
+  const at = { checkedUnixMs: '1000' }
+  const notice = (components: object[]) => updateNotice({ ...at, components })
+  it('never reads unknown as up to date', () => {
+    expect(updateNotice(null)).toMatchObject({ tone: 'amber', headline: 'no update answer yet — checks may be off', key: '' })
+    expect(notice([])).toMatchObject({ tone: 'blue', headline: 'nothing is enrolled for update checks' })
+    expect(notice([{ name: 'a' }])).toMatchObject({ tone: 'blue', headline: 'everything is up to date', key: '' })
+  })
+  it('lifts one shared hint into the action', () => {
+    const n = notice([
+      { name: 'a', updateAvailable: true, localRev: '1', remoteRev: '2', updateHint: 'make update' },
+      { name: 'b', updateAvailable: true, updateHint: 'make update' }, { name: 'c' },
+    ])
+    expect(n).toMatchObject({ headline: 'update available', action: 'make update', key: 'a@2 b@', details: ['a 1 → 2', 'b ? → ?'] })
+  })
+  it('appends hints that differ', () => {
+    const n = notice([{ name: 'a', updateAvailable: true, localRev: '1', remoteRev: '2', updateHint: 'x' }, { name: 'b', updateAvailable: true, localRev: '3', remoteRev: '4', updateHint: 'y' }])
+    expect(n.action).toBeUndefined()
+    expect(n.details).toEqual(['a 1 → 2 — x', 'b 3 → 4 — y'])
+  })
+  it('never claims up to date on a partial answer, and folds a shared error', () => {
+    const n = notice([{ name: 'a' }, { name: 'b', error: 'offline' }, { name: 'c', error: 'offline' }])
+    expect(n).toMatchObject({ tone: 'amber', headline: 'nothing new where it could be checked', details: ['could not check b, c (offline)'] })
+    expect(notice([{ name: 'a', error: 'x' }, { name: 'b', error: 'y' }, { name: 'c' }]).details).toEqual(['could not check a (x)', 'could not check b (y)'])
+    expect(notice([{ name: 'a', error: 'x' }]).headline).toBe('could not check for updates')
+  })
+  it('keeps the 08:00 cutoff across DST', () => {
+    const before = process.env.TZ
+    process.env.TZ = 'Europe/Amsterdam'
+    const local = (y: number, m: number, d: number, h: number) => new Date(y, m, d, h).getTime()
+    // Sunday 30 March 2025 lost an hour at 02:00, so the day before is 23 hours long.
+    expect(new Date(local(2025, 2, 30, 7)).getTimezoneOffset()).not.toBe(new Date(local(2025, 2, 29, 7)).getTimezoneOffset())
+    expect(lastEightAm(local(2025, 2, 30, 7))).toBe(local(2025, 2, 29, 8))
+    expect(new Date(lastEightAm(local(2025, 2, 30, 7))).getHours()).toBe(8)
+    expect(lastEightAm(local(2025, 2, 30, 9))).toBe(local(2025, 2, 30, 8))
+    expect(lastEightAm(local(2025, 2, 1, 7))).toBe(local(2025, 1, 28, 8))
+    process.env.TZ = before
+  })
+  it('is due only when the stamp predates the cutoff', () => {
+    const now = new Date(2026, 5, 10, 9).getTime()
+    expect(refreshDue(new Date(2026, 5, 10, 7).getTime(), now)).toBe(true)
+    expect(refreshDue(new Date(2026, 5, 10, 8).getTime(), now)).toBe(false)
+    expect(refreshDue(0, now)).toBe(true)
+  })
+  it('words the age of an answer', () => {
+    expect(checkedAgo(2000, 1000)).toBe('just now')
+    expect(checkedAgo(0, 59_000)).toBe('just now')
+    expect(checkedAgo(0, 12 * 60000)).toBe('12 min ago')
+    expect(checkedAgo(0, 3 * 3600000)).toBe('3h ago')
+    expect(checkedAgo(0, 50 * 3600000)).toBe('2d ago')
+  })
+})
+
+describe('log lines', () => {
+  it('dims the timestamp and tints by the first severity word', () => {
+    expect(classifyLogLine('2026/10/28 14:32:10.5 error: upstream warn')).toEqual({ time: '2026/10/28 14:32:10.5', message: 'error: upstream warn', tone: 'red', run: false })
+    expect(classifyLogLine('2026-10-28T14:32:10Z WARNING slow')).toMatchObject({ time: '2026-10-28T14:32:10Z', tone: 'amber' })
+    expect(classifyLogLine('level=info msg=up').tone).toBe('blue')
+    expect(classifyLogLine('Traceback (most recent call last):').tone).toBe('red')
+    expect(classifyLogLine('trace: step').tone).toBe('grey')
+    expect(classifyLogLine('no level here').tone).toBeNull()
+  })
+  it('spots run markers', () => {
+    expect(classifyLogLine('=== gateway start · 2026/10/28 ===').run).toBe(true)
+    expect(classifyLogLine('=== half').run).toBe(false)
+  })
+})
+
+describe('row selection', () => {
+  const ids = ['a', 'b', 'c', 'd']
+  const none = { anchor: null, set: NOTHING }
+  it('a plain click selects one and clears the set', () => {
+    expect(select(ids, { anchor: 'a', set: new Set(['a', 'b']) }, 'c', {})).toEqual({ anchor: 'c', set: NOTHING })
+  })
+  it('shift selects the range from the anchor, in either direction', () => {
+    const s = select(ids, { anchor: 'b', set: NOTHING }, 'd', { shift: true })
+    expect([...s.set]).toEqual(['b', 'c', 'd'])
+    expect(s.anchor).toBe('b')
+    expect([...select(ids, { anchor: 'c', set: NOTHING }, 'a', { shift: true }).set]).toEqual(['a', 'b', 'c'])
+    expect(select(ids, none, 'b', { shift: true }).anchor).toBe('b')
+  })
+  it('toggle keeps the first row and moves the anchor', () => {
+    const s = select(ids, { anchor: 'a', set: NOTHING }, 'c', { toggle: true })
+    expect([...s.set]).toEqual(['a', 'c'])
+    expect(s.anchor).toBe('c')
+    const off = select(ids, s, 'c', { toggle: true })
+    expect([...off.set]).toEqual(['a'])
+    expect(off.anchor).toBe('a')
+  })
+})
+
+describe('message compare', () => {
+  const frame = (o: Partial<WsMessage>): WsMessage => ({ id: 'm', ...o })
+  it('pretty-prints JSON without reordering keys or rounding numbers', () => {
+    expect(prettyJson('{"b":1,"2":[1,{}],"a":{"x":12345678901234567890}}')).toBe('{\n  "b": 1,\n  "2": [\n    1,\n    {}\n  ],\n  "a": {\n    "x": 12345678901234567890\n  }\n}')
+    expect(prettyJson('{"s":"a,:{\\"}"}')).toBe('{\n  "s": "a,:{\\"}"\n}')
+    expect(prettyJson('nope')).toBeNull()
+  })
+  it('pretty-prints XML keeping attribute order', () => {
+    expect(prettyXml('<a z="1" b="2"><b>t</b><c/></a>')).toBe('<a z="1" b="2">\n  <b>t</b>\n  <c/>\n</a>')
+    expect(prettyXml('<a><b></a>')).toBeNull()
+    expect(prettyPayload('<not xml')).toBe('<not xml')
+  })
+  it('builds hunks with context, line numbers and a summary', () => {
+    const a = Array.from({ length: 20 }, (_, i) => `l${i}`)
+    const b = [...a]
+    b[10] = 'changed'
+    b.splice(15, 1)
+    const d = unifiedDiff(a, b)
+    expect([d.removed, d.added]).toEqual([2, 1])
+    expect(d.hunks).toHaveLength(1)
+    expect(d.hunks[0].header).toBe('@@ -8,12 +8,11 @@')
+    expect(d.hunks[0].lines.find((l) => l.kind === '-')).toMatchObject({ text: 'l10', a: 11 })
+    expect(d.hunks[0].lines.find((l) => l.kind === '+')).toMatchObject({ text: 'changed', b: 11 })
+    expect(diffText(d).split('\n').slice(0, 3)).toEqual(['--- A', '+++ B', '@@ -8,12 +8,11 @@'])
+  })
+  it('splits distant changes, and has no hunks for equal text', () => {
+    const a = Array.from({ length: 40 }, (_, i) => `l${i}`)
+    const b = a.map((l, i) => (i === 2 || i === 30 ? 'x' : l))
+    expect(unifiedDiff(a, b).hunks).toHaveLength(2)
+    expect(unifiedDiff(a, a)).toEqual({ hunks: [], removed: 0, added: 0 })
+    expect(unifiedDiff([], ['x']).hunks[0].header).toBe('@@ -0,0 +1,1 @@')
+  })
+  it('falls back to a block replace past the size guard', () => {
+    const a = Array.from({ length: 3000 }, (_, i) => `a${i}`), b = Array.from({ length: 3000 }, (_, i) => `b${i}`)
+    const d = unifiedDiff(a, b)
+    expect([d.removed, d.added]).toEqual([3000, 3000])
+  })
+  it('places a frame without counting it as a difference', () => {
+    const all = [frame({ id: '1', fromClient: true, tsUnixMicros: '1000000' }), frame({ id: '2', tsUnixMicros: '2000000' }), frame({ id: '3', fromClient: true, tsUnixMicros: '3500000' }), frame({ id: '4', tsUnixMicros: '4000000' })]
+    expect(positionLines(messagePosition(all, '3', 500000)!)).toEqual(['#3 of 4 · client #2', 't+3.000 s', '+2.500 s'])
+    expect(messagePosition(all, '2', 0)).toMatchObject({ dir: 'server', dirIndex: 1, sincePrevious: null })
+    expect(messagePosition(all, 'gone', 0)).toBeNull()
+  })
+  it('compares direction, exact size and metadata by key', () => {
+    const s = compareMessages(frame({ fromClient: true, opcode: 'text', payload: { size: '2100' }, metadata: { k: '1' } }), frame({ opcode: 'text', payload: { size: '2200' }, metadata: { k: '2', o: 'x' } }))
+    expect(s.map((x) => [x.title, x.match])).toEqual([['Direction · opcode', false], ['Payload size', false], ['Metadata', false]])
+    expect(s[2].pairs?.map((p) => p.name)).toEqual(['k', 'o'])
+  })
+})
+
 describe('declared columns', () => {
   it('reads the comma list a source attaches, trimmed and once each', () => {
     const s = (v?: string): Session => ({ id: 's', metadata: v === undefined ? undefined : { 'viewer.columns': v } })
     expect(declaredColumns(s('conn,stream'))).toEqual(['conn', 'stream'])
     expect(declaredColumns(s(' scrape_group , proxy_provider,,scrape_group'))).toEqual(['scrape_group', 'proxy_provider'])
     expect(declaredColumns(s())).toEqual([])
+  })
+})
+
+describe('annotations', () => {
+  it('names the ids the catalog no longer knows', () => {
+    const catalog = new Map([['t1', {}]])
+    expect(unknownIds(['t1', 'gone'], catalog)).toEqual(['gone'])
+    expect(unknownIds(undefined, catalog)).toEqual([])
   })
 })
