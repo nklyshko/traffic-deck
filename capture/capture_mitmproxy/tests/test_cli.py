@@ -1,10 +1,18 @@
+import sys
+
 from capture_mitmproxy import cli
 from capture_mitmproxy.cli import _WGConfigScanner, _iface_rank, _print_qr
 
 
 class _FakeStore:
+    def __init__(self, *_):
+        pass
+
     def get(self, key, default=""):
         return default
+
+    def remember(self, key, value):
+        pass
 
 
 def test_iface_rank_physical_lan_first():
@@ -94,3 +102,13 @@ def test_print_qr_renders(capsys):
     _print_qr("\n".join(l.strip() for l in _OUTPUT[1:10]))
     out = capsys.readouterr().out
     assert "WireGuard app" in out and "█" in out  # header + rendered QR modules
+
+
+def test_interactive_runs_the_mitmdump_beside_the_interpreter(monkeypatch):
+    execs = []
+    monkeypatch.setattr(cli, "Store", _FakeStore)
+    monkeypatch.setattr(cli.os, "execvpe", lambda file, argv, env: execs.append(file))
+    monkeypatch.setattr(sys, "executable", "/venv/bin/python")
+    monkeypatch.setattr(sys, "argv", ["trafficdeck-capture-mitmproxy", "--mode", "regular"])
+    cli._interactive()
+    assert execs == ["/venv/bin/mitmdump"]

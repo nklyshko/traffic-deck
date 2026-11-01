@@ -26,6 +26,8 @@ from pathlib import Path
 from capture_sdk import prompt
 from capture_sdk.state import Store
 
+from capture_mitmproxy.launch import mitmdump
+
 # The modes offered by the interactive selector (label shown, value passed to mitmdump).
 # --mode still accepts any mitmproxy mode (transparent, local, ...) for power users.
 _MODE_CHOICES = [
@@ -134,7 +136,7 @@ def _interactive() -> None:
     store.remember("listen_port", args.listen_port)
 
     addon = Path(__file__).resolve().parent / "addon.py"
-    cmd = ["mitmdump", "-s", str(addon), "--mode", args.mode,
+    cmd = [mitmdump(), "-s", str(addon), "--mode", args.mode,
            "--listen-port", str(args.listen_port)]
     if args.mode == "wireguard":
         # Auto-detection picks the wrong interface when a VPN/Docker owns the default route,
