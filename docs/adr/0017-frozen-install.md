@@ -31,7 +31,7 @@ so upgrading or uninstalling is replacing a directory.
     <prefix>/venvs/<component>/      not editable; one per component, as 0008 requires
     <prefix>/venvs/android-frida-<version>/   one per supported Frida version (§5)
     <prefix>/libexec/                the venvs' console scripts
-    <prefix>/install.toml            commit, dirty, source_dir, remote, branch, date
+    <prefix>/install.toml            commit, dirty, source_dir, remote, branch, date, viewer
 
 The interpreter is part of the prefix. A venv records the Python it was built on by absolute
 path, so building on whichever one was on `PATH` (mise's, Homebrew's) would tie the install to

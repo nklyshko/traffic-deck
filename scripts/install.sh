@@ -37,10 +37,20 @@ COMPONENTS="${COMPONENTS:-$DEFAULT_COMPONENTS}"
 # the same interpreter rather than whichever 3.12 the local uv knows of. That needs a uv
 # recent enough to know this release.
 INSTALL_PYTHON="${INSTALL_PYTHON:-3.12.13}"
+VIEWER="${VIEWER:-}"
 
 # Checked first: `make build` tolerates a missing node with a stub page, but a frozen copy
 # with a stub would only be discovered when someone opens it.
 command -v npm >/dev/null || die "npm is needed to build the web UI (see mise.toml)"
+
+# Recorded in a TOML string, and a bare `make install` is how an install updates: without
+# carrying the choice over, an update would quietly put the viewer back.
+if [[ -z "$VIEWER" && -f "$PREFIX/install.toml" ]]; then
+  VIEWER="$(sed -n 's/^viewer = "\(.*\)"$/\1/p' "$PREFIX/install.toml")"
+elif [[ "$VIEWER" = tui && " $COMPONENTS " != *" tui "* ]]; then
+  die "VIEWER=tui, but COMPONENTS leaves the tui out"
+fi
+[[ "$VIEWER" != *[\"\\]* ]] || die "VIEWER can't contain a quote or a backslash"
 
 cd "$ROOT"
 dirty=false
@@ -270,6 +280,7 @@ source_dir = $source_toml
 remote = $remote_toml
 branch = $branch_toml
 date = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+viewer = "$VIEWER"
 EOF
 rm "$PREFIX/.incomplete"
 

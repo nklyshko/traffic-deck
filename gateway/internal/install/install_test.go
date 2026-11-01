@@ -137,3 +137,26 @@ func TestTheInstallRecordIsReadOnce(t *testing.T) {
 		t.Errorf("Read().Commit = %q: reports code it is not running", info.Commit)
 	}
 }
+
+func TestViewerIsTheInstallsChoice(t *testing.T) {
+	prefix := t.TempDir()
+	touch(t, filepath.Join(prefix, "bin", "trafficdeck"))
+	manifest := filepath.Join(prefix, manifestName)
+
+	if err := os.WriteFile(manifest, []byte("viewer = \"web\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runningFrom(t, filepath.Join(prefix, "bin", "trafficdeck"))
+	if got := Viewer(); got != "web" {
+		t.Errorf("Viewer() = %q, want web", got)
+	}
+
+	// An install from before the setting existed has no key.
+	if err := os.WriteFile(manifest, []byte("commit = \"abc\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runningFrom(t, filepath.Join(prefix, "bin", "trafficdeck"))
+	if got := Viewer(); got != "" {
+		t.Errorf("Viewer() = %q, want none", got)
+	}
+}

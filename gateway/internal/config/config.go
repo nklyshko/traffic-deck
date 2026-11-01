@@ -199,6 +199,10 @@ func Load() Config {
 			"the live decode is authoritative; to decode a capture with tshark, import its " +
 			"capture.pcap and key.log as a new session with `trafficdeck import --decoder tshark`")
 	}
+	viewer := install.Viewer()
+	if viewer == "" {
+		viewer = "tui"
+	}
 	return Config{
 		GatewayAddr:     s.str("GATEWAY_ADDR", "127.0.0.1:7331"),
 		DataRoot:        dataRoot,
@@ -206,7 +210,7 @@ func Load() Config {
 		LiveDecode:      s.boolean("GATEWAY_LIVE_DECODE", true),
 		TsharkVerify:    s.boolean("GATEWAY_TSHARK_VERIFY", false),
 		StartMCP:        s.boolean("GATEWAY_MCP", true),
-		Viewer:          s.str("GATEWAY_VIEWER", "tui"),
+		Viewer:          s.str("GATEWAY_VIEWER", viewer),
 		UpdateCheck:     s.boolean("GATEWAY_UPDATE_CHECK", true),
 		FingerprintsDir: s.str("TRAFFICDECK_FP_DIR", fpDir),
 		LogFile:         s.str("GATEWAY_LOG_FILE", logFile),

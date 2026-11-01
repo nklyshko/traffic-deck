@@ -7,8 +7,9 @@ value decoder, and capture control. It shows what the TUI shows, on one loopback
 GATEWAY_VIEWER=web trafficdeck        # starts the gateway, opens the browser
 ```
 
-To make it the default, set `GATEWAY_VIEWER = "web"` in `~/.traffic-deck/config.toml`. If a
-gateway is already running, the same command attaches to it.
+To make it the default, install with `make install VIEWER=web`, or set `GATEWAY_VIEWER = "web"`
+in `~/.traffic-deck/config.toml`, which also covers dev builds. If a gateway is already running,
+the same command attaches to it.
 
 **To stop it, press Ctrl-C in the terminal.** Closing the browser tab stops nothing, so a capture
 keeps running and you can reopen the URL. Ctrl-C ends the gateway too if this command started it,

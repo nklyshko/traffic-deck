@@ -34,6 +34,7 @@ type Info struct {
 	Remote    string `toml:"remote"`
 	Branch    string `toml:"branch"`
 	Date      string `toml:"date"`
+	Viewer    string `toml:"viewer"`
 }
 
 // exeDir is the directory of the real binary. Symlinks are resolved because macOS's
@@ -85,6 +86,16 @@ func Prefix() string { return current().prefix }
 func Read() (Info, error) {
 	s := current()
 	return s.info, s.err
+}
+
+// Viewer is the default foreground viewer chosen at install time, or "" for a dev build or an
+// install that made no choice.
+func Viewer() string {
+	info, err := Read()
+	if err != nil {
+		return ""
+	}
+	return info.Viewer
 }
 
 // Checkout is the checkout this dev binary sits in, or "" — always "" when installed, even

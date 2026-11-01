@@ -31,14 +31,19 @@ PKTAP_CMD   ?= $(if $(wildcard $(PKTAP_INSTALLED)),trafficdeck pktap,$(CURDIR)/c
 .PHONY: build web-ui run test vet gen clean help install install-pktap
 
 build: web-ui ## build the gateway and web viewer binaries
-	cd $(GATEWAY_DIR) && $(GO) build -o ../$(GATEWAY_BIN) ./cmd/gateway
-	cd $(WEB_DIR) && $(GO) build -o ../$(WEB_BIN) .
+	@echo "==> building $(GATEWAY_BIN) (a first build can take minutes)"
+	@cd $(GATEWAY_DIR) && $(GO) build -o ../$(GATEWAY_BIN) ./cmd/gateway
+	@echo "==> building $(WEB_BIN)"
+	@cd $(WEB_DIR) && $(GO) build -o ../$(WEB_BIN) .
+	@echo "==> done: ./$(GATEWAY_BIN) ./$(WEB_BIN)"
 
 # Node is needed only to change the UI: without it the binary embeds a page saying so, and
 # gateway work isn't blocked. `make install` is stricter, since a frozen stub would be silent.
 web-ui: ## build the SPA bundle embedded in the web viewer
 	@if command -v npm >/dev/null; then \
-		cd $(WEB_DIR)/ui && npm ci --silent && npm run --silent build; \
+		echo "==> installing web UI dependencies"; \
+		cd $(WEB_DIR)/ui && npm ci --silent && \
+		echo "==> building the web UI" && npm run --silent build; \
 	else \
 		echo "web-ui: npm not found, trafficdeck-web will serve a stub page" >&2; \
 	fi
@@ -60,8 +65,8 @@ gen: ## regenerate all stubs (Go + Python) after editing proto/
 clean: ## remove the built binaries
 	rm -f $(GATEWAY_BIN) $(WEB_BIN)
 
-# PREFIX, BINDIR, COMPONENTS and INSTALL_PYTHON (default 3.12.13) pass through the environment;
-# ALLOW_DIRTY=1 installs a tree with uncommitted changes and records that it did.
+# PREFIX, BINDIR, COMPONENTS, VIEWER and INSTALL_PYTHON (default 3.12.13) pass through the
+# environment; ALLOW_DIRTY=1 installs a tree with uncommitted changes and records that it did.
 install: ## freeze this tree into ~/.local/share/trafficdeck
 	./scripts/install.sh
 

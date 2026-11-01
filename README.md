@@ -78,6 +78,7 @@ Wireshark's ChmodBPF helper.
 `make install` again; `make build && ./trafficdeck` stays the dev build of its own worktree.
 
 - It refuses uncommitted changes; `ALLOW_DIRTY=1` installs them and records that it did.
+- `VIEWER=web` makes bare `trafficdeck` open the web viewer; reinstalls keep the choice.
 - `PREFIX`, `BINDIR` and `COMPONENTS` narrow where and what. To uninstall, delete the prefix and
   the link.
 - On macOS, after `make install-pktap`, `trafficdeck pktap` starts the per-process Chrome source
