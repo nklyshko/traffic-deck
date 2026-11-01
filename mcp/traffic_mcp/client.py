@@ -3,21 +3,13 @@
 Mostly read-only: ViewerService (sessions/flows/bodies/ws messages) plus ControlService's
 ListTags/ListGroups so name-based annotation filters resolve. The exceptions are the
 session-metadata writes and the capture-control calls at the bottom, which the MCP server
-only exposes when it is not in read-only mode. The generated stubs live in the sibling
-`gen/` tree (absolute `traffic.v1.*` imports).
+only exposes when it is not in read-only mode.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_GEN = Path(__file__).resolve().parent / "gen"
-if str(_GEN) not in sys.path:
-    sys.path.insert(0, str(_GEN))
-
-import grpc  # noqa: E402
-from traffic.v1 import (  # noqa: E402
+import grpc
+from traffic.v1 import (
     control_pb2,
     control_pb2_grpc,
     viewer_pb2,

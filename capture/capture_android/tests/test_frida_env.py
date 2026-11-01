@@ -37,6 +37,14 @@ def test_a_built_venv_is_not_rebuilt(prefix, monkeypatch):
     frida_env.ensure_frida("17.15.1")
 
 
+def test_a_build_installs_every_first_party_wheel(prefix, monkeypatch):
+    # --no-deps, so a wheel missing here only shows up as an import error at first use.
+    runs = []
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **_: runs.append(cmd))
+    frida_env.ensure_frida("17.15.1")
+    assert {"trafficdeck-proto", "trafficdeck-capture-sdk", "trafficdeck-capture-android"} <= set(runs[-1])
+
+
 def test_a_timed_out_caller_leaves_the_build_running_for_its_retry(prefix, monkeypatch):
     release = threading.Event()
     runs = []

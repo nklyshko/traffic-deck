@@ -1,21 +1,11 @@
-"""Async gRPC client for the gateway (ViewerService, ControlService, IngestService).
-
-The generated stubs live in the sibling `gen/` tree (absolute `traffic.v1.*`
-imports), so we put it on sys.path before importing them.
-"""
+"""Async gRPC client for the gateway (ViewerService, ControlService, IngestService)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import AsyncIterator
 
-_GEN = Path(__file__).resolve().parent / "gen"
-if str(_GEN) not in sys.path:
-    sys.path.insert(0, str(_GEN))
-
-import grpc  # noqa: E402
-from traffic.v1 import (  # noqa: E402
+import grpc
+from traffic.v1 import (
     control_pb2,
     control_pb2_grpc,
     ingest_pb2,
