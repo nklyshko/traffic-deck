@@ -7,9 +7,10 @@ Chrome's own `--ssl-key-log-file` is read on Android but aborts its NetworkServi
 So a browser is captured the other way round: terminate TLS in mitmproxy and point the
 browser at it.
 
-Chrome reads its flags from `/data/local/tmp/<name>-command-line` on a debuggable build (or
-with `chrome://flags#enable-command-line-on-non-rooted-devices` turned on), and that file
-an **unrooted** adb shell can write — /data/local/tmp belongs to the shell user. mitmproxy
+Chrome reads its flags from `/data/local/tmp/<name>-command-line` on a debuggable build or
+when it is the device's debug app, which is what makes this work on a production phone. An
+**unrooted** adb shell can do both: /data/local/tmp belongs to the shell user, and
+`am set-debug-app` is open to it. mitmproxy
 binds loopback only and the device reaches it over `adb reverse`, so no port is exposed to
 the network and the same flags work on an emulator and on a USB-attached phone.
 
@@ -44,6 +45,12 @@ from capture_sdk.shutdown import GracefulInterrupt
 _MITM_PROJECT = Path(__file__).resolve().parents[2] / "capture_mitmproxy"
 _MITM_ADDON = _MITM_PROJECT / "capture_mitmproxy" / "addon.py"
 _SESSION_GRACE = 120.0
+# How long a capture may go without one connection before it says the browser is not using
+# the proxy: the browser has been restarted by then, and loading any page connects at once.
+_NO_TRAFFIC_GRACE = 15.0
+# mitmproxy's per-connection log lines. They name the hosts visited, which the session
+# already records and the module log should not, and the first one proves the proxy is used.
+_CONNECTION_LOG = ("client connect", "client disconnect", "server connect", "server disconnect")
 
 # Browsers offered as targets. Chrome ships *preinstalled*, i.e. as a system app, so it
 # never shows up in `pm list packages -3` — the app picker's usual source — which is why
@@ -96,8 +103,37 @@ def chrome_flags(port: int) -> str:
     --disable-quic because a proxy only sees what goes through it: HTTP rides a CONNECT
     tunnel, and this keeps nothing from slipping out over UDP instead and leaving the
     capture quietly short.
+
+    --disable-fre and the two after it because a browser that has never been opened stops at
+    its welcome screen, which never loads the URL: on a fresh emulator that is the whole
+    capture gone.
     """
-    return f"chrome --proxy-server=127.0.0.1:{port} --ignore-certificate-errors --disable-quic"
+    return (f"chrome --proxy-server=127.0.0.1:{port} --ignore-certificate-errors --disable-quic"
+            " --disable-fre --no-first-run --no-default-browser-check")
+
+
+def normalize_url(url: str | None) -> str | None:
+    """Give a bare host the scheme `am start -d` needs: without one the VIEW intent names no
+    web page, and the browser may open without loading anything."""
+    if not url or "://" in url or url.startswith(("about:", "chrome:")):
+        return url
+    return f"https://{url}"
+
+
+def _set_debug_app(adb: AdbClient, package: str) -> str:
+    """Make `package` the debug app, the one way a production build reads its command-line
+    file, and return the setting it replaces for _restore_debug_app. Not checked: on a device
+    that refuses, a debuggable build still works and the no-traffic warning covers the rest."""
+    previous = adb.shell("settings get global debug_app", check=False).strip()
+    adb.shell(f"am set-debug-app --persistent {shlex.quote(package)}", check=False)
+    return previous
+
+
+def _restore_debug_app(adb: AdbClient, previous: str) -> None:
+    if previous and previous != "null":
+        adb.shell(f"am set-debug-app --persistent {shlex.quote(previous)}", check=False)
+    else:
+        adb.shell("am clear-debug-app", check=False)
 
 
 def run_proxy_capture(
@@ -118,14 +154,17 @@ def run_proxy_capture(
     port = port or free_port()
     remote = f"/data/local/tmp/{command_line_file(package)}"
     label = label or f"{package} (proxy)"
+    url = normalize_url(url)
+    traffic = threading.Event()
 
     mitm = _start_mitmdump(port, gateway, label, _metadata(adb, package, url), log)
     sid: str | None = None
     reversed_port = False
+    debug_app: str | None = None
     interrupt = GracefulInterrupt()
     with interrupt:
         try:
-            sid = _read_session(mitm)
+            sid = _read_session(mitm, traffic)
             log(f"session {sid}")
             if on_session is not None:
                 on_session(sid)  # let a supervisor learn the id while the capture runs
@@ -137,6 +176,7 @@ def run_proxy_capture(
             reversed_port = True
 
             adb.shell(f"echo {shlex.quote(chrome_flags(port))} > {remote} && chmod 644 {remote}")
+            debug_app = _set_debug_app(adb, package)
             # Chromium reads the file once, at process start, so the browser has to be
             # restarted — one already running would keep its unproxied network stack.
             adb.shell(f"am force-stop {shlex.quote(package)}", check=False)
@@ -146,11 +186,17 @@ def run_proxy_capture(
             log(f"capturing {package} through mitmproxy on 127.0.0.1:{port}"
                 + (f" (auto-stop in {duration:g}s)" if duration else " (Ctrl-C to stop)"))
             deadline = (time.monotonic() + duration) if duration else None
+            traffic_due: float | None = time.monotonic() + _NO_TRAFFIC_GRACE
             while mitm.poll() is None:
                 if deadline and time.monotonic() >= deadline:
                     break
                 if interrupt.stopping or (stop_event is not None and stop_event.is_set()):
                     break
+                if traffic_due and time.monotonic() >= traffic_due:
+                    traffic_due = None
+                    if not traffic.is_set():
+                        log(f"warning: no connection through the proxy after "
+                            f"{_NO_TRAFFIC_GRACE:g}s — {package} may not be using it")
                 time.sleep(0.3)
         except Exception as exc:  # noqa: BLE001 — surface it; the finally still cleans up
             log(f"capture error: {type(exc).__name__}: {exc}")
@@ -160,6 +206,8 @@ def run_proxy_capture(
             # launch, long after this capture, and a browser left running would be pointing
             # at a proxy that is about to die.
             adb.shell(f"rm -f {remote}", check=False)
+            if debug_app is not None:
+                _restore_debug_app(adb, debug_app)
             adb.shell(f"am force-stop {shlex.quote(package)}", check=False)
             if reversed_port:
                 adb.run("reverse", "--remove", f"tcp:{port}", check=False)
@@ -208,7 +256,8 @@ def _mitmdump_cmd() -> list[str]:
 def _start_mitmdump(port: int, gateway: str, label: str, metadata: str,
                     log: Callable[[str], None]) -> subprocess.Popen:
     cmd = [*_mitmdump_cmd(), "--mode", "regular",
-           "--listen-host", "127.0.0.1", "--listen-port", str(port)]
+           "--listen-host", "127.0.0.1", "--listen-port", str(port),
+           "--set", "flow_detail=0"]  # one line per flow would put every URL in the log
     env = dict(os.environ, GATEWAY_ADDR=gateway, CAPTURE_LABEL=label,
                CAPTURE_METADATA=metadata, PYTHONUNBUFFERED="1")
     log(f"starting mitmproxy on 127.0.0.1:{port}")
@@ -217,7 +266,7 @@ def _start_mitmdump(port: int, gateway: str, label: str, metadata: str,
                             text=True, bufsize=1, start_new_session=True)
 
 
-def _read_session(proc: subprocess.Popen) -> str:
+def _read_session(proc: subprocess.Popen, traffic: threading.Event) -> str:
     """Read mitmdump's output until its addon prints the session id, then keep draining so
     the pipe never fills."""
     # From a checkout mitmdump runs under `uv run`, whose cold start resolves and builds the environment
@@ -225,13 +274,16 @@ def _read_session(proc: subprocess.Popen) -> str:
     sid = read_session_id(proc, grace=_SESSION_GRACE)
     if sid is None:
         raise RuntimeError("mitmdump exited before opening a session (port taken? uv failed? gateway down?)")
-    threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+    threading.Thread(target=_drain, args=(proc, traffic), daemon=True).start()
     return sid
 
 
-def _drain(proc: subprocess.Popen) -> None:
+def _drain(proc: subprocess.Popen, traffic: threading.Event) -> None:
     for line in proc.stdout:
-        print(f"[mitm] {line.rstrip()}", flush=True)
+        if any(marker in line for marker in _CONNECTION_LOG):
+            traffic.set()
+        else:
+            print(f"[mitm] {line.rstrip()}", flush=True)
 
 
 def _stop_mitmdump(proc: subprocess.Popen) -> None:

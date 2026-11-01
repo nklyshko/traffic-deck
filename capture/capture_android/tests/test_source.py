@@ -16,7 +16,7 @@ from capture_sdk.proto import control_pb2 as ctl
 from capture_sdk.proto import source_pb2_grpc as sp_grpc
 
 
-def describe_provisioned(src, action="attach", extra=None):
+def describe_provisioned(src, action="attach:phone", extra=None):
     """Consent, then poll Describe until the (background) provisioning is done and it goes
     READY — mirroring how the viewer polls."""
     params = {"provision": action, **(extra or {})}
@@ -36,7 +36,7 @@ class FakeBackend:
         self.provisioned = 0
         self.provision_action = None
         self.show_window = None
-        self.options = options or [("attach", "Use the connected device")]
+        self.options = options or [("attach:phone", "Use the connected device")]
         self.packages = ["com.a", "com.b"]
         self.browsers = ["com.android.chrome"]
         self.started = []      # (package, label, params)
@@ -50,6 +50,9 @@ class FakeBackend:
         self.provisioned += 1
         self.provision_action = action
         self.show_window = show_window
+
+    def serves(self, action):
+        return action == self.provision_action
 
     def frida_versions(self):
         return ["16.7.19", "17.15.1"], "16.7.19"
@@ -86,20 +89,20 @@ def test_the_module_serves_two_named_sources():
 def test_describe_offers_provision_options_first():
     # No device chosen yet → the provision step, its choices from the backend (attach a
     # running device, or boot an emulator). Both sources ask the same question.
-    srcs = two_sources(FakeBackend(options=[("attach", "Use device"),
+    srcs = two_sources(FakeBackend(options=[("attach:phone", "Use device"),
                                             ("pixel", "Boot emulator: pixel")]))
     for src in srcs.values():
         d = src.describe({})
         assert d.readiness == ctl.READINESS_PROVISION_REQUIRED
         provision = next(p for p in d.params if p.key == "provision")
-        assert [c.value for c in provision.choices] == ["attach", "pixel"]
+        assert [c.value for c in provision.choices] == ["attach:phone", "pixel"]
 
 
 def test_the_window_option_comes_before_the_device_choice():
     """Order is load-bearing, not cosmetic: a viewer fills one param per re-describe, and
     answering `provision` is what starts the boot — so a flag asked after it would arrive
     too late to affect how the emulator comes up."""
-    srcs = two_sources(FakeBackend(options=[("attach", "Use device"),
+    srcs = two_sources(FakeBackend(options=[("attach:phone", "Use device"),
                                             ("pixel", "Boot emulator: pixel")]))
     d = srcs["android"].describe({})
     assert [p.key for p in d.params] == ["show_window", "provision"]
@@ -111,7 +114,7 @@ def test_the_window_option_comes_before_the_device_choice():
 def test_the_window_option_is_not_offered_when_nothing_can_be_booted():
     # Only a device the user already has running → there is no boot to influence, and its
     # window is theirs either way.
-    srcs = two_sources(FakeBackend(options=[("attach", "Use the connected device")]))
+    srcs = two_sources(FakeBackend(options=[("attach:phone", "Use the connected device")]))
     d = srcs["android"].describe({})
     assert [p.key for p in d.params] == ["provision"]
 
@@ -147,7 +150,7 @@ def test_app_source_offers_frida_and_packages():
     assert [c.value for c in d.params[1].choices] == ["com.a", "com.b"]
     assert b.provisioned == 1
 
-    srcs["android"].describe({"provision": "attach"})  # re-describe
+    srcs["android"].describe({"provision": "attach:phone"})  # re-describe
     assert b.provisioned == 1  # not re-provisioned — the resource is kept warm
 
 
@@ -173,7 +176,7 @@ def test_one_device_is_provisioned_for_both_sources():
     srcs = two_sources(b)
     describe_provisioned(srcs["android"])
 
-    d = srcs["android-browser"].describe({"provision": "attach"})
+    d = srcs["android-browser"].describe({"provision": "attach:phone"})
     assert d.readiness == ctl.READINESS_READY  # already up — no second provisioning step
     assert b.provisioned == 1
 
@@ -190,7 +193,7 @@ def test_provisioning_state_is_shared_so_both_report_it():
 
     b = SlowBackend()
     srcs = two_sources(b)
-    d = srcs["android"].describe({"provision": "attach"})
+    d = srcs["android"].describe({"provision": "attach:phone"})
     assert d.readiness == ctl.READINESS_PROVISION_REQUIRED
     assert list(d.params) == []           # nothing to answer — just working
     assert "Setting up" in d.message
@@ -238,7 +241,7 @@ def test_start_and_stop_through_the_served_harness():
     try:
         resp = stub.StartCapture(ctl.StartCaptureRequest(
             source="android-browser", label="run",
-            params={"provision": "attach", "package": "com.android.chrome"}))
+            params={"provision": "attach:phone", "package": "com.android.chrome"}))
         assert resp.session_id == "android-sess-1"
         assert b.started[0][0] == "com.android.chrome"
         assert b.started[0][2]["method"] == "proxy"
@@ -290,7 +293,7 @@ def test_a_backend_that_fails_before_opening_is_reported_at_once():
     src = two_sources(FailingBackend())["android"]
     t0 = time.monotonic()
     with pytest.raises(RuntimeError, match="com.missing is not installed"):
-        src.start_capture("run", {"provision": "attach", "package": "com.missing"})
+        src.start_capture("run", {"provision": "attach:phone", "package": "com.missing"})
     assert time.monotonic() - t0 < 5
 
 
@@ -310,7 +313,7 @@ def test_stop_capture_waits_for_the_session_to_close():
             torn_down.set()
 
     src = two_sources(SlowCloseBackend())["android"]
-    sid = src.start_capture("run", {"provision": "attach", "package": "com.a"})
+    sid = src.start_capture("run", {"provision": "attach:phone", "package": "com.a"})
     src._track(sid)  # the harness servicer does this on StartCapture; mirror it here
     assert src._status().state == ctl.SOURCE_STATE_CAPTURING
 
@@ -330,8 +333,37 @@ def test_release_tears_down_the_shared_device_once():
     srcs["android"].release()
     assert b.released == 1
     # Both sources see the device as gone, so either can provision it afresh.
-    assert srcs["android-browser"].describe({"provision": "attach"}).readiness == \
+    assert srcs["android-browser"].describe({"provision": "attach:phone"}).readiness == \
         ctl.READINESS_PROVISION_REQUIRED
+
+
+def test_choosing_another_device_replaces_the_warm_one():
+    b = FakeBackend()
+    src = two_sources(b)["android"]
+    describe_provisioned(src, action="attach:phone")
+
+    describe_provisioned(src, action="pixel")
+    assert b.released == 1
+    assert b.provision_action == "pixel"
+    assert b.provisioned == 2
+
+
+def test_another_device_is_refused_while_a_capture_runs_on_this_one():
+    b = FakeBackend()
+    srcs = two_sources(b)
+    describe_provisioned(srcs["android"], action="attach:phone")
+    sid = srcs["android"].start_capture("app", {"package": "com.a"})
+    srcs["android"]._track(sid)
+
+    try:
+        srcs["android-browser"].describe({"provision": "pixel"})
+    except RuntimeError as exc:
+        assert "stop it first" in str(exc)
+    else:
+        raise AssertionError("switched device under a running capture")
+    assert b.released == 0
+    srcs["android"].stop_capture(sid)
+    srcs["android"].session_ended(sid)
 
 
 def test_releasing_one_source_leaves_a_capture_on_the_other_alone():

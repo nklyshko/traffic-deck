@@ -6,7 +6,7 @@ only, and each capture runs as a subprocess under the frida version chosen for t
 interactive CLI does — client and frida-server versions must match, and frida 17 can't
 spawn on Android ≤ 11, so the version has to be per-device.
 
-Provisioning attaches to a running device, or boots/creates an emulator (the same
+Provisioning attaches to any running device, or boots/creates an emulator (the same
 emulator.Sdk the CLI uses, which is tested there). When we boot an emulator we own it, so
 ReleaseSource stops it; a device we merely attached to is left alone. This whole path needs
 a real device or emulator and is not exercised in CI.
@@ -23,7 +23,8 @@ from typing import Mapping
 from capture_android import frida_env, frida_versions
 from capture_android import chromeproxy
 from capture_android.adb import AdbClient
-from capture_android.emulator import DEFAULT_AVD, Sdk, parse_devices, quick_run
+from capture_android.emulator import DEFAULT_AVD, Device, Sdk, parse_devices, quick_run
+from capture_android.source import ATTACH
 from capture_sdk.sessionline import read_session_id
 
 _CREATE = "__create__"  # provision-choice value: create + boot a new emulator
@@ -37,6 +38,7 @@ class RealAndroidBackend:
     def __init__(self, gateway: str) -> None:
         self._gateway = gateway
         self._serial: str | None = None
+        self._action = ""  # the provision action that brought _serial up
         self._release = ""  # Android version, for the frida recommendation
         self.owns_resource = False  # set True when we boot an emulator ourselves
         self._sdk_inst: Sdk | None = None
@@ -46,28 +48,36 @@ class RealAndroidBackend:
             self._sdk_inst = Sdk()  # locates the Android SDK ($ANDROID_HOME / ~/Android/Sdk)
         return self._sdk_inst
 
-    def _running_serials(self) -> list[str]:
-        # adb only (no full SDK needed): serials in the "device" state.
+    def _running_devices(self) -> list[Device]:
+        # adb only (no full SDK needed): devices in the "device" state.
         adb = AdbClient().adb
         out = quick_run([adb, "devices", "-l"]).stdout
-        return [d.serial for d in parse_devices(out) if d.state == "device"]
+        return [d for d in parse_devices(out) if d.state == "device"]
 
     def provision_options(self) -> list[tuple[str, str]]:
-        running = self._running_serials()
-        if running:
-            return [("attach", f"Use the connected device ({running[0]})")]
-        # Nothing connected → offer the emulators to boot (needs the SDK).
-        avds = self._sdk().list_avds()
-        opts = [(a, f"Boot emulator: {a}") for a in avds]
+        running = self._running_devices()
+        opts = [(ATTACH + d.serial,
+                 f"Use running emulator: {d.serial}" if d.emulator
+                 else f"Use connected device: {d.serial}") for d in running]
+        try:
+            sdk = self._sdk()
+            avds = sdk.list_avds()
+        except RuntimeError:
+            if not opts:
+                raise
+            return opts  # adb without the SDK: enough for what is already connected
+        # An AVD runs once: booting it again fails on the lock its running emulator holds.
+        busy = {sdk.avd_name(d.serial) for d in running if d.emulator}
+        opts += [(a, f"Boot emulator: {a}") for a in avds if a not in busy]
         opts.append((_CREATE, "Create + boot a new emulator (~1GB on first run)"))
         return opts
 
     def provision(self, action: str, *, show_window: bool = False) -> None:
-        if action == "attach":
-            running = self._running_serials()
-            if not running:
-                raise RuntimeError("no connected device to attach to")
-            self._serial = running[0]
+        if action.startswith(ATTACH):
+            serial = action.removeprefix(ATTACH)
+            if serial not in [d.serial for d in self._running_devices()]:
+                raise RuntimeError(f"{serial} is no longer connected")
+            self._serial = serial
             self.owns_resource = False
         else:
             sdk = self._sdk()
@@ -81,11 +91,16 @@ class RealAndroidBackend:
             # Headless by default because a gateway-driven capture usually has nobody
             # watching — but an app that needs a tap (a login, a consent screen) is
             # unreachable without a window, so the viewer can ask for one.
+            already_running = sdk.emulator_serials()
             sdk.boot(avd, headless=not show_window)
-            self._serial = sdk.wait_for_boot()
+            self._serial = sdk.wait_for_boot(ignore=already_running)
             self.owns_resource = True  # we booted it → ReleaseSource stops it
+        self._action = action
         self._release = AdbClient(serial=self._serial).shell(
             "getprop", "ro.build.version.release").strip()
+
+    def serves(self, action: str) -> bool:
+        return action in (self._action, f"{ATTACH}{self._serial}")
 
     def frida_versions(self) -> tuple[list[str], str]:
         """(offered versions, recommended default) for the provisioned device."""
@@ -118,8 +133,8 @@ class RealAndroidBackend:
         # New session so the capture runs off the TUI's terminal. proc is the `uv run` wrapper
         # from a checkout, which forwards a single SIGINT (see _reap); installed, it is the
         # headless python itself.
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                text=True, start_new_session=True)
+        # stderr is inherited: the gateway keeps this process's in the module's log.
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, start_new_session=True)
         try:
             self._relay_session(proc, on_session)
             # Run until the capture exits on its own (duration) or a stop is requested.
@@ -131,10 +146,14 @@ class RealAndroidBackend:
     @staticmethod
     def _relay_session(proc, on_session) -> None:
         """Read the subprocess's stdout until it prints its session id (SESSION <id>), then
-        keep draining so its pipe never fills."""
+        keep passing it to the module's log, so its pipe never fills."""
         if (sid := read_session_id(proc, grace=_SESSION_GRACE)) is not None:
             on_session(sid)
-        threading.Thread(target=lambda: [None for _ in proc.stdout], daemon=True).start()
+        def relay() -> None:
+            for line in proc.stdout:
+                print(line, end="", file=sys.stderr, flush=True)
+
+        threading.Thread(target=relay, daemon=True).start()
 
     @staticmethod
     def _reap(proc) -> None:

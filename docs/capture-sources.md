@@ -197,8 +197,9 @@ sources are served by one module process over one connection, so picking the sec
 not provision a second emulator, and releasing either one leaves a capture running on the
 other alone. See [ADR-0010 §4a](adr/0010-supervisor-and-capture-modules.md).
 
-Either source first asks which device to capture on: a connected one to attach to, or an
-AVD to boot (or create). When there is an AVD to boot, the form also offers **"Show the
+Either source first asks which device to capture on: any connected device or running
+emulator to attach to, or an AVD to boot (or create), so a plugged-in phone does not hide
+the emulators. When there is an AVD to boot, the form also offers **"Show the
 emulator window"** — off by default, since a gateway-driven capture usually has nobody
 watching, but an app that needs a tap (a login, a consent screen, navigating to the
 interesting request) is unreachable without it. It is asked *before* the device choice
@@ -293,11 +294,13 @@ certificates for, every later browser launch.
 > (the system store needs root, the user store needs a trip through Settings), and it turns
 > off certificate checking for that browser run, which is why the browser is restarted
 > again on the way out. `--disable-quic` keeps traffic from leaving over UDP, which a
-> CONNECT proxy would never see.
+> CONNECT proxy would never see. `--disable-fre` and its two companions skip the welcome
+> screen of a never-opened browser, which would otherwise never load the URL.
 >
-> Needs `ro.debuggable=1` (emulators, `userdebug` builds) for the command-line file to be
-> read; on a production phone enable `chrome://flags#enable-command-line-on-non-rooted-devices`
-> once instead. Verified end-to-end on an emulator (Android 11, Chrome 91): decrypted
+> Chrome reads the command-line file only on a debuggable build or as the device's debug
+> app, so the capture sets `am set-debug-app` for its duration, which is what makes a
+> production phone work, and restores the previous value afterwards. A capture that sees no
+> connection within 15 seconds logs a warning to the Android module's log. Verified end-to-end on an emulator (Android 11, Chrome 91): decrypted
 > HTTPS flows in the gateway, session closed with its bodies searchable.
 
 ## F) Chrome, per-process (macOS, PKTAP)

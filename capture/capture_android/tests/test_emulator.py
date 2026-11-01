@@ -75,7 +75,7 @@ def test_system_ready_waits_for_package_manager(monkeypatch):
 
 def test_wait_for_boot_polls_until_ready(monkeypatch):
     sdk = _sdk(monkeypatch)
-    monkeypatch.setattr(Sdk, "_emulator_serial", lambda self: "emulator-5554")
+    monkeypatch.setattr(Sdk, "_emulator_serial", lambda self, ignore=(): "emulator-5554")
     seen = {"n": 0}
 
     def ready(self, serial):
@@ -95,7 +95,7 @@ def test_wait_for_boot_polls_until_ready(monkeypatch):
 
 def test_wait_for_boot_times_out(monkeypatch):
     sdk = _sdk(monkeypatch)
-    monkeypatch.setattr(Sdk, "_emulator_serial", lambda self: None)  # never appears
+    monkeypatch.setattr(Sdk, "_emulator_serial", lambda self, ignore=(): None)  # never appears
     monkeypatch.setattr(emulator.time, "sleep", lambda _s: None)
     ticks = iter([0.0, 100.0, 200.0, 300.0])
     monkeypatch.setattr(emulator.time, "monotonic", lambda: next(ticks))
@@ -148,3 +148,22 @@ def test_emulator_serial_ignores_real_devices(monkeypatch):
     monkeypatch.setattr(Sdk, "connected_devices", lambda self: [
         Device(serial="2ccc4268251d7ece", state="device", emulator=False)])
     assert sdk._emulator_serial() is None
+
+
+def test_wait_for_boot_skips_the_emulators_that_were_already_running(monkeypatch):
+    sdk = _sdk(monkeypatch)
+    monkeypatch.setattr(Sdk, "connected_devices", lambda self: [
+        Device(serial="emulator-5554", state="device", emulator=True),
+        Device(serial="emulator-5556", state="device", emulator=True),
+    ])
+    monkeypatch.setattr(Sdk, "_system_ready", lambda self, serial: True)
+    assert sdk.wait_for_boot(ignore={"emulator-5554"}) == "emulator-5556"
+
+
+def test_emulator_serials_include_one_still_booting(monkeypatch):
+    sdk = _sdk(monkeypatch)
+    monkeypatch.setattr(Sdk, "connected_devices", lambda self: [
+        Device(serial="2ccc4268251d7ece", state="device", emulator=False),
+        Device(serial="emulator-5554", state="offline", emulator=True),
+    ])
+    assert sdk.emulator_serials() == {"emulator-5554"}

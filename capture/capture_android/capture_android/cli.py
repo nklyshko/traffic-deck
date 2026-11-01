@@ -75,8 +75,9 @@ def pick_emulator(sdk: Sdk, store: Store, headless: bool = False) -> tuple[str, 
                 raise SystemExit("a system image is required")
         sdk.create_avd(name, DEFAULT_IMAGE)
     print(f"booting {name} …")
+    already_running = sdk.emulator_serials()
     sdk.boot(name, headless=headless)
-    serial = sdk.wait_for_boot()
+    serial = sdk.wait_for_boot(ignore=already_running)
     print(f"booted {serial}")
     return serial, name
 

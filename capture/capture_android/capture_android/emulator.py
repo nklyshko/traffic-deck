@@ -13,7 +13,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Collection
 
 from capture_android.adb import find_adb
 
@@ -149,7 +149,8 @@ class Sdk:
             args.append("-no-window")
         return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def wait_for_boot(self, serial: str | None = None, timeout: float = 240) -> str:
+    def wait_for_boot(self, serial: str | None = None, timeout: float = 240,
+                      ignore: Collection[str] = ()) -> str:
         """Wait for an emulator to come online and finish booting, then return its serial.
 
         Polls until the device is in `device` state and both `sys.boot_completed` and a
@@ -157,17 +158,24 @@ class Sdk:
         serving requests, so a `pm` query immediately after otherwise races and fails.
         Everything targets a resolved serial (no bare `adb wait-for-device`/`shell`), so
         it's unaffected by another attached device — those fail with 'more than one
-        device'."""
+        device'. `ignore` is the emulator_serials() from before the boot: without it an
+        emulator that was already running passes for the new one, and whoever owns the
+        boot later stops an emulator it never started."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            target = serial or self._emulator_serial()
+            target = serial or self._emulator_serial(ignore)
             if target and self._system_ready(target):
                 return target
             time.sleep(2)
         raise RuntimeError("emulator did not finish booting in time")
 
-    def _emulator_serial(self) -> str | None:
-        devs = [d for d in self.connected_devices() if d.emulator and d.state == "device"]
+    def emulator_serials(self) -> set[str]:
+        """Every emulator adb knows of, in any state: one still booting reads `offline`."""
+        return {d.serial for d in self.connected_devices() if d.emulator}
+
+    def _emulator_serial(self, ignore: Collection[str] = ()) -> str | None:
+        devs = [d for d in self.connected_devices()
+                if d.emulator and d.state == "device" and d.serial not in ignore]
         return devs[0].serial if devs else None
 
     def is_running(self, serial: str) -> bool:

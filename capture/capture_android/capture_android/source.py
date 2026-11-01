@@ -31,10 +31,11 @@ from typing import Mapping, Protocol
 from capture_sdk import source
 from capture_sdk.proto import control_pb2 as ctl
 
-# The one provision action that boots nothing: a device the user already has running is
-# attached to as it is. Shared with RealAndroidBackend, which branches on the same value —
-# so the window option is offered only when there is actually something to boot.
-_ATTACH = "attach"
+# Prefix of the provision actions that boot nothing: a device the user already has running
+# is attached to as it is, named by the serial after the prefix. Shared with
+# RealAndroidBackend, which branches on the same value — so the window option is offered
+# only when there is actually something to boot. AVD names cannot contain a colon.
+ATTACH = "attach:"
 
 
 class AndroidBackend(Protocol):
@@ -53,6 +54,11 @@ class AndroidBackend(Protocol):
         by name, or create+boot one. Blocking; booting can take tens of seconds.
         show_window boots the emulator with a window; ignored when attaching to a device the
         user already has running, which is theirs as it is."""
+        ...
+
+    def serves(self, action: str) -> bool:
+        """Whether the provisioned device is already what `action` asks for, however it is
+        named: an emulator booted from its AVD is offered as a running emulator afterwards."""
 
     def frida_versions(self) -> tuple[list[str], str]:
         """(offered frida versions, recommended default) for the connected device — frida
@@ -103,7 +109,7 @@ class _Device:
         what's connected (attach vs boot an AVD)."""
         options = self.backend.provision_options()
         params = []
-        if any(value != _ATTACH for value, _ in options):
+        if any(not value.startswith(ATTACH) for value, _ in options):
             # Offered *before* the device choice, and that order is load-bearing: a viewer
             # fills one param per re-describe, and answering `provision` is what starts the
             # boot — anything asked after it would arrive too late to affect how it boots.
@@ -147,6 +153,13 @@ class _Device:
     def busy_apart_from(self, src: source.CaptureSource) -> bool:
         """Whether any *other* source on this device still has a capture running."""
         return any(s._status().active_sessions for s in self._sources if s is not src)
+
+    def switch_away(self, src: source.CaptureSource) -> None:
+        """Give up the warm device for a different choice. Without this the new choice would
+        be ignored and the capture would run on the old device."""
+        if any(s._status().active_sessions for s in self._sources):
+            raise RuntimeError("a capture is running on this device — stop it first")
+        self.release(src)
 
     def release(self, src: source.CaptureSource) -> None:
         if self.busy_apart_from(src):
@@ -200,6 +213,8 @@ class _AndroidSource(source.CaptureSource):
     def describe(self, params: Mapping[str, str]) -> ctl.SourceDescriptor:
         if not params.get("provision"):
             return self._device.choice_descriptor()
+        if self._device.provisioned and not self._backend.serves(params["provision"]):
+            self._device.switch_away(self)
         if not self._device.provisioned:
             return self._device.start_provisioning(
                 params["provision"], show_window=params.get("show_window") == "true")
