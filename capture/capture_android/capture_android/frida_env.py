@@ -53,7 +53,8 @@ def _build(prefix: Path, version: str, log: Callable[[str], None]) -> None:
             ["uv", "pip", "install", "--python", python,
              "-r", str(prefix / "requirements" / "capture_android.txt"), f"frida=={version}"],
             ["uv", "pip", "install", "--python", python, "--no-deps", "--no-index",
-             "--find-links", wheels, "trafficdeck-capture-sdk", "trafficdeck-capture-android"],
+             "--find-links", wheels, "trafficdeck-proto", "trafficdeck-capture-sdk",
+             "trafficdeck-capture-android"],
         ):
             subprocess.run(cmd, check=True, capture_output=True, text=True,
                            stdin=subprocess.DEVNULL)

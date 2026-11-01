@@ -170,6 +170,7 @@ dependencies = [
     { name = "grpcio" },
     { name = "protobuf" },
     { name = "questionary" },
+    { name = "trafficdeck-proto" },
 ]
 
 [package.metadata]
@@ -177,6 +178,22 @@ requires-dist = [
     { name = "grpcio", specifier = ">=1.76" },
     { name = "protobuf", specifier = ">=5.29" },
     { name = "questionary", specifier = ">=2" },
+    { name = "trafficdeck-proto", editable = "../../proto/python" },
+]
+
+[[package]]
+name = "trafficdeck-proto"
+version = "0.0.0"
+source = { editable = "../../proto/python" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "protobuf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "grpcio", specifier = ">=1.76" },
+    { name = "protobuf", specifier = ">=5.29" },
 ]
 
 [[package]]

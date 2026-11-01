@@ -36,6 +36,7 @@ merge="$(git config "branch.$branch.merge" || true)"
 project_dir() {
   case "$1" in
     capture_*) echo "capture/$1" ;;
+    proto) echo "proto/python" ;;
     *) echo "$1" ;;
   esac
 }
@@ -52,21 +53,22 @@ git ls-files -z -co --exclude-standard | while IFS= read -r -d '' f; do
 done
 
 mkdir -p "$stage/out/wheels" "$stage/out/requirements" "$stage/out/bin"
-# Every capture app needs the SDK, so it isn't something a filter can leave out.
-for c in capture_sdk $COMPONENTS; do
+# Every component needs the stubs and every capture app the SDK, so a filter can't leave
+# them out.
+for c in proto capture_sdk $COMPONENTS; do
   dir="$stage/src/$(project_dir "$c")"
   [[ -d "$dir" ]] || die "unknown component: $c"
   sed -i.orig "s/^version = \"0\.0\.0\"$/version = \"$version\"/" "$dir/pyproject.toml"
   rm "$dir/pyproject.toml.orig"
 done
-for c in capture_sdk $COMPONENTS; do
+for c in proto capture_sdk $COMPONENTS; do
   dir="$stage/src/$(project_dir "$c")"
   echo "building $c"
   uv build --quiet --wheel "$dir" --out-dir "$stage/out/wheels"
-  # --no-emit-package: the SDK is a first-party wheel, and the lock names it by a path that
+  # --no-emit-package: these are first-party wheels, and the lock names them by a path that
   # only exists in a checkout.
   uv export --quiet --frozen --no-dev --no-emit-project \
-    --no-emit-package trafficdeck-capture-sdk --no-header \
+    --no-emit-package trafficdeck-capture-sdk --no-emit-package trafficdeck-proto --no-header \
     --project "$dir" -o "$stage/out/requirements/$c.txt" >/dev/null
 done
 (cd gateway && go build -o "$stage/out/bin/trafficdeck" ./cmd/gateway)
@@ -80,7 +82,7 @@ for c in $COMPONENTS; do
   echo "installing $c"
   uv venv --quiet --python "$PYTHON_VERSION" "$env"
   uv pip install --quiet --python "$env/bin/python" -r "$PREFIX/requirements/$c.txt"
-  pkgs=("trafficdeck-${c//_/-}")
+  pkgs=("trafficdeck-${c//_/-}" trafficdeck-proto)
   [[ "$c" = capture_* ]] && pkgs+=(trafficdeck-capture-sdk)
   # --no-index, or a same-named package on PyPI could stand in for a first-party wheel.
   uv pip install --quiet --python "$env/bin/python" --no-deps --no-index \

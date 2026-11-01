@@ -1,7 +1,8 @@
 # 0008 — Capture tools are independent apps over a shared SDK
 
 Status: accepted. The editable path dependency is the dev setup; an installed copy builds wheels
-into per-component venvs ([0017](0017-frozen-install.md)).
+into per-component venvs ([0017](0017-frozen-install.md)). The proto stubs have since moved out of
+`capture_sdk` into `trafficdeck-proto`, which the TUI and MCP server share with it.
 
 ## Context
 
@@ -16,7 +17,7 @@ Split capture into independent projects sharing a light `capture_sdk` (proto
 stubs, the upload-streaming helper, interactive prompts) — tool-specific code (e.g.
 Chrome/dumpcap discovery) stays in the owning app:
 
-- `capture_sdk` (deps: `grpcio`, `protobuf`, `questionary`) — the shared library.
+- `capture_sdk` (deps: `trafficdeck-proto`, `grpcio`, `protobuf`, `questionary`) — the shared library.
 - `capture_chrome`, `capture_mitmproxy`, `capture_android` — one app each, depending on
   `capture_sdk` via an editable **path dependency** and adding only its own heavy deps.
 

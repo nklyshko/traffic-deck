@@ -36,6 +36,10 @@ installed with `--no-index`. `--find-links` alone would resolve to whatever is n
 day, and two installs of one commit could differ. A version is `0.0.0+g<sha>`, because a repo
 with no tags makes `git describe` return a bare hash, which is not a valid Python version.
 
+The Python stubs are one package, `trafficdeck-proto` (`proto/python`), a dependency of the TUI,
+the MCP server and `capture_sdk`. It is separate from the SDK so that neither client takes on a
+capture library to reach the contract, and it is a first-party wheel like the SDK.
+
 A dirty tree is refused unless `ALLOW_DIRTY=1`, which is recorded and shown by
 `trafficdeck version`: "frozen" means nothing if the recorded commit does not describe the code.
 

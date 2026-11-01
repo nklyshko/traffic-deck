@@ -6,12 +6,15 @@ requires-python = ">=3.12"
 dependencies = [
     "mcp>=1.2",
     "grpcio>=1.76",
-    "grpcio-tools>=1.76",
     "protobuf>=5.29",
+    "trafficdeck-proto",
 ]
 
 [project.scripts]
 trafficdeck-mcp = "traffic_mcp.server:main"
+
+[tool.uv.sources]
+trafficdeck-proto = { path = "../proto/python", editable = true }
 
 [dependency-groups]
 dev = ["pytest>=8"]
