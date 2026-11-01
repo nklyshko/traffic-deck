@@ -1,0 +1,128 @@
+@import 'tailwindcss';
+@import './tokens.css';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-*: initial;
+  --color-chrome: var(--chrome);
+  --color-well: var(--well);
+  --color-app: var(--app);
+  --color-panel: var(--panel);
+  --color-head: var(--header);
+  --color-raised: var(--raised);
+  --color-toast: var(--toast);
+  --color-line: var(--line);
+  --color-line-faint: var(--line-faint);
+  --color-edge: var(--border);
+  --color-edge-strong: var(--border-strong);
+  --color-edge-input: var(--border-input);
+  --color-edge-card: var(--border-card);
+  --color-edge-check: var(--border-check);
+  --color-sel: var(--selected-fill);
+  --color-hover: var(--hover-fill);
+  --color-rowhover: var(--row-hover);
+  --color-ink: var(--text);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-dim: var(--dim);
+  --color-ghost: var(--ghost);
+  --color-white: var(--white);
+  --color-onsolid: var(--on-solid);
+  --color-seltext: var(--selected-text);
+  --color-accent: var(--accent);
+  --color-primary: var(--primary);
+  --color-green: var(--green);
+  --color-green-fg: var(--green-fg);
+  --color-blue: var(--blue);
+  --color-blue-fg: var(--blue-fg);
+  --color-amber: var(--amber);
+  --color-amber-fg: var(--amber-fg);
+  --color-red: var(--red);
+  --color-red-fg: var(--red-fg);
+  --color-purple: var(--purple);
+  --color-purple-fg: var(--purple-fg);
+  --color-cyan: var(--cyan);
+  --color-cyan-fg: var(--cyan-fg);
+  --color-orange: var(--orange);
+  --color-orange-fg: var(--orange-fg);
+  --color-pink: var(--pink);
+  --color-pink-fg: var(--pink-fg);
+  --color-grey: var(--grey);
+  --color-grey-fg: var(--grey-fg);
+  --font-sans: 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--app);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+
+/* A tint of a tone: one rule per use rather than a utility per alpha. */
+.tint { --t: var(--grey); --a: 15%; background: color-mix(in srgb, var(--t) var(--a), transparent); }
+.tone-green { --t: var(--green); color: var(--green-fg); }
+.tone-blue { --t: var(--blue); color: var(--blue-fg); }
+.tone-amber { --t: var(--amber); color: var(--amber-fg); }
+.tone-red { --t: var(--red); color: var(--red-fg); }
+.tone-purple { --t: var(--purple); color: var(--purple-fg); }
+.tone-cyan { --t: var(--cyan); color: var(--cyan-fg); }
+.tone-orange { --t: var(--orange); color: var(--orange-fg); }
+.tone-pink { --t: var(--pink); color: var(--pink-fg); }
+.tone-grey { --t: var(--grey); color: var(--grey-fg); }
+.mark-red { --t: var(--red); }
+.mark-yellow { --t: var(--amber); }
+.mark-green { --t: var(--green); }
+.mark-blue { --t: var(--blue); }
+.mark-magenta { --t: var(--pink); }
+.mark-cyan { --t: var(--cyan); }
+
+select.td-select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--faint) 50%), linear-gradient(135deg, var(--faint) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 50%, calc(100% - 9px) 50%;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
+select.td-select option { background: var(--raised); color: var(--text); }
+
+[data-tooltip] { position: relative; }
+[data-tooltip]:hover { z-index: 50; }
+[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: 280px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--toast);
+  color: var(--body);
+  font: 400 11px/1.4 var(--font-sans);
+  white-space: normal;
+  pointer-events: none;
+}
+
+@keyframes td-flash { from { box-shadow: inset 0 0 0 100px color-mix(in srgb, var(--accent) 16%, transparent); } to { box-shadow: inset 0 0 0 100px transparent; } }
+.row-new { animation: td-flash 1.8s ease-out; }
+@keyframes td-pulse { 50% { opacity: 0.4; } }
+.pulse { animation: td-pulse 1.6s ease-in-out infinite; }
+@keyframes td-spin { to { transform: rotate(360deg); } }
+.spin { animation: td-spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .row-new, .pulse, .spin { animation: none; } }

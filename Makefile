@@ -3,9 +3,9 @@
 # committed, so `make build` needs only the Go toolchain — regenerate with `make gen`
 # after editing proto/.
 #
-#   make            build the gateway -> ./trafficdeck
+#   make            build the gateway and web viewer -> ./trafficdeck ./trafficdeck-web
 #   make run        build + run the gateway server
-#   make test       run gateway tests
+#   make test       run gateway and web viewer tests
 #   make gen        regenerate all stubs (Go + Python) via mise
 #   make clean      remove the built binary
 #
@@ -15,6 +15,8 @@
 GO          ?= go
 GATEWAY_DIR := gateway
 GATEWAY_BIN := trafficdeck
+WEB_DIR     := web
+WEB_BIN     := trafficdeck-web
 
 # Where the gateway looks for plugin manifests — mirrors config.Home().
 TD_HOME     ?= $(if $(TRAFFIC_DECK_HOME),$(TRAFFIC_DECK_HOME),$(HOME)/.traffic-deck)
@@ -26,25 +28,37 @@ PKTAP_ADDR  ?= 127.0.0.1:7071
 PKTAP_INSTALLED := $(or $(PREFIX),$(HOME)/.local/share/trafficdeck)/libexec/trafficdeck-capture-pktap
 PKTAP_CMD   ?= $(if $(wildcard $(PKTAP_INSTALLED)),trafficdeck pktap,$(CURDIR)/capture/capture-pktap.sh)
 
-.PHONY: build run test vet gen clean help install install-pktap
+.PHONY: build web-ui run test vet gen clean help install install-pktap
 
-build: ## build the gateway binary -> ./trafficdeck
+build: web-ui ## build the gateway and web viewer binaries
 	cd $(GATEWAY_DIR) && $(GO) build -o ../$(GATEWAY_BIN) ./cmd/gateway
+	cd $(WEB_DIR) && $(GO) build -o ../$(WEB_BIN) .
+
+# Node is needed only to change the UI: without it the binary embeds a page saying so, and
+# gateway work isn't blocked. `make install` is stricter, since a frozen stub would be silent.
+web-ui: ## build the SPA bundle embedded in the web viewer
+	@if command -v npm >/dev/null; then \
+		cd $(WEB_DIR)/ui && npm ci --silent && npm run --silent build; \
+	else \
+		echo "web-ui: npm not found, trafficdeck-web will serve a stub page" >&2; \
+	fi
 
 run: build ## build, then run the gateway server
 	./$(GATEWAY_BIN) serve
 
-test: ## run the gateway test suite
+test: ## run the gateway and web viewer test suites
 	cd $(GATEWAY_DIR) && $(GO) test ./...
+	cd $(WEB_DIR) && $(GO) test ./...
 
-vet: ## go vet the gateway
+vet: ## go vet the gateway and web viewer
 	cd $(GATEWAY_DIR) && $(GO) vet ./...
+	cd $(WEB_DIR) && $(GO) vet ./...
 
 gen: ## regenerate all stubs (Go + Python) after editing proto/
 	mise run gen
 
-clean: ## remove the built binary
-	rm -f $(GATEWAY_BIN)
+clean: ## remove the built binaries
+	rm -f $(GATEWAY_BIN) $(WEB_BIN)
 
 # PREFIX, BINDIR, COMPONENTS and INSTALL_PYTHON (default 3.12.13) pass through the environment;
 # ALLOW_DIRTY=1 installs a tree with uncommitted changes and records that it did.

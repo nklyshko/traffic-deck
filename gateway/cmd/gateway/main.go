@@ -201,7 +201,7 @@ func runPktap(args []string) {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|version|pktap|import|redecode|export|import-session] [flags]")
 	fmt.Fprintln(os.Stderr, "  (no command)  run the gateway and the TUI together")
-	fmt.Fprintln(os.Stderr, "                (GATEWAY_VIEWER=tui|<module>|<command>|none picks the foreground viewer)")
+	fmt.Fprintln(os.Stderr, "                (GATEWAY_VIEWER=tui|web|<module>|<command>|none picks the foreground viewer)")
 	os.Exit(2)
 }
 
@@ -457,6 +457,7 @@ type viewer struct {
 // viewer — keep the gateway up until Ctrl-C".
 //
 //	tui                 the built-in TUI (default)
+//	web                 the browser viewer, trafficdeck-web
 //	<module>[:<process>] a module's `viewer = true` process (docs/modules.md); the manifest
 //	                    carries its command, cwd, env, url and whether it owns the screen
 //	<command>           run this, e.g. `myviewer --flag`; assumed to own the screen
@@ -471,6 +472,13 @@ func resolveViewer(name string) (*viewer, error) {
 			return nil, errors.New("cannot find the TUI; run `trafficdeck serve` and attach it separately")
 		}
 		return &viewer{label: "tui", argv: argv, screen: true}, nil
+	case strings.EqualFold(name, "web"):
+		argv := resolveWeb()
+		if argv == nil {
+			return nil, errors.New("cannot find the web viewer; run `make build`, or `make install` for an installed copy")
+		}
+		// screen false: it prints a banner and shares the terminal with the gateway's log.
+		return &viewer{label: "web", argv: argv, env: webViewerEnv()}, nil
 	}
 
 	viewers := sourcemgr.Viewers(sourcemgr.PluginsDir())
@@ -503,7 +511,7 @@ func resolveViewer(name string) (*viewer, error) {
 // viewerChoices names what GATEWAY_VIEWER accepts here, installed modules included — the
 // answer to a typo is the list, not just "not found".
 func viewerChoices(viewers []sourcemgr.ViewerSpec) string {
-	choices := []string{`"tui"`, `"none"`, "a command to run"}
+	choices := []string{`"tui"`, `"web"`, `"none"`, "a command to run"}
 	for _, v := range viewers {
 		choices = append(choices, strconv.Quote(v.Key()))
 	}
@@ -538,6 +546,32 @@ func resolveTUI() []string {
 		}
 		return []string{uv, "run", "--directory", filepath.Join(root, "tui"), "python", "-m", "traffic_viewer.app"}
 	})
+}
+
+// resolveWeb finds trafficdeck-web. In a checkout that is the binary `make build` leaves at
+// the root: a stale one is possible, but building here would hide compile errors behind a
+// slow start.
+func resolveWeb() []string {
+	return install.Resolve("TRAFFICDECK_WEB", "trafficdeck-web", func() []string {
+		root := install.Checkout()
+		if root == "" {
+			return nil
+		}
+		bin := filepath.Join(root, "trafficdeck-web")
+		if _, err := os.Stat(bin); err != nil {
+			return nil
+		}
+		return []string{bin}
+	})
+}
+
+// webViewerEnv opens the browser for the one-command path, where nobody is looking for a URL
+// to copy. An explicit setting wins, so a headless box can say 0.
+func webViewerEnv() map[string]string {
+	if _, set := os.LookupEnv("TRAFFICDECK_WEB_OPEN"); set {
+		return nil
+	}
+	return map[string]string{"TRAFFICDECK_WEB_OPEN": "1"}
 }
 
 func importCapture(args []string) {

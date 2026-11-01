@@ -44,6 +44,9 @@ traffic unless you want one.
 - **TUI** — session list → flow table → detail, body pretty-printing, cross-session
   compare, curl/raw export, annotations (tags, favorites, comments, color marks, groups),
   and a jump straight into Wireshark on the packets behind a request.
+- **Web viewer** — the same sessions in a [browser](docs/web.md) with `GATEWAY_VIEWER=web`:
+  live tables at any session size, WebSocket timelines, A/B compare and a value decoder, on
+  one loopback port.
 - **Server-side filtering** — a [mitmproxy-style filter DSL](docs/filters.md) evaluated in
   the gateway, including header and body terms, so the viewer holds a page rather than a
   session and a 273k-flow capture opens instantly.
@@ -108,6 +111,7 @@ tui/run.sh     # the TUI, GATEWAY_ADDR overridable
 |---|---|
 | [Capture sources](docs/capture-sources.md) | pcap import, Chrome, mitmproxy, Android — flags and prerequisites |
 | [The TUI](docs/tui.md) | keys by screen, the windowed flow table, HTTP/2 columns, Wireshark |
+| [The web viewer](docs/web.md) | running it in a browser, stopping it, its settings |
 | [Filter syntax](docs/filters.md) | the filter DSL: terms, cost, RE2 |
 | [MCP server](docs/mcp.md) | tools, paging, running it |
 | [Configuration](docs/configuration.md) | every environment variable |
@@ -125,6 +129,7 @@ tui/run.sh     # the TUI, GATEWAY_ADDR overridable
 | [`gateway/`](gateway/) | Go service: ingest, decode, filter, per-session SQLite store, serve |
 | [`capture/`](capture/) | Independent Python capture apps over a shared `capture_sdk` |
 | [`tui/`](tui/) | Textual TUI |
+| [`web/`](web/) | Browser viewer: a Go bridge to the gateway and an embedded React SPA |
 | [`mcp/`](mcp/) | MCP server exposing recorded sessions to LLM/agent clients |
 
 The generated gRPC stubs are committed, so a clone builds without codegen; run

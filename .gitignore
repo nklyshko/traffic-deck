@@ -9,6 +9,12 @@
 # Go build artifacts
 /gateway/gateway
 /trafficdeck
+/trafficdeck-web
+
+# Web UI build output; .gitkeep is what lets the bridge compile without a bundle
+/web/dist/*
+!/web/dist/.gitkeep
+node_modules/
 
 # Python
 __pycache__/

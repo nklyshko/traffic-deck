@@ -38,6 +38,10 @@ COMPONENTS="${COMPONENTS:-$DEFAULT_COMPONENTS}"
 # recent enough to know this release.
 INSTALL_PYTHON="${INSTALL_PYTHON:-3.12.13}"
 
+# Checked first: `make build` tolerates a missing node with a stub page, but a frozen copy
+# with a stub would only be discovered when someone opens it.
+command -v npm >/dev/null || die "npm is needed to build the web UI (see mise.toml)"
+
 cd "$ROOT"
 dirty=false
 if [[ -n "$(git status --porcelain)" ]]; then
@@ -123,6 +127,10 @@ for c in $builds; do
     --project "$dir" -o "$stage/out/requirements/$c.txt" >/dev/null
 done
 (cd gateway && go build -o "$stage/out/bin/trafficdeck" ./cmd/gateway)
+echo "building web"
+mkdir -p "$stage/out/libexec"
+(cd "$stage/src/web/ui" && npm ci --silent && npm run --silent build)
+(cd "$stage/src/web" && go build -o "$stage/out/libexec/trafficdeck-web" .)
 
 # The interpreter lives in the prefix too, or every venv would point at whichever Python was
 # on PATH (mise's, Homebrew's), and removing that would break the install. uv's builds run

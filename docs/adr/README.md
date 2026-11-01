@@ -21,3 +21,4 @@ reasoning at the time. Format: Context → Decision → Consequences.
 | [0014](0014-update-checks-read-git.md) | Update checks read git; a module declares a source directory, not a version *(installed comparison in 0017)* |
 | [0015](0015-agents-drive-capture-over-mcp.md) | An agent starts and stops captures through the MCP server *(deadline rationale narrowed by 0017)* |
 | [0017](0017-frozen-install.md) | A frozen install lives in a self-contained prefix; the running binary picks its code |
+| [0018](0018-web-viewer-bridge.md) | The web viewer is a separate binary that bridges HTTP to the gateway's gRPC |

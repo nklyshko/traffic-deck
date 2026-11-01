@@ -3,6 +3,7 @@
 
 [tools]
 go = "1.25"
+node = "24"
 python = "3.12"
 uv = "latest"
 buf = "1"
@@ -40,6 +41,10 @@ run = "go build ./..."
 description = "Run the gateway tests"
 dir = "gateway"
 run = "go test ./..."
+
+[tasks."web:test"]
+description = "Run the web viewer's bridge and UI tests"
+run = ["cd web && go test ./...", "cd web/ui && npm test"]
 
 [tasks."tui:test"]
 description = "Run the tui tests"
