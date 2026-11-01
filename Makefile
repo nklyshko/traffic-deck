@@ -24,7 +24,7 @@ PKTAP_ADDR  ?= 127.0.0.1:7071
 # How to start that source: the installed copy when there is one, so enrolling doesn't tie an
 # installed gateway to this checkout.
 PKTAP_INSTALLED := $(or $(PREFIX),$(HOME)/.local/share/trafficdeck)/libexec/trafficdeck-capture-pktap
-PKTAP_CMD   ?= $(if $(wildcard $(PKTAP_INSTALLED)),sudo $(PKTAP_INSTALLED) serve,$(CURDIR)/capture/capture-pktap.sh)
+PKTAP_CMD   ?= $(if $(wildcard $(PKTAP_INSTALLED)),sudo $(PKTAP_INSTALLED) serve --control $(PKTAP_ADDR),$(CURDIR)/capture/capture-pktap.sh)
 
 .PHONY: build run test vet gen clean help install install-pktap
 
