@@ -107,6 +107,7 @@ type liveSession struct {
 	dirty    map[string]struct{}
 	pending  map[string]struct{}
 	stored   map[string]storedBody
+	inBundle map[string]struct{} // guarded by mu; see markInBundle
 	flushErr error
 }
 
@@ -673,6 +674,18 @@ func contentType(hs []decode.Header) string {
 	return ""
 }
 
+// markInBundle records a flow written straight to the store, as PushFlows does before it
+// publishes. Without this a passive session's whole history counts as tail: the caller can
+// only dedupe against the page in hand, so `matched` came back roughly doubled.
+func (ls *liveSession) markInBundle(id string) {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	if ls.inBundle == nil {
+		ls.inBundle = map[string]struct{}{}
+	}
+	ls.inBundle[id] = struct{}{}
+}
+
 // unflushedFlows returns clones of the flows the flusher has not written to the bundle
 // yet — the tail a stored query must merge, since the bundle does not have them
 // (ADR-0012 §8). A session with no flusher has no such tail to distinguish, so every live
@@ -682,6 +695,9 @@ func (ls *liveSession) unflushedFlows() []*trafficv1.Flow {
 	defer ls.mu.Unlock()
 	out := make([]*trafficv1.Flow, 0, 8)
 	for _, id := range ls.order {
+		if _, ok := ls.inBundle[id]; ok {
+			continue
+		}
 		if ls.sink != nil {
 			if _, written := ls.pending[id]; written {
 				continue

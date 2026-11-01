@@ -424,6 +424,7 @@ func (i *Ingest) PushFlows(stream grpc.ClientStreamingServer[trafficv1.FlowBatch
 			return status.Errorf(codes.Internal, "insert flows: %v", err)
 		}
 		for _, pf := range flows {
+			ls.markInBundle(pf.GetId())
 			ls.publish(pf, true)
 			i.recordWSMeta(pf)
 		}

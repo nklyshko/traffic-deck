@@ -450,3 +450,31 @@ func TestQueryFlowsTailCarriesNoBodies(t *testing.T) {
 		t.Fatalf("content-type dropped: %q", got.GetResponseBody().GetContentType())
 	}
 }
+
+// TestQueryFlowsCountsPushedFlowsOnce: PushFlows stores a flow before publishing it, so a
+// flow outside the page in hand is not tail, and must not be counted a second time.
+func TestQueryFlowsCountsPushedFlowsOnce(t *testing.T) {
+	ctx := context.Background()
+	st, sid := queryTestStore(t)
+	defer st.Close()
+	hub := newLiveHub()
+	ls := hub.startPassive(sid)
+	for i, id := range []string{"f1", "f2", "f3"} {
+		ts := int64(i + 1)
+		if _, err := st.InsertFlows(ctx, sid, "a1", []*decode.Flow{
+			{ID: id, Method: "GET", Authority: "api.example.com", Path: "/", Status: 200, TSUnixMicros: ts},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		ls.markInBundle(id)
+		ls.publish(&trafficv1.Flow{Id: id, Method: "GET", Authority: "api.example.com", Path: "/",
+			Status: 200, TsUnixMicros: ts}, true)
+	}
+	page, err := NewViewer(st, hub).QueryFlows(ctx, &trafficv1.QueryFlowsRequest{SessionId: sid, Limit: 50, Last: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.GetMatched() != 3 || len(page.GetFlows()) != 3 {
+		t.Fatalf("matched = %d, flows = %d, want 3 of each", page.GetMatched(), len(page.GetFlows()))
+	}
+}
