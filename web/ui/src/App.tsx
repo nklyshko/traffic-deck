@@ -50,6 +50,15 @@ export function App() {
     if (active === id) setActive(next[Math.min(at, next.length - 1)]?.id ?? null)
   }
 
+  // Here, not on the Sessions screen: Stop can fail in a workspace too.
+  const [stuck, setStuck] = useState<ReadonlySet<string>>(new Set<string>())
+  const markStuck = useCallback((id: string, on: boolean) => setStuck((cur) => {
+    const next = new Set(cur)
+    if (on) next.add(id)
+    else next.delete(id)
+    return next
+  }), [])
+
   const [picks, setPicks] = useState<Pick[]>([])
   const togglePick = useCallback((p: Pick) => {
     setPicks((cur) => (cur.some((x) => x.id === p.id) ? cur.filter((x) => x.id !== p.id) : [...cur, p].slice(-2)))
@@ -90,13 +99,13 @@ export function App() {
       </nav>
       <main className="flex-1 min-h-0 relative">
         <div className="h-full" style={{ display: active === null ? undefined : 'none' }}>
-          <SessionsScreen sessions={sessions} loaded={loaded} loadError={loadError} refresh={refresh} onOpen={open} onNewCapture={() => setNewCapture(true)} />
+          <SessionsScreen sessions={sessions} loaded={loaded} loadError={loadError} refresh={refresh} stuck={stuck} onStuck={markStuck} onOpen={open} onNewCapture={() => setNewCapture(true)} />
         </div>
         {/* Every tab stays mounted: a hidden one keeps its filter, scroll and live subscription. */}
         {tabs.map((tab) => (
           <div key={tab.id} className="h-full" style={{ display: active === tab.id ? undefined : 'none' }}>
             <Workspace session={current(tab)} active={active === tab.id} picks={picks} onBack={toSessions} onTogglePick={togglePick}
-              onCompare={startCompare} onClearPicks={clearPicks} onDecoder={onDecoder} onOpenMessages={onOpenMessages} onSessionsChanged={refresh} />
+              onCompare={startCompare} onClearPicks={clearPicks} onDecoder={onDecoder} onOpenMessages={onOpenMessages} onSessionsChanged={refresh} onStuck={markStuck} />
           </div>
         ))}
       </main>

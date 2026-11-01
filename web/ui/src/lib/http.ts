@@ -139,3 +139,13 @@ export function saveBlob(name: string, data: BlobPart): void {
   // Revoking synchronously cancels large downloads in some browsers.
   setTimeout(() => URL.revokeObjectURL(url), 0)
 }
+
+const NAME_TAIL = 12
+const NAME_TAIL_MAX = 18
+
+// Where a long name's ellipsis may fall: on a word boundary when one is close to the end.
+export function nameCut(name: string): number {
+  const from = Math.max(0, name.length - NAME_TAIL_MAX)
+  const at = name.slice(from).search(/[-_.]/)
+  return at >= 0 && from > 0 ? from + at : Math.max(0, name.length - NAME_TAIL)
+}

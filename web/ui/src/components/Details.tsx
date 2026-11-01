@@ -1,8 +1,8 @@
-import { ChevronDown, ChevronUp, Copy, Download, Star, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight, ChevronUp, Copy, Download, Star, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as api from '../lib/api'
 import { FAVORITE_TAG, loadCatalog, useCatalog, userTags } from '../lib/catalog'
-import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, hexDump, looksTextual, queryPairs, rawExchange, rejoinCookies, saveBlob } from '../lib/http'
+import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies, saveBlob } from '../lib/http'
 import { formatBytes, num, preciseDuration, reasonPhrase } from '../lib/format'
 import { useSetting } from '../lib/settings'
 import type { Body, Flow, Header } from '../lib/types'
@@ -15,16 +15,44 @@ const HEX_CAP = 4096
 const DECODE_CAP = 20_000
 export const MARKS = ['red', 'yellow', 'green', 'blue', 'magenta', 'cyan']
 
-export function NameValue({ name, value, decode = true, nameWidth = 132 }: { name: string; value: string; decode?: boolean; nameWidth?: number }) {
+// The column fits the card's longest name, up to a share the value can live with. Names are
+// monospace, so ch measures them without touching the DOM.
+export const nameColumn = (names: string[]) => ({ '--name-col': `min(${Math.max(1, ...names.map((n) => n.length))}ch, 42%)` }) as CSSProperties
+
+export function NameValue({ name, value, decode = true }: { name: string; value: string; decode?: boolean }) {
   const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [clipped, setClipped] = useState(false)
+  const valueEl = useRef<HTMLSpanElement>(null)
+  // Measured, not guessed from the length: whether a value fits depends on the panel's width.
+  useLayoutEffect(() => {
+    const el = valueEl.current
+    if (!el || expanded) return
+    const measure = () => setClipped(el.scrollWidth > el.clientWidth || value.includes('\n'))
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [value, expanded])
+  // Ellipsis in the middle: access-control-allow-* differ only at the end.
+  const cut = nameCut(name)
   return (
     <div className="group">
       <div className="flex items-start gap-2 px-3 py-1 hover:bg-hover font-mono text-[11px] leading-4">
-        <span className="shrink-0 text-muted break-all" style={{ width: nameWidth }}>{name}</span>
-        <span className="flex-1 min-w-0 text-body break-all whitespace-pre-wrap">{value}</span>
+        {/* Inline, not flex: a selection across flex items copies with a newline in the name. */}
+        <span title={name} className="shrink-0 block overflow-hidden text-muted whitespace-pre" style={{ width: 'var(--name-col, 132px)' }}>
+          <span className="inline-block align-top truncate" style={{ maxWidth: `calc(100% - ${name.length - cut}ch)` }}>{name.slice(0, cut)}</span>{name.slice(cut)}
+        </span>
+        {/* A drag that selects part of the value must not also toggle it. */}
+        <span ref={valueEl} onClick={() => { if (clipped && !getSelection()?.toString()) setExpanded(!expanded) }}
+          className={cx('flex-1 min-w-0 text-body', expanded ? 'break-all whitespace-pre-wrap' : 'truncate', clipped && 'cursor-pointer')}>{value}</span>
+        {clipped && (
+          <button type="button" aria-label={expanded ? 'Collapse value' : 'Show full value'} aria-expanded={expanded} title={expanded ? 'Collapse' : 'Show full value'} onClick={() => setExpanded(!expanded)} className="shrink-0 h-4 text-faint hover:text-ink">
+            <ChevronRight size={13} className={cx(expanded && 'rotate-90')} />
+          </button>
+        )}
         {decode && value && <DecodeAffordance value={value} name={name} open={open} onToggle={() => setOpen(!open)} />}
       </div>
-      {open && <div className="mx-3 my-1 p-3 rounded-lg border border-edge-input bg-well" style={{ marginLeft: nameWidth + 20 }}><Decoded value={value} name={name} /></div>}
+      {open && <div className="mx-3 my-1 p-3 rounded-lg border border-edge-input bg-well"><Decoded value={value} name={name} /></div>}
     </div>
   )
 }
@@ -32,7 +60,8 @@ export function NameValue({ name, value, decode = true, nameWidth = 132 }: { nam
 function Headers({ headers }: { headers: Header[] }) {
   return (
     <Card title="Headers" count={headers.length}>
-      {headers.length === 0 ? <p className="px-3 text-[11px] text-faint">None.</p> : headers.map((h, i) => <NameValue key={i} name={h.name ?? ''} value={h.value ?? ''} />)}
+      {headers.length === 0 ? <p className="px-3 text-[11px] text-faint">None.</p>
+        : <div style={nameColumn(headers.map((h) => h.name ?? ''))}>{headers.map((h, i) => <NameValue key={i} name={h.name ?? ''} value={h.value ?? ''} />)}</div>}
     </Card>
   )
 }
@@ -51,7 +80,8 @@ export function BodyCard({ title, body, load, filename, onDecode }: {
 
   const textual = useMemo(() => !!bytes && looksTextual(bytes), [bytes])
   const text = useMemo(() => (textual && bytes ? new TextDecoder().decode(bytes) : ''), [bytes, textual])
-  const json = useMemo(() => parseJson(text), [text])
+  // Over the cap the tree would put the whole body in the DOM, so it falls back to capped text.
+  const json = useMemo(() => (text.length > TEXT_CAP ? undefined : parseJson(text)), [text])
 
   if (!size) return <Card title={title}><p className="px-3 text-[11px] text-faint">No body.</p></Card>
   const ext = bodyExt(body?.contentType)
@@ -69,8 +99,8 @@ export function BodyCard({ title, body, load, filename, onDecode }: {
         )}
         <button type="button" className="text-muted hover:text-ink" onClick={() => void navigator.clipboard.writeText(textual && !hex ? text : hexDump(bytes, bytes.length))}>Copy</button>
         <button type="button" className="text-muted hover:text-ink" onClick={save}>Save</button>
-        {/* mousedown: by click time the selection is gone. */}
-        <button type="button" className="text-muted hover:text-ink" onMouseDown={() => onDecode((getSelection()?.toString() || text).slice(0, DECODE_CAP))}>Decode</button>
+        {/* preventDefault keeps the selection until click, which the keyboard can also reach. */}
+        <button type="button" className="text-muted hover:text-ink" onMouseDown={(e) => e.preventDefault()} onClick={() => onDecode((getSelection()?.toString() || (hex ? hexDump(bytes, HEX_CAP) : text)).slice(0, DECODE_CAP))}>Decode</button>
       </span>
     )}>
       <div className="px-3 pb-1.5 max-h-[420px] overflow-auto">
@@ -109,7 +139,8 @@ function MetaTab({ f }: { f: Flow }) {
     ['WebSocket frames', f.websocket ? String(num(f.messageCount)) : undefined], ['user agent', f.userAgent],
     ...Object.entries(f.metadata ?? {}),
   ]
-  return <Card title="Meta">{rows.filter(([, v]) => v).map(([n, v]) => <NameValue key={n} name={n} value={v!} decode={false} />)}</Card>
+  const shown = rows.filter(([, v]) => v)
+  return <Card title="Meta"><div style={nameColumn(shown.map(([n]) => n))}>{shown.map(([n, v]) => <NameValue key={n} name={n} value={v!} decode={false} />)}</div></Card>
 }
 
 function Annotations({ flow, session, onChanged }: { flow: Flow; session: string; onChanged: () => void }) {
@@ -231,9 +262,9 @@ function Footer({ flow, session, onOpenMessages }: { flow: Flow; session: string
       <DurationBadge micros={flow.durationMicros} />
       <button type="button" title="Copy flow id" onClick={() => void navigator.clipboard.writeText(flow.id).then(() => flashNote('✓ id copied'))} className="font-mono text-[11px] text-muted truncate min-w-0 hover:text-ink">{flow.id}</button>
       <span className="flex-1 text-right text-[11px] text-faint truncate">{note}</span>
-      {flow.websocket && <Button size="sm" onClick={onOpenMessages}>messages ({num(flow.messageCount)})</Button>}
       <Button size="sm" icon={<Copy size={12} />} className="font-mono" onClick={() => void curl()}>curl</Button>
       <Button size="sm" icon={<Download size={12} />} className="font-mono" onClick={() => void raw()}>raw</Button>
+      {flow.websocket && <Button size="sm" onClick={onOpenMessages}>messages ({num(flow.messageCount)})</Button>}
     </div>
   )
 }
@@ -269,6 +300,7 @@ export function DetailsPanel({ session, summary, onClose, onPatch, onDecode, onO
     <div className="flex flex-col h-full min-w-0 bg-panel">
       <div className="flex items-center gap-2 h-11 px-3 shrink-0">
         <MethodBadge method={f.method} /><StatusBadge status={f.status} error={f.error} />
+        {f.error && !f.status && <span title={f.error} className="text-red-fg">⚠</span>}
         <span title={flowUrl(f)} className="flex-1 min-w-0 truncate font-mono text-xs text-ink">{f.authority}{f.path}{f.query ? `?${f.query}` : ''}</span>
         <IconButton label="Close details" size={24} onClick={onClose}><X size={13} /></IconButton>
       </div>
@@ -284,24 +316,28 @@ export function DetailsPanel({ session, summary, onClose, onPatch, onDecode, onO
       <div className="flex-1 min-h-0 overflow-auto p-3 space-y-3">
         {error && <p className="text-[11px] text-red-fg">{error}</p>}
         {!full && !error && <Spinner />}
-        {full && tab === 'Request' && <>
+        {tab === 'Request' && <>
           <Card title="URL"><p className="px-3 font-mono text-[11px] text-body break-all">{flowUrl(f)}</p></Card>
-          {query.length > 0 && <Card title="Query" count={query.length}>{query.map((q, i) => <NameValue key={i} name={q.name} value={q.value} />)}</Card>}
-          <Headers headers={request} />
-          <BodyCard title="Body" body={f.requestBody} load={loadRequest} filename={`${f.id}-request`} onDecode={onDecode} />
+          {query.length > 0 && <Card title="Query" count={query.length}><div style={nameColumn(query.map((q) => q.name))}>{query.map((q, i) => <NameValue key={i} name={q.name} value={q.value} />)}</div></Card>}
+          {full && <>
+            <Headers headers={request} />
+            <BodyCard title="Body" body={f.requestBody} load={loadRequest} filename={`${f.id}-request`} onDecode={onDecode} />
+          </>}
         </>}
         {full && tab === 'Cookies' && (sent.length + received.length === 0 ? <p className="text-[11px] text-faint">No cookies in either direction.</p> : <>
-          <Card title="Sent" count={sent.length}>{sent.map((c, i) => <NameValue key={i} name={c.name} value={c.value} />)}</Card>
+          <Card title="Sent" count={sent.length}><div style={nameColumn(sent.map((c) => c.name))}>{sent.map((c, i) => <NameValue key={i} name={c.name} value={c.value} />)}</div></Card>
           <Card title="Set-Cookie" count={received.length}>
-            {received.map((c, i) => (
-              <div key={i}>
-                <NameValue name={c.name ?? ''} value={c.value ?? ''} />
-                {cookieAttrs(c).length > 0 && <div className="flex flex-wrap gap-1 px-3 pb-1">{cookieAttrs(c).map((a) => <Badge key={a} size="sm">{a}</Badge>)}</div>}
-              </div>
-            ))}
+            <div style={nameColumn(received.map((c) => c.name ?? ''))}>
+              {received.map((c, i) => (
+                <div key={i}>
+                  <NameValue name={c.name ?? ''} value={c.value ?? ''} />
+                  {cookieAttrs(c).length > 0 && <div className="flex flex-wrap gap-1 px-3 pb-1">{cookieAttrs(c).map((a) => <Badge key={a} size="sm">{a}</Badge>)}</div>}
+                </div>
+              ))}
+            </div>
           </Card>
         </>)}
-        {full && tab === 'Response' && <>
+        {tab === 'Response' && <>
           {f.error && <Card title="Error" tone="red"><p className="px-3 text-xs break-words">{f.error}</p></Card>}
           <Card>
             <div className="flex items-center gap-2 h-10 px-3 -mb-1.5">
@@ -310,10 +346,12 @@ export function DetailsPanel({ session, summary, onClose, onPatch, onDecode, onO
               <span className="ml-auto text-[11px] text-faint">{[f.protocol, f.tlsDecrypted && 'TLS decrypted'].filter(Boolean).join(' · ')}</span>
             </div>
           </Card>
-          <Headers headers={f.responseHeaders ?? []} />
-          <BodyCard title="Body" body={f.responseBody} load={loadResponse} filename={`${f.id}-response`} onDecode={onDecode} />
+          {full && <>
+            <Headers headers={f.responseHeaders ?? []} />
+            <BodyCard title="Body" body={f.responseBody} load={loadResponse} filename={`${f.id}-response`} onDecode={onDecode} />
+          </>}
         </>}
-        {full && tab === 'Meta' && <MetaTab f={f} />}
+        {tab === 'Meta' && <MetaTab f={f} />}
       </div>
       <Annotations flow={f} session={session} onChanged={() => void reread()} />
       <Footer flow={f} session={session} onOpenMessages={() => onOpenMessages(f)} />

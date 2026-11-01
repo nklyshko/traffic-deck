@@ -1,5 +1,5 @@
 import { cookiePairs, rejoinCookies } from './http'
-import { formatBytes, num } from './format'
+import { num } from './format'
 import type { Flow, Header } from './types'
 
 export const MISSING = '∅'
@@ -73,7 +73,8 @@ export function compareFlows(a: Flow, b: Flow): Section[] {
     title, match: rows.every((r) => r.same), pairs: rows,
   })
   const tls = (f: Flow) => [`client ${f.tlsClientName || MISSING}`, `ja3 ${f.ja3 || MISSING}`, `ja4 ${f.ja4 || MISSING}`]
-  const size = (f: Flow) => formatBytes(num(f.requestBody?.size)) || '0'
+  // Exact: rounded sizes would call 2100 and 2200 bytes a match.
+  const size = (f: Flow) => `${num(f.requestBody?.size).toLocaleString('en-US')} B`
   return [
     ordered('HTTP version', [a.protocol ?? ''].filter(Boolean), [b.protocol ?? ''].filter(Boolean)),
     ordered('Pseudo-header order', pseudo(a.requestHeaders ?? []), pseudo(b.requestHeaders ?? [])),

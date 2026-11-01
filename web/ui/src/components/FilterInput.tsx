@@ -1,6 +1,6 @@
 import { Search } from 'lucide-react'
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { opAtCaret, type HelpTerm } from '../lib/filter'
+import { opAtCaret, wordAtCaret, type HelpTerm } from '../lib/filter'
 import { cx } from './ui'
 
 function Highlight({ text }: { text: string }) {
@@ -25,11 +25,11 @@ function TermRow({ term, active, onPick }: { term: HelpTerm; active?: boolean; o
 
 const Key = ({ children }: { children: ReactNode }) => <kbd className="px-1 mx-0.5 rounded border border-edge bg-well font-mono text-[10px] text-muted">{children}</kbd>
 
-function Legend() {
+function Legend({ bareMatches }: { bareMatches: string }) {
   return (
     <div className="px-3 py-2 border-t border-line text-[11px] text-faint">
       <div>space = AND · ! negates</div>
-      <div>arguments are unanchored RE2 regexes · a bare word matches the {'URL'}</div>
+      <div>arguments are unanchored RE2 regexes · a bare word matches the {bareMatches}</div>
       <div className="flex items-center mt-1.5"><Key>↑↓</Key>move<span className="w-2" /><Key>⇥</Key>insert<span className="w-2" /><Key>Esc</Key>close<span className="flex-1" /><Key>Ctrl Space</Key>reopen</div>
     </div>
   )
@@ -44,20 +44,24 @@ interface Props {
   placeholder: string
   trailing?: ReactNode
   extraHelp?: string
+  bareMatches?: string
 }
 
 // The input shows one expression; a mirror behind transparent text colours its terms.
-export function FilterInput({ value, onChange, onSubmit, terms, examples, placeholder, trailing, extraHelp }: Props) {
+export function FilterInput({ value, onChange, onSubmit, terms, examples, placeholder, trailing, extraHelp, bareMatches = 'URL' }: Props) {
   const input = useRef<HTMLInputElement>(null)
   const mirror = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [caret, setCaret] = useState(0)
   const [active, setActive] = useState(0)
+  const [scroll, setScroll] = useState(0)
 
   const typing = opAtCaret(value, caret)
   const matches = useMemo(() => (typing ? terms.filter((t) => t.op.startsWith(typing.prefix)).sort((a, b) => a.op.length - b.op.length) : []), [typing, terms])
-  const mode: 'all' | 'narrow' | null = !open ? null : !value.trim() ? 'all' : matches.length ? 'narrow' : null
+  const emptyTerm = !wordAtCaret(value, caret).word
+  const mode: 'all' | 'narrow' | null = !open ? null : typing ? (matches.length ? 'narrow' : null) : emptyTerm ? 'all' : null
   const flat = mode === 'all' ? terms : matches
+  const current = active < flat.length ? active : 0
   const groups = useMemo(() => [...new Set(terms.map((t) => t.group))], [terms])
 
   useLayoutEffect(() => {
@@ -68,11 +72,11 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
     onChange(next)
     setCaret(at)
     setActive(0)
-    setOpen(true)
+    setOpen(!next.trim() || !!opAtCaret(next, at))
   }
   const insert = (term: HelpTerm) => {
     const start = typing ? typing.start : caret
-    const end = typing ? typing.start + typing.prefix.length : caret
+    const end = typing ? typing.end + (value[typing.end] === ' ' ? 1 : 0) : caret
     const sep = !typing && start > 0 && value[start - 1] !== ' ' ? ' ' : ''
     const text = `${sep}${term.op} `
     const next = value.slice(0, start) + text + value.slice(end)
@@ -88,6 +92,8 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.ctrlKey && e.key === ' ') {
       e.preventDefault()
+      setCaret(e.currentTarget.selectionStart ?? 0)
+      setActive(0)
       setOpen(true)
     } else if (mode && e.key === 'Escape') {
       e.preventDefault()
@@ -95,13 +101,13 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
       setOpen(false)
     } else if (mode && e.key === 'ArrowDown') {
       e.preventDefault()
-      setActive((a) => (a + 1) % flat.length)
+      setActive((current + 1) % flat.length)
     } else if (mode && e.key === 'ArrowUp') {
       e.preventDefault()
-      setActive((a) => (a - 1 + flat.length) % flat.length)
-    } else if (mode && e.key === 'Tab' && flat[active]) {
+      setActive((current - 1 + flat.length) % flat.length)
+    } else if (mode && e.key === 'Tab' && flat[current]) {
       e.preventDefault()
-      insert(flat[active])
+      insert(flat[current])
     } else if (e.key === 'Enter') {
       setOpen(false)
       onSubmit?.()
@@ -116,12 +122,20 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
           <div ref={mirror} aria-hidden className="absolute inset-0 flex items-center overflow-hidden whitespace-pre pointer-events-none">
             {value ? <span><Highlight text={value} /></span> : <span className="text-dim">{placeholder}</span>}
           </div>
-          <input ref={input} value={value} aria-label="Filter expression" spellCheck={false} autoComplete="off"
+          <input ref={input} value={value} aria-label="Filter expression" spellCheck={false} autoComplete="off" data-owns-escape={mode ? '' : undefined}
             className="absolute inset-0 w-full bg-transparent text-transparent caret-[var(--text)] outline-none! border-0! shadow-none! font-mono text-xs"
             onChange={(e) => change(e.target.value, e.target.selectionStart ?? 0)}
-            onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
-            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-            onScroll={(e) => { if (mirror.current) mirror.current.scrollLeft = e.currentTarget.scrollLeft }}
+            onFocus={() => { setActive(0); setOpen(!value.trim()) }} onBlur={() => setOpen(false)}
+            onSelect={(e) => {
+              const at = e.currentTarget.selectionStart ?? 0
+              setCaret(at)
+              // Walking off an op closes the help; only typing or Ctrl-Space opens it again.
+              if (value.trim() && !opAtCaret(value, at)) setOpen(false)
+            }}
+            onScroll={(e) => {
+              setScroll(e.currentTarget.scrollLeft)
+              if (mirror.current) mirror.current.scrollLeft = e.currentTarget.scrollLeft
+            }}
             onKeyDown={onKey} />
         </div>
         {trailing}
@@ -143,18 +157,20 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
             {groups.map((g) => (
               <div key={g} className="break-inside-avoid mb-2">
                 <div className="px-2 mb-0.5 text-[10px] uppercase tracking-wide text-faint">{g}</div>
-                {terms.filter((t) => t.group === g).map((t) => <TermRow key={t.op} term={t} active={flat[active] === t} onPick={() => insert(t)} />)}
+                {terms.filter((t) => t.group === g).map((t) => <TermRow key={t.op} term={t} active={flat[current] === t} onPick={() => insert(t)} />)}
               </div>
             ))}
           </div>
           {extraHelp && <div className="px-3 pb-2 text-[11px] text-faint">{extraHelp}</div>}
-          <Legend />
+          <Legend bareMatches={bareMatches} />
         </div>
       )}
-      {mode === 'narrow' && (
-        <div className="absolute z-30 top-[calc(100%+6px)] left-8 w-[360px] max-w-[85vw] rounded-lg border border-edge bg-toast" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>
-          <div className="p-1.5">{matches.map((t, i) => <TermRow key={t.op} term={t} active={i === active} onPick={() => insert(t)} />)}</div>
-          <Legend />
+      {mode === 'narrow' && typing && (
+        // Mono at the input's size, so `ch` here is one character of the expression above.
+        <div className="absolute z-30 top-[calc(100%+6px)] w-[440px] max-w-[85vw] rounded-lg border border-edge bg-toast font-mono text-xs"
+          style={{ left: `max(0px, min(calc(32px + ${typing.start}ch - ${scroll}px), calc(100% - 440px)))`, boxShadow: '0 8px 24px var(--shadow)' }}>
+          <div className="p-1.5 font-sans">{matches.map((t, i) => <TermRow key={t.op} term={t} active={i === current} onPick={() => insert(t)} />)}</div>
+          <div className="font-sans"><Legend bareMatches={bareMatches} /></div>
         </div>
       )}
     </div>

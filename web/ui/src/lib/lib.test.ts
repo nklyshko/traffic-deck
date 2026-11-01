@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { compareFlows, diffLines, goSlice, MISSING, pairValues } from './compare'
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
-import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readStatus, readTerm, termLabel, writeStatus, writeTerm } from './filter'
-import { formatBytes, formatDuration, formatMatched, reasonPhrase } from './format'
-import { bodyExt, cookiePairs, curlCommand, hexDump, looksTextual, queryPairs, rawExchange, rejoinCookies } from './http'
+import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
+import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
+import { bodyExt, cookiePairs, curlCommand, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
+import { accepts } from './settings'
+import { declaredColumns, groupScope, inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionScopes } from './sessions'
 import { cursorOf, extendWindow, patchFlow } from './window'
-import type { Flow } from './types'
+import type { Flow, Session } from './types'
 
 const b64 = (s: string) => btoa(s)
 const b64url = (s: string) => btoa(s).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_')
@@ -46,8 +48,17 @@ describe('filter tokeniser', () => {
     expect([halfTyped('~d a ~h'), halfTyped('~d a'), halfTyped('~fav'), halfTyped('')]).toEqual([true, false, false, false])
   })
   it('finds the op being typed', () => {
-    expect(opAtCaret('~d a !~h', 8)).toEqual({ start: 6, prefix: '~h' })
+    expect(opAtCaret('~d a !~h', 8)).toEqual({ start: 6, end: 8, prefix: '~h' })
     expect(opAtCaret('~d a', 4)).toBeNull()
+  })
+  it('knows the whole op under the caret, and that an argument is not one', () => {
+    expect(opAtCaret('~mark x', 3)).toEqual({ start: 0, end: 5, prefix: '~ma' })
+    expect(opAtCaret('~m ~', 4)).toBeNull()
+    expect(opAtCaret('~s ~', 4)).toEqual({ start: 3, end: 4, prefix: '~' })
+  })
+  it('finds no word on empty space', () => {
+    expect(wordAtCaret('~m GET ', 7).word).toBe('')
+    expect(wordAtCaret('', 0).word).toBe('')
   })
 })
 
@@ -197,6 +208,102 @@ describe('format', () => {
   })
   it('formats counts and reasons', () => {
     expect(formatMatched(1284, true)).toBe('1,284+')
+    expect(formatCount(0)).toBe('0')
+    expect(formatCount(999)).toBe('999')
+    expect(formatCount(1906)).toBe('1.9K')
+    expect(formatCount(999_949)).toBe('999.9K')
+    expect(formatCount(999_950)).toBe('1.0M')
+    expect(formatCount(2_500_000)).toBe('2.5M')
     expect([reasonPhrase(404), reasonPhrase(599), reasonPhrase(299)]).toEqual(['Not Found', 'Server Error', 'Success'])
+  })
+})
+
+describe('nameCut', () => {
+  const tail = (n: string) => n.slice(nameCut(n))
+  it('keeps what tells a family of names apart', () => {
+    expect(tail('access-control-allow-credentials')).toBe('-allow-credentials')
+    expect(tail('access-control-allow-headers')).toBe('-allow-headers')
+  })
+  it('falls back to a fixed tail without a separator', () => {
+    expect(tail('averyveryveryverylongcookiename')).toBe('gcookiename'.padStart(12, 'n'))
+  })
+  it('leaves a short name whole', () => {
+    expect(nameCut('vary')).toBe(0)
+  })
+})
+
+describe('fitWidth', () => {
+  it('sizes to the longest of the label and the values', () => {
+    expect(fitWidth('max.ver', ['10'])).toBeLessThan(fitWidth('max.opcode', ['VideoContent(83)']))
+  })
+  it('is bounded either way', () => {
+    expect(fitWidth('n', ['1'])).toBe(44)
+    expect(fitWidth('n', ['x'.repeat(500)])).toBe(180)
+  })
+})
+
+describe('session scopes', () => {
+  const live = (s: Session) => s.status === 'SESSION_STATUS_OPEN'
+  const sessions: Session[] = [
+    { id: 'new', status: 'SESSION_STATUS_OPEN' }, { id: 'a', group: 'zeta', status: 'SESSION_STATUS_OPEN' },
+    { id: 'b', group: 'Alpha' }, { id: 'c', group: 'zeta' }, { id: 'old' },
+  ]
+  it('offers no scopes until a group exists', () => {
+    expect(sessionScopes([{ id: 'x' }, { id: 'y' }], live)).toEqual([])
+  })
+  it('lists All and Ungrouped, then groups alphabetically with counts and live captures', () => {
+    expect(sessionScopes(sessions, live)).toEqual([
+      { key: SCOPE_ALL, label: 'All sessions', count: 5, live: 2 },
+      { key: SCOPE_UNGROUPED, label: 'Ungrouped', count: 2, live: 1 },
+      { key: groupScope('Alpha'), label: 'Alpha', count: 1, live: 0 },
+      { key: groupScope('zeta'), label: 'zeta', count: 2, live: 1 },
+    ])
+  })
+  it('drops Ungrouped once every session has a group', () => {
+    expect(sessionScopes([{ id: 'x', group: 'g' }], live).map((s) => s.key)).toEqual([SCOPE_ALL, groupScope('g')])
+  })
+  it('keeps a group called "all" apart from the All scope', () => {
+    const scopes = sessionScopes([{ id: 'x', group: 'all' }, { id: 'y' }], live)
+    expect(scopes.map((s) => s.count)).toEqual([2, 1, 1])
+    expect(inScope({ id: 'y' }, groupScope('all'))).toBe(false)
+  })
+  it('selects by scope, keeping list order', () => {
+    const ids = (scope: string) => sessions.filter((s) => inScope(s, scope)).map((s) => s.id)
+    expect(ids(SCOPE_ALL)).toEqual(['new', 'a', 'b', 'c', 'old'])
+    expect(ids(SCOPE_UNGROUPED)).toEqual(['new', 'old'])
+    expect(ids(groupScope('zeta'))).toEqual(['a', 'c'])
+  })
+  it('falls back to All when the remembered group is gone', () => {
+    const scopes = sessionScopes(sessions, live)
+    expect(resolveScope(scopes, groupScope('zeta'))).toBe(groupScope('zeta'))
+    expect(resolveScope(scopes, groupScope('deleted'))).toBe(SCOPE_ALL)
+  })
+})
+
+describe('settings', () => {
+  it('reads a corrupt value as the default', () => {
+    expect(accepts('columnOverrides', null, {})).toBe(false)
+    expect(accepts('columnOverrides', [], {})).toBe(false)
+    expect(accepts('columnOverrides', { path: false }, {})).toBe(true)
+    expect(accepts('detailsWidth', 999, 40)).toBe(false)
+    expect(accepts('detailsWidth', 55, 40)).toBe(true)
+    expect(accepts('compact', 'yes', false)).toBe(false)
+  })
+})
+
+describe('compare sizes', () => {
+  it('tells apart sizes that round to the same text', () => {
+    const size = (n: number) => compareFlows({ id: 'a', requestBody: { size: n } } as unknown as Flow, { id: 'b', requestBody: { size: 2100 } } as unknown as Flow).find((s) => s.title === 'Request body size')
+    expect(size(2100)?.match).toBe(true)
+    expect(size(2200)?.match).toBe(false)
+  })
+})
+
+describe('declared columns', () => {
+  it('reads the comma list a source attaches, trimmed and once each', () => {
+    const s = (v?: string): Session => ({ id: 's', metadata: v === undefined ? undefined : { 'viewer.columns': v } })
+    expect(declaredColumns(s('conn,stream'))).toEqual(['conn', 'stream'])
+    expect(declaredColumns(s(' scrape_group , proxy_provider,,scrape_group'))).toEqual(['scrape_group', 'proxy_provider'])
+    expect(declaredColumns(s())).toEqual([])
   })
 })

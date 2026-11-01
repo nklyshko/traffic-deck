@@ -31,7 +31,7 @@ export async function rpc<T = unknown>(method: string, body: unknown = {}): Prom
 
 export const listSessions = () => getJSON<{ sessions?: Session[] }>('/api/sessions').then((r) => r.sessions ?? [])
 
-export interface FlowQuery { session: string; filter: string; limit?: number; last?: boolean; after?: string; before?: string }
+export interface FlowQuery { session: string; filter: string; hidden?: boolean; limit?: number; last?: boolean; after?: string; before?: string }
 export const queryFlows = (q: FlowQuery, signal?: AbortSignal) => getJSON<FlowPage>(`/api/flows?${qs({ ...q })}`, signal)
 export const getFlow = (session: string, id: string) => getJSON<Flow>(`/api/flow?${qs({ session, id })}`)
 
@@ -51,7 +51,7 @@ export async function importBundle(file: File): Promise<void> {
 }
 
 export const exportUrl = (session: string) => `/api/session/export?${qs({ session })}`
-export const flowStreamUrl = (session: string, filter: string) => `/api/stream?${qs({ session, filter })}`
+export const flowStreamUrl = (session: string, filter: string, hidden: boolean) => `/api/stream?${qs({ session, filter, hidden })}`
 export const messageStreamUrl = (session: string, flow: string, filter: string) => `/api/messages/stream?${qs({ session, flow, filter })}`
 
 export const listSources = () => rpc<{ sources?: CaptureSourceInfo[] }>('ListCaptureSources').then((r) => r.sources ?? [])

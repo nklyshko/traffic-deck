@@ -12,24 +12,28 @@ interface State {
   hasNewer: boolean
   matched: number
   capped: boolean
+  hiddenMatched: number
   hints: string[]
   pending: number
   error: string
   loading: boolean
 }
-const EMPTY: State = { rows: [], hasOlder: false, hasNewer: false, matched: 0, capped: false, hints: [], pending: 0, error: '', loading: true }
+const EMPTY: State = { rows: [], hasOlder: false, hasNewer: false, matched: 0, capped: false, hiddenMatched: 0, hints: [], pending: 0, error: '', loading: true }
 const STREAM_FLUSH_MS = 50
+const RETRY_MS = 2000
+const MAX_RETRY_MS = 30000
 
 function fromPage(page: FlowPage): State {
   return {
     rows: page.flows ?? [], hasOlder: !!page.prev, hasNewer: !!page.next, matched: num(page.matched),
-    capped: !!page.countCapped, hints: page.hints ?? [], pending: 0, error: '', loading: false,
+    capped: !!page.countCapped, hiddenMatched: num(page.hiddenMatched), hints: page.hints ?? [], pending: 0, error: '', loading: false,
   }
 }
 
 interface Options {
   session: string
   filter: string
+  hidden: boolean
   live: boolean
   follow: boolean
   onClosed: (e: SessionEvent) => void
@@ -37,7 +41,7 @@ interface Options {
 }
 
 // One contiguous window of the matching set: never a page, never the whole session.
-export function useFlowWindow({ session, filter, live, follow, onClosed, onProgress }: Options) {
+export function useFlowWindow({ session, filter, hidden, live, follow, onClosed, onProgress }: Options) {
   const [state, setState] = useState<State>(EMPTY)
   const [flashed, setFlashed] = useState<ReadonlySet<string>>(new Set<string>())
   const [scrollTo, setScrollTo] = useState<{ kind: 'bottom' | 'top' | 'delta'; delta?: number; seq: number }>({ kind: 'top', seq: 0 })
@@ -45,7 +49,7 @@ export function useFlowWindow({ session, filter, live, follow, onClosed, onProgr
   const nudge = (kind: 'bottom' | 'top' | 'delta', delta?: number) => setScrollTo({ kind, delta, seq: ++seq.current })
 
   // Reset during render, not in an effect: no frame may show old rows under a new filter.
-  const key = `${session}\0${filter}`
+  const key = `${session}\0${filter}\0${hidden}`
   const [prevKey, setPrevKey] = useState(key)
   if (key !== prevKey) {
     setPrevKey(key)
@@ -68,7 +72,7 @@ export function useFlowWindow({ session, filter, live, follow, onClosed, onProgr
     bufferGen.current++
     setState((s) => ({ ...s, loading: true }))
     try {
-      const page = await queryFlows({ session, filter, limit: PAGE_SIZE, last: anchor === 'last' })
+      const page = await queryFlows({ session, filter, hidden, limit: PAGE_SIZE, last: anchor === 'last' })
       if (gen !== refillGen.current) return
       bufferGen.current++
       setState(fromPage(page))
@@ -76,7 +80,7 @@ export function useFlowWindow({ session, filter, live, follow, onClosed, onProgr
     } catch (e) {
       if (gen === refillGen.current) setState((s) => ({ ...s, loading: false, error: (e as Error).message }))
     }
-  }, [session, filter])
+  }, [session, filter, hidden])
 
   const refillRef = useRef(refill)
   useLayoutEffect(() => { refillRef.current = refill })
@@ -91,7 +95,7 @@ export function useFlowWindow({ session, filter, live, follow, onClosed, onProgr
     const gen = bufferGen.current
     try {
       const page = await queryFlows({
-        session, filter, limit: PAGE_SIZE,
+        session, filter, hidden, limit: PAGE_SIZE,
         ...(dir === 'older' ? { before: cursorOf(s.rows[0]) } : { after: cursorOf(s.rows[s.rows.length - 1]) }),
       })
       // Merging into a replaced buffer would splice a gap into a contiguous window.
@@ -109,7 +113,7 @@ export function useFlowWindow({ session, filter, live, follow, onClosed, onProgr
     } finally {
       extending.current = false
     }
-  }, [session, filter, commit])
+  }, [session, filter, hidden, commit])
 
   // In a ref: a caller's new function must not tear down the subscription.
   const handlers = useRef({ onClosed, onProgress })
@@ -172,30 +176,41 @@ export function useFlowWindow({ session, filter, live, follow, onClosed, onProgr
   // requestAnimationFrame, which stops in a hidden browser tab.
   useEffect(() => {
     if (!live) return
-    const source = new EventSource(flowStreamUrl(session, filter))
+    let source: EventSource
     let buffer: FlowEvent[] = []
     let timer: ReturnType<typeof setTimeout> | undefined
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let delay = RETRY_MS
     const flush = () => {
       timer = undefined
       const batch = buffer
       buffer = []
       applyEvents(batch)
     }
-    source.onmessage = (e) => {
-      buffer.push(JSON.parse(e.data))
-      timer ??= setTimeout(flush, STREAM_FLUSH_MS)
+    const connect = () => {
+      source = new EventSource(flowStreamUrl(session, filter, hidden))
+      source.onmessage = (e) => {
+        delay = RETRY_MS
+        buffer.push(JSON.parse(e.data))
+        timer ??= setTimeout(flush, STREAM_FLUSH_MS)
+      }
+      source.addEventListener('end', () => source.close())
+      // Missed deltas cannot be replayed, so a lost stream refetches. It also subscribes again:
+      // the session is still live, and closing the source ended the browser's own retry.
+      source.onerror = () => {
+        source.close()
+        void refill(followRef.current ? 'last' : 'first')
+        retry = setTimeout(connect, delay)
+        delay = Math.min(delay * 2, MAX_RETRY_MS)
+      }
     }
-    source.addEventListener('end', () => source.close())
-    // Missed deltas cannot be replayed, so a lost stream refetches.
-    source.onerror = () => {
-      source.close()
-      void refill(followRef.current ? 'last' : 'first')
-    }
+    connect()
     return () => {
       source.close()
       clearTimeout(timer)
+      clearTimeout(retry)
     }
-  }, [session, filter, live, applyEvents, refill])
+  }, [session, filter, hidden, live, applyEvents, refill])
 
   const patchRow = useCallback((flow: Flow) => {
     const s = stateRef.current

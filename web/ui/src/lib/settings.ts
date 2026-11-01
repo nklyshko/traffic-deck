@@ -5,16 +5,28 @@ import { useCallback, useSyncExternalStore } from 'react'
 export interface Settings {
   dark: boolean
   compact: boolean
+  showHidden: boolean
   columnOverrides: Record<string, boolean>
+  columnWidths: Record<string, number>
+  frameColumnOverrides: Record<string, boolean>
+  frameColumnWidths: Record<string, number>
   detailsWidth: number
   detailsCollapsed: boolean
   annotationsOpen: boolean
+  sessionScope: string
 }
 
 const systemDark = () => typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
 const DEFAULTS = (): Settings => ({
-  dark: systemDark(), compact: false, columnOverrides: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false,
+  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all',
 })
+
+// typeof alone would let null and arrays through, and those crash whoever indexes them.
+export function accepts(key: string, v: unknown, dflt: unknown): boolean {
+  if (typeof v !== typeof dflt) return false
+  if (key === 'detailsWidth') return (v as number) >= 20 && (v as number) <= 80
+  return typeof dflt !== 'object' || (v !== null && !Array.isArray(v))
+}
 
 function load(): Settings {
   const out = DEFAULTS() as unknown as Record<string, unknown>
@@ -23,7 +35,7 @@ function load(): Settings {
       const raw = localStorage.getItem(`td.${key}`)
       if (raw !== null) {
         const v = JSON.parse(raw)
-        if (typeof v === typeof out[key]) out[key] = v
+        if (accepts(key, v, out[key])) out[key] = v
       }
     } catch { /* corrupt or blocked storage reads as the default */ }
   }

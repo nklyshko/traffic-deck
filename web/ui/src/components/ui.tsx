@@ -49,7 +49,7 @@ export function Badge({ tone = 'grey', size = 'md', title, children }: { tone?: 
 
 export function MethodBadge({ method, size }: { method?: string; size?: keyof typeof BADGE }) {
   if (!method) return <span className="text-dim font-mono">—</span>
-  return <Badge tone={methodTone(method)} size={size}>{shortMethod(method)}</Badge>
+  return <Badge tone={methodTone(method)} size={size} title={method}>{shortMethod(method)}</Badge>
 }
 
 export function StatusBadge({ status, error, size }: { status?: number; error?: string; size?: keyof typeof BADGE }) {
@@ -148,7 +148,9 @@ export function Modal({ title, width, height, headerExtra, footer, onClose, chil
     const id = Symbol()
     stack.push(id)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && stack[stack.length - 1] === id) {
+      // Capture phase, so an open filter help has to say the Esc is its own.
+      const own = e.target instanceof Element && e.target.closest('[data-owns-escape]')
+      if (e.key === 'Escape' && !own && stack[stack.length - 1] === id) {
         e.stopPropagation()
         closeRef.current()
       }

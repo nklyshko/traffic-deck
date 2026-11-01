@@ -32,9 +32,10 @@ func (s *server) sessions(w http.ResponseWriter, r *http.Request) {
 func flowsRequest(r *http.Request) (*trafficv1.QueryFlowsRequest, error) {
 	q := r.URL.Query()
 	req := &trafficv1.QueryFlowsRequest{
-		SessionId: q.Get("session"),
-		Filter:    q.Get("filter"),
-		Last:      q.Get("last") == "1",
+		SessionId:     q.Get("session"),
+		Filter:        q.Get("filter"),
+		Last:          q.Get("last") == "1",
+		IncludeHidden: q.Get("hidden") == "1",
 	}
 	var err error
 	if req.Limit, err = queryUint(r, "limit", 250); err != nil {
@@ -162,6 +163,7 @@ func (s *server) streamFlows(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	stream, err := s.viewer.StreamFlows(r.Context(), &trafficv1.StreamFlowsRequest{
 		SessionId: q.Get("session"), Filter: q.Get("filter"), Follow: q.Get("follow") != "0",
+		IncludeHidden: q.Get("hidden") == "1",
 	})
 	if err != nil {
 		rpcError(w, "StreamFlows", err)

@@ -34,6 +34,11 @@ function Row({ a, b, same, name }: { a: string | null; b: string | null; same: b
   return <div className="flex gap-2"><Cell side="a" text={a} same={same} name={name} open={open} onToggle={toggle} /><Cell side="b" text={b} same={same} name={name} open={open} onToggle={toggle} /></div>
 }
 
+function EqualCookie({ name, value }: { name: string; value: string }) {
+  const [open, setOpen] = useState(false)
+  return <div className="flex gap-2 px-2 py-0.5 font-mono text-[11px] text-body"><span className="w-2.5" /><span className="text-muted shrink-0">{name}</span><Value text={value} open={open} onToggle={() => setOpen(!open)} /></div>
+}
+
 function SectionCard({ s, n }: { s: Section; n: number }) {
   return (
     <section className="rounded-lg border border-edge-card bg-panel p-3 space-y-1">
@@ -45,7 +50,7 @@ function SectionCard({ s, n }: { s: Section; n: number }) {
       {s.rows?.map((r, i) => <Row key={i} a={r.a} b={r.b} same={r.same} />)}
       {/* Equal cookie rows render once across both columns. */}
       {s.pairs?.map((r, i) => (s.title === 'Cookie values' && r.same
-        ? <div key={i} className="flex gap-2 px-2 py-0.5 font-mono text-[11px] text-body"><span className="w-2.5" /><span className="text-muted shrink-0">{r.name}</span><span className="break-all">{r.a}</span></div>
+        ? <EqualCookie key={i} name={r.name} value={r.a} />
         : <Row key={i} a={r.a} b={r.b} same={r.same} name={r.name} />))}
       {s.pairs?.length === 0 && <p className="px-2 font-mono text-[11px] text-faint">{MISSING}</p>}
     </section>

@@ -89,6 +89,18 @@ func (f *fakeBodyStream) Recv() (*trafficv1.BodyChunk, error) {
 type fakeViewer struct {
 	trafficv1.ViewerServiceClient
 	stream *fakeBodyStream
+	query  *trafficv1.QueryFlowsRequest
+	follow *trafficv1.StreamFlowsRequest
+}
+
+func (f *fakeViewer) QueryFlows(_ context.Context, in *trafficv1.QueryFlowsRequest, _ ...grpc.CallOption) (*trafficv1.FlowPage, error) {
+	f.query = in
+	return &trafficv1.FlowPage{}, nil
+}
+
+func (f *fakeViewer) StreamFlows(_ context.Context, in *trafficv1.StreamFlowsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[trafficv1.FlowEvent], error) {
+	f.follow = in
+	return nil, status.Error(codes.Unavailable, "not streaming")
 }
 
 func (f *fakeViewer) GetBody(context.Context, *trafficv1.GetBodyRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[trafficv1.BodyChunk], error) {
@@ -176,6 +188,26 @@ func TestBodyNotFoundIsAnAnswer(t *testing.T) {
 	v := &fakeViewer{stream: &fakeBodyStream{err: status.Error(codes.NotFound, "no body")}}
 	if w := get(testServer(&fakeControl{}, v), "localhost:18890", "/api/body"); w.Code != http.StatusNotFound {
 		t.Errorf("%d", w.Code)
+	}
+}
+
+func TestHiddenFlowsAreOptIn(t *testing.T) {
+	v := &fakeViewer{}
+	h := testServer(&fakeControl{}, v)
+	get := func(path string) {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = "127.0.0.1:18890"
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	get("/api/flows?session=s")
+	get("/api/stream?session=s")
+	if v.query.IncludeHidden || v.follow.IncludeHidden {
+		t.Fatal("hidden flows returned without being asked for")
+	}
+	get("/api/flows?session=s&hidden=1")
+	get("/api/stream?session=s&hidden=1")
+	if !v.query.IncludeHidden || !v.follow.IncludeHidden {
+		t.Fatal("hidden=1 did not reach the gateway")
 	}
 }
 

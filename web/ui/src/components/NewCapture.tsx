@@ -3,11 +3,13 @@ import * as api from '../lib/api'
 import type { CaptureSourceInfo, Param, SourceDescriptor } from '../lib/types'
 import { Banner, Button, cx, Field, inputClass, Modal, SectionLabel, selectClass, Spinner } from './ui'
 
+const MAX_RESEEDS = 3
+
 function ParamField({ p, value, onChange }: { p: Param; value: string; onChange: (v: string) => void }) {
   const label = p.label || p.key
   switch (p.type) {
     case 'PARAM_TYPE_BOOL':
-      return <label className="flex items-center gap-2 text-xs text-body"><input type="checkbox" className="accent-[var(--accent)]" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />{label}</label>
+      return <label className="flex items-center gap-2 text-xs text-body"><input type="checkbox" className="accent-[var(--accent)]" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />{label}{p.required && <span className="text-red-fg">*</span>}</label>
     case 'PARAM_TYPE_CHOICE':
       return (
         <Field label={label} required={p.required}>
@@ -44,7 +46,13 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
   const touchedRef = useRef(touched)
   touchedRef.current = touched
 
-  const describe = useCallback(async (name: string, values: Record<string, string>) => {
+  const touch = (keys: string[]) => {
+    const next = new Set([...touchedRef.current, ...keys])
+    touchedRef.current = next
+    setTouched(next)
+  }
+
+  const describe = useCallback(async (name: string, values: Record<string, string>, reseeds = 0): Promise<void> => {
     const gen = ++generation.current
     setDescribing(true)
     try {
@@ -57,7 +65,7 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
       for (const p of d.params ?? []) {
         const only = p.choices?.length === 1 ? p.choices[0].value : undefined
         const dflt = p.default || (provisioning ? only : undefined)
-        if (dflt && values[p.key] === undefined && !touchedRef.current.has(p.key)) seeded[p.key] = dflt
+        if (dflt && values[p.key] !== dflt && !touchedRef.current.has(p.key)) seeded[p.key] = dflt
       }
       // Provisioning can cost a large download, so its defaults are staged, never sent.
       if (provisioning) setStaged((s) => ({ ...seeded, ...s }))
@@ -65,6 +73,9 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         const next = { ...values, ...seeded }
         paramsRef.current = next
         setParams(next)
+        // A seeded answer cascades like a typed one. Bounded, as describing spawns the source
+        // and a third-party one could answer with defaults that never settle.
+        if (reseeds < MAX_RESEEDS) void describe(name, next, reseeds + 1)
       }
     } catch (e) {
       if (gen === generation.current) setError((e as Error).message)
@@ -79,13 +90,12 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
     setTouched(new Set())
     setStaged({})
     setDescriptor(null)
-    setError('')
     void describe(name, {})
   }
   const change = (key: string, value: string) => {
     const next = { ...params, [key]: value }
     setParams(next)
-    setTouched((t) => new Set(t).add(key))
+    touch([key])
     void describe(source, next)
   }
 
@@ -101,6 +111,7 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
   const setUp = () => {
     const next = { ...params, ...staged }
     setParams(next)
+    touch(Object.keys(staged))
     setStaged({})
     void describe(source, next)
   }
@@ -129,7 +140,7 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
     : provisioning ? 'Selecting stages the answer — nothing is sent until Set up.'
       : missing.length ? `needs ${missing.map((p) => p.label || p.key).join(', ')}` : ''
   return (
-    <Modal title="New capture" width={480} onClose={onClose} footer={<>
+    <Modal title="New capture" width={560} onClose={onClose} footer={<>
       <span className={cx('mr-auto text-[11px]', provisioning ? 'text-faint' : 'text-amber-fg')}>{footerNote}</span>
       <Button onClick={onClose}>Cancel</Button>
       {provisioning && !settingUp

@@ -32,16 +32,18 @@ function OutputView({ o }: { o: Output }) {
       <>
         <Block title="Header" text={JSON.stringify(o.jwt.header, null, 2)} json />
         <Block title="Payload" text={JSON.stringify(o.jwt.payload, null, 2)} json />
-        <div className="rounded-lg border border-edge-card bg-panel p-3 font-mono text-[11px] space-y-1">
-          {o.jwt.claims.map((c) => (
-            <div key={c.name} className="flex gap-3"><span className="w-8 text-muted">{c.name}</span><span className={c.expired ? 'text-red-fg' : 'text-body'}>{c.when}{c.expired ? ' — expired' : ''}</span></div>
-          ))}
-          <div className="text-amber-fg">Signature is not verified.</div>
-        </div>
+        <Card title="Claims" actions={<CopyButton text={o.jwt.claims.map((c) => `${c.name} ${c.when}`).join('\n')} label="Copy" />}>
+          <div className="px-3 pb-1.5 font-mono text-[11px] space-y-1">
+            {o.jwt.claims.map((c) => (
+              <div key={c.name} className="flex gap-3"><span className="w-8 text-muted">{c.name}</span><span className={c.expired ? 'text-red-fg' : 'text-body'}>{c.when}{c.expired ? ' — expired' : ''}</span></div>
+            ))}
+            <div className="text-amber-fg">Signature is not verified.</div>
+          </div>
+        </Card>
       </>
     )
   }
-  if (o.time) return <div className="font-mono text-xs text-body">{o.time}</div>
+  if (o.time) return <Block title="Time" text={o.time} />
   if (o.hex) return <Block title={o.binaryLabel ?? 'binary'} text={o.hex} />
   return <Block title={o.isJson ? 'JSON' : 'Text'} text={o.text ?? ''} json={o.isJson} />
 }

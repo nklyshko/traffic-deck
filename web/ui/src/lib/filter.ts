@@ -104,10 +104,18 @@ export const FLOW_EXAMPLES = [
 ]
 export const MESSAGE_EXAMPLES = [['From client', '~from client'], ['Text frames', '~op text'], ['No pings', '!~op ping|pong']]
 
-// The word under the caret, when it is an op being typed: what narrows the help popover.
-export function opAtCaret(expr: string, caret: number): { start: number; prefix: string } | null {
-  const start = Math.max(expr.lastIndexOf(' ', caret - 1) + 1, 0)
-  const word = expr.slice(start, caret)
-  const m = /^!?(~\w*)$/.exec(word)
-  return m ? { start: start + (word.length - m[1].length), prefix: m[1] } : null
+export function wordAtCaret(expr: string, caret: number): { start: number; end: number; word: string } {
+  const start = caret > 0 ? expr.lastIndexOf(' ', caret - 1) + 1 : 0
+  const space = expr.indexOf(' ', caret)
+  const end = space < 0 ? expr.length : space
+  return { start, end, word: expr.slice(start, end) }
+}
+
+// The op being typed at the caret: what narrows the help popover. In argument position a `~`
+// is the start of a regex, not an op.
+export function opAtCaret(expr: string, caret: number): { start: number; end: number; prefix: string } | null {
+  const { start, end } = wordAtCaret(expr, caret)
+  const m = /^!?(~\w*)$/.exec(expr.slice(start, caret))
+  if (!m || halfTyped(expr.slice(0, start))) return null
+  return { start: start + (caret - start - m[1].length), end, prefix: m[1] }
 }

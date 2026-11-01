@@ -2,26 +2,39 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Check } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useCatalog, userTags } from '../lib/catalog'
-import { durationTone, formatTime, num, shortProto, type Tone } from '../lib/format'
+import { durationTone, formatCount, formatMatched, formatTime, num, shortProto, type Tone } from '../lib/format'
 import type { Flow, Tag, Group } from '../lib/types'
 import { EDGE_ROWS } from '../lib/window'
+import { columnStyle, HeaderCell } from './Columns'
 import { Button, cx, DurationBadge, MethodBadge, Spinner, StatusBadge } from './ui'
 
-export interface Column { id: string; label: string; width: number | null; default: boolean }
+export interface Column { id: string; label: string; width: number | null; default: boolean; meta?: string }
 export const COLUMNS: Column[] = [
-  { id: 'flags', label: 'Flags', width: 62, default: true }, { id: 'time', label: 'Time', width: 116, default: true },
-  { id: 'method', label: 'Method', width: 68, default: true }, { id: 'status', label: 'Status', width: 60, default: true },
-  { id: 'duration', label: 'Dur', width: 56, default: true }, { id: 'protocol', label: 'Proto', width: 56, default: true },
-  { id: 'authority', label: 'Authority', width: 200, default: true }, { id: 'path', label: 'Path', width: null, default: true },
-  { id: 'conn', label: 'Conn', width: 90, default: false }, { id: 'stream', label: 'Stream', width: 70, default: false },
+  // The messages chip and two more flags, the most the three slots can show.
+  { id: 'flags', label: 'Flags', width: 82, default: true }, { id: 'time', label: 'Time', width: 94, default: true },
+  { id: 'method', label: 'Method', width: 54, default: true }, { id: 'status', label: 'Status', width: 56, default: true },
+  { id: 'duration', label: 'Dur', width: 60, default: true }, { id: 'protocol', label: 'Proto', width: 44, default: true },
+  // 32 characters, which holds nearly 9 in 10 hosts in real captures; Path takes the rest.
+  { id: 'authority', label: 'Authority', width: 240, default: true }, { id: 'path', label: 'Path', width: null, default: true },
+  { id: 'conn', label: 'Conn', width: 66, default: false }, { id: 'stream', label: 'Stream', width: 56, default: false },
 ]
+
+// A source's declared columns start on, and a name that isn't a built-in column is a flow
+// metadata key. Only the user's own toggles are persisted, so hiding a seeded one sticks.
+export function tableColumns(declared: string[], metaWidth: (key: string) => number): Column[] {
+  const ids = new Set(COLUMNS.map((c) => c.id))
+  return [
+    ...COLUMNS.map((c) => (declared.includes(c.id) ? { ...c, default: true } : c)),
+    ...declared.filter((k) => !ids.has(k)).map((k) => ({ id: `meta:${k}`, label: k, width: metaWidth(k), default: true, meta: k })),
+  ]
+}
 
 interface FlagItem { glyph: string; title: string; tone: string }
 
 // Fixed order, packed from the left; selection and mark aren't flags because the row shows them.
 export function flagsOf(f: Flow, tags: Map<string, Tag>, groups: Map<string, Group>): FlagItem[] {
   const out: FlagItem[] = []
-  if (f.websocket) out.push({ glyph: '⇅', title: `WebSocket — ${num(f.messageCount)} messages`, tone: 'text-blue-fg' })
+  if (f.websocket) out.push({ glyph: '⇅', title: `Open messages (${formatMatched(num(f.messageCount))})`, tone: 'text-blue-fg' })
   if (f.redirectLocation) out.push({ glyph: '↪', title: `Redirects to ${f.redirectLocation}`, tone: 'text-blue-fg' })
   else if (f.redirectedFromId) out.push({ glyph: '↪', title: 'Arrived here via a redirect', tone: 'text-blue-fg' })
   if (f.favorite) out.push({ glyph: '★', title: 'Favorite', tone: 'text-amber-fg' })
@@ -33,14 +46,19 @@ export function flagsOf(f: Flow, tags: Map<string, Tag>, groups: Map<string, Gro
   return out
 }
 
-function Flags({ flow }: { flow: Flow }) {
+function Flags({ flow, onOpenMessages }: { flow: Flow; onOpenMessages: (f: Flow) => void }) {
   const { tags, groups } = useCatalog()
   const items = flagsOf(flow, tags, groups)
   const shown = items.length > 3 ? items.slice(0, 2) : items
   const rest = items.length > 3 ? items.slice(2) : []
   return (
     <span className="flex items-center gap-1.5 font-mono text-xs">
-      {shown.map((f) => <span key={f.glyph} title={f.title} className={f.tone}>{f.glyph}{f.glyph === '⇅' && flow.messageCount ? <span className="text-[10px] ml-0.5">{num(flow.messageCount)}</span> : null}</span>)}
+      {shown.map((f) => (f.glyph === '⇅'
+        ? <button key={f.glyph} type="button" title={f.title} aria-label={f.title} onClick={(e) => { e.stopPropagation(); onOpenMessages(flow) }}
+            className="inline-flex items-center gap-[3px] h-5 pl-[5px] pr-1.5 rounded font-medium shrink-0 tone-blue tint [--a:10%] hover:[--a:20%] border border-transparent hover:border-[color-mix(in_srgb,var(--blue)_40%,transparent)]">
+            {f.glyph}<span className="text-[10px]">{formatCount(num(flow.messageCount))}</span>
+          </button>
+        : <span key={f.glyph} title={f.title} className={f.tone}>{f.glyph}</span>))}
       {rest.length > 0 && <span className="text-muted" title={rest.map((f) => f.title).join('\n')}>⋯</span>}
     </span>
   )
@@ -53,14 +71,13 @@ function Rail({ flow }: { flow: Flow }) {
 
 interface RowProps {
   flow: Flow; columns: Column[]; selected: boolean; picked: boolean; flash: boolean; zebra: boolean
-  onSelect: (id: string) => void; onPick: (f: Flow) => void
+  onSelect: (id: string) => void; onPick: (f: Flow) => void; onOpenMessages: (f: Flow) => void
 }
 
-const cellStyle = (c: Column) => (c.width === null ? { flex: 1, minWidth: 0 } : { width: c.width, flexShrink: 0 })
-
-function Cell({ c, f }: { c: Column; f: Flow }) {
+function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f: Flow) => void }) {
+  if (c.meta !== undefined) return <span title={f.metadata?.[c.meta]} className="block truncate text-body">{f.metadata?.[c.meta]}</span>
   switch (c.id) {
-    case 'flags': return <Flags flow={f} />
+    case 'flags': return <Flags flow={f} onOpenMessages={onOpenMessages} />
     case 'time': return <span className="text-muted">{formatTime(num(f.tsUnixMicros))}</span>
     case 'method': return <MethodBadge method={f.method} />
     case 'status': return <StatusBadge status={f.status} error={f.error} />
@@ -74,7 +91,7 @@ function Cell({ c, f }: { c: Column; f: Flow }) {
   return null
 }
 
-const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra, onSelect, onPick }: RowProps) {
+const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra, onSelect, onPick, onOpenMessages }: RowProps) {
   const mark = f.markColor
   return (
     <div role="row" aria-selected={selected} onClick={() => onSelect(f.id)}
@@ -85,7 +102,7 @@ const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra
         className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
         {picked && <Check size={12} strokeWidth={3} />}
       </button>
-      {columns.map((c) => <div key={c.id} style={cellStyle(c)} className="pr-2"><Cell c={c} f={f} /></div>)}
+      {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><Cell c={c} f={f} onOpenMessages={onOpenMessages} /></div>)}
       <Rail flow={f} />
     </div>
   )
@@ -97,9 +114,11 @@ interface Props {
   compact: boolean; hasOlder: boolean; hasNewer: boolean; loading: boolean; filtered: boolean; follow: boolean
   active: boolean; scrollTo: { kind: 'bottom' | 'top' | 'delta'; delta?: number; seq: number }
   onSelect: (id: string) => void; onPick: (f: Flow) => void; onExtend: (dir: 'older' | 'newer') => void; onClearFilter: () => void
+  onOpenMessages: (f: Flow) => void
+  onColumnWidth: (id: string, width: number | null) => void
 }
 
-export function FlowTable({ rows, columns, selected, picks, flashed, compact, hasOlder, hasNewer, loading, filtered, follow, active, scrollTo, onSelect, onPick, onExtend, onClearFilter }: Props) {
+export function FlowTable({ rows, columns, selected, picks, flashed, compact, hasOlder, hasNewer, loading, filtered, follow, active, scrollTo, onSelect, onPick, onOpenMessages, onExtend, onClearFilter, onColumnWidth }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const rowHeight = compact ? 30 : 44
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => rowHeight, overscan: 12 })
@@ -129,10 +148,11 @@ export function FlowTable({ rows, columns, selected, picks, flashed, compact, ha
   useEffect(() => { if (active) virtual.measure() }, [active, virtual])
 
   const items = virtual.getVirtualItems()
-  const first = items[0]?.index
-  const lastIndex = items[items.length - 1]?.index
+  // The visible range: virtual items include the overscan, which would extend too early.
+  const first = virtual.range?.startIndex
+  const lastIndex = virtual.range?.endIndex
   useEffect(() => {
-    if (first === undefined || !active) return
+    if (first === undefined || lastIndex === undefined || !active) return
     if (first <= EDGE_ROWS && hasOlder) onExtend('older')
     else if (lastIndex >= rows.length - 1 - EDGE_ROWS && hasNewer) onExtend('newer')
   }, [first, lastIndex, rows.length, hasOlder, hasNewer, active, onExtend])
@@ -148,7 +168,7 @@ export function FlowTable({ rows, columns, selected, picks, flashed, compact, ha
     <div className="flex flex-col flex-1 min-w-0 min-h-0" role="table" aria-label="Flows">
       <div role="row" className="flex items-center h-8 pl-3 pr-3 shrink-0 bg-head border-b border-line text-[11px] font-medium text-muted">
         <span className="w-6 shrink-0" />
-        {columns.map((c) => <div key={c.id} style={cellStyle(c)} className={cx('pr-2', c.id === 'stream' && 'text-right')}>{c.label}</div>)}
+        {columns.map((c) => <HeaderCell key={c.id} label={c.label} width={c.width} className={c.id === 'stream' ? 'text-right' : c.meta !== undefined ? 'text-purple-fg' : undefined} onResize={(w) => onColumnWidth(c.id, w)} onReset={() => onColumnWidth(c.id, null)} />)}
       </div>
       <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative" onScroll={(e) => {
         const el = e.currentTarget
@@ -164,7 +184,7 @@ export function FlowTable({ rows, columns, selected, picks, flashed, compact, ha
               const f = rows[v.index]
               return (
                 <div key={f.id} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: rowHeight, transform: `translateY(${v.start}px)` }}>
-                  <Row flow={f} columns={columns} selected={f.id === selected} picked={picks.has(f.id)} flash={flashed.has(f.id)} zebra={v.index % 2 === 1} onSelect={onSelect} onPick={onPick} />
+                  <Row flow={f} columns={columns} selected={f.id === selected} picked={picks.has(f.id)} flash={flashed.has(f.id)} zebra={v.index % 2 === 1} onSelect={onSelect} onPick={onPick} onOpenMessages={onOpenMessages} />
                 </div>
               )
             })}

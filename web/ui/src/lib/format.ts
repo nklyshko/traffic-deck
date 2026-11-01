@@ -27,6 +27,13 @@ export function formatTime(us: number): string {
 export const formatDateTime = (ms: number): string => (ms ? new Date(ms).toLocaleString() : '—')
 export const formatMatched = (n: number, capped?: boolean): string => `${n.toLocaleString('en-US')}${capped ? '+' : ''}`
 
+export function formatCount(n: number): string {
+  if (n < 1000) return String(n)
+  // Rounded before choosing the unit, or 999,950 would read 1000.0K.
+  const k = Math.round(n / 100) / 10
+  return k < 1000 ? `${k.toFixed(1)}K` : `${(n / 1e6).toFixed(1)}M`
+}
+
 const REASONS: Record<number, string> = {
   100: 'Continue', 101: 'Switching Protocols', 102: 'Processing', 103: 'Early Hints',
   200: 'OK', 201: 'Created', 202: 'Accepted', 203: 'Non-Authoritative Information', 204: 'No Content',
@@ -60,5 +67,18 @@ export function durationTone(us: number): Tone | null {
   if (us <= 500_000) return 'green'
   return us <= 2_000_000 ? 'amber' : 'red'
 }
-export const shortMethod = (m?: string): string => ({ DELETE: 'DEL', OPTIONS: 'OPT' } as Record<string, string>)[m ?? ''] ?? (m ?? '')
+export const shortMethod = (m?: string): string => ({ CONNECT: 'CONN', DELETE: 'DEL', OPTIONS: 'OPT' } as Record<string, string>)[m ?? ''] ?? (m ?? '')
 export const shortProto = (p?: string): string => (p ?? '').replace(/^HTTP\//, 'H/')
+
+const FIT_CHAR_PX = 6.7
+const FIT_PADDING = 12
+const FIT_MIN = 44
+const FIT_MAX = 180
+
+// Default width for a column of monospace values: a short sequence number shouldn't get
+// the room a long name needs.
+export function fitWidth(label: string, values: Iterable<string>): number {
+  let longest = label.length
+  for (const v of values) longest = Math.max(longest, v.length)
+  return Math.min(FIT_MAX, Math.max(FIT_MIN, Math.ceil(longest * FIT_CHAR_PX) + FIT_PADDING))
+}
