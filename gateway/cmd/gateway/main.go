@@ -133,6 +133,8 @@ func main() {
 		serve()
 	case "version":
 		printVersion()
+	case "pktap":
+		runPktap(os.Args[2:])
 	case "import":
 		importCapture(os.Args[2:])
 	case "redecode":
@@ -171,8 +173,33 @@ func printVersion() {
 	fmt.Printf("trafficdeck %s\ndev build, checkout %s\n", rev, install.Checkout())
 }
 
+// runPktap runs the macOS per-process capture tool, which the gateway cannot spawn: it needs
+// sudo, and spawned sources have no terminal to prompt on. With no args it serves the RPC
+// source the gateway dials, finding its address and asking for sudo itself, so that is the
+// whole setup after install-pktap. Args pass through as they would to capture-pktap.sh:
+// `serve …` serves with flags, anything else is one capture.
+func runPktap(args []string) {
+	argv := install.Resolve("TRAFFICDECK_SOURCE_PKTAP", "trafficdeck-capture-pktap", func() []string {
+		if root := install.Checkout(); root != "" {
+			return []string{filepath.Join(root, "capture", "capture-pktap.sh")}
+		}
+		return nil
+	})
+	if argv == nil {
+		log.Fatal("pktap is not installed (it is macOS-only; `make install` includes it there)")
+	}
+	bin, err := exec.LookPath(argv[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(args) == 0 {
+		args = []string{"serve"}
+	}
+	log.Fatal(syscall.Exec(bin, append(argv, args...), os.Environ()))
+}
+
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|version|import|redecode|export|import-session] [flags]")
+	fmt.Fprintln(os.Stderr, "usage: trafficdeck [run|serve|version|pktap|import|redecode|export|import-session] [flags]")
 	fmt.Fprintln(os.Stderr, "  (no command)  run the gateway and the TUI together")
 	fmt.Fprintln(os.Stderr, "                (GATEWAY_VIEWER=tui|<module>|<command>|none picks the foreground viewer)")
 	os.Exit(2)

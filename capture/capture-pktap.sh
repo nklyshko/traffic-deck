@@ -48,7 +48,10 @@ fi
 # the tool knows who to launch the browser as and whose home to resolve profiles against.
 if [[ "$(id -u)" != "0" ]]; then
   echo "pktap needs root to create its capture interface — re-running under sudo …" >&2
-  exec sudo -- "$0" "${args[@]}"
+  # TRAFFIC_DECK_HOME goes through env(1): sudo resets the environment and won't pass it on.
+  home=()
+  [[ -n "${TRAFFIC_DECK_HOME:-}" ]] && home=(/usr/bin/env "TRAFFIC_DECK_HOME=$TRAFFIC_DECK_HOME")
+  exec sudo -- ${home[@]+"${home[@]}"} "$0" "${args[@]}"
 fi
 
 exec uv run --project "$HERE/capture_pktap" trafficdeck-capture-pktap "${args[@]}"
