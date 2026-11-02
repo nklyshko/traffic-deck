@@ -103,7 +103,10 @@ export function App() {
           )
         })}
         <span className="flex-1" />
-        <span className="mr-3 text-xs text-ghost font-medium">TrafficDeck</span>
+        <span className="mr-3 flex items-center gap-1.5 text-xs text-ghost font-medium">
+          <img src="/favicon.svg" alt="" width={16} height={16} className="shrink-0" />
+          TrafficDeck
+        </span>
         <IconButton label="Toggle theme" size={26} className="border border-edge" onClick={() => setDark(!dark)}>{dark ? <Moon size={13} /> : <Sun size={13} />}</IconButton>
       </nav>
       <main className="flex-1 min-h-0 relative">
