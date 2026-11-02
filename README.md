@@ -77,6 +77,8 @@ Wireshark's ChmodBPF helper.
 - It refuses uncommitted changes; `ALLOW_DIRTY=1` installs them and records that it did.
 - `PREFIX`, `BINDIR` and `COMPONENTS` narrow where and what. To uninstall, delete the prefix and
   the link.
+- On macOS, after `make install-pktap`, `trafficdeck pktap` starts the per-process Chrome source
+  (it asks for sudo).
 - Android's frida is prepared the first time a version is used, which needs `uv` and the network.
   A start that outruns it says to retry shortly.
 - Both copies share `~/.traffic-deck` and keep separate data. Running both at once needs a different

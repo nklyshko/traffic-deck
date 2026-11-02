@@ -487,3 +487,46 @@ def test_a_start_holds_the_priv_lock_for_its_root_work_only(monkeypatch):
     monkeypatch.setattr(ChromeSource, "start_capture",
                         lambda self, label, params: _other_thread_gets_priv_lock())
     assert PktapSource.start_capture(object.__new__(PktapSource), "", {})  # source holds none
+
+
+def _serve_without_root(monkeypatch, execvp):
+    from capture_sdk import source as harness
+
+    from capture_pktap import cli
+
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    monkeypatch.setattr(os, "execvp", execvp)
+    monkeypatch.setattr(harness, "serve_forever",
+                        lambda *_a: pytest.fail("served without root"))
+    cli._serve(["--control", "127.0.0.1:7099"])
+
+
+def test_serve_reruns_itself_under_sudo(monkeypatch):
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    calls = []
+
+    def execvp(file, args):
+        calls.append(args)
+        raise SystemExit(0)  # a real execvp never returns
+
+    with pytest.raises(SystemExit):
+        _serve_without_root(monkeypatch, execvp)
+    assert calls[0][:2] == ["sudo", "--"]
+    assert calls[0][-4:] == ["--control", "127.0.0.1:7099", "--gateway", "127.0.0.1:7331"]
+
+
+def test_serve_refuses_when_sudo_did_not_make_it_root(monkeypatch):
+    # Re-running would only loop: sudo already ran, and this is still not root.
+    monkeypatch.setenv("SUDO_UID", "501")
+    with pytest.raises(SystemExit, match="did not make it root"):
+        _serve_without_root(monkeypatch, lambda *_a: pytest.fail("re-ran sudo"))
+
+
+def test_serve_refuses_when_sudo_cannot_run(monkeypatch):
+    monkeypatch.delenv("SUDO_UID", raising=False)
+
+    def execvp(*_a):
+        raise FileNotFoundError("sudo")
+
+    with pytest.raises(SystemExit, match="sudo could not run"):
+        _serve_without_root(monkeypatch, execvp)

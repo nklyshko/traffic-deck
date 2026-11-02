@@ -400,6 +400,8 @@ port cannot drift between the two:
 capture/capture-pktap.sh
 ```
 
+From a frozen install ([ADR-0017](adr/0017-frozen-install.md)) the same is `trafficdeck pktap`.
+
 Serving is what a bare invocation does, because that is the mode this tool exists for —
 started once, left up, captures come and go from the viewer. Pass any flag and it falls
 through to a single capture instead.

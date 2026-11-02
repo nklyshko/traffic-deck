@@ -11,10 +11,11 @@ Two ways to run it:
 and a `[control]`-only manifest in ~/.traffic-deck/plugins/ makes the gateway dial it, so
 captures start and stop from the TUI or a web UI with no further prompting:
 
-    sudo trafficdeck-capture-pktap serve --control 127.0.0.1:7071
+    trafficdeck-capture-pktap serve      (or `trafficdeck pktap`)
 
-With no arguments it runs one capture directly, with the same interactive Chrome/profile
-pickers as `trafficdeck-capture-chrome`:
+It serves on the address from the manifest `make install-pktap` wrote, and re-runs itself
+under sudo. With no arguments it runs one capture directly, with the same interactive
+Chrome/profile pickers as `trafficdeck-capture-chrome`:
 
     sudo trafficdeck-capture-pktap --label demo --url https://example.com
 
@@ -27,13 +28,15 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tomllib
+from pathlib import Path
 
 from capture_chrome import platform, profiles
 from capture_chrome.capture import AlreadyRunning, profile_desc
 # The pickers are capture-chrome's, reused as-is: same browsers, same profiles, same
 # remembered defaults, so the two tools can't drift on what they offer.
 from capture_chrome.cli import _pick_chrome, _pick_profile
-from capture_sdk import dumpcap, terminal
+from capture_sdk import dumpcap, paths, terminal
 from capture_sdk.shutdown import GracefulInterrupt
 from capture_sdk.state import Store
 
@@ -55,6 +58,18 @@ def main(argv=None) -> None:
     return _capture(argv)
 
 
+def _manifest_addr() -> str | None:
+    """The [control] addr in the module manifest, so the port lives in one place."""
+    try:
+        return tomllib.loads(_manifest_path().read_text())["control"]["addr"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
+        return None
+
+
+def _manifest_path() -> Path:
+    return paths.home() / "plugins" / "pktap.toml"
+
+
 def _serve(argv) -> None:
     from capture_sdk import source as harness
 
@@ -63,18 +78,34 @@ def _serve(argv) -> None:
     ap = argparse.ArgumentParser(prog="capture-pktap serve",
                                  description="Serve macOS per-process capture as a CaptureSourceService")
     ap.add_argument("--gateway", default=os.environ.get("GATEWAY_ADDR", "127.0.0.1:7331"))
-    ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR", "127.0.0.1:7071"),
-                    help="address to serve CaptureSourceService on; must match the addr in "
-                         "the module manifest the gateway dials (host:port)")
+    ap.add_argument("--control", default=os.environ.get("TRAFFICDECK_CONTROL_ADDR"),
+                    help="address to serve CaptureSourceService on (host:port; default: the "
+                         "addr in the module manifest the gateway dials)")
     ap.add_argument("--tcpdump", default=None, help="tcpdump binary (default: /usr/sbin/tcpdump)")
     args = ap.parse_args(argv)
 
     run_as = privdrop.invoking_user()
+    # Before the manifest is read: under sudo, ~ has to be the user's again to find it.
     privdrop.adopt_user_home(run_as)
+    control = args.control or _manifest_addr()
+    if not control:
+        sys.exit(f"error: no [control] addr in {_manifest_path()} — run `make install-pktap` "
+                 "first, or pass --control host:port")
     if run_as is None:
-        print("warning: not running as root — pktap capture will fail; re-run under sudo",
+        # Already under sudo and still not root (a non-root runas, a shim): re-running would
+        # only loop, and serving would accept captures that cannot start.
+        if "SUDO_UID" in os.environ:
+            sys.exit("error: pktap must serve as root, and sudo did not make it root")
+        # sudo resets the environment, so what was resolved from it goes along as flags.
+        print("pktap needs root to create its capture interface — re-running under sudo …",
               file=sys.stderr, flush=True)
-    harness.serve_forever(PktapSource(args.gateway, run_as, args.tcpdump), args.control)
+        try:
+            os.execvp("sudo", ["sudo", "--", sys.executable, "-m", "capture_pktap", "serve",
+                               *argv, "--control", control, "--gateway", args.gateway])
+        except OSError as e:
+            sys.exit(f"error: pktap must serve as root, and sudo could not run: {e}")
+    print(f"serving on {control}", file=sys.stderr, flush=True)
+    harness.serve_forever(PktapSource(args.gateway, run_as, args.tcpdump), control)
 
 
 def _capture(argv) -> None:
