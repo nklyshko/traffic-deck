@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { compareFlows, compareMessages, diffLines, diffText, goSlice, messagePosition, MISSING, pairValues, positionLines, prettyJson, prettyPayload, prettyXml, unifiedDiff } from './compare'
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
+import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
 import { bodyExt, cookiePairs, curlCommand, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
@@ -170,6 +171,19 @@ describe('decoder', () => {
     expect(d.steps).toEqual(['b64'])
     expect(d.output.binaryLabel).toBe('b64 · 4 bytes, not text')
     expect(d.output.hex).toContain('ff fe 00 01')
+  })
+  it('recognises a TLS ClientHello as hex, a hex dump or base64', () => {
+    const record = rfc8448.trim()
+    const message = record.slice(10)
+    expect(guessKind(record)).toBe('tls')
+    expect(guessKind(message)).toBe('tls')
+    expect(guessKind(btoa(String.fromCharCode(...message.match(/../g)!.map((b) => parseInt(b, 16)))))).toBe('tls')
+    expect(guessKind(message.match(/.{1,32}/g)!.map((l, i) => `${(i * 16).toString(16).padStart(4, '0')}  ${l.match(/../g)!.join(' ')}`).join('\n'))).toBe('tls')
+    expect(guessKind('68656c6c6f20776f726c64')).toBe('hex')
+    expect(canDecode(message.slice(0, 100), 'tls')).toBe(false)
+    const d = decodeAs(record, 'tls')!
+    expect(d.steps).toEqual(['tls'])
+    expect(d.output.tls?.view).toMatchObject({ record: 'TLS 1.0 (0x0301), 1 record', length: 196, cipher_suites: ['TLS_AES_128_GCM_SHA256 (0x1301)', 'TLS_CHACHA20_POLY1305_SHA256 (0x1303)', 'TLS_AES_256_GCM_SHA384 (0x1302)'] })
   })
   it('caps a chain at three steps', () => {
     let v = 'hello world example text'

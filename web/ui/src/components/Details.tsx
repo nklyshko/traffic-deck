@@ -5,6 +5,7 @@ import { FAVORITE_TAG, loadCatalog, unknownIds, useCatalog, userTags } from '../
 import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies, saveBlob } from '../lib/http'
 import { formatBytes, num, preciseDuration, reasonPhrase } from '../lib/format'
 import { useSetting } from '../lib/settings'
+import { toHex } from '../lib/tlshello'
 import type { Body, Comment, Flow, Header } from '../lib/types'
 import { DecodeAffordance, Decoded } from './Decode'
 import { JsonTree } from './Json'
@@ -19,7 +20,9 @@ export const MARKS = ['red', 'yellow', 'green', 'blue', 'magenta', 'cyan']
 // monospace, so ch measures them without touching the DOM.
 export const nameColumn = (names: string[]) => ({ '--name-col': `min(${Math.max(1, ...names.map((n) => n.length))}ch, 42%)` }) as CSSProperties
 
-export function NameValue({ name, value, decode = true }: { name: string; value: string; decode?: boolean }) {
+// decodeFrom: what the decode chip decodes when that isn't the value shown — the ClientHello
+// row shows the readable summary and decodes the raw handshake bytes, one per ClientHello.
+export function NameValue({ name, value, decode = true, decodeFrom }: { name: string; value: string; decode?: boolean; decodeFrom?: string[] }) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [clipped, setClipped] = useState(false)
@@ -50,9 +53,17 @@ export function NameValue({ name, value, decode = true }: { name: string; value:
             <ChevronRight size={13} className={cx(expanded && 'rotate-90')} />
           </button>
         )}
-        {decode && value && <DecodeAffordance value={value} name={name} open={open} onToggle={() => setOpen(!open)} />}
+        {decodeFrom?.length ? <DecodeAffordance value={decodeFrom[0]} name={name} open={open} onToggle={() => setOpen(!open)} />
+          : decode && value && <DecodeAffordance value={value} name={name} open={open} onToggle={() => setOpen(!open)} />}
       </div>
-      {open && <div className="mx-3 my-1 p-3 rounded-lg border border-edge-input bg-well"><Decoded value={value} name={name} /></div>}
+      {open && <div className="mx-3 my-1 p-3 rounded-lg border border-edge-input bg-well space-y-3">
+        {decodeFrom?.length
+          ? decodeFrom.map((v, i) => <div key={i}>
+            {decodeFrom.length > 1 && <p className="mb-1.5 text-[11px] text-faint">{i === 0 ? 'First' : 'After HelloRetryRequest'}</p>}
+            <Decoded value={v} name={name} />
+          </div>)
+          : <Decoded value={value} name={name} />}
+      </div>}
     </div>
   )
 }
@@ -130,17 +141,20 @@ export function parseJson(text: string): unknown {
 }
 
 function MetaTab({ f }: { f: Flow }) {
+  // The raw ClientHellos only come with GetFlow; two when the server asked for a retry.
+  const hellos = useMemo(() => (f.clientHellos ?? []).map((b64) => toHex(base64Bytes(b64))), [f.clientHellos])
   const rows: [string, string | undefined][] = [
     ['duration', f.durationMicros ? preciseDuration(num(f.durationMicros)) : undefined],
     ['client', f.srcAddr], ['server', f.dstAddr], ['connection', f.connectionId], ['stream', f.streamId], ['protocol', f.protocol],
     ['TLS decrypted', f.tlsDecrypted ? 'yes' : 'no'], ['TLS client', f.tlsClientName], ['JA3', f.ja3], ['JA4', f.ja4],
-    ['HTTP/2 fingerprint', f.http2Fingerprint], ['ClientHello', f.tlsClientHello],
+    ['HTTP/2 fingerprint', f.http2Fingerprint], ['ClientHello', f.tlsClientHello || (hellos.length ? `${hellos[0].length / 2} bytes` : undefined)],
     ['proxy', f.proxy?.addr ? `${f.proxy.addr}${f.proxy.type ? ` (${f.proxy.type})` : ''}` : undefined],
     ['WebSocket frames', f.websocket ? String(num(f.messageCount)) : undefined], ['user agent', f.userAgent],
     ...Object.entries(f.metadata ?? {}),
   ]
   const shown = rows.filter(([, v]) => v)
-  return <Card title="Meta"><div style={nameColumn(shown.map(([n]) => n))}>{shown.map(([n, v]) => <NameValue key={n} name={n} value={v!} decode={false} />)}</div></Card>
+  // No decode chips here except the ClientHello's, which decodes the bytes behind the row.
+  return <Card title="Meta"><div style={nameColumn(shown.map(([n]) => n))}>{shown.map(([n, v]) => <NameValue key={n} name={n} value={v!} decode={false} decodeFrom={n === 'ClientHello' ? hellos : undefined} />)}</div></Card>
 }
 
 const without = (ids: string[] | undefined, id: string, add: boolean) => (add ? [...new Set([...(ids ?? []), id])] : (ids ?? []).filter((x) => x !== id))

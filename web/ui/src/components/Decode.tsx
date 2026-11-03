@@ -1,12 +1,13 @@
 import { ScanSearch } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { canDecode, decodeAs, guessKind, KINDS, pickKind, type Kind, type Output } from '../lib/decoder'
+import { alpn, serverName, toBase64, toHex, toRecords, type ClientHello } from '../lib/tlshello'
 import { JsonTree } from './Json'
 import { Badge, Card, CopyButton, cx, Modal } from './ui'
 import type { Tone } from '../lib/format'
 
 const CLIP = 20_000
-const KIND_TONE: Record<Kind, Tone> = { jwt: 'purple', b64: 'cyan', url: 'blue', hex: 'orange', ts: 'green' }
+const KIND_TONE: Record<Kind, Tone> = { jwt: 'purple', b64: 'cyan', url: 'blue', hex: 'orange', ts: 'green', tls: 'pink' }
 
 function Block({ title, text, json }: { title: string; text: string; json?: boolean }) {
   const parsed = useMemo(() => {
@@ -26,7 +27,38 @@ function Block({ title, text, json }: { title: string; text: string; json?: bool
   )
 }
 
+// Copies the ClientHello in the forms other tools take: hex and base64 of the handshake
+// message as TLS stores it, and the same wrapped in a TLS record for Wireshark, openssl or a
+// replay. A TLS 1.3 client puts 0x0301 on its first ClientHello's record, 0x0303 after a retry.
+export function ClientHelloCopy({ message, retry = false }: { message: Uint8Array; retry?: boolean }) {
+  return (
+    <span className="flex items-center gap-2.5">
+      <span className="text-[11px] text-faint">Copy</span>
+      <CopyButton text={() => toHex(message)} label="hex" />
+      <CopyButton text={() => toBase64(message)} label="base64" />
+      <CopyButton text={() => toHex(toRecords(message, retry ? 0x0303 : 0x0301))} label="as record" />
+    </span>
+  )
+}
+
+export function helloSummary(h: ClientHello): string {
+  const name = serverName(h), protocols = alpn(h)
+  return [`${h.message.length} bytes`, name, protocols.length ? protocols.join(', ') : undefined, h.record && `${h.record.count} record${h.record.count > 1 ? 's' : ''}`].filter(Boolean).join(' · ')
+}
+
+function ClientHelloView({ hello, view }: { hello: ClientHello; view: Record<string, unknown> }) {
+  return (
+    <Card title="ClientHello" meta={helloSummary(hello)} actions={<span className="flex items-center gap-2.5"><ClientHelloCopy message={hello.message} /><CopyButton text={() => JSON.stringify(view, null, 2)} label="JSON" /></span>}>
+      <div className="px-3 pb-1.5">
+        {hello.warnings.map((w) => <p key={w} className="text-[11px] text-amber-fg">{w}</p>)}
+        <JsonTree value={view} />
+      </div>
+    </Card>
+  )
+}
+
 function OutputView({ o }: { o: Output }) {
+  if (o.tls) return <ClientHelloView hello={o.tls.hello} view={o.tls.view} />
   if (o.jwt) {
     return (
       <>
@@ -91,7 +123,7 @@ export function DecoderModal({ initial, onClose }: { initial: string; onClose: (
   return (
     <Modal title="Decoder" width={760} height="min(760px, 100%)" onClose={onClose}
       headerExtra={<span className="inline-flex items-center gap-1.5 h-5 px-2 rounded-full tint tone-green text-[10px]">runs in your browser — nothing is sent anywhere</span>}>
-      <textarea autoFocus spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a JWT, base64, URL-encoded, hex or timestamp value"
+      <textarea autoFocus spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a JWT, base64, URL-encoded, hex or timestamp value, or a TLS ClientHello as hex, a hex dump or base64"
         className="w-full h-24 p-2.5 rounded-lg bg-well border border-edge-input font-mono text-xs text-ink resize-y" />
       {value.trim() && <Decoded key={value} value={value} />}
     </Modal>

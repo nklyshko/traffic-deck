@@ -30,6 +30,8 @@ export interface Flow extends Annotations {
   metadata?: Record<string, string>; error?: string; durationMicros?: Str64
   redirectLocation?: string; redirectedFromId?: string
   http2Fingerprint?: string; ja3?: string; ja4?: string; tlsClientHello?: string; tlsClientName?: string
+  clientHellos?: string[] // base64; only from GetFlow, never in a page or the stream
+  tlsHrr?: boolean
 }
 export interface FlowCursor { tsMicros?: Str64; frameNumber?: Str64 }
 export interface FlowPage {

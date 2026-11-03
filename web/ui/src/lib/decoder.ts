@@ -1,8 +1,9 @@
 // Pure value decoding: runs in the browser, nothing is sent anywhere.
 import { hexDump } from './http'
+import { bytesFromText, describe as describeHello, looksLikeClientHello, parseClientHello, type ClientHello } from './tlshello'
 
-export type Kind = 'jwt' | 'b64' | 'url' | 'hex' | 'ts'
-export const KINDS: Kind[] = ['jwt', 'b64', 'url', 'hex', 'ts']
+export type Kind = 'jwt' | 'b64' | 'url' | 'hex' | 'ts' | 'tls'
+export const KINDS: Kind[] = ['jwt', 'b64', 'url', 'hex', 'ts', 'tls']
 
 export interface Claim { name: string; when: string; expired: boolean }
 export interface Output {
@@ -13,6 +14,7 @@ export interface Output {
   time?: string
   binaryLabel?: string
   hex?: string
+  tls?: { hello: ClientHello; view: Record<string, unknown> }
 }
 export interface Decoded { steps: Kind[]; output: Output }
 
@@ -84,6 +86,17 @@ function hexBytes(s: string): Uint8Array | null {
   return Uint8Array.from(s.match(/../g)!, (b) => parseInt(b, 16))
 }
 
+// A TLS ClientHello as hex, a hex dump or base64, with or without record framing.
+function clientHello(s: string): ClientHello | null {
+  const bytes = bytesFromText(s)
+  if (!bytes || !looksLikeClientHello(bytes)) return null
+  try {
+    return parseClientHello(bytes)
+  } catch {
+    return null
+  }
+}
+
 const timestampMs = (s: string): number | null => (/^\d{10}$/.test(s) ? Number(s) * 1000 : /^\d{13}$/.test(s) ? Number(s) : null)
 
 function b64Strict(s: string): boolean {
@@ -110,6 +123,7 @@ export function guessKind(rawValue: string, name = ''): Kind | null {
     const sec = ms / 1000
     if (sec >= 1_100_000_000 && sec <= 1_900_000_000) return 'ts'
   }
+  if (clientHello(s)) return 'tls'
   if (urlDecoded(s) !== null) return 'url'
   if (b64Strict(s)) return 'b64'
   if (hexStrict(s)) return 'hex'
@@ -124,6 +138,7 @@ export function canDecode(rawValue: string, kind: Kind): boolean {
     case 'url': return urlDecoded(s) !== null
     case 'hex': return !!hexBytes(s)
     case 'ts': return timestampMs(s) !== null
+    case 'tls': return !!clientHello(s)
   }
 }
 
@@ -185,6 +200,10 @@ function decodeOnce(rawValue: string, kind: Kind, now: number): Output | null {
     case 'ts': {
       const ms = timestampMs(s)
       return ms === null ? null : { kind, time: formatWhen(ms, now) }
+    }
+    case 'tls': {
+      const hello = clientHello(s)
+      return hello && { kind, tls: { hello, view: describeHello(hello) } }
     }
   }
 }
