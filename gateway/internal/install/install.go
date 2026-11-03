@@ -4,11 +4,12 @@
 package install
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 )
@@ -49,28 +50,41 @@ func exeDir() string {
 	return filepath.Dir(exe)
 }
 
-// Prefix is the install prefix this binary runs from, or "" for a dev build.
-func Prefix() string {
+// snapshot is what this process learned about its install, once: a running gateway is the
+// code it started with, so a reinstall under it (or the moment its prefix is being replaced)
+// must not change what it reports about itself.
+type snapshot struct {
+	prefix string
+	info   Info
+	err    error
+}
+
+func load() snapshot {
 	dir := exeDir()
 	if dir == "" {
-		return ""
+		return snapshot{err: errNotInstalled}
 	}
 	prefix := filepath.Dir(dir)
 	if _, err := os.Stat(filepath.Join(prefix, manifestName)); err != nil {
-		return ""
+		return snapshot{err: errNotInstalled}
 	}
-	return prefix
+	var info Info
+	_, err := toml.DecodeFile(filepath.Join(prefix, manifestName), &info)
+	return snapshot{prefix: prefix, info: info, err: err}
 }
 
-// Read loads install.toml from this binary's prefix.
+var errNotInstalled = errors.New("not an installed binary")
+
+// current is the snapshot, taken on first use — config.Load, at startup.
+var current = sync.OnceValue(load)
+
+// Prefix is the install prefix this binary runs from, or "" for a dev build.
+func Prefix() string { return current().prefix }
+
+// Read is install.toml from this binary's prefix, as it was when the process started.
 func Read() (Info, error) {
-	var info Info
-	prefix := Prefix()
-	if prefix == "" {
-		return info, fmt.Errorf("not an installed binary")
-	}
-	_, err := toml.DecodeFile(filepath.Join(prefix, manifestName), &info)
-	return info, err
+	s := current()
+	return s.info, s.err
 }
 
 // Checkout is the checkout this dev binary sits in, or "" — always "" when installed, even

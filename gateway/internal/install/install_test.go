@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -21,7 +22,8 @@ func runningFrom(t *testing.T, exe string) {
 	t.Helper()
 	old := executable
 	executable = func() (string, error) { return exe, nil }
-	t.Cleanup(func() { executable = old })
+	current = sync.OnceValue(load)
+	t.Cleanup(func() { executable = old; current = sync.OnceValue(load) })
 }
 
 func TestDevBinaryFindsItsOwnCheckoutNotTheWorkingDirectory(t *testing.T) {
@@ -106,5 +108,32 @@ func TestInstalledResolveStopsAtLibexec(t *testing.T) {
 	t.Setenv("TD_TEST_SET", "my launcher")
 	if got := Resolve("TD_TEST_SET", "absent", never); !reflect.DeepEqual(got, []string{"my", "launcher"}) {
 		t.Errorf("Resolve(override) = %v", got)
+	}
+}
+
+func TestTheInstallRecordIsReadOnce(t *testing.T) {
+	prefix := t.TempDir()
+	touch(t, filepath.Join(prefix, "bin", "trafficdeck"))
+	record := filepath.Join(prefix, manifestName)
+	if err := os.WriteFile(record, []byte(`commit = "old"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runningFrom(t, filepath.Join(prefix, "bin", "trafficdeck"))
+	if info, err := Read(); err != nil || info.Commit != "old" {
+		t.Fatalf("Read() = %+v, %v", info, err)
+	}
+
+	// A reinstall under a running gateway: first the prefix goes, then a new record appears.
+	if err := os.Remove(record); err != nil {
+		t.Fatal(err)
+	}
+	if Prefix() == "" {
+		t.Error("mid-reinstall, the running binary took itself for a dev build")
+	}
+	if err := os.WriteFile(record, []byte(`commit = "new"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := Read(); info.Commit != "old" {
+		t.Errorf("Read().Commit = %q: reports code it is not running", info.Commit)
 	}
 }
