@@ -194,6 +194,10 @@ func configureFingerprints(cfg config.Config) {
 }
 
 func openDeps(ctx context.Context, cfg config.Config) (objstore.Store, *store.Store) {
+	if cfg.DataRoot == "" {
+		log.Fatal("no data root: this binary is neither installed nor inside a checkout " +
+			"(`go run`, or a copied binary), so set DATA_ROOT to say which catalog it uses")
+	}
 	obj, err := objstore.NewFSStore(cfg.DataRoot)
 	if err != nil {
 		log.Fatalf("objstore: %v", err)

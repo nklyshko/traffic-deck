@@ -52,7 +52,8 @@ three walks. An installed binary is one with `<exe>/../install.toml`, symlinks r
 
 An installed binary deliberately has no `PATH` fallback: a stray console script from a dev venv
 on `PATH` would be checkout code again. `go run` no longer finds a checkout; it builds into a
-temporary directory, and nothing documented relies on it.
+temporary directory, and nothing documented relies on it. Such a binary, like a copied one,
+has no data root of its own and refuses to open a catalog until `DATA_ROOT` names one.
 
 **3. Data is separated by binary, the home is shared.** `DATA_ROOT` defaults to
 `~/.traffic-deck/data` when installed and `<checkout>/data` in dev, and is removed from
