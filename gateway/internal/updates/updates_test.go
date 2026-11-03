@@ -295,6 +295,36 @@ func TestCheckInstalled(t *testing.T) {
 		t.Errorf("installed ahead of the remote reported as behind: %+v", got)
 	}
 
+	// Published after the checkout's last fetch: the install can't contain what it never saw.
+	commit(remote, "unfetched")
+	if got := checkInstalled(ctx, comp); !got.Available || got.Err != "" {
+		t.Errorf("tip not fetched into the checkout: %+v", got)
+	}
+
+	// Rewritten away: the checkout no longer has the installed commit, so merge-base can't run.
+	rewritten := comp
+	rewritten.InstalledCommit = strings.Repeat("d", 40)
+	if got := checkInstalled(ctx, rewritten); !got.Available || got.Err != "" {
+		t.Errorf("installed commit gone from the checkout: %+v", got)
+	}
+
+	// A source_dir that is now a file is gone too, not a git failure.
+	asFile := comp
+	asFile.Dir = filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(asFile.Dir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkInstalled(ctx, asFile); !got.Available || got.Err != "" {
+		t.Errorf("source_dir replaced by a file: %+v", got)
+	}
+
+	// A git that can't answer is not an update.
+	notRepo := comp
+	notRepo.Dir = t.TempDir()
+	if got := checkInstalled(ctx, notRepo); got.Available || got.Err == "" {
+		t.Errorf("source_dir no longer a repo: %+v", got)
+	}
+
 	noUpstream := comp
 	noUpstream.Remote = ""
 	if got := checkInstalled(ctx, noUpstream); got.Err == "" || got.Available {
