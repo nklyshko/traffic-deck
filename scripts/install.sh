@@ -139,12 +139,25 @@ pydir="$(find "$stage/pythons" -mindepth 1 -maxdepth 1 -type d -name 'cpython-*'
 pydir_real="$(cd "$pydir" && pwd -P)"
 mv "$pydir" "$stage/out/python"
 
+# Android captures run under the frida matching the device's frida-server, so each version
+# gets its own venv. frida_versions.py names them, so it stays the one place they are named.
+frida_versions=""
+if [[ " $COMPONENTS " = *" capture_android "* ]]; then
+  frida_versions="$("$stage/out/python/bin/python3" -I -c \
+    'import sys; sys.path.insert(0, sys.argv[1]); from capture_android import frida_versions as v; print(*v.SUPPORTED)' \
+    "$stage/src/capture/capture_android")"
+fi
+
 # A throwaway install of every third-party requirement fills uv's cache, so the real one
 # below runs --offline and a network failure can't strike after the old prefix is gone.
 for c in $COMPONENTS; do
   echo "fetching $c"
   uv venv --quiet --python "$stage/out/python/bin/python3" "$stage/venvs/$c"
   uv pip install --quiet --python "$stage/venvs/$c/bin/python" -r "$stage/out/requirements/$c.txt"
+done
+for v in $frida_versions; do
+  echo "fetching frida $v"
+  uv pip install --quiet --python "$stage/venvs/capture_android/bin/python" "frida==$v"
 done
 
 # Moved aside before it is deleted: a removal that failed partway (root-owned files from an
@@ -209,6 +222,13 @@ for c in $COMPONENTS; do
   fill_venv "$env" "$c" -r "$PREFIX/requirements/$c.txt"
   script="trafficdeck-${c//_/-}"
   ln -s "../venvs/$c/bin/$script" "$PREFIX/libexec/$script"
+done
+# The capture itself runs in these, never the CLI or source process: they hold the Android
+# component plus the one frida a device needs (capture_android/frida_env.py).
+for v in $frida_versions; do
+  echo "installing frida $v"
+  fill_venv "$PREFIX/venvs/android-frida-$v" capture_android \
+    -r "$PREFIX/requirements/capture_android.txt" "frida==$v"
 done
 
 # A TOML basic string: a quote, backslash or line break in a path or URL would otherwise
