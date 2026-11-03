@@ -167,6 +167,8 @@ func (s source) integer(key string, def int) int {
 // defaultDataRoot keeps an installed gateway and each checkout's dev gateway on separate
 // catalogs: they run different schemas, and a gateway refuses a database written by a newer
 // one, so sharing would let a dev migration lock the installed gateway out (ADR-0017 §3).
+// "" for a binary that is neither (`go run`, a copied binary): it has no catalog of its own,
+// and ./data would give it a different one in every directory, so it must be told.
 func defaultDataRoot() string {
 	if home := Home(); home != "" && install.Prefix() != "" {
 		return filepath.Join(home, "data")
@@ -174,7 +176,7 @@ func defaultDataRoot() string {
 	if root := install.Checkout(); root != "" {
 		return filepath.Join(root, "data")
 	}
-	return "./data"
+	return ""
 }
 
 // Load reads config from the environment and $TRAFFIC_DECK_HOME/config.toml (env wins),
@@ -182,6 +184,10 @@ func defaultDataRoot() string {
 func Load() Config {
 	s := loadFile()
 	dataRoot := s.str("DATA_ROOT", defaultDataRoot())
+	logFile := "off" // no data root to put it under: stderr only, never the working directory
+	if dataRoot != "" {
+		logFile = filepath.Join(dataRoot, "logs", "gateway.log")
+	}
 	fpDir := "" // builtin fingerprints only
 	if home := Home(); home != "" {
 		fpDir = filepath.Join(home, "fingerprints")
@@ -203,7 +209,7 @@ func Load() Config {
 		Viewer:          s.str("GATEWAY_VIEWER", "tui"),
 		UpdateCheck:     s.boolean("GATEWAY_UPDATE_CHECK", true),
 		FingerprintsDir: s.str("TRAFFICDECK_FP_DIR", fpDir),
-		LogFile:         s.str("GATEWAY_LOG_FILE", filepath.Join(dataRoot, "logs", "gateway.log")),
+		LogFile:         s.str("GATEWAY_LOG_FILE", logFile),
 		LogMaxSizeMB:    s.integer("GATEWAY_LOG_MAX_SIZE_MB", 50),
 		LogMaxBackups:   s.integer("GATEWAY_LOG_MAX_BACKUPS", 10),
 		LogMaxAgeDays:   s.integer("GATEWAY_LOG_MAX_AGE_DAYS", 30),

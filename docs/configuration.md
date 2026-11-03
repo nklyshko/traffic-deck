@@ -21,7 +21,7 @@ file for one run.
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `DATA_ROOT` | `~/.traffic-deck/data` installed, `<checkout>/data` in a dev build | SQLite bundles + catalog. Don't set it in `config.toml`, which an installed and a dev gateway share: a gateway refuses a database written by a newer one, so sharing a catalog can lock the installed gateway out ([ADR-0017](adr/0017-frozen-install.md)). |
+| `DATA_ROOT` | `~/.traffic-deck/data` installed, `<checkout>/data` in a dev build; required for any other binary (`go run`, a copy) | SQLite bundles + catalog. Don't set it in `config.toml`, which an installed and a dev gateway share: a gateway refuses a database written by a newer one, so sharing a catalog can lock the installed gateway out ([ADR-0017](adr/0017-frozen-install.md)). |
 | `TRAFFIC_DECK_HOME` | `~/.traffic-deck` | per-user root, shared with the capture tools: `config.toml`, [plugin manifests](modules.md), profiles. Env only — a config file can't relocate the directory it lives in. |
 | `GATEWAY_ADDR` | `127.0.0.1:7331` | gRPC listen / viewer + tools connect addr |
 | `TRAFFICDECK_FP_DIR` | `$TRAFFIC_DECK_HOME/fingerprints` | dir of user TLS-fingerprint `*.json` files (on top of the builtin set) — see [TLS client fingerprint names](fingerprints.md) |
