@@ -211,8 +211,10 @@ func checkInstalled(ctx context.Context, c Component) Result {
 	}
 	// From the checkout when it is still there: a relative remote URL and the repo's own config
 	// (core.sshCommand, url.*.insteadOf) only mean anything inside it.
+	fi, err := os.Stat(c.Dir)
+	haveDir := err == nil && fi.IsDir()
 	lsDir := os.TempDir()
-	if fi, err := os.Stat(c.Dir); err == nil && fi.IsDir() {
+	if haveDir {
 		lsDir = c.Dir
 	}
 	ls, err := git(ctx, lsDir, "ls-remote", c.Remote, "refs/heads/"+c.Branch)
@@ -229,9 +231,46 @@ func checkInstalled(ctx context.Context, c Component) Result {
 	if sha == c.InstalledCommit {
 		return r
 	}
+	// Only "no" counts as behind. A git that could not answer (a timeout, a source_dir that is
+	// no longer a repo) is an error, not an update.
+	if !haveDir {
+		r.Available = true // the documented false alarm: nothing left to ask
+		return r
+	}
+	// Either commit missing from the checkout is an answer, not a failure: a tip it never
+	// fetched can't be in the install, and an installed commit it no longer has was rewritten
+	// away (a force-push, then gc), so the branch has moved on without it.
+	for _, rev := range []string{sha, c.InstalledCommit} {
+		if _, err := git(ctx, c.Dir, "cat-file", "-e", rev); err != nil {
+			if exitCode(err) != 1 {
+				r.Err = fmt.Sprintf("cannot compare with %s: %v", c.Dir, err)
+				return r
+			}
+			r.Available = true
+			return r
+		}
+	}
 	_, err = git(ctx, c.Dir, "merge-base", "--is-ancestor", sha, c.InstalledCommit)
-	r.Available = err != nil
+	switch exitCode(err) {
+	case 0:
+	case 1:
+		r.Available = true
+	default:
+		r.Err = fmt.Sprintf("cannot compare with %s: %v", c.Dir, err)
+	}
 	return r
+}
+
+// exitCode is git's exit status: 0 for no error, -1 when git did not run to an exit.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }
 
 // short trims a sha for display. Both revs are abbreviated to the same width — a fixed 12
@@ -262,7 +301,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := firstLine(stderr.String()); msg != "" {
-			return "", errors.New(msg)
+			return "", gitError{msg, err}
 		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("timed out after %s", componentTimeout)
@@ -271,6 +310,15 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// gitError reads as git's own complaint and still unwraps to its exit status.
+type gitError struct {
+	msg string
+	err error
+}
+
+func (e gitError) Error() string { return e.msg }
+func (e gitError) Unwrap() error { return e.err }
 
 // firstLine is git's complaint: the first line of its stderr, which carries the cause, without
 // the "fatal: Could not read from remote repository" boilerplate under it.
