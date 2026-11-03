@@ -5,12 +5,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PREFIX="${PREFIX:-$HOME/.local/share/trafficdeck}"
-BINDIR="${BINDIR:-$HOME/.local/bin}"
+# Absolute, and resolved before the cd below: the venvs and the link in BINDIR keep these
+# paths, so a relative one would point nowhere. No trailing slash, so "$PREFIX.old.*" is a
+# sibling of the prefix rather than a directory inside it.
+abspath() { [[ "$1" = /* ]] && echo "${1%/}" || echo "$PWD/${1%/}"; }
+PREFIX="$(abspath "${PREFIX:-$HOME/.local/share/trafficdeck}")"
+BINDIR="$(abspath "${BINDIR:-$HOME/.local/bin}")"
 DEFAULT_COMPONENTS="capture_chrome capture_firefox capture_mitmproxy capture_android tui mcp"
 [[ "$(uname -s)" = Darwin ]] && DEFAULT_COMPONENTS+=" capture_pktap"
 COMPONENTS="${COMPONENTS:-$DEFAULT_COMPONENTS}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
+# Not PYTHON_VERSION: that name is commonly set already (Python's Docker images, CI), and
+# would silently pick the interpreter.
+INSTALL_PYTHON="${INSTALL_PYTHON:-3.12}"
 
 die() { echo "install: $*" >&2; exit 1; }
 
@@ -80,7 +86,7 @@ done
 # below runs --offline and a network failure can't strike after the old prefix is gone.
 for c in $COMPONENTS; do
   echo "fetching $c"
-  uv venv --quiet --python "$PYTHON_VERSION" "$stage/venvs/$c"
+  uv venv --quiet --python "$INSTALL_PYTHON" "$stage/venvs/$c"
   uv pip install --quiet --python "$stage/venvs/$c/bin/python" -r "$stage/out/requirements/$c.txt"
 done
 
@@ -101,7 +107,7 @@ cp -R "$stage/out/." "$PREFIX/"
 for c in $COMPONENTS; do
   env="$PREFIX/venvs/$c"
   echo "installing $c"
-  uv venv --quiet --offline --python "$PYTHON_VERSION" "$env"
+  uv venv --quiet --offline --python "$INSTALL_PYTHON" "$env"
   uv pip install --quiet --offline --compile-bytecode --python "$env/bin/python" \
     -r "$PREFIX/requirements/$c.txt"
   pkgs=("trafficdeck-${c//_/-}" trafficdeck-proto)
@@ -114,13 +120,16 @@ for c in $COMPONENTS; do
   ln -s "../venvs/$c/bin/$script" "$PREFIX/libexec/$script"
 done
 
+# A TOML basic string: a quote or backslash in a path or URL would otherwise break the file.
+toml_str() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "$s"; }
+
 # Written last: its presence is what makes this directory an install.
 cat > "$PREFIX/install.toml" <<EOF
 commit = "$commit"
 dirty = $dirty
-source_dir = "$ROOT"
-remote = "$remote_url"
-branch = "${merge#refs/heads/}"
+source_dir = $(toml_str "$ROOT")
+remote = $(toml_str "$remote_url")
+branch = $(toml_str "${merge#refs/heads/}")
 date = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EOF
 rm "$PREFIX/.incomplete"
