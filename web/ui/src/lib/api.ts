@@ -31,6 +31,17 @@ export async function rpc<T = unknown>(method: string, body: unknown = {}, signa
   return r.json()
 }
 
+// The bridge builds the whole command; the page only names the flow. The action header is
+// what the bridge requires besides same-origin JSON (web/wireshark.go).
+export async function openInWireshark(sessionId: string, flowId: string): Promise<void> {
+  const r = await fetch('/api/wireshark', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-TrafficDeck-Action': 'wireshark' },
+    body: JSON.stringify({ sessionId, flowId }),
+  })
+  if (!r.ok) throw await failure(r)
+}
+
 export const listSessions = () => getJSON<{ sessions?: Session[] }>('/api/sessions').then((r) => r.sessions ?? [])
 
 export interface FlowQuery { session: string; filter: string; hidden?: boolean; limit?: number; last?: boolean; after?: string; before?: string }

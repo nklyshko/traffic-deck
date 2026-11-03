@@ -280,9 +280,18 @@ function Annotations({ flow, targets, session, onChanged, onPatch }: { flow: Flo
 
 function Footer({ flow, session, onOpenMessages }: { flow: Flow; session: string; onOpenMessages: () => void }) {
   const [note, setNote] = useState('')
+  // An action's failure says what to do about it, so it gets a full-width line of its own
+  // instead of the note's truncated slot, and stays until the next action or flow.
+  const [error, setError] = useState('')
+  useEffect(() => setError(''), [flow.id])
   const flashNote = (t: string) => {
+    setError('')
     setNote(t)
     setTimeout(() => setNote(''), 1500)
+  }
+  const fail = (e: unknown) => {
+    setNote('')
+    setError((e as Error).message)
   }
   const bodyOf = async (b: Body | undefined, response: boolean) => {
     if (!num(b?.size)) return null
@@ -297,7 +306,15 @@ function Footer({ flow, session, onOpenMessages }: { flow: Flow; session: string
       if (binary) saveBlob(`${flow.id}-request.body`, bytes.slice())
       flashNote('✓ curl copied')
     } catch (e) {
-      setNote((e as Error).message)
+      fail(e)
+    }
+  }
+  const wireshark = async () => {
+    try {
+      await api.openInWireshark(session, flow.id)
+      flashNote('✓ opening Wireshark')
+    } catch (e) {
+      fail(e)
     }
   }
   const raw = async () => {
@@ -306,17 +323,26 @@ function Footer({ flow, session, onOpenMessages }: { flow: Flow; session: string
       saveBlob(`${flow.id}.http`, rawExchange(flow, asText(req), asText(rsp)))
       flashNote('✓ saved')
     } catch (e) {
-      setNote((e as Error).message)
+      fail(e)
     }
   }
   return (
-    <div className="flex items-center gap-2 h-12 px-3 shrink-0 border-t border-line bg-chrome">
-      <DurationBadge micros={flow.durationMicros} />
-      <button type="button" title="Copy flow id" onClick={() => void navigator.clipboard.writeText(flow.id).then(() => flashNote('✓ id copied'))} className="font-mono text-[11px] text-muted truncate min-w-0 hover:text-ink">{flow.id}</button>
-      <span className="flex-1 text-right text-[11px] text-faint truncate">{note}</span>
-      <Button size="sm" icon={<Copy size={12} />} className="font-mono" onClick={() => void curl()}>curl</Button>
-      <Button size="sm" icon={<Download size={12} />} className="font-mono" onClick={() => void raw()}>raw</Button>
-      {flow.websocket && <Button size="sm" onClick={onOpenMessages}>messages ({num(flow.messageCount)})</Button>}
+    <div className="shrink-0 border-t border-line bg-chrome">
+      {error && (
+        <div role="alert" className="flex items-start gap-2 px-3 pt-2 text-[11px] text-red-fg">
+          <span className="flex-1 min-w-0 break-words">{error}</span>
+          <IconButton label="Dismiss" size={18} onClick={() => setError('')}><X size={11} /></IconButton>
+        </div>
+      )}
+      <div className="flex items-center gap-2 h-12 px-3">
+        <DurationBadge micros={flow.durationMicros} />
+        <button type="button" title="Copy flow id" onClick={() => void navigator.clipboard.writeText(flow.id).then(() => flashNote('✓ id copied'))} className="font-mono text-[11px] text-muted truncate min-w-0 hover:text-ink">{flow.id}</button>
+        <span className="flex-1 text-right text-[11px] text-faint truncate">{note}</span>
+        <Button size="sm" icon={<Copy size={12} />} className="font-mono" onClick={() => void curl()}>curl</Button>
+        <Button size="sm" icon={<Download size={12} />} className="font-mono" onClick={() => void raw()}>raw</Button>
+        <Button size="sm" tooltip="Open the flow's packets in Wireshark, on this machine" className="font-mono" onClick={() => void wireshark()}>wireshark</Button>
+        {flow.websocket && <Button size="sm" onClick={onOpenMessages}>messages ({num(flow.messageCount)})</Button>}
+      </div>
     </div>
   )
 }

@@ -38,6 +38,7 @@ type backend struct {
 type server struct {
 	backend
 	listenHost string
+	wireshark  *wiresharkLauncher // nil: opening Wireshark is refused
 }
 
 func newServer(b backend, listenAddr string) *server {
@@ -61,6 +62,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/log", s.log)
 	mux.HandleFunc("GET /api/session/export", s.exportSession)
 	mux.HandleFunc("POST /api/session/import", s.importSession)
+	mux.HandleFunc("POST /api/wireshark", s.openInWireshark)
 	for name, h := range s.rpcMethods() {
 		mux.Handle("POST /api/rpc/"+name, h)
 	}

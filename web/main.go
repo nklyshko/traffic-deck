@@ -62,12 +62,14 @@ func main() {
 	// deadline: cancelling the base context is what releases the SSE handlers.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	bridge := newServer(backend{
+		viewer:  trafficv1.NewViewerServiceClient(conn),
+		control: trafficv1.NewControlServiceClient(conn),
+		ingest:  trafficv1.NewIngestServiceClient(conn),
+	}, lis.Addr().String())
+	bridge.wireshark = newWiresharkLauncher(lis.Addr().String(), gatewayAddr)
 	srv := &http.Server{
-		Handler: newServer(backend{
-			viewer:  trafficv1.NewViewerServiceClient(conn),
-			control: trafficv1.NewControlServiceClient(conn),
-			ingest:  trafficv1.NewIngestServiceClient(conn),
-		}, lis.Addr().String()).routes(),
+		Handler:           bridge.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
