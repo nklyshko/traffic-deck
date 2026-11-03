@@ -324,7 +324,11 @@ class AndroidBrowserSource(_AndroidSource):
             source.param("duration", "Auto-stop after (seconds)", source.INT),
         ], message="mitmproxy terminates TLS, so bodies are readable but the browser's own "
                    "fingerprint and the conn/stream columns are lost. The browser is "
-                   "restarted, with certificate checks off, for the capture.")
+                   "restarted, with certificate checks off, for the capture. A release "
+                   "Chrome only takes those flags with "
+                   "chrome://flags#enable-command-line-on-non-rooted-devices enabled on the "
+                   "device; without it the browser bypasses the proxy and the capture stays "
+                   "empty.")
 
 
 def sources(gateway: str, backend: AndroidBackend | None = None) -> dict[str, _AndroidSource]:
