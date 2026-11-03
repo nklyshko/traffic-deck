@@ -206,10 +206,16 @@ func checkOne(ctx context.Context, c Component) Result {
 func checkInstalled(ctx context.Context, c Component) Result {
 	r := Result{Name: c.Name, UpdateHint: c.UpdateHint, LocalRev: short(c.InstalledCommit)}
 	if c.Remote == "" || c.Branch == "" {
-		r.Err = "installed from a branch with no upstream — nothing to compare against"
+		r.Err = "installed from a detached HEAD or a branch with no remote upstream — nothing to compare against"
 		return r
 	}
-	ls, err := git(ctx, os.TempDir(), "ls-remote", c.Remote, "refs/heads/"+c.Branch)
+	// From the checkout when it is still there: a relative remote URL and the repo's own config
+	// (core.sshCommand, url.*.insteadOf) only mean anything inside it.
+	lsDir := os.TempDir()
+	if fi, err := os.Stat(c.Dir); err == nil && fi.IsDir() {
+		lsDir = c.Dir
+	}
+	ls, err := git(ctx, lsDir, "ls-remote", c.Remote, "refs/heads/"+c.Branch)
 	if err != nil {
 		r.Err = fmt.Sprintf("cannot reach %s: %v", c.Remote, err)
 		return r

@@ -268,6 +268,14 @@ func TestCheckInstalled(t *testing.T) {
 		t.Errorf("same commit: %+v", got)
 	}
 
+	// A remote that only the checkout's own config can resolve.
+	run(checkout, "config", "url."+remote+".insteadOf", "td-test:")
+	aliased := comp
+	aliased.Remote = "td-test:"
+	if got := checkInstalled(ctx, aliased); got.Available || got.Err != "" {
+		t.Errorf("remote resolved through the checkout's config: %+v", got)
+	}
+
 	// The case a checkout can't answer: it has pulled the tip, the install has not.
 	commit(remote, "published")
 	run(checkout, "pull", "-q")
