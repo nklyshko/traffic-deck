@@ -25,11 +25,20 @@ The cause is the lookup order as much as the packaging, so fixing either alone l
 so upgrading or uninstalling is replacing a directory.
 
     <prefix>/bin/trafficdeck
+    <prefix>/python/                 the interpreter every venv is built on
     <prefix>/wheels/*.whl
     <prefix>/requirements/*.txt      exported from each uv.lock, kept for the first-use Frida build
     <prefix>/venvs/<component>/      not editable; one per component, as 0008 requires
     <prefix>/libexec/                the venvs' console scripts
     <prefix>/install.toml            commit, dirty, source_dir, remote, branch, date
+
+The interpreter is part of the prefix. A venv records the Python it was built on by absolute
+path, so building on whichever one was on `PATH` (mise's, Homebrew's) would tie the install to
+it, and removing that Python would break the install. uv's Python builds run from any
+directory, so it is fetched into the staging directory with everything else and moved in; the
+build configuration that names the staging directory (sysconfig, `python3-config`, pkg-config)
+is then rewritten to the prefix. The version is an exact release, for the same reason the
+dependencies are locked.
 
 Third-party dependencies come from each component's `uv.lock` and first-party wheels are
 installed with `--no-index`. `--find-links` alone would resolve to whatever is newest on install
@@ -114,5 +123,9 @@ is required at runtime on Frida 17; its `node_modules` is build tooling and stay
 - Stopping an Android capture changes shape when installed: `proc` is the capture itself rather
   than a `uv run` wrapper. One SIGINT still reaches it exactly once, but this path was verified
   on-device and has to be again.
+- An install stages in a hidden `.trafficdeck-stage.*` beside the prefix, not in `/tmp`, so the
+  result moves in by rename and the throwaway venvs can hardlink uv's cache. One left by a
+  killed install is removed by the next. Installs into one parent directory take a lock, so
+  that cleanup never meets a stage still in use.
 - The prefix is not relocatable: venvs hold absolute paths and platform-specific packages. Tarring
   it is not a release artifact.

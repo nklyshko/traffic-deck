@@ -5,20 +5,38 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+die() { echo "install: $*" >&2; exit 1; }
+
 # Absolute, and resolved before the cd below: the venvs and the link in BINDIR keep these
-# paths, so a relative one would point nowhere. No trailing slash, so "$PREFIX.old.*" is a
-# sibling of the prefix rather than a directory inside it.
-abspath() { [[ "$1" = /* ]] && echo "${1%/}" || echo "$PWD/${1%/}"; }
+# paths, so a relative one would point nowhere. Normalised, with no "." or ".." left and no
+# trailing slash, so "$PREFIX.old.*" is a sibling of the prefix rather than inside it.
+abspath() {
+  local p="$1" out="" part parts
+  [[ "$p" = /* ]] || p="$PWD/$p"
+  IFS=/ read -r -a parts <<<"$p"
+  for part in "${parts[@]}"; do
+    case "$part" in
+      "" | .) ;;
+      ..) out="${out%/*}" ;;
+      *) out+="/$part" ;;
+    esac
+  done
+  echo "${out:-/}"
+}
 PREFIX="$(abspath "${PREFIX:-$HOME/.local/share/trafficdeck}")"
 BINDIR="$(abspath "${BINDIR:-$HOME/.local/bin}")"
+# Replacing the prefix deletes it, so it has to be a directory of its own.
+case "$PREFIX" in
+  / | "$(abspath "$HOME")" | "$(dirname "$(abspath "$HOME")")") die "PREFIX=$PREFIX would replace a directory that isn't the install's" ;;
+esac
 DEFAULT_COMPONENTS="capture_chrome capture_firefox capture_mitmproxy capture_android tui mcp"
 [[ "$(uname -s)" = Darwin ]] && DEFAULT_COMPONENTS+=" capture_pktap"
 COMPONENTS="${COMPONENTS:-$DEFAULT_COMPONENTS}"
 # Not PYTHON_VERSION: that name is commonly set already (Python's Docker images, CI), and
-# would silently pick the interpreter.
-INSTALL_PYTHON="${INSTALL_PYTHON:-3.12}"
-
-die() { echo "install: $*" >&2; exit 1; }
+# would silently pick the interpreter. An exact release, so two installs of one commit get
+# the same interpreter rather than whichever 3.12 the local uv knows of. That needs a uv
+# recent enough to know this release.
+INSTALL_PYTHON="${INSTALL_PYTHON:-3.12.13}"
 
 cd "$ROOT"
 dirty=false
@@ -37,8 +55,9 @@ $dirty && version+=".dirty"
 branch="$(git rev-parse --abbrev-ref HEAD)"
 remote_name="$(git config "branch.$branch.remote" || true)"
 remote_url=""
-# "." is a branch tracking another local branch: there is no remote to check for updates.
-[[ -n "$remote_name" && "$remote_name" != . ]] && remote_url="$(git remote get-url "$remote_name")"
+# "." is a branch tracking another local branch, and a remote since removed leaves its name
+# behind: either way there is no remote to check for updates.
+[[ -n "$remote_name" && "$remote_name" != . ]] && remote_url="$(git remote get-url "$remote_name" 2>/dev/null || true)"
 merge="$(git config "branch.$branch.merge" || true)"
 
 project_dir() {
@@ -49,8 +68,31 @@ project_dir() {
   esac
 }
 
-stage="$(mktemp -d)"
-trap 'rm -rf "$stage"' EXIT
+# The stage sits beside the prefix, not in /tmp: on the same filesystem it reaches the
+# prefix by rename rather than a copy, uv can hardlink its cache into the throwaway venvs,
+# and a tmpfs /tmp isn't asked to hold them in memory. A stage an install killed outright
+# left behind is cleared first.
+parent="$(dirname "$PREFIX")"
+mkdir -p "$parent"
+# One install per parent at a time: two would replace the same prefix, and the sweep below
+# would delete a stage still in use. mkdir, because macOS has no flock(1). A lock whose
+# process is gone was left by a killed install, and is taken over.
+lock="$parent/.trafficdeck-install.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+  holder="$(cat "$lock/pid" 2>/dev/null || true)"
+  if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+    die "another install into $parent is running (pid $holder)"
+  fi
+  rm -rf "$lock"
+  mkdir "$lock" || die "another install into $parent took over $lock"
+fi
+echo $$ >"$lock/pid"
+stage=""
+trap 'rm -rf "$stage" "$lock"' EXIT
+for d in "$parent"/.trafficdeck-stage.*; do
+  [[ -d "$d" ]] && rm -rf "$d"
+done
+stage="$(mktemp -d "$parent/.trafficdeck-stage.XXXXXX")"
 
 # A copy, not the tree itself: versions are stamped into pyproject.toml, and only files git
 # would commit may reach a wheel.
@@ -82,11 +124,26 @@ for c in $builds; do
 done
 (cd gateway && go build -o "$stage/out/bin/trafficdeck" ./cmd/gateway)
 
+# The interpreter lives in the prefix too, or every venv would point at whichever Python was
+# on PATH (mise's, Homebrew's), and removing that would break the install. uv's builds run
+# from anywhere, so it is fetched into the stage and moved: only the versioned directory,
+# since uv's minor-version link beside it is absolute. Its build configuration still names
+# the stage, and is rewritten once it is in place.
+echo "fetching Python $INSTALL_PYTHON"
+uv python install --quiet --no-bin --install-dir "$stage/pythons" "$INSTALL_PYTHON" ||
+  die "uv could not fetch Python $INSTALL_PYTHON: if it doesn't know that release, \`uv self update\` (or set INSTALL_PYTHON)"
+pydir="$(find "$stage/pythons" -mindepth 1 -maxdepth 1 -type d -name 'cpython-*' | head -1)"
+[[ -n "$pydir" ]] || die "uv installed no Python $INSTALL_PYTHON"
+# Both spellings: on macOS the stage is under /var, a link to /private/var, and uv may have
+# recorded either.
+pydir_real="$(cd "$pydir" && pwd -P)"
+mv "$pydir" "$stage/out/python"
+
 # A throwaway install of every third-party requirement fills uv's cache, so the real one
 # below runs --offline and a network failure can't strike after the old prefix is gone.
 for c in $COMPONENTS; do
   echo "fetching $c"
-  uv venv --quiet --python "$INSTALL_PYTHON" "$stage/venvs/$c"
+  uv venv --quiet --python "$stage/out/python/bin/python3" "$stage/venvs/$c"
   uv pip install --quiet --python "$stage/venvs/$c/bin/python" -r "$stage/out/requirements/$c.txt"
 done
 
@@ -98,38 +155,86 @@ if [[ -e "$PREFIX" ]]; then
   mv "$PREFIX" "$old/"
   rm -rf "$old" 2>/dev/null || echo "install: could not fully remove the old install; delete $old with sudo" >&2
 fi
-mkdir -p "$PREFIX/venvs" "$PREFIX/libexec"
-touch "$PREFIX/.incomplete"
-cp -R "$stage/out/." "$PREFIX/"
+# Marked before the rename, so the prefix never exists without install.toml or .incomplete.
+mkdir -p "$stage/out/venvs" "$stage/out/libexec"
+touch "$stage/out/.incomplete"
+mv "$stage/out" "$PREFIX"
+# sysconfig, python3-config and the pkg-config files carry the directory uv installed into,
+# which is the stage and about to be deleted: anything building a C extension against this
+# Python would look for headers there.
+{ grep -rlIF -e "$pydir" -e "$pydir_real" "$PREFIX/python" || true; } |
+  "$PREFIX/python/bin/python3" -I -c '
+import sys
+new, *olds = sys.argv[1:]
+for path in sys.stdin.read().splitlines():
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        text = f.read()
+    for old in sorted(set(olds), key=len, reverse=True):
+        text = text.replace(old, new)
+    with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write(text)
+' "$PREFIX/python" "$pydir_real" "$pydir"
+# A few modules were compiled while the interpreter ran from the stage (at its fetched path
+# or at out/python), and their bytecode names it. Removed, so compileall below writes them
+# again.
+stage_real="$(cd "$stage" && pwd -P)"
+{ grep -rlaF --include='*.pyc' -e "$stage" -e "$stage_real" "$PREFIX/python" || true; } |
+  while IFS= read -r f; do rm -f "$f"; done
+# The standard library ships without bytecode, so whoever first imported a module would write
+# it: under the root pktap, root-owned __pycache__ the next install could not remove. Compiled
+# here, after the rewrite above changed some of those sources.
+"$PREFIX/python/bin/python3" -m compileall -q -j0 "$PREFIX/python/lib" >/dev/null
 
+# fill_venv ENV COMPONENT REQUIREMENT...: a venv on the prefix's Python with the third-party
+# requirements, then the component's first-party wheels.
+#
 # --compile-bytecode: pktap runs under sudo, and a root interpreter would otherwise write
 # root-owned __pycache__ into the prefix, which the next install could not remove.
-for c in $COMPONENTS; do
-  env="$PREFIX/venvs/$c"
-  echo "installing $c"
-  uv venv --quiet --offline --python "$INSTALL_PYTHON" "$env"
-  uv pip install --quiet --offline --compile-bytecode --python "$env/bin/python" \
-    -r "$PREFIX/requirements/$c.txt"
-  pkgs=("trafficdeck-${c//_/-}" trafficdeck-proto)
+fill_venv() {
+  local env="$1" c="$2"
+  shift 2
+  uv venv --quiet --offline --python "$PREFIX/python/bin/python3" "$env"
+  uv pip install --quiet --offline --compile-bytecode --python "$env/bin/python" "$@"
+  local pkgs=("trafficdeck-${c//_/-}" trafficdeck-proto)
   [[ "$c" = capture_* ]] && pkgs+=(trafficdeck-capture-sdk)
   [[ "$c" = capture_pktap ]] && pkgs+=(trafficdeck-capture-chrome)
   # --no-index, or a same-named package on PyPI could stand in for a first-party wheel.
   uv pip install --quiet --compile-bytecode --python "$env/bin/python" --no-deps --no-index \
     --find-links "$PREFIX/wheels" "${pkgs[@]}"
+}
+
+for c in $COMPONENTS; do
+  env="$PREFIX/venvs/$c"
+  echo "installing $c"
+  fill_venv "$env" "$c" -r "$PREFIX/requirements/$c.txt"
   script="trafficdeck-${c//_/-}"
   ln -s "../venvs/$c/bin/$script" "$PREFIX/libexec/$script"
 done
 
-# A TOML basic string: a quote or backslash in a path or URL would otherwise break the file.
-toml_str() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "$s"; }
+# A TOML basic string: a quote, backslash or line break in a path or URL would otherwise
+# break the file. Other control characters have no business in either.
+toml_str() {
+  local s="${1//\\/\\\\}" nl=$'\n' cr=$'\r' tab=$'\t'
+  s="${s//\"/\\\"}"
+  s="${s//$nl/\\n}"
+  s="${s//$cr/\\r}"
+  s="${s//$tab/\\t}"
+  [[ "$s" != *[[:cntrl:]]* ]] || die "a control character in $1 can't be recorded"
+  printf '"%s"' "$s"
+}
+
+# Assigned first: a failure inside the heredoc below would not stop the script.
+source_toml="$(toml_str "$ROOT")"
+remote_toml="$(toml_str "$remote_url")"
+branch_toml="$(toml_str "${merge#refs/heads/}")"
 
 # Written last: its presence is what makes this directory an install.
 cat > "$PREFIX/install.toml" <<EOF
 commit = "$commit"
 dirty = $dirty
-source_dir = $(toml_str "$ROOT")
-remote = $(toml_str "$remote_url")
-branch = $(toml_str "${merge#refs/heads/}")
+source_dir = $source_toml
+remote = $remote_toml
+branch = $branch_toml
 date = "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 EOF
 rm "$PREFIX/.incomplete"

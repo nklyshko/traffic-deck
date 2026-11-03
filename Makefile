@@ -46,7 +46,7 @@ gen: ## regenerate all stubs (Go + Python) after editing proto/
 clean: ## remove the built binary
 	rm -f $(GATEWAY_BIN)
 
-# PREFIX, BINDIR, COMPONENTS and INSTALL_PYTHON (default 3.12) pass through the environment;
+# PREFIX, BINDIR, COMPONENTS and INSTALL_PYTHON (default 3.12.13) pass through the environment;
 # ALLOW_DIRTY=1 installs a tree with uncommitted changes and records that it did.
 install: ## freeze this tree into ~/.local/share/trafficdeck
 	./scripts/install.sh
