@@ -27,8 +27,9 @@ so upgrading or uninstalling is replacing a directory.
     <prefix>/bin/trafficdeck
     <prefix>/python/                 the interpreter every venv is built on
     <prefix>/wheels/*.whl
-    <prefix>/requirements/*.txt      exported from each uv.lock, kept for the first-use Frida build
+    <prefix>/requirements/*.txt      exported from each uv.lock
     <prefix>/venvs/<component>/      not editable; one per component, as 0008 requires
+    <prefix>/venvs/android-frida-<version>/   one per supported Frida version (§5)
     <prefix>/libexec/                the venvs' console scripts
     <prefix>/install.toml            commit, dirty, source_dir, remote, branch, date
 
@@ -88,18 +89,19 @@ exists, it also asks whether the installed commit already contains the tip, so a
 its remote is not reported as behind. Without it that case can be a false alarm, which is harmless.
 The default hint is `make install` when installed.
 
-**5. Android has no checkout dependency; Frida is built on first use.** There are exactly two Frida
-versions (`frida_versions.py`), and the base venv holds neither: the CLI and source process do not
-import it, and the proxy method does not load it. `venvs/android-frida<major>` is built from the
-kept wheels, the pinned requirements and the exact version in `frida_versions.py` the first time
-that version is needed. That file stays the one place the versions are named, so there are no
-`frida16`/`frida17` extras to keep in step with it.
+**5. Android has no checkout dependency; every Frida version is installed.** Client and
+frida-server versions must match, so a capture runs under the version chosen for its device, and
+the base venv holds none: the CLI and source process do not import it, and the proxy method does
+not load it. `make install` builds `venvs/android-frida-<version>` for each version in
+`frida_versions.SUPPORTED`, so that file stays the one place the versions are named. The venv is
+named for the exact version rather than the major, so a mismatched client cannot pass for the
+right one.
 
-That build can outlast `StartCapture`'s deadline
-([0015](0015-agents-drive-capture-over-mcp.md) §6), so it does not belong to the call. It runs once
-under a lock, independently of the caller; a call that runs out of time fails with "still being
-prepared, retry shortly", and the retry finds the venv. Raising the deadlines would make every
-client wait longer for one first-use case and would still be a guess.
+Building each version on first use instead was tried and dropped. It kept the install smaller
+(about 110 MB per version) but needed `uv`, the network and a writable prefix at capture time,
+and could outlast `StartCapture`'s deadline ([0015](0015-agents-drive-capture-over-mcp.md) §6),
+which took a background build, a lock, and a "retry shortly" error to cover. Installing both
+leaves nothing to write into the prefix at runtime.
 
 The proxy method runs `mitmdump` from the sibling `capture_mitmproxy` venv, so Android does not
 inherit mitmproxy's dependencies. `frida_scripts/` moves into the package because the Java bridge
@@ -118,14 +120,14 @@ is required at runtime on Frida 17; its `node_modules` is build tooling and stay
 - **Rollback is not supported.** Once a newer install migrates the data, an older one fails with
   `ErrSchemaNewer` until you move forward again. The failure is loud and loses nothing. Backing up
   the catalog would only be a partial answer, since session bundles are versioned too.
-- First use of a Frida version needs `uv`, the network and a writable prefix, and each reinstall
-  costs that download again.
+- Every supported Frida version is installed whether or not it is used, about 110 MB each.
 - Stopping an Android capture changes shape when installed: `proc` is the capture itself rather
-  than a `uv run` wrapper. One SIGINT still reaches it exactly once, but this path was verified
-  on-device and has to be again.
+  than a `uv run` wrapper. One SIGINT still reaches it exactly once, which was verified on a
+  device.
 - An install stages in a hidden `.trafficdeck-stage.*` beside the prefix, not in `/tmp`, so the
   result moves in by rename and the throwaway venvs can hardlink uv's cache. One left by a
   killed install is removed by the next. Installs into one parent directory take a lock, so
   that cleanup never meets a stage still in use.
-- The prefix is not relocatable: venvs hold absolute paths and platform-specific packages. Tarring
+- The prefix is not relocatable: venvs hold absolute paths, to the prefix's own Python among
+  others, and platform-specific packages. Tarring
   it is not a release artifact.

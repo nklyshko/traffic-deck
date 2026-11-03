@@ -17,7 +17,6 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-import sys
 import threading
 from typing import Mapping
 
@@ -105,9 +104,6 @@ class RealAndroidBackend:
         # Client and frida-server versions must match, so the capture runs under the version
         # chosen for this device. The proxy method loads no frida at all.
         fver = None if method == "proxy" else params.get("frida") or self.frida_versions()[1]
-        if fver:
-            frida_env.ensure_frida(fver, wait=frida_env.START_WAIT,
-                                   log=lambda m: print(m, file=sys.stderr, flush=True))
         cmd = frida_env.python_cmd("capture_android.headless", fver)
         cmd += ["--method", method, "--package", package, "--gateway", self._gateway]
         if self._serial:

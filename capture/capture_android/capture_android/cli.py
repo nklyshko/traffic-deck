@@ -151,9 +151,8 @@ def enumerate_app_names(serial: str, fver: str) -> dict[str, str]:
     from the device's PackageManager — no APK downloads. Returns {} on any failure, so
     the picker falls back to bare package names.
     """
-    cmd = [*frida_env.python_cmd("capture_android.list_apps", fver), "--serial", serial]
     try:
-        frida_env.ensure_frida(fver, log=print)
+        cmd = [*frida_env.python_cmd("capture_android.list_apps", fver), "--serial", serial]
         # stdin=DEVNULL: this subprocess's adb/frida calls would otherwise inherit the
         # controlling tty and leave it in a broken input state, wedging the next prompt.
         out = subprocess.run(cmd, text=True, capture_output=True, timeout=180,
@@ -195,7 +194,6 @@ def _run_capture(sdk: Sdk, adb: AdbClient, store: Store, serial: str, fver: str,
     url = store.remember("url", prompt.text(
         "URL to open in the app (optional)", store.get("url", "")))
 
-    frida_env.ensure_frida(fver, log=print)
     cmd = [*frida_env.python_cmd("capture_android.headless", fver), "--method", "frida",
            "--serial", serial, "--package", package, "--gateway", args.gateway]
     if url:
