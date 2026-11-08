@@ -406,6 +406,33 @@ def test_profile_is_created_as_the_user_after_a_state_write(monkeypatch):
     assert creds.euid == 0
 
 
+def test_the_picker_state_is_opened_as_the_user(monkeypatch):
+    # Opening it creates <home>/state when that is missing. Created as root, the first save
+    # of a choice is refused and so is the capture: a fresh home failed every start.
+    import contextlib
+
+    from capture_chrome import source as chrome_source
+    from capture_pktap.source import PktapSource
+
+    state = {"as_user": False, "seen": None}
+
+    @contextlib.contextmanager
+    def fake_as_user(run_as):
+        state["as_user"] = True
+        try:
+            yield
+        finally:
+            state["as_user"] = False
+
+    def fake_store(tool):
+        state["seen"] = state["as_user"]
+
+    monkeypatch.setattr(privdrop, "as_user", fake_as_user)
+    monkeypatch.setattr(chrome_source, "Store", fake_store)
+    PktapSource("127.0.0.1:7331", (501, 20))
+    assert state["seen"] is True
+
+
 def test_describe_lists_profiles_as_the_user(monkeypatch):
     # Describe creates ~/.traffic-deck/chrome-profiles on first use; done as root, no
     # later "new profile" can be made in it.
