@@ -128,6 +128,9 @@ is required at runtime on Frida 17; its `node_modules` is build tooling and stay
   result moves in by rename and the throwaway venvs can hardlink uv's cache. One left by a
   killed install is removed by the next. Installs into one parent directory take a lock, so
   that cleanup never meets a stage still in use.
-- The prefix is not relocatable: venvs hold absolute paths, to the prefix's own Python among
-  others, and platform-specific packages. Tarring
-  it is not a release artifact.
+- The prefix can be moved, which an app bundle needs: the venvs are `--relocatable` and reach
+  the prefix's Python by a relative link. Two things still name the old path and are
+  harmless: each `pyvenv.cfg`'s `home` (Python finds its base through the link) and the
+  Python's build configuration (only a C extension built against it would notice).
+  `~/.local/bin/trafficdeck` is outside the prefix and must be re-linked. Moving is not
+  porting: the prefix holds platform-specific packages and is built on the machine it runs on.
