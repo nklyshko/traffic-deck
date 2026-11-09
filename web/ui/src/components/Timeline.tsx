@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { MESSAGE_EXAMPLES, MESSAGE_TERMS } from '../lib/filter'
 import { fitWidth, formatBytes, formatTime, num } from '../lib/format'
-import { base64Bytes, bodyExt, hexDump, looksTextual, saveBlob } from '../lib/http'
+import { base64Bytes, bodyExt, hexDump, looksTextual, saveBlob, HEX_CAP, TEXT_CAP } from '../lib/http'
 import { useSetting } from '../lib/settings'
 import type { Flow, MessageEvent_, WsMessage } from '../lib/types'
 import { Check, columnStyle, HeaderCell, Popover, ResetColumns } from './Columns'
@@ -14,8 +14,6 @@ import { NameValue, nameColumn, parseJson } from './Details'
 import type { Pick } from './Workspace'
 import { Banner, Button, Card, CopyButton, cx, IconButton, Modal, Pill, Spinner } from './ui'
 
-const TEXT_CAP = 50_000
-const HEX_CAP = 4096
 const FRAME_ROW = 30
 
 function preview(m: WsMessage): string {

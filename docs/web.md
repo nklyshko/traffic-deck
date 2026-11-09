@@ -31,6 +31,9 @@ The controls under it edit the same expression. Focus the empty box for the whol
 `~` to narrow it, Tab to insert, Ctrl-Space to reopen. In the message timeline the box takes the
 message dialect, applied on Enter.
 
+On the Sessions screen, `/` focuses the search box above the list. It matches every word against
+a session's label, id, group, source and metadata, within the selected group.
+
 Selecting a row: ↑/↓ move, Home/End jump within the loaded rows, Esc clears.
 
 ## Open a request in Wireshark

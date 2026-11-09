@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { compareFlows, compareMessages, diffLines, diffText, goSlice, messagePosition, MISSING, pairValues, positionLines, prettyJson, prettyPayload, prettyXml, unifiedDiff } from './compare'
+import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessages, describeLayout, diffLines, diffParts, diffText, fitLines, formDecode, goSlice, messagePosition, MISSING, pairValues, positionLines, prettyJson, prettyPayload, prettyXml, renderBudget, splitRows, unifiedDiff } from './compare'
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
-import { bodyExt, cookiePairs, curlCommand, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
+import { bodyExt, cookiePairs, curlCommand, HEX_CAP, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
 import { classifyLogLine } from './logs'
+import { matchesTerms, matchRuns, plural, searchTerms } from './search'
 import { select, NOTHING } from './selection'
 import { accepts } from './settings'
 import { unknownIds } from './catalog'
-import { declaredColumns, groupScope, inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionScopes } from './sessions'
+import { declaredColumns, groupScope, inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionMatcher, sessionScopes } from './sessions'
 import { checkedAgo, lastEightAm, refreshDue, updateNotice } from './updates'
 import { cursorOf, extendWindow, patchFlow } from './window'
 import type { Flow, Session, WsMessage } from './types'
@@ -211,7 +212,7 @@ describe('compare', () => {
   it('compares two flows section by section', () => {
     const f: Flow = { id: 'a', protocol: 'HTTP/2', requestHeaders: [{ name: ':method', value: 'GET' }, { name: 'accept', value: '*/*' }] }
     const sections = compareFlows(f, { ...f, id: 'b', protocol: 'HTTP/1.1' })
-    expect(sections).toHaveLength(9)
+    expect(sections).toHaveLength(8)
     expect(sections[0].match).toBe(false)
     expect(sections[2].match).toBe(true)
   })
@@ -300,6 +301,36 @@ describe('session scopes', () => {
   })
 })
 
+describe('session search', () => {
+  const live = (s: Session) => s.status === 'SESSION_STATUS_OPEN'
+  const sessions: Session[] = [
+    { id: '7f3a90c2', label: 'Chromium baseline', source: 'mitmproxy', status: 'SESSION_STATUS_OPEN' },
+    { id: '91d2aa01', label: 'Imitation v2', source: 'native', group: 'regression' },
+    { id: 'c04b11ee', label: 'Login replay', source: 'mitmproxy', group: 'fixtures', metadata: { device: 'Pixel 8' } },
+  ]
+  const ids = (q: string) => sessions.filter(sessionMatcher(q)).map((s) => s.id)
+  it('matches every term in any field, ignoring case', () => {
+    expect(ids('CHROMIUM')).toEqual(['7f3a90c2'])
+    expect(ids('mitm')).toEqual(['7f3a90c2', 'c04b11ee'])
+    expect(ids('mitm login')).toEqual(['c04b11ee'])
+    expect(ids('91d2')).toEqual(['91d2aa01'])
+    expect(ids('regress')).toEqual(['91d2aa01'])
+    expect(ids('pixel')).toEqual(['c04b11ee'])
+    expect(ids('mitm native')).toEqual([])
+  })
+  it('matches everything on a blank query, and takes no syntax', () => {
+    expect(ids('   ')).toHaveLength(3)
+    expect(ids('.*')).toEqual([])
+    expect(ids('~s')).toEqual([])
+  })
+  it('counts matches per scope and keeps every scope listed', () => {
+    const scopes = sessionScopes(sessions, live, sessionMatcher('mitm'))
+    expect(scopes.map((s) => [s.key, s.count, s.live])).toEqual([
+      [SCOPE_ALL, 2, 1], [SCOPE_UNGROUPED, 1, 1], [groupScope('fixtures'), 1, 0], [groupScope('regression'), 0, 0],
+    ])
+  })
+})
+
 describe('settings', () => {
   it('reads a corrupt value as the default', () => {
     expect(accepts('columnOverrides', null, {})).toBe(false)
@@ -308,14 +339,87 @@ describe('settings', () => {
     expect(accepts('detailsWidth', 999, 40)).toBe(false)
     expect(accepts('detailsWidth', 55, 40)).toBe(true)
     expect(accepts('compact', 'yes', false)).toBe(false)
+    expect(accepts('diffView', 'split', 'inline')).toBe(true)
+    expect(accepts('diffView', 'sideways', 'inline')).toBe(false)
   })
 })
 
-describe('compare sizes', () => {
-  it('tells apart sizes that round to the same text', () => {
-    const size = (n: number) => compareFlows({ id: 'a', requestBody: { size: n } } as unknown as Flow, { id: 'b', requestBody: { size: 2100 } } as unknown as Flow).find((s) => s.title === 'Request body size')
-    expect(size(2100)?.match).toBe(true)
-    expect(size(2200)?.match).toBe(false)
+describe('compare request bodies', () => {
+  const enc = (t: string) => new TextEncoder().encode(t)
+  const JSON_A = '{"cart":"demo-cart-7","items":[{"sku":"demo-42","qty":1}],"currency":"USD","nonce":"4f1c9a77e2"}'
+  const JSON_B = '{\n  "items": [\n    {\n      "sku": "demo-42",\n      "qty": 1\n    }\n  ],\n  "cart": "demo-cart-7",\n  "currency": "USD",\n  "nonce": "b83d0e1150"\n}\n'
+  const FORM_A = 'email=user%40example.test&password=demo%21pass&remember=on&csrf=a1b2c3&ctx=eyJyZXQiOiIvY2FydCJ9'
+  const FORM_B = 'email=user@example.test&remember=on&password=demo!pass&csrf=d4e5f6&ctx=eyJyZXQiOiIvY2FydCJ9'
+  const json = 'application/json', form = 'application/x-www-form-urlencoded; charset=UTF-8'
+
+  it('describes how JSON and XML were laid out', () => {
+    expect(describeLayout(JSON_A, 'json')).toBe('1 line · compact, no spaces')
+    expect(describeLayout(JSON_B, 'json')).toBe('11 lines · 2-space indent · LF · final newline')
+    expect(describeLayout('{"a": "x y"}', 'json')).toBe('1 line')
+    expect(describeLayout('{"a":"x y"}', 'json')).toBe('1 line · compact, no spaces')
+    expect(describeLayout('{\r\n\t"a": 1\r\n}', 'json')).toBe('3 lines · tab indent · CRLF')
+    expect(describeLayout('<a>\n    <b/>\n</a>', 'xml')).toBe('3 lines · 4-space indent · LF')
+    expect(describeLayout('<a><b>x y</b></a>', 'xml')).toBe('1 line · compact, no spaces')
+  })
+  it('diffs JSON pretty-printed with key order kept', () => {
+    const c = compareBodies(enc(JSON_A), enc(JSON_B), json, json)
+    expect(c).toMatchObject({ kind: 'json', identical: false, verdict: 'differ', sizes: [JSON_A.length, JSON_B.length] })
+    expect(c.layout![0]).not.toBe(c.layout![1])
+    expect([c.diff!.removed, c.diff!.added]).toEqual([2, 2])
+  })
+  it('calls a layout-only difference so', () => {
+    const c = compareBodies(enc('{"a":1,"b":[2]}'), enc('{\n  "a": 1,\n  "b": [\n    2\n  ]\n}\n'), json, json)
+    expect(c.verdict).toBe('layout')
+    expect(compareBodies(enc('{"a":1}'), enc('{"a":1}'), json, json).verdict).toBe('match')
+  })
+  it('falls back to text when a kind is not confirmed or not shared', () => {
+    expect(compareBodies(enc('{"a":'), enc('{"a":1}'), json, json).kind).toBe('text')
+    expect(compareBodies(enc('{"a":1}'), enc('<a/>'), json, 'text/xml').kind).toBe('text')
+    expect(compareBodies(enc('{"a":1}'), enc('{"a":1}'), undefined, undefined).kind).toBe('text')
+    expect(compareBodies(new Uint8Array([0, 1, 2, 255]), enc('x'), undefined, undefined).kind).toBe('binary')
+  })
+  it('form-decodes with + as a space and UTF-8', () => {
+    expect(formDecode('a+b%20c')).toBe('a b c')
+    expect(formDecode('%D0%BF%D1%80')).toBe('пр')
+    expect(formDecode('%E0%A4%A')).toBeNull()
+  })
+  it('pairs form fields by name and occurrence, values as sent', () => {
+    const { order, rows } = compareForms('a=1&a=2&x=%20', 'a=2&b=3&x=+')
+    expect(order).toEqual([['a', 'a', 'x'], ['a', 'b', 'x']])
+    expect(rows).toEqual([
+      { name: 'a', a: '1', b: '2', same: false, sameDecoded: false },
+      { name: 'a', a: '2', b: null, same: false, sameDecoded: false },
+      { name: 'x', a: '%20', b: '+', same: false, sameDecoded: true },
+      { name: 'b', a: null, b: '3', same: false, sameDecoded: false },
+    ])
+  })
+  it('marks values that differ only in encoding', () => {
+    const c = compareBodies(enc(FORM_A), enc(FORM_B), form, form)
+    expect(c.kind).toBe('form')
+    expect(c.verdict).toBe('differ') // field order and csrf differ
+    const by = Object.fromEntries(c.form!.rows.map((r) => [r.name, r]))
+    expect(by.email).toMatchObject({ same: false, sameDecoded: true })
+    expect(by.remember.same).toBe(true)
+    expect(by.csrf).toMatchObject({ same: false, sameDecoded: false })
+    expect(compareBodies(enc('q=a+b&n=%31'), enc('q=a%20b&n=1'), form, form).verdict).toBe('encoding')
+    expect(compareBodies(enc('n=1&q=a+b'), enc('q=a%20b&n=1'), form, form).verdict).toBe('differ')
+  })
+  it('handles missing bodies', () => {
+    expect(compareBodies(null, new Uint8Array(), json, json)).toEqual({ sizes: [null, null], identical: true, verdict: 'match' })
+    const one = compareBodies(null, enc('{"a":1}'), undefined, json)
+    expect(one).toMatchObject({ identical: false, verdict: 'differ', alone: { side: 'b', lines: ['{', '  "a": 1', '}'] } })
+  })
+  it('compares big bodies byte for byte only', () => {
+    const big = enc('x'.repeat((1 << 20) + 1))
+    expect(compareBodies(big, big.slice())).toMatchObject({ identical: true, verdict: 'match', bytesOnly: true })
+  })
+  it('copies the diff, or a form as name=value lines', () => {
+    expect(bodyDiffText(compareBodies(enc('a'), enc('b')))).toBe('--- A\n+++ B\n@@ -1,1 +1,1 @@\n-a\n+b')
+    expect(bodyDiffText(compareBodies(enc('a=1&b=2'), enc('a=1&b=3'), form, form))).toBe('--- A\n+++ B\n a=1\n-b=2\n+b=3')
+  })
+  it('pairs diff lines side by side', () => {
+    const lines = unifiedDiff(['a', 'b', 'c'], ['a', 'x', 'y', 'c']).hunks[0].lines
+    expect(splitRows(lines).map(([l, r]) => [l?.text ?? null, r?.text ?? null])).toEqual([['a', 'a'], ['b', 'x'], [null, 'y'], ['c', 'c']])
   })
 })
 
@@ -439,8 +543,21 @@ describe('message compare', () => {
     const a = Array.from({ length: 40 }, (_, i) => `l${i}`)
     const b = a.map((l, i) => (i === 2 || i === 30 ? 'x' : l))
     expect(unifiedDiff(a, b).hunks).toHaveLength(2)
-    expect(unifiedDiff(a, a)).toEqual({ hunks: [], removed: 0, added: 0 })
+    expect(unifiedDiff(a, a)).toMatchObject({ hunks: [], removed: 0, added: 0 })
     expect(unifiedDiff([], ['x']).hunks[0].header).toBe('@@ -0,0 +1,1 @@')
+  })
+  it('lays out hunks with the unchanged lines between them as gaps', () => {
+    const a = Array.from({ length: 40 }, (_, i) => `l${i}`)
+    const b = a.map((l, i) => (i === 10 || i === 30 ? 'x' : l))
+    const d = unifiedDiff(a, b) // 42 script lines: each change is a − and a + line
+    const shape = (revealed: number[]) => diffParts(d, new Set(revealed)).map((p) => (p.kind === 'gap' ? `gap ${p.to - p.from}${p.above ? '↑' : ''}${p.below ? '↓' : ''}` : p.header))
+    expect(shape([])).toEqual(['gap 7↓', '@@ -8,7 +8,7 @@', 'gap 13↑↓', '@@ -28,7 +28,7 @@', 'gap 6↑'])
+    const [, first, middle] = diffParts(d, new Set())
+    // Opening the whole middle gap joins the two hunks into one block with one header.
+    const all = Array.from({ length: middle.to - middle.from }, (_, k) => middle.from + k)
+    expect(shape(all)).toEqual(['gap 7↓', '@@ -8,27 +8,27 @@', 'gap 6↑'])
+    // Opening part of it grows the hunk above and keeps a smaller gap.
+    expect(shape([first.to, first.to + 1])).toEqual(['gap 7↓', '@@ -8,9 +8,9 @@', 'gap 11↑↓', '@@ -28,7 +28,7 @@', 'gap 6↑'])
   })
   it('falls back to a block replace past the size guard', () => {
     const a = Array.from({ length: 3000 }, (_, i) => `a${i}`), b = Array.from({ length: 3000 }, (_, i) => `b${i}`)
@@ -460,12 +577,44 @@ describe('message compare', () => {
   })
 })
 
-describe('declared columns', () => {
-  it('reads the comma list a source attaches, trimmed and once each', () => {
-    const s = (v?: string): Session => ({ id: 's', metadata: v === undefined ? undefined : { 'viewer.columns': v } })
-    expect(declaredColumns(s('conn,stream'))).toEqual(['conn', 'stream'])
-    expect(declaredColumns(s(' scrape_group , proxy_provider,,scrape_group'))).toEqual(['scrape_group', 'proxy_provider'])
-    expect(declaredColumns(s())).toEqual([])
+describe('choice search', () => {
+  it('needs every term in the label or the value, case ignored', () => {
+    const t = searchTerms('  QA  prof ')
+    expect(t).toEqual(['qa', 'prof'])
+    expect(matchesTerms(t, ['qa-checkout', 'Profile 3'])).toBe(true)
+    expect(matchesTerms(t, ['qa-checkout', 'Default'])).toBe(false)
+    expect(matchesTerms(searchTerms(''), [undefined])).toBe(true)
+    expect(matchesTerms(['x'], [undefined, ''])).toBe(false)
+  })
+  it('marks every occurrence of every term, overlaps joined', () => {
+    expect(matchRuns('Chromium 131 · stable', ['131', 'chrom'])).toEqual([
+      { text: 'Chrom', hit: true }, { text: 'ium ', hit: false }, { text: '131', hit: true }, { text: ' · stable', hit: false }])
+    expect(matchRuns('aaa', ['aa'])).toEqual([{ text: 'aaa', hit: true }])
+    expect(matchRuns('qa-qa', ['qa'])).toEqual([{ text: 'qa', hit: true }, { text: '-', hit: false }, { text: 'qa', hit: true }])
+    expect(matchRuns('abc', [])).toEqual([{ text: 'abc', hit: false }])
+    expect(matchRuns('', ['a'])).toEqual([])
+  })
+  it('names the nothing-matches noun', () => {
+    expect(plural('Browser binary')).toBe('browser binaries')
+    expect(plural('Profile')).toBe('profiles')
+    expect(plural('Device')).toBe('devices')
+    expect(plural('Proxy')).toBe('proxies')
+    expect(plural('Key')).toBe('keys')
+    expect(plural('Arch')).toBe('arches')
+  })
+})
+
+describe('render budget', () => {
+  it('stops before the line that would pass it, counting newlines', () => {
+    expect(fitLines(['abc', 'de', 'f'], 7)).toEqual({ count: 2, used: 7 })
+    expect(fitLines(['abc', 'de', 'f'], 6)).toEqual({ count: 1, used: 4 })
+    expect(fitLines(['abc'], 3)).toEqual({ count: 0, used: 0 })
+    expect(fitLines([], 10)).toEqual({ count: 0, used: 0 })
+  })
+  it('holds exactly 4 KiB of hex dump', () => {
+    const lines = hexDump(new Uint8Array(HEX_CAP * 2), HEX_CAP * 2).split('\n')
+    expect(fitLines(lines, renderBudget(true)).count * 16).toBe(HEX_CAP)
+    expect(renderBudget(false)).toBe(50_000)
   })
 })
 
@@ -474,5 +623,14 @@ describe('annotations', () => {
     const catalog = new Map([['t1', {}]])
     expect(unknownIds(['t1', 'gone'], catalog)).toEqual(['gone'])
     expect(unknownIds(undefined, catalog)).toEqual([])
+  })
+})
+
+describe('declared columns', () => {
+  it('reads the comma list a source attaches, trimmed and once each', () => {
+    const s = (v?: string): Session => ({ id: 's', metadata: v === undefined ? undefined : { 'viewer.columns': v } })
+    expect(declaredColumns(s('conn,stream'))).toEqual(['conn', 'stream'])
+    expect(declaredColumns(s(' scrape_group , proxy_provider,,scrape_group'))).toEqual(['scrape_group', 'proxy_provider'])
+    expect(declaredColumns(s())).toEqual([])
   })
 })

@@ -111,7 +111,7 @@ export function App() {
       </nav>
       <main className="flex-1 min-h-0 relative">
         <div className="h-full" style={{ display: active === null ? undefined : 'none' }}>
-          <SessionsScreen sessions={sessions} loaded={loaded} loadError={loadError} refresh={refresh} stuck={stuck} onStuck={markStuck} onOpen={open} onNewCapture={() => setNewCapture(true)}
+          <SessionsScreen active={active === null} sessions={sessions} loaded={loaded} loadError={loadError} refresh={refresh} stuck={stuck} onStuck={markStuck} onOpen={open} onNewCapture={() => setNewCapture(true)}
             onServices={() => setServices(true)} onUpdates={updates.check} checkingUpdates={updates.checking} />
         </div>
         {/* Every tab stays mounted: a hidden one keeps its filter, scroll and live subscription. */}

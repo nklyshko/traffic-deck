@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as api from '../lib/api'
+import { matchesTerms, plural, searchTerms } from '../lib/search'
 import type { CaptureSourceInfo, Param, SourceDescriptor } from '../lib/types'
-import { Banner, Button, cx, Field, inputClass, Modal, SectionLabel, selectClass, Spinner } from './ui'
+import { ChoiceSelect, Highlight, SearchBox, type Choice } from './Choice'
+import { Banner, Button, cx, Field, inputClass, Modal, SectionLabel, Spinner } from './ui'
 
 const MAX_RESEEDS = 3
+const SETUP_FILTER_FROM = 6
+
+const choicesOf = (p: Param): Choice[] => (p.choices ?? []).map((c) => ({ value: c.value ?? '', label: c.label || c.value || '' }))
 
 function ParamField({ p, value, onChange }: { p: Param; value: string; onChange: (v: string) => void }) {
   const label = p.label || p.key
@@ -13,10 +18,7 @@ function ParamField({ p, value, onChange }: { p: Param; value: string; onChange:
     case 'PARAM_TYPE_CHOICE':
       return (
         <Field label={label} required={p.required}>
-          <select className={selectClass} value={value} onChange={(e) => onChange(e.target.value)}>
-            <option value="">—</option>
-            {p.choices?.map((c) => <option key={c.value} value={c.value}>{c.label || c.value}</option>)}
-          </select>
+          <ChoiceSelect choices={choicesOf(p)} value={value} onChange={onChange} optional={!p.required} noun={plural(label)} />
         </Field>
       )
     default:
@@ -32,6 +34,7 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
   const [params, setParams] = useState<Record<string, string>>({})
   const [touched, setTouched] = useState<Set<string>>(new Set())
   const [staged, setStaged] = useState<Record<string, string>>({})
+  const [setupQuery, setSetupQuery] = useState<Record<string, string>>({})
   const [descriptor, setDescriptor] = useState<SourceDescriptor | null>(null)
   const [describing, setDescribing] = useState(false)
   const [label, setLabel] = useState('')
@@ -89,6 +92,7 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
     setParams({})
     setTouched(new Set())
     setStaged({})
+    setSetupQuery({})
     setDescriptor(null)
     void describe(name, {})
   }
@@ -136,9 +140,15 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
   const crumbs = Object.entries(params).filter(([k, v]) => v && !asked.some((p) => p.key === k))
   const canStart = !!source && !!descriptor && !provisioning && missing.length === 0 && !starting
 
+  // Filtering never unstages, so a staged answer the filter hides is still named.
+  const hiddenStaged = provisioning ? asked.flatMap((p) => {
+    const terms = searchTerms(setupQuery[p.key] ?? ''), c = choicesOf(p).find((c) => c.value === staged[p.key])
+    return c && !matchesTerms(terms, [c.label, c.value]) ? [c.label] : []
+  }) : []
   const footerNote = settingUp ? `waiting for ${source} to finish setting up`
-    : provisioning ? 'Selecting stages the answer — nothing is sent until Set up.'
-      : missing.length ? `needs ${missing.map((p) => p.label || p.key).join(', ')}` : ''
+    : hiddenStaged.length ? `Staged: ${hiddenStaged.join(', ')} — hidden by the filter. Nothing is sent until Set up.`
+      : provisioning ? 'Selecting stages the answer — nothing is sent until Set up.'
+        : missing.length ? `needs ${missing.map((p) => p.label || p.key).join(', ')}` : ''
   return (
     <Modal title="New capture" width={560} onClose={onClose} footer={<>
       <span className={cx('mr-auto text-[11px]', provisioning ? 'text-faint' : 'text-amber-fg')}>{footerNote}</span>
@@ -167,14 +177,8 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         <div key={p.key}>
           <span className="block mb-1.5 text-xs text-body">{p.label || p.key}{p.required && <span className="text-red-fg"> *</span>}</span>
           {p.type === 'PARAM_TYPE_CHOICE' ? (
-            <div role="radiogroup" className="space-y-1">
-              {p.choices?.map((c) => (
-                <button key={c.value} type="button" role="radio" aria-checked={staged[p.key] === c.value} onClick={() => setStaged({ ...staged, [p.key]: c.value ?? '' })}
-                  className={cx('flex items-center gap-2.5 w-full min-h-10 px-3 py-1.5 rounded-md border text-left text-xs', staged[p.key] === c.value ? 'tone-blue tint border-accent' : 'bg-well border-edge text-body')}>
-                  <span className={cx('w-3 h-3 rounded-full border shrink-0', staged[p.key] === c.value ? 'border-accent bg-accent' : 'border-edge-check')} />{c.label || c.value}
-                </button>
-              ))}
-            </div>
+            <SetupChoices p={p} staged={staged[p.key]} query={setupQuery[p.key] ?? ''} onQuery={(q) => setSetupQuery({ ...setupQuery, [p.key]: q })}
+              onStage={(v) => setStaged({ ...staged, [p.key]: v })} />
           ) : <ParamField p={p} value={staged[p.key] ?? ''} onChange={(v) => setStaged({ ...staged, [p.key]: v })} />}
         </div>
       ))}
@@ -183,5 +187,28 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         {shown.map((p) => <ParamField key={p.key} p={p} value={params[p.key] ?? ''} onChange={(v) => change(p.key, v)} />)}
       </>}
     </Modal>
+  )
+}
+
+// The setup step's rows stage an answer each; a long list gets a filter box over them.
+function SetupChoices({ p, staged, query, onQuery, onStage }: { p: Param; staged?: string; query: string; onQuery: (q: string) => void; onStage: (v: string) => void }) {
+  const choices = choicesOf(p)
+  const terms = searchTerms(query)
+  const shown = choices.filter((c) => matchesTerms(terms, [c.label, c.value]))
+  const label = p.label || p.key
+  return (
+    <div className="space-y-1.5">
+      {choices.length >= SETUP_FILTER_FROM && <SearchBox tall query={query} onQuery={onQuery} shown={shown.length} total={choices.length} label={`Filter ${plural(label)}`} placeholder="Filter" />}
+      <div role="radiogroup" aria-label={label} className="space-y-1">
+        {shown.map((c) => (
+          <button key={c.value} type="button" role="radio" aria-checked={staged === c.value} onClick={() => onStage(c.value)}
+            className={cx('flex items-center gap-2.5 w-full min-h-10 px-3 py-1.5 rounded-md border text-left text-xs', staged === c.value ? 'tone-blue tint border-accent' : 'bg-well border-edge text-body')}>
+            <span className={cx('w-3 h-3 rounded-full border shrink-0', staged === c.value ? 'border-accent bg-accent' : 'border-edge-check')} />
+            <Highlight text={c.label} terms={terms} />
+          </button>
+        ))}
+        {!shown.length && <p className="px-1 py-2 text-xs text-muted">No {plural(label)} match “{query.trim()}”. <span className="text-[11px] text-faint">Search reads labels and values.</span></p>}
+      </div>
+    </div>
   )
 }

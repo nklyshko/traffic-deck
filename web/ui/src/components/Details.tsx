@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, ChevronUp, Copy, Download, Pencil, Star, X }
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import * as api from '../lib/api'
 import { FAVORITE_TAG, loadCatalog, unknownIds, useCatalog, userTags } from '../lib/catalog'
-import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies, saveBlob } from '../lib/http'
+import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies, saveBlob, HEX_CAP, TEXT_CAP } from '../lib/http'
 import { formatBytes, num, preciseDuration, reasonPhrase } from '../lib/format'
 import { useSetting } from '../lib/settings'
 import { toHex } from '../lib/tlshello'
@@ -11,8 +11,6 @@ import { DecodeAffordance, Decoded } from './Decode'
 import { JsonTree } from './Json'
 import { Badge, Button, Card, cx, DurationBadge, IconButton, inputClass, MethodBadge, Spinner, StatusBadge } from './ui'
 
-const TEXT_CAP = 50_000
-const HEX_CAP = 4096
 const DECODE_CAP = 20_000
 export const MARKS = ['red', 'yellow', 'green', 'blue', 'magenta', 'cyan']
 

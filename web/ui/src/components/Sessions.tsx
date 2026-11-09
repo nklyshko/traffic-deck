@@ -1,8 +1,8 @@
-import { Activity, Check, Copy, Download, Pencil, Plus, RefreshCw, Square, Trash2, Upload, Zap } from 'lucide-react'
+import { Activity, Check, Copy, Download, Pencil, Plus, RefreshCw, Search, Square, Trash2, Upload, X, Zap } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { formatBytes, formatDateTime, num, type Tone } from '../lib/format'
-import { inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionScopes, type Scope } from '../lib/sessions'
+import { inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionMatcher, sessionScopes, type Scope } from '../lib/sessions'
 import { useSetting } from '../lib/settings'
 import type { Session, SessionArtifacts } from '../lib/types'
 import { isLive } from './Workspace'
@@ -113,12 +113,13 @@ function ImportPcapDialog({ onClose, onDone }: { onClose: () => void; onDone: ()
 }
 
 function ScopeRail({ scopes, active, onSelect }: { scopes: Scope[]; active: string; onSelect: (key: string) => void }) {
+  // A scope with no matches fades but stays, so the rail holds still while typing.
   const item = (s: Scope) => (
     <button key={s.key} type="button" title={s.label} aria-current={s.key === active ? 'true' : undefined} onClick={() => onSelect(s.key)}
-      className={cx('flex items-center gap-2 w-full h-8 px-2.5 rounded-md text-left text-xs', s.key === active ? 'bg-hover text-ink font-semibold' : 'text-body hover:bg-panel')}>
+      className={cx('flex items-center gap-2 w-full h-8 px-2.5 rounded-md text-left text-xs', s.key === active ? 'bg-hover text-ink font-semibold' : s.count ? 'text-body hover:bg-panel' : 'text-dim hover:bg-panel')}>
       <span className="flex-1 min-w-0 truncate">{s.label}</span>
       {s.live > 0 && <span aria-label={`${s.live} live`} className="w-1.5 h-1.5 rounded-full pulse shrink-0" style={{ background: 'var(--green)' }} />}
-      <span className="font-mono text-[11px] text-faint">{s.count.toLocaleString('en-US')}</span>
+      <span className={cx('font-mono text-[11px]', s.count ? 'text-faint' : 'text-dim')}>{s.count.toLocaleString('en-US')}</span>
     </button>
   )
   const builtIn = (s: Scope) => s.key === SCOPE_ALL || s.key === SCOPE_UNGROUPED
@@ -128,6 +129,36 @@ function ScopeRail({ scopes, active, onSelect }: { scopes: Scope[]; active: stri
       <div className="px-2.5 pt-4 pb-1"><SectionLabel>Groups</SectionLabel></div>
       {scopes.filter((s) => !builtIn(s)).map(item)}
     </nav>
+  )
+}
+
+// Heads the list it filters, with the scope inside it as a chip, so it says what it searches.
+function SessionSearch({ inputRef, query, onQuery, scope, onAll, count }: {
+  inputRef: React.RefObject<HTMLInputElement | null>; query: string; onQuery: (q: string) => void; scope?: string; onAll: () => void; count: number
+}) {
+  const searching = !!query.trim()
+  return (
+    <div className="flex items-center gap-2 h-8 pl-2.5 pr-1.5 shrink-0 rounded-md bg-well border border-edge-input focus-within:border-accent focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--blue)_25%,transparent)]">
+      <Search size={14} className="text-faint shrink-0" />
+      {scope && (
+        <span className="inline-flex items-center gap-1 h-5 pl-2 pr-1 shrink-0 max-w-60 rounded-full tint tone-blue text-[11px] font-medium">
+          <span className="truncate">in {scope}</span>
+          <button type="button" aria-label="Search all sessions" title="Search all sessions" onClick={onAll} className="inline-flex items-center justify-center w-3.5 h-3.5 hover:text-ink"><X size={11} /></button>
+        </span>
+      )}
+      <input ref={inputRef} type="search" aria-label="Search sessions" spellCheck={false} value={query} placeholder={scope ? 'Search' : 'Search all sessions'}
+        onChange={(e) => onQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Escape') return
+          if (query) onQuery('')
+          else e.currentTarget.blur()
+        }}
+        className="flex-1 min-w-0 h-full bg-transparent text-xs text-ink placeholder:text-dim outline-none! border-0! shadow-none! [&::-webkit-search-cancel-button]:hidden" />
+      {searching ? <>
+        <span className="shrink-0 text-[11px] text-faint">{count.toLocaleString('en-US')} {count === 1 ? 'match' : 'matches'}</span>
+        <IconButton label="Clear search" size={20} onClick={() => { onQuery(''); inputRef.current?.focus() }}><X size={13} /></IconButton>
+      </> : <kbd className="shrink-0 px-1.5 rounded border border-edge bg-panel font-mono text-[10px] text-muted">/</kbd>}
+    </div>
   )
 }
 
@@ -169,6 +200,7 @@ function SessionRow({ s, showGroup, stuck, busy, onOpen, onStop, onForceClose, o
 }
 
 interface Props {
+  active: boolean
   sessions: Session[]
   loaded: boolean
   loadError: string
@@ -182,7 +214,7 @@ interface Props {
   checkingUpdates: boolean
 }
 
-export function SessionsScreen({ sessions, loaded, loadError, refresh, stuck, onStuck, onOpen, onNewCapture, onServices, onUpdates, checkingUpdates }: Props) {
+export function SessionsScreen({ active, sessions, loaded, loadError, refresh, stuck, onStuck, onOpen, onNewCapture, onServices, onUpdates, checkingUpdates }: Props) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [dismissedLoad, setDismissedLoad] = useState('')
@@ -213,8 +245,28 @@ export function SessionsScreen({ sessions, loaded, loadError, refresh, stuck, on
   const forceClose = (s: Session) => act('closing…', () => api.forceClose(s.id)).then(() => onStuck(s.id, false), () => {})
 
   const [storedScope, setScope] = useSetting('sessionScope')
-  const scopes = useMemo(() => sessionScopes(sessions, isLive), [sessions])
+  // Component state, never persisted: the 5 s poll re-applies it to fresh data.
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const match = useMemo(() => sessionMatcher(query), [query])
+  const scopes = useMemo(() => sessionScopes(sessions, isLive, match), [sessions, match])
   const scope = resolveScope(scopes, storedScope)
+  const scopeLabel = scope === SCOPE_ALL ? undefined : scopes.find((s) => s.key === scope)?.label
+  // Always newest first: grouping and search select from this list and never reorder it.
+  const shown = sessions.filter((s) => inScope(s, scope) && match(s))
+  const everywhere = useMemo(() => sessions.filter(match).length, [sessions, match])
+  useEffect(() => {
+    if (!active) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
+      const t = e.target as HTMLElement
+      if (t.closest('input, textarea, select, [contenteditable], [role=dialog]') || document.querySelector('[role=dialog]')) return
+      e.preventDefault()
+      searchRef.current?.focus()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [active])
   const groups = useMemo(() => [...new Set(sessions.flatMap((s) => (s.group ? [s.group] : [])))].sort(), [sessions])
   const row = (s: Session) => (
     <SessionRow key={s.id} s={s} showGroup={scope === SCOPE_ALL} stuck={stuck.has(s.id) && isLive(s)} busy={!!busy} onOpen={() => onOpen(s)} onStop={() => void stop(s)} onForceClose={() => void forceClose(s)} onRename={() => setRenaming(s)} onDelete={() => setDeleting(s)} />
@@ -246,8 +298,18 @@ export function SessionsScreen({ sessions, loaded, loadError, refresh, stuck, on
         : sessions.length === 0 ? (!loadError && <p className="py-16 text-center text-muted">No sessions yet — start a capture.</p>)
           : <div className="flex-1 min-h-0 flex gap-4">
             {scopes.length > 0 && <ScopeRail scopes={scopes} active={scope} onSelect={setScope} />}
-            {/* Always newest first: grouping scopes this list and never reorders it. */}
-            <div className="flex-1 min-w-0 overflow-auto pb-4">{sessions.filter((s) => inScope(s, scope)).map(row)}</div>
+            <div className="flex-1 min-w-0 flex flex-col gap-3">
+              <SessionSearch inputRef={searchRef} query={query} onQuery={setQuery} scope={scopeLabel} onAll={() => setScope(SCOPE_ALL)} count={shown.length} />
+              {shown.length ? <div className="flex-1 min-h-0 overflow-auto pb-4">{shown.map(row)}</div> : (
+                <div className="flex flex-col items-center gap-3.5 pt-24">
+                  <p className="text-[13px] text-muted">{scopeLabel ? `No sessions in ${scopeLabel} match “${query.trim()}”.` : `No sessions match “${query.trim()}”.`}</p>
+                  <div className="flex gap-2">
+                    {scopeLabel && everywhere > 0 && <Button onClick={() => setScope(SCOPE_ALL)}>Show {everywhere.toLocaleString('en-US')} in All sessions</Button>}
+                    <Button onClick={() => { setQuery(''); searchRef.current?.focus() }}>Clear search</Button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>}
       {renaming && <RenameDialog session={renaming} groups={groups} onClose={() => setRenaming(null)} onSaved={() => { setRenaming(null); void refresh() }} />}
       {deleting && <DeleteDialog session={deleting} onClose={() => setDeleting(null)} onDelete={() => {

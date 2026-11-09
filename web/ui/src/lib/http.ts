@@ -113,6 +113,10 @@ export function looksTextual(bytes: Uint8Array): boolean {
   }
 }
 
+// What the page may put into the DOM (§9); Copy and Save always take everything.
+export const TEXT_CAP = 50_000
+export const HEX_CAP = 4096
+
 export function hexDump(bytes: Uint8Array, limit = 4096): string {
   const lines: string[] = []
   const end = Math.min(bytes.length, limit)

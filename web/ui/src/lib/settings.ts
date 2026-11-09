@@ -14,19 +14,21 @@ export interface Settings {
   detailsCollapsed: boolean
   annotationsOpen: boolean
   sessionScope: string
+  diffView: 'inline' | 'split'
   'updates.checkedAt': number
   'updates.dismissed': string
 }
 
 const systemDark = () => typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
 const DEFAULTS = (): Settings => ({
-  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all', 'updates.checkedAt': 0, 'updates.dismissed': '',
+  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all', diffView: 'inline', 'updates.checkedAt': 0, 'updates.dismissed': '',
 })
 
 // typeof alone would let null and arrays through, and those crash whoever indexes them.
 export function accepts(key: string, v: unknown, dflt: unknown): boolean {
   if (typeof v !== typeof dflt) return false
   if (key === 'detailsWidth') return (v as number) >= 20 && (v as number) <= 80
+  if (key === 'diffView') return v === 'inline' || v === 'split'
   return typeof dflt !== 'object' || (v !== null && !Array.isArray(v))
 }
 

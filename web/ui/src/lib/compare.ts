@@ -1,4 +1,4 @@
-import { cookiePairs, rejoinCookies } from './http'
+import { cookiePairs, HEX_CAP, hexDump, looksTextual, rejoinCookies, TEXT_CAP } from './http'
 import { num } from './format'
 import type { Flow, Header, WsMessage } from './types'
 
@@ -73,8 +73,6 @@ export function compareFlows(a: Flow, b: Flow): Section[] {
     title, match: rows.every((r) => r.same), pairs: rows,
   })
   const tls = (f: Flow) => [`client ${f.tlsClientName || MISSING}`, `ja3 ${f.ja3 || MISSING}`, `ja4 ${f.ja4 || MISSING}`]
-  // Exact: rounded sizes would call 2100 and 2200 bytes a match.
-  const size = (f: Flow) => `${num(f.requestBody?.size).toLocaleString('en-US')} B`
   return [
     ordered('HTTP version', [a.protocol ?? ''].filter(Boolean), [b.protocol ?? ''].filter(Boolean)),
     ordered('Pseudo-header order', pseudo(a.requestHeaders ?? []), pseudo(b.requestHeaders ?? [])),
@@ -84,7 +82,7 @@ export function compareFlows(a: Flow, b: Flow): Section[] {
     paired('Cookie values', pairValues(ac, bc)),
     ordered('TLS fingerprint', tls(a), tls(b)),
     ordered('HTTP/2 fingerprint', [a.http2Fingerprint ?? ''].filter(Boolean), [b.http2Fingerprint ?? ''].filter(Boolean)),
-    ordered('Request body size', [size(a)], [size(b)]),
+    // Section 9, the request body, needs the bytes: compareBodies.
   ]
 }
 
@@ -104,14 +102,25 @@ const DIFF_CONTEXT = 3
 const MAX_DIFF_CELLS = 4_000_000
 
 export interface DiffLine { kind: ' ' | '-' | '+'; text: string; a?: number; b?: number }
-export interface Hunk { header: string; lines: DiffLine[] }
-export interface UnifiedDiff { hunks: Hunk[]; removed: number; added: number }
+export interface Hunk { header: string; lines: DiffLine[]; from: number; to: number } // [from, to) in script
+export interface UnifiedDiff { hunks: Hunk[]; removed: number; added: number; script: DiffLine[] }
 
-function editScript(a: string[], b: string[]): DiffLine[] {
+function commonEnds(a: string[], b: string[]): [number, number] {
   let start = 0
   while (start < a.length && start < b.length && a[start] === b[start]) start++
   let tail = 0
   while (tail < a.length - start && tail < b.length - start && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
+  return [start, tail]
+}
+
+/** Whether the changed middle fits the LCS table; past it a diff is a whole-block replace. */
+export function diffFits(a: string[], b: string[]): boolean {
+  const [start, tail] = commonEnds(a, b)
+  return (a.length - start - tail) * (b.length - start - tail) <= MAX_DIFF_CELLS
+}
+
+function editScript(a: string[], b: string[]): DiffLine[] {
+  const [start, tail] = commonEnds(a, b)
   const midA = a.slice(start, a.length - tail), midB = b.slice(start, b.length - tail)
   // The LCS table is quadratic: past this a whole-block replace is the honest answer.
   const rows = midA.length * midB.length > MAX_DIFF_CELLS
@@ -140,23 +149,69 @@ function editScript(a: string[], b: string[]): DiffLine[] {
   return out
 }
 
+function hunkHeader(script: DiffLine[], from: number, to: number): string {
+  const lines = script.slice(from, to), before = script.slice(0, from)
+  const count = (side: 'a' | 'b') => lines.filter((l) => l[side] !== undefined).length
+  const startOf = (side: 'a' | 'b') => before.filter((l) => l[side] !== undefined).length + (count(side) ? 1 : 0)
+  return `@@ -${startOf('a')},${count('a')} +${startOf('b')},${count('b')} @@`
+}
+
 export function unifiedDiff(a: string[], b: string[]): UnifiedDiff {
   const script = editScript(a, b)
   const changes = script.flatMap((l, i) => (l.kind === ' ' ? [] : [i]))
   const hunks: Hunk[] = []
   let at = 0
   while (at < changes.length) {
-    const first = Math.max(0, changes[at] - DIFF_CONTEXT)
+    const from = Math.max(0, changes[at] - DIFF_CONTEXT)
     let last = changes[at]
     while (at + 1 < changes.length && changes[at + 1] - last <= DIFF_CONTEXT * 2) last = changes[++at]
     at++
-    const lines = script.slice(first, Math.min(script.length, last + DIFF_CONTEXT + 1))
-    const count = (side: 'a' | 'b') => lines.filter((l) => l[side] !== undefined).length
-    const before = script.slice(0, first)
-    const startOf = (side: 'a' | 'b') => before.filter((l) => l[side] !== undefined).length + (count(side) ? 1 : 0)
-    hunks.push({ header: `@@ -${startOf('a')},${count('a')} +${startOf('b')},${count('b')} @@`, lines })
+    const to = Math.min(script.length, last + DIFF_CONTEXT + 1)
+    hunks.push({ header: hunkHeader(script, from, to), lines: script.slice(from, to), from, to })
   }
-  return { hunks, removed: script.filter((l) => l.kind === '-').length, added: script.filter((l) => l.kind === '+').length }
+  return { hunks, script, removed: script.filter((l) => l.kind === '-').length, added: script.filter((l) => l.kind === '+').length }
+}
+
+export type DiffPart =
+  | { kind: 'block'; header: string; from: number; to: number }
+  | { kind: 'gap'; from: number; to: number; above: boolean; below: boolean } // above/below: a block borders it
+
+/** The hunks with some unchanged lines revealed: shown runs become blocks with their own
+ *  headers, so a gap opened all the way joins its two hunks; the rest stay gaps. */
+export function diffParts(d: UnifiedDiff, revealed: ReadonlySet<number>): DiffPart[] {
+  const inHunk = new Array<boolean>(d.script.length).fill(false)
+  for (const h of d.hunks) inHunk.fill(true, h.from, h.to)
+  const shown = (i: number) => inHunk[i] || revealed.has(i)
+  const parts: DiffPart[] = []
+  let i = 0
+  while (i < d.script.length) {
+    const on = shown(i)
+    let j = i
+    while (j < d.script.length && shown(j) === on) j++
+    parts.push(on ? { kind: 'block', header: hunkHeader(d.script, i, j), from: i, to: j } : { kind: 'gap', from: i, to: j, above: i > 0, below: j < d.script.length })
+    i = j
+  }
+  return parts
+}
+
+/** Side by side: equal lines face each other, a run of changes pairs removed against added,
+ *  the shorter side left blank, as diffLines pairs the ordered sections. */
+export function splitRows(lines: DiffLine[]): [DiffLine | null, DiffLine | null][] {
+  const rows: [DiffLine | null, DiffLine | null][] = []
+  let removed: DiffLine[] = [], added: DiffLine[] = []
+  const flush = () => {
+    for (let k = 0; k < Math.max(removed.length, added.length); k++) rows.push([removed[k] ?? null, added[k] ?? null])
+    removed = []
+    added = []
+  }
+  for (const l of lines) {
+    if (l.kind === ' ') {
+      flush()
+      rows.push([l, l])
+    } else (l.kind === '-' ? removed : added).push(l)
+  }
+  flush()
+  return rows
 }
 
 export const diffText = (d: UnifiedDiff) => ['--- A', '+++ B', ...d.hunks.flatMap((h) => [h.header, ...h.lines.map((l) => `${l.kind}${l.text}`)])].join('\n')
@@ -264,4 +319,170 @@ export function compareMessages(a: WsMessage, b: WsMessage): Section[] {
     ordered('Payload size', [size(a)], [size(b)]),
     { title: 'Metadata', match: pairs.every((r) => r.same), pairs },
   ]
+}
+
+// --- two request bodies (§5.9.2) ---
+
+export const BODY_COMPARE_LIMIT = 1 << 20
+
+export type BodyKind = 'json' | 'xml' | 'form' | 'text' | 'binary'
+
+function declaredKind(contentType = ''): BodyKind | null {
+  const t = contentType.split(';')[0].trim().toLowerCase()
+  if (t === 'application/x-www-form-urlencoded') return 'form'
+  if (t === 'application/json' || t.endsWith('+json')) return 'json'
+  if (t.endsWith('/xml') || t.endsWith('+xml')) return 'xml'
+  return null
+}
+
+const utf8 = (bytes: Uint8Array) => new TextDecoder().decode(bytes)
+
+/** The Content-Type names the kind and parsing confirms it: a JSON label on broken JSON is text. */
+export function bodyKind(bytes: Uint8Array, contentType?: string): BodyKind {
+  if (!looksTextual(bytes)) return 'binary'
+  const text = utf8(bytes)
+  switch (declaredKind(contentType)) {
+    case 'json': return prettyJson(text) !== null ? 'json' : 'text'
+    case 'xml': return prettyXml(text) !== null ? 'xml' : 'text'
+    case 'form': return /[\r\n\t]/.test(text.trim()) ? 'text' : 'form'
+    default: return 'text'
+  }
+}
+
+// A hexDump line: offset, two spaces, 47 of hex, two spaces, 16 of ASCII, and the newline.
+const HEX_LINE = 76
+export const renderBudget = (binary: boolean) => (binary ? (HEX_CAP / 16) * HEX_LINE : TEXT_CAP)
+
+/** How many of the lines fit the budget, counting a newline after each, and what they use. */
+export function fitLines(lines: string[], budget: number): { count: number; used: number } {
+  let used = 0
+  for (let i = 0; i < lines.length; i++) {
+    const next = used + lines[i].length + 1
+    if (next > budget) return { count: i, used }
+    used = next
+  }
+  return { count: lines.length, used }
+}
+
+/** The body as Show original shows it: text as sent, anything else as a hex dump. */
+export const bodyText = (bytes: Uint8Array) => (looksTextual(bytes) ? utf8(bytes) : hexDump(bytes, bytes.length))
+
+/** How a JSON or XML body was laid out, which pretty-printing for the diff hides. */
+export function describeLayout(text: string, kind: 'json' | 'xml'): string {
+  const lines = text.split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  const parts = [`${lines.length} ${lines.length === 1 ? 'line' : 'lines'}`]
+  if (lines.length === 1) {
+    const line = lines[0].replace(/\r$/, '')
+    const compact = kind === 'json' ? !/\s/.test(line.replace(/"(?:[^"\\]|\\.)*"/g, '""')) : !/>\s+</.test(line)
+    if (compact) parts.push('compact, no spaces')
+  } else {
+    const indents = lines.map((l) => /^[ \t]*/.exec(l)![0]).filter(Boolean)
+    if (indents.some((i) => i.startsWith('\t'))) parts.push('tab indent')
+    else if (indents.length) parts.push(`${Math.min(...indents.map((i) => i.length))}-space indent`)
+    else parts.push('no indent')
+  }
+  const crlf = text.match(/\r\n/g)?.length ?? 0, lf = (text.match(/\n/g)?.length ?? 0) - crlf
+  if (crlf && lf) parts.push('mixed LF/CRLF')
+  else if (crlf) parts.push('CRLF')
+  else if (lf) parts.push('LF')
+  if (text.endsWith('\n')) parts.push('final newline')
+  return parts.join(' · ')
+}
+
+/** Form decoding: `+` is a space, then percent-decoding as UTF-8; null when malformed. */
+export function formDecode(s: string): string | null {
+  try {
+    return decodeURIComponent(s.replace(/\+/g, ' '))
+  } catch {
+    return null
+  }
+}
+
+/** Fields in order, name and value as sent. */
+export function formFields(text: string): { name: string; value: string }[] {
+  return text.split('&').filter(Boolean).map((part) => {
+    const at = part.indexOf('=')
+    return at < 0 ? { name: part, value: '' } : { name: part.slice(0, at), value: part.slice(at + 1) }
+  })
+}
+
+export interface FormRow { name: string; a: string | null; b: string | null; same: boolean; sameDecoded: boolean }
+
+const fieldName = (raw: string) => formDecode(raw) ?? raw
+
+// Paired by decoded name and by occurrence, as header values are; compared byte for byte.
+export function compareForms(a: string, b: string): { order: [string[], string[]]; rows: FormRow[] } {
+  const fa = formFields(a), fb = formFields(b)
+  const remaining = [...fb]
+  const rows: FormRow[] = []
+  const decodedEqual = (x: string, y: string) => { const dx = formDecode(x); return dx !== null && dx === formDecode(y) }
+  for (const f of fa) {
+    const at = remaining.findIndex((x) => fieldName(x.name) === fieldName(f.name))
+    const other = at >= 0 ? remaining.splice(at, 1)[0].value : null
+    const same = other === f.value
+    rows.push({ name: fieldName(f.name), a: f.value, b: other, same, sameDecoded: !same && other !== null && decodedEqual(f.value, other) })
+  }
+  for (const f of remaining) rows.push({ name: fieldName(f.name), a: null, b: f.value, same: false, sameDecoded: false })
+  return { order: [fa.map((f) => fieldName(f.name)), fb.map((f) => fieldName(f.name))], rows }
+}
+
+export type BodyVerdict = 'match' | 'layout' | 'encoding' | 'differ'
+
+export interface BodyComparison {
+  sizes: [number | null, number | null] // null: no body
+  identical: boolean
+  kind?: BodyKind // absent when neither side has a body
+  layout?: [string, string]
+  verdict: BodyVerdict
+  diff?: UnifiedDiff
+  form?: { order: [string[], string[]]; rows: FormRow[] }
+  alone?: { side: 'a' | 'b'; lines: string[] }
+  bytesOnly?: boolean // too big to diff: compared byte for byte only
+}
+
+function prepared(bytes: Uint8Array, kind: BodyKind): string[] {
+  if (kind === 'binary') return hexDump(bytes, bytes.length).split('\n')
+  const text = utf8(bytes)
+  const pretty = kind === 'json' ? prettyJson(text) : kind === 'xml' ? prettyXml(text) : null
+  return (pretty ?? text).split('\n').map((l) => l.replace(/\r$/, ''))
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i])
+
+export function compareBodies(a: Uint8Array | null, b: Uint8Array | null, typeA?: string, typeB?: string): BodyComparison {
+  const ba = a?.length ? a : null, bb = b?.length ? b : null
+  const sizes: [number | null, number | null] = [ba?.length ?? null, bb?.length ?? null]
+  if (!ba || !bb) {
+    if (!ba && !bb) return { sizes, identical: true, verdict: 'match' }
+    const only = (ba ?? bb)!, kind = bodyKind(only, ba ? typeA : typeB)
+    return { sizes, identical: false, kind, verdict: 'differ', alone: { side: ba ? 'a' : 'b', lines: prepared(only, kind) } }
+  }
+  const identical = sameBytes(ba, bb)
+  const ka = bodyKind(ba, typeA), kb = bodyKind(bb, typeB)
+  // Both sides must share a kind; otherwise they compare as text, or binary.
+  const kind: BodyKind = ka === kb ? ka : ka !== 'binary' && kb !== 'binary' ? 'text' : 'binary'
+  const out: BodyComparison = { sizes, identical, kind, verdict: identical ? 'match' : 'differ' }
+  if (kind === 'json' || kind === 'xml') out.layout = [describeLayout(utf8(ba), kind), describeLayout(utf8(bb), kind)]
+  if (ba.length > BODY_COMPARE_LIMIT || bb.length > BODY_COMPARE_LIMIT) return { ...out, bytesOnly: true }
+  if (kind === 'form') {
+    const form = compareForms(utf8(ba), utf8(bb))
+    const sameOrder = form.order[0].join('&') === form.order[1].join('&')
+    const encoding = !identical && sameOrder && form.rows.every((r) => r.same || r.sameDecoded)
+    return { ...out, form, verdict: identical ? 'match' : encoding ? 'encoding' : 'differ' }
+  }
+  const la = prepared(ba, kind), lb = prepared(bb, kind)
+  if (!diffFits(la, lb)) return { ...out, bytesOnly: true }
+  const diff = unifiedDiff(la, lb)
+  const layoutOnly = !identical && (kind === 'json' || kind === 'xml') && diff.removed + diff.added === 0
+  return { ...out, diff, verdict: identical ? 'match' : layoutOnly ? 'layout' : 'differ' }
+}
+
+/** Copy body diff: the unified diff, or for a form one `name=value` line per field as sent. */
+export function bodyDiffText(c: BodyComparison): string {
+  if (c.diff) return diffText(c.diff)
+  if (c.alone) return [c.alone.side === 'a' ? '--- A' : '+++ B', ...c.alone.lines.map((l) => `${c.alone!.side === 'a' ? '-' : '+'}${l}`)].join('\n')
+  if (!c.form) return ''
+  return ['--- A', '+++ B', ...c.form.rows.flatMap((r) => (r.same ? [` ${r.name}=${r.a}`]
+    : [...(r.a !== null ? [`-${r.name}=${r.a}`] : []), ...(r.b !== null ? [`+${r.name}=${r.b}`] : [])]))].join('\n')
 }
