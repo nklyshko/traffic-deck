@@ -6,7 +6,7 @@ import { base64Bytes, bodyExt, cookieAttrs, cookiePairs, curlCommand, flowUrl, h
 import { formatBytes, num, preciseDuration, reasonPhrase } from '../lib/format'
 import { useSetting } from '../lib/settings'
 import { toHex } from '../lib/tlshello'
-import type { Body, Comment, Flow, Header } from '../lib/types'
+import type { Annotations, Body, Comment, Flow, Header } from '../lib/types'
 import { DecodeAffordance, Decoded } from './Decode'
 import { JsonTree } from './Json'
 import { Badge, Button, Card, cx, DurationBadge, IconButton, inputClass, MethodBadge, Spinner, StatusBadge } from './ui'
@@ -178,7 +178,12 @@ function CommentRow({ comment: c, onSave, onDelete }: { comment: Comment; onSave
   )
 }
 
-function Annotations({ flow, targets, session, onChanged, onPatch }: { flow: Flow; targets: Flow[]; session: string; onChanged: () => void; onPatch: (flows: Flow[]) => void }) {
+export type Annotated = Annotations & { id: string }
+
+// Flows and WebSocket frames alike: the annotation store is keyed on the record id.
+export function AnnotationBar({ record: flow, targets, session, noun, onChanged, onPatch }: {
+  record: Annotated; targets: Annotated[]; session: string; noun: string; onChanged: () => void; onPatch: (records: Annotated[]) => void
+}) {
   const { tags, groups } = useCatalog()
   const [open, setOpen] = useSetting('annotationsOpen')
   const [error, setError] = useState('')
@@ -189,10 +194,10 @@ function Annotations({ flow, targets, session, onChanged, onPatch }: { flow: Flo
   const comments = flow.comments ?? []
   const ids = targets.map((t) => t.id)
   const many = targets.length > 1
-  const every = (test: (f: Flow) => boolean) => targets.every(test)
+  const every = (test: (f: Annotated) => boolean) => targets.every(test)
   const hasTag = (id: string) => every((f) => !!f.tagIds?.includes(id))
   const hasGroup = (id: string) => every((f) => !!f.groupIds?.includes(id))
-  const run = async (op: () => Promise<unknown>, change?: (f: Flow) => Partial<Flow>) => {
+  const run = async (op: () => Promise<unknown>, change?: (f: Annotated) => Partial<Annotations>) => {
     try {
       await op()
       setError('')
@@ -222,7 +227,7 @@ function Annotations({ flow, targets, session, onChanged, onPatch }: { flow: Flo
             className={cx(`mark-${m} w-3.5 h-3.5 rounded-full`, on && 'ring-2 ring-offset-1 ring-offset-[var(--panel)] ring-[var(--t)]')} style={{ background: 'var(--t)' }} />
         })}
         {targets.some((f) => f.markColor) && <IconButton label="Clear mark" size={22} onClick={() => void run(() => api.clearMark(session, ids), () => ({ markColor: undefined }))}><X size={12} /></IconButton>}
-        {many && <span className="text-[11px] text-muted">{targets.length} flows</span>}
+        {many && <span className="text-[11px] text-muted">{targets.length} {noun}</span>}
         <span className="flex-1" />
         <Button size="sm" aria-expanded={open} onClick={() => setOpen(!open)}>{summary}{open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}</Button>
       </div>
@@ -429,7 +434,7 @@ export function DetailsPanel({ session, summary, targets, onClose, onPatch, onDe
         </>}
         {tab === 'Meta' && <MetaTab f={f} />}
       </div>
-      <Annotations flow={f} targets={targets} session={session} onChanged={() => void reread()} onPatch={onPatch} />
+      <AnnotationBar record={f} targets={targets} session={session} noun="flows" onChanged={() => void reread()} onPatch={onPatch} />
       <Footer flow={f} session={session} onOpenMessages={() => onOpenMessages(f)} />
     </div>
   )

@@ -108,9 +108,10 @@ func (f *fakeBodyStream) Recv() (*trafficv1.BodyChunk, error) {
 
 type fakeViewer struct {
 	trafficv1.ViewerServiceClient
-	stream *fakeBodyStream
-	query  *trafficv1.QueryFlowsRequest
-	follow *trafficv1.StreamFlowsRequest
+	stream  *fakeBodyStream
+	query   *trafficv1.QueryFlowsRequest
+	follow  *trafficv1.StreamFlowsRequest
+	message *trafficv1.GetMessageRequest
 }
 
 func (f *fakeViewer) QueryFlows(_ context.Context, in *trafficv1.QueryFlowsRequest, _ ...grpc.CallOption) (*trafficv1.FlowPage, error) {
@@ -121,6 +122,11 @@ func (f *fakeViewer) QueryFlows(_ context.Context, in *trafficv1.QueryFlowsReque
 func (f *fakeViewer) StreamFlows(_ context.Context, in *trafficv1.StreamFlowsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[trafficv1.FlowEvent], error) {
 	f.follow = in
 	return nil, status.Error(codes.Unavailable, "not streaming")
+}
+
+func (f *fakeViewer) GetMessage(_ context.Context, in *trafficv1.GetMessageRequest, _ ...grpc.CallOption) (*trafficv1.Message, error) {
+	f.message = in
+	return &trafficv1.Message{Id: in.GetMessageId(), Favorite: true}, nil
 }
 
 func (f *fakeViewer) GetBody(context.Context, *trafficv1.GetBodyRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[trafficv1.BodyChunk], error) {
@@ -208,6 +214,18 @@ func TestBodyNotFoundIsAnAnswer(t *testing.T) {
 	v := &fakeViewer{stream: &fakeBodyStream{err: status.Error(codes.NotFound, "no body")}}
 	if w := get(testServer(&fakeControl{}, v), "localhost:18890", "/api/body"); w.Code != http.StatusNotFound {
 		t.Errorf("%d", w.Code)
+	}
+}
+
+// A frame's annotations are re-read after the viewer changes them.
+func TestMessageIsReadBack(t *testing.T) {
+	v := &fakeViewer{}
+	w := get(testServer(&fakeControl{}, v), "127.0.0.1:18890", "/api/message?session=s&id=m1")
+	if w.Code != http.StatusOK || v.message.GetSessionId() != "s" || v.message.GetMessageId() != "m1" {
+		t.Fatalf("%d %v", w.Code, v.message)
+	}
+	if !strings.Contains(w.Body.String(), `"favorite":true`) {
+		t.Errorf("annotations missing: %s", w.Body)
 	}
 }
 

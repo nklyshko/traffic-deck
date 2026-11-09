@@ -3,7 +3,7 @@ import { Check } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useCatalog, userTags } from '../lib/catalog'
 import { durationTone, formatCount, formatMatched, formatTime, num, shortProto, type Tone } from '../lib/format'
-import type { Flow, Tag, Group } from '../lib/types'
+import type { Annotations, Flow, Tag, Group } from '../lib/types'
 import { EDGE_ROWS } from '../lib/window'
 import { columnStyle, HeaderCell } from './Columns'
 import { Button, cx, DurationBadge, MethodBadge, Spinner, StatusBadge } from './ui'
@@ -33,7 +33,10 @@ export function tableColumns(declared: string[], metaWidth: (key: string) => num
 interface FlagItem { glyph: string; title: string; tone: string }
 
 // Fixed order, packed from the left; selection and mark aren't flags because the row shows them.
-export function flagsOf(f: Flow, tags: Map<string, Tag>, groups: Map<string, Group>): FlagItem[] {
+// A frame has only the annotation flags; the rest are a flow's.
+type Flagged = Annotations & Pick<Flow, 'websocket' | 'messageCount' | 'redirectLocation' | 'redirectedFromId' | 'proxy'>
+
+export function flagsOf(f: Flagged, tags: Map<string, Tag>, groups: Map<string, Group>): FlagItem[] {
   const out: FlagItem[] = []
   if (f.websocket) out.push({ glyph: '⇅', title: `Open messages (${formatMatched(num(f.messageCount))})`, tone: 'text-blue-fg' })
   if (f.redirectLocation) out.push({ glyph: '↪', title: `Redirects to ${f.redirectLocation}`, tone: 'text-blue-fg' })
@@ -48,7 +51,7 @@ export function flagsOf(f: Flow, tags: Map<string, Tag>, groups: Map<string, Gro
   return out
 }
 
-function Flags({ flow, onOpenMessages }: { flow: Flow; onOpenMessages: (f: Flow) => void }) {
+export function Flags<T extends Flagged>({ flow, onOpenMessages }: { flow: T; onOpenMessages?: (f: T) => void }) {
   const { tags, groups } = useCatalog()
   const items = flagsOf(flow, tags, groups)
   const shown = items.length > 3 ? items.slice(0, 2) : items
@@ -56,7 +59,7 @@ function Flags({ flow, onOpenMessages }: { flow: Flow; onOpenMessages: (f: Flow)
   return (
     <span className="flex items-center gap-1.5 font-mono text-xs">
       {shown.map((f) => (f.glyph === '⇅'
-        ? <button key={f.glyph} type="button" title={f.title} aria-label={f.title} onClick={(e) => { e.stopPropagation(); onOpenMessages(flow) }}
+        ? <button key={f.glyph} type="button" title={f.title} aria-label={f.title} onClick={(e) => { e.stopPropagation(); onOpenMessages?.(flow) }}
             className="inline-flex items-center gap-[3px] h-5 pl-[5px] pr-1.5 rounded font-medium shrink-0 tone-blue tint [--a:10%] hover:[--a:20%] border border-transparent hover:border-[color-mix(in_srgb,var(--blue)_40%,transparent)]">
             {f.glyph}<span className="text-[10px]">{formatCount(num(flow.messageCount))}</span>
           </button>

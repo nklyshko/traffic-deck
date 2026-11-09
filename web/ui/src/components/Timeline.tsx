@@ -2,15 +2,18 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowDown, ArrowLeft, ArrowRight, Check as Tick, Columns3, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
-import { MESSAGE_EXAMPLES, MESSAGE_TERMS } from '../lib/filter'
+import { MESSAGE_EXAMPLES, MESSAGE_TERMS, readsAnnotations } from '../lib/filter'
 import { fitWidth, formatBytes, formatTime, num } from '../lib/format'
 import { base64Bytes, bodyExt, hexDump, looksTextual, saveBlob, HEX_CAP, TEXT_CAP } from '../lib/http'
+import { NOTHING, select, type Selection } from '../lib/selection'
 import { useSetting } from '../lib/settings'
 import type { Flow, MessageEvent_, WsMessage } from '../lib/types'
+import { patchFlow } from '../lib/window'
 import { Check, columnStyle, HeaderCell, Popover, ResetColumns } from './Columns'
 import { FilterInput } from './FilterInput'
 import { JsonTree } from './Json'
-import { NameValue, nameColumn, parseJson } from './Details'
+import { AnnotationBar, NameValue, nameColumn, parseJson, type Annotated } from './Details'
+import { Flags } from './FlowTable'
 import type { Pick } from './Workspace'
 import { Banner, Button, Card, CopyButton, cx, IconButton, Modal, Pill, Spinner } from './ui'
 
@@ -25,7 +28,7 @@ function preview(m: WsMessage): string {
 interface FrameColumn { id: string; label: string; width: number | null; meta?: string }
 
 const FRAME_START: FrameColumn[] = [
-  { id: 'time', label: 'Time', width: 90 }, { id: 'dir', label: 'Dir', width: 30 },
+  { id: 'flags', label: 'Flags', width: 62 }, { id: 'time', label: 'Time', width: 90 }, { id: 'dir', label: 'Dir', width: 30 },
   { id: 'opcode', label: 'Opcode', width: 56 }, { id: 'len', label: 'Len', width: 48 },
 ]
 const FRAME_END: FrameColumn = { id: 'preview', label: 'Preview', width: null }
@@ -33,6 +36,7 @@ const FRAME_END: FrameColumn = { id: 'preview', label: 'Preview', width: null }
 function FrameCell({ c, m }: { c: FrameColumn; m: WsMessage }) {
   if (c.meta !== undefined) return <span className="block truncate" title={m.metadata?.[c.meta]}>{m.metadata?.[c.meta]}</span>
   switch (c.id) {
+    case 'flags': return <Flags flow={m} />
     case 'time': return <span className="text-muted">{formatTime(num(m.tsUnixMicros))}</span>
     case 'dir': return m.fromClient
       ? <ArrowRight size={16} strokeWidth={3} aria-label="client" className="block text-cyan-fg" />
@@ -50,13 +54,15 @@ function Payload({ session, message }: { session: string; message: WsMessage }) 
   const body = raw ? message.raw : message.payload
   const [bytes, setBytes] = useState<Uint8Array | null | undefined>(undefined)
   const [error, setError] = useState('')
+  // By value: a re-read after an annotation brings a new but equal body, which must not refetch.
+  const inline = body?.inline, size = num(body?.size)
   useEffect(() => {
     setBytes(undefined)
     setError('')
-    if (body?.inline) setBytes(base64Bytes(body.inline))
-    else if (num(body?.size)) api.getMessageBody(session, message.id, raw).then(setBytes, (e: Error) => setError(e.message))
+    if (inline) setBytes(base64Bytes(inline))
+    else if (size) api.getMessageBody(session, message.id, raw).then(setBytes, (e: Error) => setError(e.message))
     else setBytes(null)
-  }, [session, message.id, raw, body])
+  }, [session, message.id, raw, inline, size])
   const textual = !!bytes && looksTextual(bytes)
   const text = useMemo(() => (textual && bytes ? new TextDecoder().decode(bytes) : ''), [bytes, textual])
   const json = useMemo(() => (text.length > TEXT_CAP ? undefined : parseJson(text)), [text])
@@ -101,7 +107,10 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
   const [filter, setFilter] = useState('')
   const [rows, setRows] = useState<WsMessage[]>([])
   const [hints, setHints] = useState<string[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selection, setSelection] = useState<Selection>({ anchor: null, set: NOTHING })
+  const selected = selection.anchor
+  // Bumped to subscribe again with the same filter, when an annotation may change what matches.
+  const [epoch, setEpoch] = useState(0)
   const [live, setLive] = useState(true)
   const [lost, setLost] = useState(false)
   const [follow, setFollow] = useState(true)
@@ -113,7 +122,7 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
     setPrev(filter)
     setRows([])
     setHints([])
-    setSelected(null)
+    setSelection({ anchor: null, set: NOTHING })
     setLive(true)
     setLost(false)
   }
@@ -154,7 +163,7 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
       source.close()
       clearTimeout(timer)
     }
-  }, [session, flow.id, filter])
+  }, [session, flow.id, filter, epoch])
 
   useEffect(() => {
     if (follow && list.current) list.current.scrollTop = list.current.scrollHeight
@@ -171,6 +180,22 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
   ], [metaKeys, rows])
   const columns = useMemo(() => allColumns.filter((c) => overrides[c.id] ?? true).map((c) => (c.width === null ? c : { ...c, width: widths[c.id] ?? c.width })), [allColumns, overrides, widths])
   const message = rows.find((m) => m.id === selected)
+  const targets = useMemo(() => (selection.set.size ? rows.filter((m) => selection.set.has(m.id)) : message ? [message] : []), [rows, selection.set, message])
+  const patchRows = useCallback((fresh: Annotated[]) => {
+    const byId = new Map(fresh.map((m) => [m.id, m]))
+    setRows((cur) => cur.map((m) => (byId.has(m.id) ? patchFlow(m, byId.get(m.id) as WsMessage) : m)))
+  }, [])
+  // A closed session has no stream to bring the change, so the frame is read back. Under a
+  // filter that reads annotations the change can also add or drop frames, so it subscribes again.
+  const annotated = useCallback(async () => {
+    if (readsAnnotations(filter)) {
+      setRows([])
+      setEpoch((e) => e + 1)
+      return
+    }
+    if (selected) patchRows([await api.getMessage(session, selected)])
+  }, [filter, selected, session, patchRows])
+  const ids = useMemo(() => rows.map((m) => m.id), [rows])
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => list.current, estimateSize: () => FRAME_ROW, overscan: 20 })
   const framePicks = picks.filter((p) => p.message)
   const pick = (m: WsMessage) => onTogglePick({
@@ -205,9 +230,15 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
               {virtual.getVirtualItems().map((v) => {
                 const m = rows[v.index]
                 const picked = framePicks.some((p) => p.id === m.id)
+                const on = m.id === selected || selection.set.has(m.id)
+                const mark = m.markColor
                 return (
-                  <div key={m.id} role="row" aria-selected={m.id === selected} onClick={() => setSelected(m.id)} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: FRAME_ROW, transform: `translateY(${v.start}px)` }}
-                    className={cx('flex items-center px-3 cursor-default', m.id === selected ? 'tone-blue tint [--a:12%]' : 'hover:bg-rowhover text-body')}>
+                  <div key={m.id} role="row" aria-selected={on} onClick={(e) => setSelection((cur) => select(ids, cur, m.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey }))}
+                    // Shift would otherwise drag a text selection across the rows.
+                    onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, height: FRAME_ROW, transform: `translateY(${v.start}px)` }}
+                    className={cx('relative flex items-center px-3 cursor-default', mark && `mark-${mark} tint [--a:10%]`, !mark && on && 'tone-blue tint [--a:12%]', !mark && !on && 'hover:bg-rowhover text-body')}>
+                    {(mark || on) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
                     <button type="button" role="checkbox" aria-checked={picked} aria-label="Pick for compare" onClick={(e) => { e.stopPropagation(); pick(m) }}
                       className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
                       {picked && <Tick size={12} strokeWidth={3} />}
@@ -219,8 +250,11 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
             </div>
           </div>
         </div>
-        <div className="shrink-0 w-[42%] border-l border-line overflow-auto p-3">
-          {message ? <Payload key={message.id} session={session} message={message} /> : <p className="py-10 text-center text-muted">Select a frame</p>}
+        <div className="shrink-0 w-[42%] border-l border-line flex flex-col">
+          <div className="flex-1 min-h-0 overflow-auto p-3">
+            {message ? <Payload key={message.id} session={session} message={message} /> : <p className="py-10 text-center text-muted">Select a frame</p>}
+          </div>
+          {message && <AnnotationBar record={message} targets={targets} session={session} noun="frames" onChanged={() => void annotated().catch(() => {})} onPatch={patchRows} />}
         </div>
       </div>
       <footer className="flex items-center gap-2 h-9 px-4 shrink-0 border-t border-line font-mono text-[11px] text-muted rounded-b-xl">

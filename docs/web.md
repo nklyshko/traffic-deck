@@ -36,6 +36,10 @@ a session's label, id, group, source and metadata, within the selected group.
 
 Selecting a row: ↑/↓ move, Home/End jump within the loaded rows, Esc clears.
 
+WebSocket frames are annotated like flows: select one, or several with Shift/Ctrl-click, and
+use the bar under its payload. The message filter's `~fav`, `~mark`, `~tag`, `~group` and
+`~comment` then match them.
+
 ## Open a request in Wireshark
 
 **wireshark** in a flow's details opens Wireshark on the session's `capture.pcap`. The session's

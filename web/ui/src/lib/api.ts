@@ -48,6 +48,7 @@ export interface FlowQuery { session: string; filter: string; hidden?: boolean; 
 export const queryFlows = (q: FlowQuery, signal?: AbortSignal) => getJSON<FlowPage>(`/api/flows?${qs({ ...q })}`, signal)
 export const listMessages = (session: string, flow: string) => getJSON<{ messages?: WsMessage[] }>(`/api/messages?${qs({ session, flow })}`).then((r) => r.messages ?? [])
 export const getFlow = (session: string, id: string) => getJSON<Flow>(`/api/flow?${qs({ session, id })}`)
+export const getMessage = (session: string, id: string) => getJSON<WsMessage>(`/api/message?${qs({ session, id })}`)
 
 // null: a flow with no stored body is an ordinary answer, not an error.
 async function getBytes(url: string): Promise<Uint8Array | null> {

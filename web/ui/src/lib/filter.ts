@@ -52,6 +52,10 @@ export function halfTyped(expr: string): boolean {
   return !!last && !!last.op && !last.arg && !FLAGS.has(last.op)
 }
 
+const ANNOTATION_OPS = new Set(['~fav', '~mark', '~tag', '~group', '~comment'])
+/** Whether the matching set can change when a record is annotated, not only when one arrives. */
+export const readsAnnotations = (expr: string) => parseFilter(expr).some((t) => !!t.op && ANNOTATION_OPS.has(t.op))
+
 export const dropTerm = (expr: string, i: number): string => formatFilter(parseFilter(expr).filter((_, j) => j !== i))
 
 export function termLabel(t: Term): string {

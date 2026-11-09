@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessages, describeLayout, diffLines, diffParts, diffText, fitLines, formDecode, goSlice, messagePosition, MISSING, pairValues, positionLines, prettyJson, prettyPayload, prettyXml, renderBudget, splitRows, unifiedDiff } from './compare'
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
-import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
+import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
 import { bodyExt, cookiePairs, curlCommand, HEX_CAP, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
 import { classifyLogLine } from './logs'
@@ -619,6 +619,13 @@ describe('render budget', () => {
 })
 
 describe('annotations', () => {
+  it('knows when a filter reads them', () => {
+    expect(readsAnnotations('~fav')).toBe(true)
+    expect(readsAnnotations('~b hello !~tag spam')).toBe(true)
+    expect(readsAnnotations('~mark red')).toBe(true)
+    expect(readsAnnotations('~from client ~b favorite')).toBe(false)
+    expect(readsAnnotations('')).toBe(false)
+  })
   it('names the ids the catalog no longer knows', () => {
     const catalog = new Map([['t1', {}]])
     expect(unknownIds(['t1', 'gone'], catalog)).toEqual(['gone'])

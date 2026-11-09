@@ -58,6 +58,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/body", s.body)
 	mux.HandleFunc("GET /api/messages", s.messages)
 	mux.HandleFunc("GET /api/messages/stream", s.streamMessages)
+	mux.HandleFunc("GET /api/message", s.message)
 	mux.HandleFunc("GET /api/message/body", s.messageBody)
 	mux.HandleFunc("GET /api/log", s.log)
 	mux.HandleFunc("GET /api/session/export", s.exportSession)

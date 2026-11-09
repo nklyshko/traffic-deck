@@ -72,6 +72,13 @@ func (s *server) flow(w http.ResponseWriter, r *http.Request) {
 	writeProto(w, "GetFlow", resp, err)
 }
 
+// message re-reads one frame with its annotations, after the viewer changed them.
+func (s *server) message(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	resp, err := s.viewer.GetMessage(r.Context(), &trafficv1.GetMessageRequest{SessionId: q.Get("session"), MessageId: q.Get("id")})
+	writeProto(w, "GetMessage", resp, err)
+}
+
 func (s *server) body(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	stream, err := s.viewer.GetBody(r.Context(), &trafficv1.GetBodyRequest{
