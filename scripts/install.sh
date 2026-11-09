@@ -203,10 +203,16 @@ stage_real="$(cd "$stage" && pwd -P)"
 #
 # --compile-bytecode: pktap runs under sudo, and a root interpreter would otherwise write
 # root-owned __pycache__ into the prefix, which the next install could not remove.
+#
+# Built to survive the prefix being moved (an app bundle is copied wherever the user drops
+# it): --relocatable makes console scripts find their interpreter beside themselves rather
+# than by a shebang, and uv's absolute link to the base Python is replaced by a relative
+# one. pyvenv.cfg still names the old home; Python finds its base through the link instead.
 fill_venv() {
   local env="$1" c="$2"
   shift 2
-  uv venv --quiet --offline --python "$PREFIX/python/bin/python3" "$env"
+  uv venv --quiet --offline --relocatable --python "$PREFIX/python/bin/python3" "$env"
+  ln -sfn ../../../python/bin/python3 "$env/bin/python"
   uv pip install --quiet --offline --compile-bytecode --python "$env/bin/python" "$@"
   local pkgs=("trafficdeck-${c//_/-}" trafficdeck-proto)
   [[ "$c" = capture_* ]] && pkgs+=(trafficdeck-capture-sdk)
