@@ -6,9 +6,10 @@ or remote gateway).
 
 The gateway starts it for you and owns it, so it is up the moment `trafficdeck` is and it
 outlives the viewer. `X` on the TUI's sessions screen stops and restarts it;
-`GATEWAY_MCP=off` keeps it down from the start. If no launcher can be found (no `uv` with
-the repo's `mcp/` dir, no `trafficdeck-mcp` on `PATH`, no `TRAFFICDECK_SERVICE_MCP`) the
-gateway logs that and starts without it.
+`GATEWAY_MCP=off` keeps it down from the start. If no launcher can be found the gateway logs
+that and starts without it. A dev build looks for `TRAFFICDECK_SERVICE_MCP`, then `uv` with the
+checkout's `mcp/` dir, then `trafficdeck-mcp` on `PATH`; an installed one for
+`TRAFFICDECK_SERVICE_MCP`, then its own `libexec` ([ADR-0017](adr/0017-frozen-install.md)).
 
 To run one yourself instead — against a standalone or remote gateway:
 

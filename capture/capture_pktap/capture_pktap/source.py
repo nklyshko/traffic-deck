@@ -37,7 +37,10 @@ class PktapSource(ChromeSource):
 
     def __init__(self, gateway: str, run_as: tuple[int, int] | None,
                  tcpdump: str | None = None) -> None:
-        super().__init__(gateway)
+        # The parent opens the picker state, creating <home>/state if it is missing: as root,
+        # every later save of a choice is refused, and so is every capture.
+        with privdrop.as_user(run_as):
+            super().__init__(gateway)
         self._run_as = run_as
         self._tcpdump = tcpdump
 

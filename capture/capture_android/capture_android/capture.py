@@ -33,8 +33,8 @@ from capture_sdk.viewer import PCAP_VIEWER_COLUMNS
 
 _KEYLOG_SCRIPT = Path(__file__).resolve().parent / "frida_sslkeylog.js"
 # Plain-IIFE bundle of frida-java-bridge that installs globalThis.Java; see
-# ../frida_scripts/_bridge/. Prepended to legacy Java-global scripts on Frida >= 17.
-_JAVA_BRIDGE = Path(__file__).resolve().parents[1] / "frida_scripts" / "_bridge" / "java-bridge.js"
+# frida_scripts/_bridge/. Prepended to legacy Java-global scripts on Frida >= 17.
+_JAVA_BRIDGE = Path(__file__).resolve().parent / "frida_scripts" / "_bridge" / "java-bridge.js"
 
 
 def _frida_major() -> int:

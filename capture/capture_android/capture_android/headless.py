@@ -15,9 +15,7 @@ import os
 import sys
 
 from capture_android.adb import AdbClient
-from capture_android.capture import run_capture
 from capture_android.chromeproxy import run_proxy_capture
-from capture_android.frida_server import ensure_target_ready
 
 
 def main(argv=None) -> None:
@@ -52,6 +50,10 @@ def main(argv=None) -> None:
             run_proxy_capture(adb, args.package, gateway=args.gateway, label=args.label,
                               url=args.url, duration=args.duration, on_session=on_session)
             return
+        # Imported here because both import frida, which the proxy method runs without.
+        from capture_android.capture import run_capture
+        from capture_android.frida_server import ensure_target_ready
+
         ensure_target_ready(adb)
         run_capture(adb, args.package, gateway=args.gateway, label=args.label, url=args.url,
                     duration=args.duration, extra_scripts=args.script,

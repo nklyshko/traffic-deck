@@ -406,6 +406,33 @@ def test_profile_is_created_as_the_user_after_a_state_write(monkeypatch):
     assert creds.euid == 0
 
 
+def test_the_picker_state_is_opened_as_the_user(monkeypatch):
+    # Opening it creates <home>/state when that is missing. Created as root, the first save
+    # of a choice is refused and so is the capture: a fresh home failed every start.
+    import contextlib
+
+    from capture_chrome import source as chrome_source
+    from capture_pktap.source import PktapSource
+
+    state = {"as_user": False, "seen": None}
+
+    @contextlib.contextmanager
+    def fake_as_user(run_as):
+        state["as_user"] = True
+        try:
+            yield
+        finally:
+            state["as_user"] = False
+
+    def fake_store(tool):
+        state["seen"] = state["as_user"]
+
+    monkeypatch.setattr(privdrop, "as_user", fake_as_user)
+    monkeypatch.setattr(chrome_source, "Store", fake_store)
+    PktapSource("127.0.0.1:7331", (501, 20))
+    assert state["seen"] is True
+
+
 def test_describe_lists_profiles_as_the_user(monkeypatch):
     # Describe creates ~/.traffic-deck/chrome-profiles on first use; done as root, no
     # later "new profile" can be made in it.
@@ -487,3 +514,107 @@ def test_a_start_holds_the_priv_lock_for_its_root_work_only(monkeypatch):
     monkeypatch.setattr(ChromeSource, "start_capture",
                         lambda self, label, params: _other_thread_gets_priv_lock())
     assert PktapSource.start_capture(object.__new__(PktapSource), "", {})  # source holds none
+
+
+def _serve_without_root(monkeypatch, execvp):
+    from capture_sdk import source as harness
+
+    from capture_pktap import cli
+
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    monkeypatch.setattr(os, "execvp", execvp)
+    monkeypatch.setattr(harness, "serve_forever",
+                        lambda *_a: pytest.fail("served without root"))
+    cli._serve(["--control", "127.0.0.1:7099"])
+
+
+def test_serve_reruns_itself_under_sudo(monkeypatch):
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("TRAFFIC_DECK_HOME", raising=False)
+    calls = []
+
+    def execvp(file, args):
+        calls.append(args)
+        raise SystemExit(0)  # a real execvp never returns
+
+    with pytest.raises(SystemExit):
+        _serve_without_root(monkeypatch, execvp)
+    assert calls[0][:2] == ["sudo", "--"]
+    assert calls[0][3:5] == ["-I", "-m"]  # never the working directory's code, as root
+    assert calls[0][-4:] == ["--control", "127.0.0.1:7099", "--gateway", "127.0.0.1:7331"]
+
+
+def test_serve_refuses_when_sudo_did_not_make_it_root(monkeypatch):
+    # Re-running would only loop: sudo already ran, and this is still not root.
+    monkeypatch.setenv("SUDO_UID", "501")
+    with pytest.raises(SystemExit, match="did not make it root"):
+        _serve_without_root(monkeypatch, lambda *_a: pytest.fail("re-ran sudo"))
+
+
+def test_serve_refuses_when_sudo_cannot_run(monkeypatch):
+    monkeypatch.delenv("SUDO_UID", raising=False)
+
+    def execvp(*_a):
+        raise FileNotFoundError("sudo")
+
+    with pytest.raises(SystemExit, match="sudo could not run"):
+        _serve_without_root(monkeypatch, execvp)
+
+
+def test_serve_keeps_traffic_deck_home_across_sudo(monkeypatch):
+    # sudo resets the environment; the root process must still use the caller's home.
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.setenv("TRAFFIC_DECK_HOME", "/tmp/td-home")
+    calls = []
+
+    def execvp(file, args):
+        calls.append(args)
+        raise SystemExit(0)
+
+    with pytest.raises(SystemExit):
+        _serve_without_root(monkeypatch, execvp)
+    assert calls[0][2:4] == ["/usr/bin/env", "TRAFFIC_DECK_HOME=/tmp/td-home"]
+
+
+def test_one_shot_as_bare_root_says_why_instead_of_a_traceback(monkeypatch):
+    from capture_pktap import cli
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
+    with pytest.raises(SystemExit, match="error: .*SUDO_UID"):
+        cli._capture(["--no-prompt"])
+
+
+def test_one_shot_reruns_itself_under_sudo_keeping_gateway_and_home(monkeypatch):
+    # The installed one-shot has no wrapper script: sudo would otherwise drop GATEWAY_ADDR and
+    # TRAFFIC_DECK_HOME, and the capture would go to another copy's gateway.
+    from capture_pktap import cli
+
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.setenv("GATEWAY_ADDR", "127.0.0.1:7441")
+    monkeypatch.setenv("TRAFFIC_DECK_HOME", "/tmp/td-home")
+    calls = []
+
+    def execvp(file, args):
+        calls.append(args)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvp", execvp)
+    with pytest.raises(SystemExit):
+        cli._capture(["--label", "x", "--", "--disable-gpu"])
+    cmd = calls[0]
+    assert cmd[:4] == ["sudo", "--", "/usr/bin/env", "TRAFFIC_DECK_HOME=/tmp/td-home"]
+    assert cmd[5:] == ["-I", "-m", "capture_pktap", "--gateway", "127.0.0.1:7441",
+                       "--label", "x", "--", "--disable-gpu"]
+
+
+def test_one_shot_refuses_when_sudo_did_not_make_it_root(monkeypatch):
+    from capture_pktap import cli
+
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    monkeypatch.setenv("SUDO_UID", "501")
+    monkeypatch.setattr(os, "execvp", lambda *_a: pytest.fail("re-ran sudo"))
+    with pytest.raises(SystemExit, match="did not make it root"):
+        cli._capture(["--label", "x"])

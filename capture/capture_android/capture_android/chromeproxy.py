@@ -34,12 +34,13 @@ from typing import Callable
 
 from capture_android.adb import AdbClient
 from capture_sdk import metadata_keys as mk
+from capture_sdk.paths import installed_prefix
 from capture_sdk.sessionline import read_session_id
 from capture_sdk.shutdown import GracefulInterrupt
 
-# The sibling mitmproxy module. We run mitmdump out of *its* project rather than depending
-# on it, so mitmproxy stays out of this module's environment — which uv rebuilds per frida
-# version, and which a proxy capture needs no frida in at all.
+# The sibling mitmproxy module, in a checkout. We run mitmdump out of *its* project rather than
+# depending on it, so mitmproxy stays out of this module's environment — one per frida version,
+# and a proxy capture needs no frida in at all.
 _MITM_PROJECT = Path(__file__).resolve().parents[2] / "capture_mitmproxy"
 _MITM_ADDON = _MITM_PROJECT / "capture_mitmproxy" / "addon.py"
 _SESSION_GRACE = 120.0
@@ -191,10 +192,22 @@ def _metadata(adb: AdbClient, package: str, url: str | None) -> str:
     return json.dumps(md)
 
 
+def _mitmdump_cmd() -> list[str]:
+    """argv for mitmdump with our addon loaded. It runs from capture_mitmproxy's own venv so
+    this tool doesn't inherit mitmproxy's dependencies (ADR-0008)."""
+    prefix = installed_prefix()
+    if prefix is None:
+        return ["uv", "run", "--project", str(_MITM_PROJECT), "mitmdump", "-s", str(_MITM_ADDON)]
+    env = prefix / "venvs" / "capture_mitmproxy"
+    addons = list(env.glob("lib/python*/site-packages/capture_mitmproxy/addon.py"))
+    if not addons:
+        raise RuntimeError("the proxy method needs the mitmproxy component, which is not installed")
+    return [str(env / "bin" / "mitmdump"), "-s", str(addons[0])]
+
+
 def _start_mitmdump(port: int, gateway: str, label: str, metadata: str,
                     log: Callable[[str], None]) -> subprocess.Popen:
-    cmd = ["uv", "run", "--project", str(_MITM_PROJECT), "mitmdump",
-           "-s", str(_MITM_ADDON), "--mode", "regular",
+    cmd = [*_mitmdump_cmd(), "--mode", "regular",
            "--listen-host", "127.0.0.1", "--listen-port", str(port)]
     env = dict(os.environ, GATEWAY_ADDR=gateway, CAPTURE_LABEL=label,
                CAPTURE_METADATA=metadata, PYTHONUNBUFFERED="1")
@@ -207,7 +220,7 @@ def _start_mitmdump(port: int, gateway: str, label: str, metadata: str,
 def _read_session(proc: subprocess.Popen) -> str:
     """Read mitmdump's output until its addon prints the session id, then keep draining so
     the pipe never fills."""
-    # mitmdump runs under `uv run`, whose cold start resolves and builds the environment
+    # From a checkout mitmdump runs under `uv run`, whose cold start resolves and builds the environment
     # first — up to two minutes, the same bound as the gateway's readyTimeout (ADR-0015 §6).
     sid = read_session_id(proc, grace=_SESSION_GRACE)
     if sid is None:
@@ -224,8 +237,8 @@ def _drain(proc: subprocess.Popen) -> None:
 def _stop_mitmdump(proc: subprocess.Popen) -> None:
     """Stop mitmdump and wait, so its addon's CloseSession has run by the time we return.
 
-    The SIGINT goes to `proc` — the `uv run` wrapper — alone, never its group: uv forwards
-    exactly one SIGINT to mitmdump, whereas signalling the group delivers one directly *and*
+    The SIGINT goes to `proc` alone, never its group. proc is mitmdump itself when installed;
+    from a checkout it is the `uv run` wrapper, which forwards exactly one SIGINT, whereas signalling the group delivers one directly *and*
     one through uv, and mitmproxy treats the second as force-quit, which skips the addon's
     session close. (The same lesson as RealAndroidBackend._reap.) If the graceful window
     overruns we group-kill, so no orphan proxy is left holding the port.

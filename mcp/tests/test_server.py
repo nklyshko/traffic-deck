@@ -7,8 +7,6 @@ from __future__ import annotations
 import json
 import os
 
-# Importing the server wires the generated `gen/` tree onto sys.path (via client.py),
-# so `traffic.v1.*` resolves afterwards.
 import grpc
 import pytest
 import traffic_mcp.server as S

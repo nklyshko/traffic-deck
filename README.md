@@ -68,6 +68,22 @@ For live capture you also need permission to capture packets: on Linux join the
 `wireshark` group (`sudo usermod -aG wireshark $USER`, then re-login); on macOS install
 Wireshark's ChmodBPF helper.
 
+### A frozen install beside the checkout
+
+`make install` freezes the current commit into `~/.local/share/trafficdeck` and links
+`trafficdeck` into `~/.local/bin`. That copy runs its own code from any directory, until you run
+`make install` again; `make build && ./trafficdeck` stays the dev build of its own worktree.
+
+- It refuses uncommitted changes; `ALLOW_DIRTY=1` installs them and records that it did.
+- `PREFIX`, `BINDIR` and `COMPONENTS` narrow where and what. To uninstall, delete the prefix and
+  the link.
+- On macOS, after `make install-pktap`, `trafficdeck pktap` starts the per-process Chrome source
+  (it asks for sudo).
+- The install brings its own Python, and every Frida version Android captures can use.
+- Both copies share `~/.traffic-deck` and keep separate data. Running both at once needs a different
+  `GATEWAY_ADDR` and `MCP_PORT` on one of them. Going back to an older install after a newer one has
+  migrated your data isn't supported. See [ADR-0017](docs/adr/0017-frozen-install.md).
+
 ## Quick start
 
 ```sh

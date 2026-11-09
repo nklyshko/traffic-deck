@@ -12,14 +12,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nklyshko/traffic-deck/gateway/internal/config"
+	"github.com/nklyshko/traffic-deck/gateway/internal/install"
 	"github.com/nklyshko/traffic-deck/gateway/internal/sourcemgr"
 )
 
@@ -150,6 +151,9 @@ func check(ctx context.Context, cs []Component) []Result {
 // "Not present locally" rather than "differs from HEAD" is what keeps a checkout carrying
 // local commits from being reported as behind.
 func checkOne(ctx context.Context, c Component) Result {
+	if c.InstalledCommit != "" {
+		return checkInstalled(ctx, c)
+	}
 	r := Result{Name: c.Name, UpdateHint: c.UpdateHint}
 	head, err := git(ctx, c.Dir, "rev-parse", "--short=12", "HEAD")
 	if err != nil {
@@ -193,6 +197,82 @@ func checkOne(ctx context.Context, c Component) Result {
 	return r
 }
 
+// checkInstalled compares a frozen install's commit with the tip of the branch it came from.
+// The checkout can't answer this alone: after a pull without a reinstall it has the tip and
+// the running code doesn't.
+//
+// The checkout is only consulted to tell "behind" from "ahead of the remote", and may be
+// gone. Without it an install of unpushed commits reads as behind, a harmless false alarm.
+func checkInstalled(ctx context.Context, c Component) Result {
+	r := Result{Name: c.Name, UpdateHint: c.UpdateHint, LocalRev: short(c.InstalledCommit)}
+	if c.Remote == "" || c.Branch == "" {
+		r.Err = "installed from a detached HEAD or a branch with no remote upstream — nothing to compare against"
+		return r
+	}
+	// From the checkout when it is still there: a relative remote URL and the repo's own config
+	// (core.sshCommand, url.*.insteadOf) only mean anything inside it.
+	fi, err := os.Stat(c.Dir)
+	haveDir := err == nil && fi.IsDir()
+	lsDir := os.TempDir()
+	if haveDir {
+		lsDir = c.Dir
+	}
+	ls, err := git(ctx, lsDir, "ls-remote", c.Remote, "refs/heads/"+c.Branch)
+	if err != nil {
+		r.Err = fmt.Sprintf("cannot reach %s: %v", c.Remote, err)
+		return r
+	}
+	sha, _, _ := strings.Cut(ls, "\t")
+	if sha == "" {
+		r.Err = fmt.Sprintf("%s has no %s", c.Remote, c.Branch)
+		return r
+	}
+	r.RemoteRev = short(sha)
+	if sha == c.InstalledCommit {
+		return r
+	}
+	// Only "no" counts as behind. A git that could not answer (a timeout, a source_dir that is
+	// no longer a repo) is an error, not an update.
+	if !haveDir {
+		r.Available = true // the documented false alarm: nothing left to ask
+		return r
+	}
+	// Either commit missing from the checkout is an answer, not a failure: a tip it never
+	// fetched can't be in the install, and an installed commit it no longer has was rewritten
+	// away (a force-push, then gc), so the branch has moved on without it.
+	for _, rev := range []string{sha, c.InstalledCommit} {
+		if _, err := git(ctx, c.Dir, "cat-file", "-e", rev); err != nil {
+			if exitCode(err) != 1 {
+				r.Err = fmt.Sprintf("cannot compare with %s: %v", c.Dir, err)
+				return r
+			}
+			r.Available = true
+			return r
+		}
+	}
+	_, err = git(ctx, c.Dir, "merge-base", "--is-ancestor", sha, c.InstalledCommit)
+	switch exitCode(err) {
+	case 0:
+	case 1:
+		r.Available = true
+	default:
+		r.Err = fmt.Sprintf("cannot compare with %s: %v", c.Dir, err)
+	}
+	return r
+}
+
+// exitCode is git's exit status: 0 for no error, -1 when git did not run to an exit.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
+}
+
 // short trims a sha for display. Both revs are abbreviated to the same width — a fixed 12
 // rather than git's auto-scaling `--short`, so the two sides of "a1b2c3 → d4e5f6" can't come
 // back different lengths. Nothing here is ever fed back to git.
@@ -221,7 +301,7 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if msg := firstLine(stderr.String()); msg != "" {
-			return "", errors.New(msg)
+			return "", gitError{msg, err}
 		}
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("timed out after %s", componentTimeout)
@@ -230,6 +310,15 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(out)), nil
 }
+
+// gitError reads as git's own complaint and still unwraps to its exit status.
+type gitError struct {
+	msg string
+	err error
+}
+
+func (e gitError) Error() string { return e.msg }
+func (e gitError) Unwrap() error { return e.err }
 
 // firstLine is git's complaint: the first line of its stderr, which carries the cause, without
 // the "fatal: Could not read from remote repository" boilerplate under it.
@@ -251,55 +340,28 @@ func firstLine(stderr string) string {
 // hint for an install that is updated by one script covering several checkouts.
 func List() []Component {
 	var out []Component
-	if dir := selfDir(); dir != "" {
-		out = append(out, Component{
-			Name: "trafficdeck", Dir: dir, UpdateHint: config.SelfUpdateHint()})
+	if self, ok := self(); ok {
+		self.UpdateHint = config.SelfUpdateHint()
+		out = append(out, self)
 	}
 	out = append(out, sourcemgr.Components(sourcemgr.PluginsDir())...)
 	return sourcemgr.Dedupe(out)
 }
 
-// selfMarker is a file only a TrafficDeck checkout has, sitting at its root: the gRPC
-// contract this binary was generated from.
-const selfMarker = "proto/traffic/v1/control.proto"
-
-// selfDir is the TrafficDeck checkout this gateway was built from, found by walking up from
-// the running binary (symlinks resolved, so a link onto PATH still finds the checkout behind
-// it), then from the working directory — `go run` puts the binary in a temp dir. "" when
-// neither leads to one; an installed copy with no sources beside it is simply not checked.
-func selfDir() string {
-	var starts []string
-	if exe, err := os.Executable(); err == nil {
-		if real, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = real
+// self is TrafficDeck's own entry. False for a build with neither a checkout nor a readable
+// install.toml, which is simply not checked.
+func self() (Component, bool) {
+	if install.Prefix() != "" {
+		info, err := install.Read()
+		if err != nil {
+			log.Printf("updates: cannot read the install record: %v", err)
+			return Component{}, false
 		}
-		starts = append(starts, filepath.Dir(exe))
+		return Component{
+			Name: "trafficdeck", Dir: info.SourceDir, InstalledCommit: info.Commit,
+			Remote: info.Remote, Branch: info.Branch,
+		}, true
 	}
-	if wd, err := os.Getwd(); err == nil {
-		starts = append(starts, wd)
-	}
-	return findSelf(starts...)
-}
-
-// findSelf walks up from each start looking for the marker, in order.
-//
-// Deliberately not `git rev-parse --show-toplevel`: that answers "which repo is this
-// directory in", which for an installed binary run from anywhere is whatever repo the user
-// happens to be standing in — and it would be reported as TrafficDeck, telling them to update
-// the wrong thing. The marker asks the question that actually matters, and a directory that
-// is a checkout of something else fails it. Same walk as main.findTUIDir.
-func findSelf(starts ...string) string {
-	for _, start := range starts {
-		for dir := start; ; {
-			if _, err := os.Stat(filepath.Join(dir, selfMarker)); err == nil {
-				return dir
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-	return ""
+	dir := install.Checkout()
+	return Component{Name: "trafficdeck", Dir: dir}, dir != ""
 }

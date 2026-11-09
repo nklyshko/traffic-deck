@@ -7,6 +7,7 @@ dependencies = [
     "grpcio>=1.76",
     "protobuf>=5.29",
     "questionary>=2",
+    "trafficdeck-proto",
 ]
 
 [build-system]
@@ -15,6 +16,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["capture_sdk"]
-# The generated stubs under capture_sdk/gen/ are gitignored; force-include them so the
-# package works when built (editable installs find them via the source tree directly).
-artifacts = ["capture_sdk/gen/**/*.py", "capture_sdk/gen/**/*.pyi"]
+
+[tool.uv.sources]
+trafficdeck-proto = { path = "../../proto/python", editable = true }

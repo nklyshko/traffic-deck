@@ -153,44 +153,6 @@ func TestRefreshHoldsTheRateFloor(t *testing.T) {
 	}
 }
 
-// TestFindSelfIgnoresAnUnrelatedCheckout is the regression that matters most here: asking git
-// "which repo is this directory in" answers with whatever the user happens to be standing in,
-// and reporting *that* as TrafficDeck would tell them to update the wrong thing.
-func TestFindSelfIgnoresAnUnrelatedCheckout(t *testing.T) {
-	root := t.TempDir()
-	checkout := filepath.Join(root, "traffic-deck")
-	deep := filepath.Join(checkout, "gateway", "cmd", "gateway")
-	if err := os.MkdirAll(filepath.Join(checkout, filepath.Dir(selfMarker)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(deep, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(checkout, selfMarker), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Found from anywhere inside the checkout, including the binary's own build directory.
-	for _, start := range []string{checkout, deep} {
-		if got := findSelf(start); got != checkout {
-			t.Errorf("findSelf(%q) = %q, want %q", start, got, checkout)
-		}
-	}
-	// Some other directory — a repo of someone else's — is not TrafficDeck.
-	elsewhere := filepath.Join(root, "unrelated")
-	if err := os.Mkdir(elsewhere, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := findSelf(elsewhere); got != "" {
-		t.Errorf("findSelf(%q) = %q, want no answer", elsewhere, got)
-	}
-	// The binary's own location wins over the working directory, since it is the copy that
-	// would actually be replaced by an update.
-	if got := findSelf(deep, elsewhere); got != checkout {
-		t.Errorf("order: got %q, want %q", got, checkout)
-	}
-}
-
 // TrafficDeck is the only component with nowhere to declare its own hint: it has no manifest,
 // and one claiming this checkout loses Dedupe to the entry List puts first. So the setting is
 // the only way an install updated by one script covering several checkouts can correct it, and
@@ -273,5 +235,99 @@ func TestRateFloorStaysShortEnoughForAButton(t *testing.T) {
 	if rateFloor > 30*time.Second {
 		t.Errorf("rateFloor = %s: long enough that a user pressing a check button gets a "+
 			"stale answer; it only has to outlast a burst", rateFloor)
+	}
+}
+
+func TestCheckInstalled(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	ctx := context.Background()
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := git(ctx, dir, args...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return out
+	}
+	commit := func(dir, msg string) string {
+		t.Helper()
+		run(dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", msg)
+		return run(dir, "rev-parse", "HEAD")
+	}
+	remote := t.TempDir()
+	run(remote, "init", "-q", "-b", "main")
+	installed := commit(remote, "installed")
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	run(remote, "clone", "-q", remote, checkout)
+
+	comp := Component{Name: "trafficdeck", Dir: checkout, InstalledCommit: installed,
+		Remote: remote, Branch: "main"}
+	if got := checkInstalled(ctx, comp); got.Available || got.Err != "" {
+		t.Errorf("same commit: %+v", got)
+	}
+
+	// A remote that only the checkout's own config can resolve.
+	run(checkout, "config", "url."+remote+".insteadOf", "td-test:")
+	aliased := comp
+	aliased.Remote = "td-test:"
+	if got := checkInstalled(ctx, aliased); got.Available || got.Err != "" {
+		t.Errorf("remote resolved through the checkout's config: %+v", got)
+	}
+
+	// The case a checkout can't answer: it has pulled the tip, the install has not.
+	commit(remote, "published")
+	run(checkout, "pull", "-q")
+	if got := checkInstalled(ctx, comp); !got.Available {
+		t.Errorf("pulled but not reinstalled: %+v", got)
+	}
+
+	gone := comp
+	gone.Dir = filepath.Join(t.TempDir(), "deleted")
+	if got := checkInstalled(ctx, gone); !got.Available || got.Err != "" {
+		t.Errorf("checkout gone: %+v", got)
+	}
+
+	ahead := comp
+	ahead.InstalledCommit = commit(checkout, "unpushed")
+	if got := checkInstalled(ctx, ahead); got.Available {
+		t.Errorf("installed ahead of the remote reported as behind: %+v", got)
+	}
+
+	// Published after the checkout's last fetch: the install can't contain what it never saw.
+	commit(remote, "unfetched")
+	if got := checkInstalled(ctx, comp); !got.Available || got.Err != "" {
+		t.Errorf("tip not fetched into the checkout: %+v", got)
+	}
+
+	// Rewritten away: the checkout no longer has the installed commit, so merge-base can't run.
+	rewritten := comp
+	rewritten.InstalledCommit = strings.Repeat("d", 40)
+	if got := checkInstalled(ctx, rewritten); !got.Available || got.Err != "" {
+		t.Errorf("installed commit gone from the checkout: %+v", got)
+	}
+
+	// A source_dir that is now a file is gone too, not a git failure.
+	asFile := comp
+	asFile.Dir = filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(asFile.Dir, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkInstalled(ctx, asFile); !got.Available || got.Err != "" {
+		t.Errorf("source_dir replaced by a file: %+v", got)
+	}
+
+	// A git that can't answer is not an update.
+	notRepo := comp
+	notRepo.Dir = t.TempDir()
+	if got := checkInstalled(ctx, notRepo); got.Available || got.Err == "" {
+		t.Errorf("source_dir no longer a repo: %+v", got)
+	}
+
+	noUpstream := comp
+	noUpstream.Remote = ""
+	if got := checkInstalled(ctx, noUpstream); got.Err == "" || got.Available {
+		t.Errorf("no upstream: %+v", got)
 	}
 }

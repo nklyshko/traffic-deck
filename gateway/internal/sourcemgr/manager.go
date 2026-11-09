@@ -25,6 +25,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
+	"github.com/nklyshko/traffic-deck/gateway/internal/install"
 	"github.com/nklyshko/traffic-deck/gateway/internal/logging"
 )
 
@@ -106,7 +107,10 @@ var builtinSources = []struct {
 // tool is found, registers it. A tool that can't be located is logged and simply omitted,
 // so capture control lists what actually works.
 func DefaultSpecs() map[string]Spec {
-	capDir := findCaptureDir()
+	capDir := ""
+	if root := install.Checkout(); root != "" {
+		capDir = filepath.Join(root, "capture")
+	}
 	specs := map[string]Spec{}
 	for _, b := range builtinSources {
 		// A shared source has no launcher of its own; it is only offerable if the source
@@ -138,56 +142,24 @@ func DefaultSpecs() map[string]Spec {
 	return specs
 }
 
-// resolveLauncher finds how to launch a built-in tool, most-specific first: an explicit
-// TRAFFICDECK_SOURCE_<NAME> override; else the dev repo (uv run against capture/capture_<name>);
-// else an installed console script on PATH. Returns nil when none is found.
+// resolveLauncher finds how to launch a built-in tool: see install.Resolve. capDir is the
+// checkout's capture/ directory, "" when there is none. Returns nil when none is found.
 func resolveLauncher(name, capDir string) []string {
-	if env := os.Getenv("TRAFFICDECK_SOURCE_" + strings.ToUpper(name)); env != "" {
-		return strings.Fields(env)
-	}
-	if capDir != "" {
+	script := "trafficdeck-capture-" + name
+	return install.Resolve("TRAFFICDECK_SOURCE_"+strings.ToUpper(name), script, func() []string {
+		if capDir == "" {
+			return nil
+		}
 		proj := filepath.Join(capDir, "capture_"+name)
-		if fi, err := os.Stat(proj); err == nil && fi.IsDir() {
-			if uv, err := exec.LookPath("uv"); err == nil {
-				return []string{uv, "run", "--project", proj, "trafficdeck-capture-" + name}
-			}
+		if fi, err := os.Stat(proj); err != nil || !fi.IsDir() {
+			return nil
 		}
-	}
-	if p, err := exec.LookPath("trafficdeck-capture-" + name); err == nil {
-		return []string{p}
-	}
-	return nil
-}
-
-// findCaptureDir locates the repo's capture/ directory (holding capture_chrome, …) by
-// walking up from the working directory, then from the executable's directory. Returns ""
-// if not found — the installed-console-script path then applies.
-func findCaptureDir() string {
-	var starts []string
-	if wd, err := os.Getwd(); err == nil {
-		starts = append(starts, wd)
-	}
-	if exe, err := os.Executable(); err == nil {
-		starts = append(starts, filepath.Dir(exe))
-	}
-	return findCaptureDirFrom(starts)
-}
-
-func findCaptureDirFrom(starts []string) string {
-	for _, start := range starts {
-		for dir := start; ; {
-			cand := filepath.Join(dir, "capture", "capture_chrome")
-			if fi, err := os.Stat(cand); err == nil && fi.IsDir() {
-				return filepath.Join(dir, "capture")
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break // reached the filesystem root
-			}
-			dir = parent
+		uv, err := exec.LookPath("uv")
+		if err != nil {
+			return nil
 		}
-	}
-	return ""
+		return []string{uv, "run", "--project", proj, script}
+	})
 }
 
 // New returns a manager over the given registry. gatewayAddr is where spawned sources

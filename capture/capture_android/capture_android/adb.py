@@ -14,7 +14,9 @@ import time
 
 
 def find_adb() -> str:
-    """Resolve the adb binary: $ADB, then $ANDROID_HOME/$ANDROID_SDK_ROOT, then PATH."""
+    """Resolve the adb binary: $ADB, then $ANDROID_HOME/$ANDROID_SDK_ROOT, then PATH, then the
+    SDK's default homes (as emulator._sdk_root): a gateway started outside the user's shell
+    setup, or a Mac with the SDK where Android Studio put it, has neither env nor PATH."""
     if env := os.environ.get("ADB"):
         return env
     for root in (os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT")):
@@ -24,6 +26,11 @@ def find_adb() -> str:
                 return cand
     if p := shutil.which("adb"):
         return p
+    for root in (os.path.expanduser("~/Android/Sdk"), os.path.expanduser("~/Library/Android/sdk"),
+                 "/opt/android-sdk"):
+        cand = os.path.join(root, "platform-tools", "adb")
+        if os.path.exists(cand):
+            return cand
     raise RuntimeError("adb not found; set ADB or ANDROID_HOME, or add adb to PATH")
 
 

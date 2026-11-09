@@ -3,10 +3,12 @@ and start/stop through the served harness."""
 
 from __future__ import annotations
 
+import sys
 import threading
 
 import grpc
 
+from capture_mitmproxy import launch
 from capture_mitmproxy import source as mitm_source
 from capture_mitmproxy.source import MitmproxySource
 from capture_sdk import source as harness
@@ -172,3 +174,23 @@ def test_mitmdump_runs_without_per_flow_output(monkeypatch):
     src = MitmproxySource("gw")
     src.start_capture("x", {})
     assert "flow_detail=0" in cmds[0]
+
+
+def test_mitmdump_is_the_one_beside_the_interpreter_not_on_path(monkeypatch):
+    cmds = []
+    monkeypatch.setattr(MitmproxySource, "_spawn",
+                        lambda self, cmd, env: cmds.append(cmd) or FakeProc())
+    monkeypatch.setattr(sys, "executable", "/venv/bin/python")
+    MitmproxySource("gw").start_capture("x", {})
+    assert cmds[0][0] == "/venv/bin/mitmdump"
+
+
+def test_mitmdump_path_keeps_a_symlinked_interpreter_in_its_venv(tmp_path, monkeypatch):
+    real = tmp_path / "system" / "python"
+    real.parent.mkdir()
+    real.touch()
+    link = tmp_path / "venv" / "bin" / "python"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(real)
+    monkeypatch.setattr(sys, "executable", str(link))
+    assert launch.mitmdump() == str(link.parent / "mitmdump")

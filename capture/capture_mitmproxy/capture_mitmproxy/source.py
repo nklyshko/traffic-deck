@@ -20,6 +20,8 @@ from capture_sdk import source
 from capture_sdk.proto import control_pb2 as ctl
 from capture_sdk.sessionline import read_session_id
 
+from capture_mitmproxy.launch import mitmdump
+
 _ADDON = str(Path(__file__).resolve().parent / "addon.py")
 
 
@@ -54,7 +56,7 @@ class MitmproxySource(source.CaptureSource):
         # flow_detail=0: the flows themselves reach the gateway, so mitmdump's log keeps only
         # what nothing else records — failed client handshakes (a pinned app), upstream
         # errors, warnings.
-        cmd = ["mitmdump", "-s", _ADDON, "--mode", mode, "--set", "flow_detail=0",
+        cmd = [mitmdump(), "-s", _ADDON, "--mode", mode, "--set", "flow_detail=0",
                "--listen-port", params.get("listen_port") or "8888"]
         if params.get("listen_host"):
             cmd += ["--listen-host", params["listen_host"]]

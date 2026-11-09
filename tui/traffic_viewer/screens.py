@@ -22,8 +22,6 @@ from textual.widgets import (
     Static, TabbedContent, TabPane,
 )
 
-# Importing the client puts the generated stubs' gen/ tree on sys.path, so this resolves
-# regardless of import order.
 from traffic_viewer.client import control_pb2 as cpb, viewer_pb2
 from textual.widgets.option_list import Option
 from rich.text import Text

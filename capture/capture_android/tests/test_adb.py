@@ -136,3 +136,16 @@ def test_quick_run_reports_a_hung_query_as_an_empty_failure():
 
     res = quick_run(["sleep", "5"], timeout=0.2)
     assert res.returncode != 0 and res.stdout == ""
+
+
+def test_find_adb_falls_back_to_the_macos_sdk_home(tmp_path, monkeypatch):
+    # Where Android Studio puts the SDK on macOS; a gateway started outside the user's shell
+    # setup has no ANDROID_HOME and no platform-tools on PATH.
+    adb = tmp_path / "Library/Android/sdk/platform-tools/adb"
+    adb.parent.mkdir(parents=True)
+    adb.touch()
+    for var in ("ADB", "ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert adbmod.find_adb() == str(adb)
