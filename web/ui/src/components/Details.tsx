@@ -219,7 +219,7 @@ export function AnnotationBar({ record: flow, targets, session, noun, onChanged,
           const favorite = !every((f) => !!f.favorite)
           void run(() => api.toggleFavorite(session, ids), () => ({ favorite }))
         }}>
-          <Star size={rem(15)} className={flow.favorite ? 'text-amber-fg fill-current' : ''} />
+          <Star size={rem(15)} className={flow.favorite ? 'text-purple fill-current' : ''} />
         </IconButton>
         {MARKS.map((m) => {
           const on = every((f) => f.markColor === m)
@@ -343,9 +343,9 @@ function Footer({ flow, session, onOpenMessages }: { flow: Flow; session: string
         <button type="button" title="Copy flow id" onClick={() => void navigator.clipboard.writeText(flow.id).then(() => flashNote('✓ id copied'))} className="font-mono text-11 text-muted truncate min-w-0 hover:text-ink">{flow.id}</button>
         <span className="flex-1 text-right text-11 text-faint truncate">{note}</span>
         <Button size="sm" icon={<Copy size={rem(12)} />} className="font-mono" onClick={() => void curl()}>curl</Button>
-        <Button size="sm" icon={<Download size={rem(12)} />} className="font-mono" onClick={() => void raw()}>raw</Button>
-        <Button size="sm" tooltip="Open the flow's packets in Wireshark, on this machine" className="font-mono" onClick={() => void wireshark()}>wireshark</Button>
-        {flow.websocket && <Button size="sm" onClick={onOpenMessages}>messages ({num(flow.messageCount)})</Button>}
+        <Button size="sm" icon={<Download size={rem(12)} />} onClick={() => void raw()}>Raw</Button>
+        <Button size="sm" tooltip="Open the flow's packets in Wireshark, on this machine" onClick={() => void wireshark()}>Wireshark</Button>
+        {flow.websocket && <Button size="sm" onClick={onOpenMessages}>Messages ({num(flow.messageCount)})</Button>}
       </div>
     </div>
   )

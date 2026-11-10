@@ -14,7 +14,7 @@ import { MARKS, DetailsPanel } from './Details'
 import { FilterInput } from './FilterInput'
 import { Check, Popover, ResetColumns } from './Columns'
 import { FlowTable, tableColumns, type Column, type SelectMods } from './FlowTable'
-import { Button, cx, IconButton, Pill } from './ui'
+import { Button, cx, IconButton, Pill, SIDES } from './ui'
 
 export const isLive = (s?: Session) => s?.status === 'SESSION_STATUS_OPEN' || s?.status === 'SESSION_STATUS_DECODING'
 
@@ -103,7 +103,8 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
   const flow = useMemo(() => rows.find((r) => r.id === selected), [rows, selected])
   // Rows only: a flow filtered out since it was selected is no longer a target.
   const targets = useMemo(() => (selection.set.size ? rows.filter((r) => selection.set.has(r.id)) : flow ? [flow] : []), [rows, selection.set, flow])
-  const pickedHere = useMemo(() => new Set(picks.filter((p) => p.session === id).map((p) => p.id)), [picks, id])
+  // Picks are global and ordered: the first is A, the second B.
+  const pickedHere = useMemo(() => new Map(picks.flatMap((p, i) => (p.session === id && !p.message ? [[p.id, SIDES[i]] as const] : []))), [picks, id])
   const togglePick = useCallback((f: Flow) => {
     onTogglePick({ session: id, sessionLabel: session.label || id, id: f.id, label: `${f.method ?? ''} ${f.authority ?? ''} ${f.path ?? ''}`.trim() })
   }, [id, session.label, onTogglePick])
@@ -204,7 +205,7 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
         <FilterInput value={text} onChange={setText} terms={FLOW_TERMS} examples={FLOW_EXAMPLES} placeholder="~d example.test !~t image" />
         <span className="shrink-0 text-12 text-muted" data-tooltip="Capped by the gateway's scan cap when shown as N+"><span className="font-mono font-medium text-ink">{formatMatched(win.matched, win.capped)}</span> matching</span>
         <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={rem(13)} />} onClick={toggleFollow}>Follow</Button>
-        <Button disabled={picks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-11">{picks.length}/2</span></Button>
+        <Button disabled={picks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-grey font-mono text-11">{picks.length}/2</span></Button>
         {picks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={rem(12)} /></IconButton>}
         <IconButton label="Refetch" className="border border-edge" onClick={() => void refill(follow ? 'last' : 'first')}><RefreshCw size={rem(14)} /></IconButton>
         <Button onMouseDown={(e) => e.preventDefault()} onClick={() => onDecoder(getSelection()?.toString().slice(0, 20000))} className="font-mono" icon={<span>{'{ }'}</span>}><span className="font-sans">Decoder</span></Button>
@@ -241,7 +242,7 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
           {terms.map((t, i) => (
             <span key={i} className="inline-flex items-center gap-1.5 h-6 pl-2.5 pr-1.5 rounded-full bg-raised border border-edge text-11 text-muted">
               <span className="font-mono text-body">{termLabel(t)}</span>
-              <button type="button" aria-label={`Remove ${termLabel(t)}`} onClick={() => setText(dropTerm(text, i))} className="hover:text-ink"><X size={rem(11)} /></button>
+              <button type="button" aria-label={`Remove ${termLabel(t)}`} title={`Remove ${termLabel(t)}`} onClick={() => setText(dropTerm(text, i))} className="hover:text-ink"><X size={rem(11)} /></button>
             </span>
           ))}
         </div>
@@ -267,8 +268,8 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
         {selection.set.size > 1 && <span className="text-body">{selection.set.size.toLocaleString('en-US')} selected</span>}
         {win.pending > 0 && <button type="button" onClick={jumpEnd} className="h-4.5 px-2 rounded-full bg-primary text-white font-sans font-semibold text-10">{win.pending} new</button>}
         <span className="flex-1" />
-        <button type="button" onClick={jumpStart} className="inline-flex items-center gap-1 hover:text-ink"><ArrowUp size={rem(11)} />first</button>
-        <button type="button" onClick={jumpEnd} className="inline-flex items-center gap-1 hover:text-ink"><ArrowDown size={rem(11)} />last</button>
+        <button type="button" onClick={jumpStart} className="inline-flex items-center gap-1 hover:text-ink"><ArrowUp size={rem(11)} />First</button>
+        <button type="button" onClick={jumpEnd} className="inline-flex items-center gap-1 hover:text-ink"><ArrowDown size={rem(11)} />Last</button>
         <span className="text-faint">buffer {MAX_ROWS}</span>
       </div>
     </div>

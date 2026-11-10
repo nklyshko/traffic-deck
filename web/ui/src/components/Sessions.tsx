@@ -164,6 +164,18 @@ function SessionSearch({ inputRef, query, onQuery, scope, onAll, count }: {
   )
 }
 
+// Shared by the rows and the header over them, so the column names sit over their numbers.
+const FLOWS_COL = 'w-24 shrink-0 text-right', SIZE_COL = 'w-16 shrink-0 text-right', STATE_COL = 'w-20 shrink-0 flex justify-center', ACTIONS_COL = 'w-39.5 shrink-0'
+
+function ListHeader() {
+  return (
+    <div aria-hidden className="flex items-center gap-4 h-6 px-4 shrink-0 text-11 font-medium text-faint">
+      <span className="w-2 shrink-0" /><span className="flex-1" />
+      <span className={FLOWS_COL}>Flows</span><span className={SIZE_COL}>Size</span><span className={STATE_COL} /><span className={ACTIONS_COL} />
+    </div>
+  )
+}
+
 function SessionRow({ s, showGroup, stuck, busy, onOpen, onStop, onForceClose, onRename, onDelete }: {
   s: Session; showGroup: boolean; stuck: boolean; busy: boolean; onOpen: () => void; onStop: () => void; onForceClose: () => void; onRename: () => void; onDelete: () => void
 }) {
@@ -183,10 +195,11 @@ function SessionRow({ s, showGroup, stuck, busy, onOpen, onStop, onForceClose, o
         <div className="font-mono text-11 text-faint truncate">{s.id.slice(0, 8)} · {s.source || 'unknown'} · {formatDateTime(num(s.createdAtUnixMs))}</div>
       </div>
       {stuck && <Button size="sm" variant="danger" disabled={busy} onClick={(e) => { stop(e); onForceClose() }}>Force close</Button>}
-      <span className={cx('w-24 text-right font-mono text-12', num(s.flowCount) ? 'text-body' : 'text-faint')}>{num(s.flowCount).toLocaleString('en-US')} flows</span>
-      <span className="w-16 text-right font-mono text-12 text-muted">{formatBytes(num(s.pcapBytes))}</span>
-      <span className="w-20 flex justify-center"><Pill tone={tone}>{label}</Pill></span>
-      <div className="flex items-center gap-0.5" onClick={stop}>
+      <span className={cx(FLOWS_COL, 'font-mono text-12', num(s.flowCount) ? 'text-body' : 'text-faint')}>{num(s.flowCount).toLocaleString('en-US')}</span>
+      <span className={cx(SIZE_COL, 'font-mono text-12 text-muted')}>{formatBytes(num(s.pcapBytes))}</span>
+      {/* Closed is the usual state, so only the others get a pill. */}
+      <span className={STATE_COL}>{s.status !== 'SESSION_STATUS_CLOSED' && <Pill tone={tone}>{label}</Pill>}</span>
+      <div className={cx(ACTIONS_COL, 'flex items-center justify-end gap-0.5')} onClick={stop}>
         <IconButton label="Copy id" size={30} onClick={() => void navigator.clipboard.writeText(s.id).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200) })}>
           {copied ? <Check size={rem(14)} className="text-green-fg" /> : <Copy size={rem(14)} />}
         </IconButton>
@@ -277,22 +290,27 @@ export function SessionsScreen({ active, sessions, loaded, loadError, refresh, s
   const shownError = error || (loadError === dismissedLoad ? '' : loadError)
   return (
     <div className="h-full flex flex-col px-6 pt-4">
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
+      {/* Three groups by meaning, set apart by a wider gap: new sessions, service windows, the list. */}
+      <div className="flex items-center gap-6 mb-4 flex-wrap">
         <div className="mr-auto">
           <h1 className="text-18 font-semibold text-ink leading-6">Sessions</h1>
           <p className="text-11 text-faint">{liveCount} live · {sessions.length} total</p>
         </div>
         {busy && <span className="inline-flex items-center gap-1.5 text-12 text-muted"><Spinner size={12} />{busy}</span>}
-        <Button variant="primary" icon={<Plus size={rem(13)} />} onClick={onNewCapture}>New capture</Button>
-        <Button icon={<Upload size={rem(13)} />} onClick={() => file.current?.click()}>Import bundle</Button>
-        <input ref={file} type="file" accept=".gz,.tar.gz" className="hidden" onChange={(e) => {
-          const f = e.target.files?.[0]
-          e.target.value = '' // so the same file can be picked again
-          if (f) void act('importing…', () => api.importBundle(f)).catch(() => {})
-        }} />
-        <Button icon={<Upload size={rem(13)} />} onClick={() => setImporting(true)}>Import pcap</Button>
-        <Button icon={<Activity size={rem(13)} />} onClick={onServices}>Services</Button>
-        <Button icon={<Zap size={rem(13)} />} disabled={checkingUpdates} onClick={onUpdates}>{checkingUpdates ? 'Checking…' : 'Updates'}</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="primary" icon={<Plus size={rem(13)} />} onClick={onNewCapture}>New capture</Button>
+          <Button icon={<Upload size={rem(13)} />} onClick={() => file.current?.click()}>Import bundle</Button>
+          <input ref={file} type="file" accept=".gz,.tar.gz" className="hidden" onChange={(e) => {
+            const f = e.target.files?.[0]
+            e.target.value = '' // so the same file can be picked again
+            if (f) void act('importing…', () => api.importBundle(f)).catch(() => {})
+          }} />
+          <Button icon={<Upload size={rem(13)} />} onClick={() => setImporting(true)}>Import pcap</Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button icon={<Activity size={rem(13)} />} onClick={onServices}>Services</Button>
+          <Button icon={<Zap size={rem(13)} />} disabled={checkingUpdates} onClick={onUpdates}>{checkingUpdates ? 'Checking…' : 'Updates'}</Button>
+        </div>
         <IconButton label="Refresh" className="border border-edge" onClick={() => void refresh()}><RefreshCw size={rem(14)} /></IconButton>
       </div>
       {shownError && <div className="mb-3"><Banner onDismiss={() => (error ? setError('') : setDismissedLoad(loadError))}>{shownError}</Banner></div>}
@@ -302,7 +320,7 @@ export function SessionsScreen({ active, sessions, loaded, loadError, refresh, s
             <ScopeRail scopes={scopes} active={scope} onSelect={setScope} />
             <div className="flex-1 min-w-0 flex flex-col gap-3">
               <SessionSearch inputRef={searchRef} query={query} onQuery={setQuery} scope={scopeLabel} onAll={() => setScope(SCOPE_ALL)} count={shown.length} />
-              {shown.length ? <div className="flex-1 min-h-0 overflow-auto pb-4">{shown.map(row)}</div> : (
+              {shown.length ? <div className="flex-1 min-h-0 flex flex-col"><ListHeader /><div className="flex-1 min-h-0 overflow-auto pb-4">{shown.map(row)}</div></div> : (
                 <div className="flex flex-col items-center gap-3.5 pt-24">
                   <p className="text-13 text-muted">{scopeLabel ? `No sessions in ${scopeLabel} match “${query.trim()}”.` : `No sessions match “${query.trim()}”.`}</p>
                   <div className="flex gap-2">

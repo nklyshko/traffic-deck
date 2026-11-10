@@ -108,9 +108,9 @@ function FlowCompare({ picks, onClose, onClear }: Props) {
           {(['A', 'B'] as const).map((l, i) => <button key={l} type="button" onClick={() => setSide(i as 0 | 1)} className={cx('w-6 h-5 rounded-sm font-mono', side === i ? 'bg-sel text-ink' : 'text-muted')}>{l}</button>)}
         </span>
         {chosen && <>
-          <CopyChip label="header order" text={goSlice(headerOrder(chosen))} />
-          <CopyChip label="pseudo order" text={goSlice(pseudoOrder(chosen))} />
-          <CopyChip label="cookie order" text={goSlice(cookieOrder(chosen))} />
+          <CopyChip label="Header order" text={goSlice(headerOrder(chosen))} />
+          <CopyChip label="Pseudo order" text={goSlice(pseudoOrder(chosen))} />
+          <CopyChip label="Cookie order" text={goSlice(cookieOrder(chosen))} />
         </>}
         {bodies && (bodies.c.diff || bodies.c.form || bodies.c.alone) && <>
           <span className="w-px h-4 bg-edge" />

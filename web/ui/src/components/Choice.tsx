@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp, Search, X } from 'lucide-react'
+import { Check, ChevronDown, Search, X } from 'lucide-react'
 import { rem, scaleNow } from '../lib/scale'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -52,7 +52,8 @@ export function ChoiceSelect({ choices, value, onChange, optional, noun }: {
         onClick={() => setOpen(!open)} onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true) } }}
         className={cx(inputClass, 'flex items-center gap-2 text-left', open && 'border-accent')}>
         <span className={cx('flex-1 truncate', !value && 'text-dim')}>{value ? (current?.label || value) : '—'}</span>
-        {open ? <ChevronUp size={rem(14)} className="text-muted shrink-0" /> : <ChevronDown size={rem(14)} className="text-muted shrink-0" />}
+        {/* Stays down while open: a flipped chevron draws the eye for nothing. */}
+        <ChevronDown size={rem(14)} className="text-muted shrink-0" />
       </button>
       {open && trigger.current && (
         <ChoiceList anchor={trigger.current} choices={choices} value={value} optional={optional} noun={noun}

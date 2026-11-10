@@ -4,11 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { canDecode, decodeAs, guessKind, KINDS, pickKind, type Kind, type Output } from '../lib/decoder'
 import { alpn, serverName, toBase64, toHex, toRecords, type ClientHello } from '../lib/tlshello'
 import { JsonTree } from './Json'
-import { Badge, Card, CopyButton, cx, Modal } from './ui'
-import type { Tone } from '../lib/format'
+import { Badge, Card, CopyButton, cx, Field, Modal } from './ui'
 
 const CLIP = 20_000
-const KIND_TONE: Record<Kind, Tone> = { jwt: 'purple', b64: 'cyan', url: 'blue', hex: 'orange', ts: 'green', tls: 'pink' }
 
 function Block({ title, text, json }: { title: string; text: string; json?: boolean }) {
   const parsed = useMemo(() => {
@@ -37,7 +35,7 @@ export function ClientHelloCopy({ message, retry = false }: { message: Uint8Arra
       <span className="text-11 text-faint">Copy</span>
       <CopyButton text={() => toHex(message)} label="hex" />
       <CopyButton text={() => toBase64(message)} label="base64" />
-      <CopyButton text={() => toHex(toRecords(message, retry ? 0x0303 : 0x0301))} label="as record" />
+      <CopyButton text={() => toHex(toRecords(message, retry ? 0x0303 : 0x0301))} label="As record" />
     </span>
   )
 }
@@ -88,7 +86,7 @@ export function Decoded({ value, name = '' }: { value: string; name?: string }) 
   return (
     <div className="space-y-2.5">
       {result && result.steps.length > 1 && (
-        <div className="flex items-center gap-1.5 text-11 text-faint">chain {result.steps.map((s, i) => <span key={i} className="flex items-center gap-1.5">{i > 0 && '→'}<Badge tone={KIND_TONE[s]} size="sm">{s}</Badge></span>)}</div>
+        <div className="flex items-center gap-1.5 text-11 text-faint">chain {result.steps.map((s, i) => <span key={i} className="flex items-center gap-1.5">{i > 0 && '→'}<Badge size="sm">{s}</Badge></span>)}</div>
       )}
       <div className="inline-flex rounded-md bg-well border border-line p-0.5" role="group" aria-label="Decode as">
         {KINDS.map((k) => {
@@ -106,7 +104,7 @@ export function Decoded({ value, name = '' }: { value: string; name?: string }) 
 
 export function DecodeAffordance({ value, name, open, onToggle }: { value: string; name: string; open: boolean; onToggle: () => void }) {
   const kind = useMemo(() => guessKind(value, name), [value, name])
-  if (kind) return <button type="button" aria-expanded={open} onClick={onToggle} title={`Decode ${kind}`}><Badge tone={KIND_TONE[kind]} size="sm">{kind}</Badge></button>
+  if (kind) return <button type="button" aria-expanded={open} onClick={onToggle} title={`Decode ${kind}`}><Badge size="sm">{kind}</Badge></button>
   return (
     <button type="button" aria-label="Decode" title="Decode" aria-expanded={open} onClick={onToggle} className={cx('text-faint hover:text-ink', !open && 'opacity-0 group-hover:opacity-100 focus:opacity-100')}>
       <ScanSearch size={rem(13)} />
@@ -124,8 +122,11 @@ export function DecoderModal({ initial, onClose }: { initial: string; onClose: (
   return (
     <Modal title="Decoder" width={760} height={760} onClose={onClose}
       headerExtra={<span className="inline-flex items-center gap-1.5 h-5 px-2 rounded-full tint tone-green text-10">runs in your browser — nothing is sent anywhere</span>}>
-      <textarea autoFocus spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} placeholder="Paste a JWT, base64, URL-encoded, hex or timestamp value, or a TLS ClientHello as hex, a hex dump or base64"
-        className="w-full h-24 p-2.5 rounded-lg bg-well border border-edge-input font-mono text-12 text-ink resize-y" />
+      {/* A permanent label, not a placeholder that typing removes. */}
+      <Field label="Value" help="A JWT, base64, URL-encoded, hex or timestamp value, or a TLS ClientHello as hex, a hex dump or base64.">
+        <textarea autoFocus spellCheck={false} value={text} onChange={(e) => setText(e.target.value)}
+          className="w-full h-24 p-2.5 rounded-lg bg-well border border-edge-input font-mono text-12 text-ink resize-y" />
+      </Field>
       {value.trim() && <Decoded key={value} value={value} />}
     </Modal>
   )

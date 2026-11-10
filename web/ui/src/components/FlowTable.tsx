@@ -1,14 +1,13 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Check } from 'lucide-react'
 import { rem, useScale } from '../lib/scale'
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useCatalog, userTags } from '../lib/catalog'
 import { packFlags } from '../lib/flags'
-import { durationTone, formatCount, formatMatched, formatTime, num, shortProto, type Tone } from '../lib/format'
+import { durationTone, formatCount, formatMatched, formatTime, num, shortProto } from '../lib/format'
 import type { Annotations, Flow, Tag, Group } from '../lib/types'
 import { EDGE_ROWS } from '../lib/window'
 import { columnStyle, HeaderCell } from './Columns'
-import { Button, cx, DurationBadge, MethodBadge, Spinner, StatusBadge } from './ui'
+import { Button, cx, DurationBadge, MethodBadge, PickBox, Spinner, StatusBadge, type Side } from './ui'
 
 export interface SelectMods { shift: boolean; toggle: boolean }
 export interface Column { id: string; label: string; width: number | null; default: boolean; meta?: string }
@@ -35,23 +34,25 @@ export function tableColumns(declared: string[], metaWidth: (key: string) => num
 }
 
 interface FlagItem { glyph: string; title: string; tone: string }
+const NOTE = 'text-purple'
 
 // Fixed order, packed from the left; selection and mark aren't flags because the row shows them.
+// Annotations share one hue; redirect and proxy are facts read from the glyph (SPEC §8.3).
 // A frame has only the annotation flags; the rest are a flow's.
 type Flagged = Annotations & Pick<Flow, 'websocket' | 'messageCount' | 'redirectLocation' | 'redirectedFromId' | 'proxy'>
 
 export function flagsOf(f: Flagged, tags: Map<string, Tag>, groups: Map<string, Group>): FlagItem[] {
   const out: FlagItem[] = []
   if (f.websocket) out.push({ glyph: '⇅', title: `⇅ Open messages (${formatMatched(num(f.messageCount))})`, tone: 'text-blue-fg' })
-  if (f.redirectLocation) out.push({ glyph: '↪', title: `Redirects to ${f.redirectLocation}`, tone: 'text-blue-fg' })
-  else if (f.redirectedFromId) out.push({ glyph: '↪', title: 'Arrived here via a redirect', tone: 'text-blue-fg' })
-  if (f.favorite) out.push({ glyph: '★', title: 'Favorite', tone: 'text-amber-fg' })
+  if (f.redirectLocation) out.push({ glyph: '↪', title: `Redirects to ${f.redirectLocation}`, tone: 'text-muted' })
+  else if (f.redirectedFromId) out.push({ glyph: '↪', title: 'Arrived here via a redirect', tone: 'text-muted' })
+  if (f.favorite) out.push({ glyph: '★', title: 'Favorite', tone: NOTE })
   if (f.proxy?.addr) out.push({ glyph: '⇄', title: `Through proxy ${f.proxy.addr}`, tone: 'text-muted' })
   const ts = userTags(f.tagIds)
-  if (ts.length) out.push({ glyph: '#', title: ts.map((id) => tags.get(id)?.name ?? id).join(', '), tone: 'text-purple-fg' })
-  if (f.comments?.length) out.push({ glyph: '✎', title: f.comments.map((c) => c.body).join('\n'), tone: 'text-muted' })
+  if (ts.length) out.push({ glyph: '#', title: ts.map((id) => tags.get(id)?.name ?? id).join(', '), tone: NOTE })
+  if (f.comments?.length) out.push({ glyph: '✎', title: f.comments.map((c) => c.body).join('\n'), tone: NOTE })
   const gs = f.groupIds ?? []
-  if (gs.length) out.push({ glyph: '⬡', title: gs.map((id) => groups.get(id)?.name ?? id).join(', '), tone: 'text-cyan-fg' })
+  if (gs.length) out.push({ glyph: '⬡', title: gs.map((id) => groups.get(id)?.name ?? id).join(', '), tone: NOTE })
   return out
 }
 
@@ -77,13 +78,15 @@ export function Flags<T extends Flagged>({ flow, onOpenMessages }: { flow: T; on
   )
 }
 
+// Only the slow bands take a colour; the rest stay faint, as a fast flow is the usual case.
 function Rail({ flow }: { flow: Flow }) {
-  const tone: Tone | null = durationTone(num(flow.durationMicros))
-  return <span aria-hidden className="absolute right-0 top-0.75 bottom-0.75 w-[2px]" style={{ background: `var(--${tone ?? 'grey'})` }} />
+  const tone = durationTone(num(flow.durationMicros))
+  const slow = tone === 'amber' || tone === 'red'
+  return <span aria-hidden className="absolute right-0 top-0.75 bottom-0.75 w-[2px]" style={{ background: slow ? `var(--${tone})` : 'var(--line)' }} />
 }
 
 interface RowProps {
-  flow: Flow; columns: Column[]; selected: boolean; picked: boolean; flash: boolean; zebra: boolean
+  flow: Flow; columns: Column[]; selected: boolean; picked: Side | null; flash: boolean
   onSelect: (id: string, mods: SelectMods) => void; onPick: (f: Flow) => void; onOpenMessages: (f: Flow) => void
 }
 
@@ -104,19 +107,16 @@ function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f
   return null
 }
 
-const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra, onSelect, onPick, onOpenMessages }: RowProps) {
+const Row = memo(function Row({ flow: f, columns, selected, picked, flash, onSelect, onPick, onOpenMessages }: RowProps) {
   const mark = f.markColor
   return (
     <div role="row" aria-selected={selected} onClick={(e) => onSelect(f.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
       // Shift would otherwise drag a text selection across the rows.
       onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
       className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-12 cursor-default', flash && 'row-new', mark && `mark-${mark} tint [--a:10%]`,
-        !mark && selected && 'tone-blue tint [--a:12%]', !mark && !selected && (zebra ? 'bg-panel hover:bg-rowhover' : 'hover:bg-rowhover'))}>
+        !mark && selected && 'tone-blue tint [--a:12%]', !mark && !selected && 'hover:bg-rowhover')}>
       {(mark || selected) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
-      <button type="button" role="checkbox" aria-checked={picked} aria-label="Pick for compare" onClick={(e) => { e.stopPropagation(); onPick(f) }}
-        className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
-        {picked && <Check size={rem(12)} strokeWidth={3} />}
-      </button>
+      <PickBox side={picked} onPick={() => onPick(f)} />
       {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><Cell c={c} f={f} onOpenMessages={onOpenMessages} /></div>)}
       <Rail flow={f} />
     </div>
@@ -125,7 +125,7 @@ const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra
 
 
 interface Props {
-  rows: Flow[]; columns: Column[]; selected: string | null; multi: ReadonlySet<string>; picks: Set<string>; flashed: ReadonlySet<string>
+  rows: Flow[]; columns: Column[]; selected: string | null; multi: ReadonlySet<string>; picks: ReadonlyMap<string, Side>; flashed: ReadonlySet<string>
   compact: boolean; hasOlder: boolean; hasNewer: boolean; loading: boolean; filtered: boolean; follow: boolean
   active: boolean; scrollTo: { kind: 'bottom' | 'top' | 'delta'; delta?: number; seq: number }
   onSelect: (id: string, mods: SelectMods) => void; onPick: (f: Flow) => void; onExtend: (dir: 'older' | 'newer') => void; onClearFilter: () => void
@@ -183,7 +183,7 @@ export function FlowTable({ rows, columns, selected, multi, picks, flashed, comp
   return (
     <div className="flex flex-col flex-1 min-w-0 min-h-0" role="table" aria-label="Flows">
       <div role="row" className="flex items-center h-8 pl-3 pr-3 shrink-0 bg-head border-b border-line text-11 font-medium text-muted">
-        <span className="w-6 shrink-0" />
+        <span className="w-5.5 shrink-0" />
         {columns.map((c) => <HeaderCell key={c.id} label={c.label} width={c.width} className={c.id === 'stream' ? 'text-right' : c.meta !== undefined ? 'text-purple-fg' : undefined} onResize={(w) => onColumnWidth(c.id, w)} onReset={() => onColumnWidth(c.id, null)} />)}
       </div>
       <div ref={scroller} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative" onScroll={(e) => {
@@ -200,7 +200,7 @@ export function FlowTable({ rows, columns, selected, multi, picks, flashed, comp
               const f = rows[v.index]
               return (
                 <div key={f.id} style={{ position: 'absolute', top: 0, left: 0, right: 0, height: rowHeight, transform: `translateY(${v.start}px)` }}>
-                  <Row flow={f} columns={columns} selected={f.id === selected || multi.has(f.id)} picked={picks.has(f.id)} flash={flashed.has(f.id)} zebra={v.index % 2 === 1} onSelect={onSelect} onPick={onPick} onOpenMessages={onOpenMessages} />
+                  <Row flow={f} columns={columns} selected={f.id === selected || multi.has(f.id)} picked={picks.get(f.id) ?? null} flash={flashed.has(f.id)} onSelect={onSelect} onPick={onPick} onOpenMessages={onOpenMessages} />
                 </div>
               )
             })}

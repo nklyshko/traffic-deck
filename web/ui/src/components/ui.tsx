@@ -2,7 +2,7 @@ import { Check, Copy, X } from 'lucide-react'
 import { rem } from '../lib/scale'
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { formatDuration, durationTone, methodTone, num, preciseDuration, reasonPhrase, shortMethod, statusTone, type Tone } from '../lib/format'
+import { formatDuration, durationTone, num, preciseDuration, reasonPhrase, shortMethod, statusTone, type Tone } from '../lib/format'
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ')
@@ -43,6 +43,22 @@ export function IconButton({ label, className, size = 32, children, ...rest }: O
   )
 }
 
+// The two compare sides; nothing else wears these hues (SPEC §8.3).
+export type Side = 'A' | 'B'
+export const SIDES: Side[] = ['A', 'B']
+
+/** The compare pick: a picked row shows which side it is, in that side's colour. */
+export function PickBox({ side, onPick }: { side: Side | null; onPick: () => void }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={!!side} aria-label={side ? `Picked as ${side}; unpick` : 'Pick for compare'} title={side ? `Picked as ${side}; unpick` : 'Pick for compare'}
+      onClick={(e) => { e.stopPropagation(); onPick() }}
+      className={cx('flex items-center justify-center w-3.5 h-3.5 rounded-[3px] shrink-0 mr-2 font-sans text-10 font-bold leading-none',
+        side ? `${side === 'A' ? 'bg-cyan' : 'bg-pink'} text-onsolid` : 'border-[1.5px] border-edge-check')}>
+      {side}
+    </button>
+  )
+}
+
 const BADGE = { sm: 'h-4.5 text-10 px-1.5', md: 'h-5 text-11 px-1.5', lg: 'h-5.5 text-12 px-1.75' }
 export function Badge({ tone = 'grey', size = 'md', title, children }: { tone?: Tone; size?: keyof typeof BADGE; title?: string; children: ReactNode }) {
   return <span title={title} className={cx('inline-flex items-center gap-1 rounded font-mono font-medium tint shrink-0', `tone-${tone}`, BADGE[size])}>{children}</span>
@@ -50,7 +66,7 @@ export function Badge({ tone = 'grey', size = 'md', title, children }: { tone?: 
 
 export function MethodBadge({ method, size }: { method?: string; size?: keyof typeof BADGE }) {
   if (!method) return <span className="text-dim font-mono">—</span>
-  return <Badge tone={methodTone(method)} size={size} title={method}>{shortMethod(method)}</Badge>
+  return <Badge size={size} title={method}>{shortMethod(method)}</Badge>
 }
 
 export function StatusBadge({ status, error, size }: { status?: number; error?: string; size?: keyof typeof BADGE }) {
@@ -80,7 +96,7 @@ export function Banner({ tone = 'red', onDismiss, children }: { tone?: Tone; onD
     <div role="alert" className={cx('flex items-start gap-2 px-3 py-2 rounded-lg tint [--a:8%] border text-12', `tone-${tone}`)} style={{ borderColor: 'color-mix(in srgb, var(--t) 30%, transparent)' }}>
       <span className="font-bold">!</span>
       <span className="flex-1 min-w-0 break-words">{children}</span>
-      {onDismiss && <button type="button" aria-label="Dismiss" onClick={onDismiss} className="opacity-70 hover:opacity-100"><X size={rem(13)} /></button>}
+      {onDismiss && <button type="button" aria-label="Dismiss" title="Dismiss" onClick={onDismiss} className="opacity-70 hover:opacity-100"><X size={rem(13)} /></button>}
     </div>
   )
 }
@@ -122,7 +138,7 @@ export function Card({ title, count, meta, actions, children, tone }: { title?: 
   )
 }
 
-export function CopyButton({ text, label, size = 13 }: { text: string | (() => string); label?: string; size?: number }) {
+export function CopyButton({ text, label, size = 13, disabled, tooltip }: { text: string | (() => string); label?: string; size?: number; disabled?: boolean; tooltip?: string }) {
   const [done, setDone] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -132,7 +148,7 @@ export function CopyButton({ text, label, size = 13 }: { text: string | (() => s
     clearTimeout(timer.current)
     timer.current = setTimeout(() => setDone(false), 1200)
   }
-  if (label) return <button type="button" onClick={copy} className="text-11 text-muted hover:text-ink">{done ? '✓ Copied' : label}</button>
+  if (label) return <button type="button" disabled={disabled} data-tooltip={tooltip} onClick={copy} className="text-11 text-muted enabled:hover:text-ink disabled:opacity-40">{done ? '✓ Copied' : label}</button>
   return <IconButton label="Copy" size={26} onClick={copy}>{done ? <Check size={size} className="text-green-fg" /> : <Copy size={size} />}</IconButton>
 }
 

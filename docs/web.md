@@ -20,7 +20,7 @@ along with its captures. An attached viewer leaves the gateway running.
 | `TRAFFICDECK_WEB_ADDR` | `127.0.0.1:18890` | HTTP listen address. It serves captured traffic with no authentication, so keep it on loopback. |
 | `TRAFFICDECK_WEB_OPEN` | `1` under `GATEWAY_VIEWER=web` | open the default browser once the server answers |
 | `TRAFFICDECK_WEB` | | override which binary the gateway launches |
-| `TRAFFICDECK_WIRESHARK` | `wireshark` on `PATH`, then the macOS app | the Wireshark the **wireshark** button starts; read at startup |
+| `TRAFFICDECK_WIRESHARK` | `wireshark` on `PATH`, then the macOS app | the Wireshark the **Wireshark** button starts; read at startup |
 | `GATEWAY_ADDR` | `127.0.0.1:7331` | the gateway to talk to |
 | `NO_COLOR` | | no colour in the startup banner |
 
@@ -45,7 +45,7 @@ use the bar under its payload. The message filter's `~fav`, `~mark`, `~tag`, `~g
 
 ## Open a request in Wireshark
 
-**wireshark** in a flow's details opens Wireshark on the session's `capture.pcap`. The session's
+**Wireshark** in a flow's details opens Wireshark on the session's `capture.pcap`. The session's
 `key.log` is set as `tls.keylog_file`, so TLS is decrypted there too. The display filter is the
 flow's connection, narrowed to its stream on HTTP/2, and the cursor goes to the request's frame
 when the flow has one. This is the same view the TUI's `W` opens

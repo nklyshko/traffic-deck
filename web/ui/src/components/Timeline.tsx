@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDown, Check as Tick, Columns3, MoveLeft, MoveRight, X } from 'lucide-react'
+import { ArrowDown, Columns3, MoveLeft, MoveRight, X } from 'lucide-react'
 import { rem, useScale } from '../lib/scale'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
@@ -16,7 +16,7 @@ import { JsonTree } from './Json'
 import { AnnotationBar, NameValue, nameColumn, parseJson, type Annotated } from './Details'
 import { Flags, FLAGS_WIDTH } from './FlowTable'
 import type { Pick } from './Workspace'
-import { Banner, Button, Card, CopyButton, cx, IconButton, Modal, Pill, Spinner } from './ui'
+import { Banner, Button, Card, CopyButton, cx, IconButton, Modal, PickBox, Pill, SIDES, Spinner } from './ui'
 
 const FRAME_ROW = 30
 
@@ -32,9 +32,6 @@ const FRAME_START: FrameColumn[] = [
   { id: 'flags', label: 'Flags', width: FLAGS_WIDTH }, { id: 'time', label: 'Time', width: 90 }, { id: 'dir', label: 'Dir', width: 30 },
   { id: 'opcode', label: 'Opcode', width: 56 }, { id: 'len', label: 'Len', width: 48 },
 ]
-// Blue against neutral reads apart under any colour-vision deficiency, which cyan against purple
-// did not, and leaves the warm hues to the binary opcode beside it.
-const DIR_TONE = { client: 'text-blue-fg', server: 'text-body' }
 const FRAME_END: FrameColumn = { id: 'preview', label: 'Preview', width: null }
 
 function FrameCell({ c, m }: { c: FrameColumn; m: WsMessage }) {
@@ -43,9 +40,9 @@ function FrameCell({ c, m }: { c: FrameColumn; m: WsMessage }) {
     case 'flags': return <Flags flow={m} />
     case 'time': return <span className="text-muted">{formatTime(num(m.tsUnixMicros))}</span>
     case 'dir': return m.fromClient
-      ? <MoveRight size={rem(18)} strokeWidth={2.5} aria-label="client" className={cx('block', DIR_TONE.client)} />
-      : <MoveLeft size={rem(18)} strokeWidth={2.5} aria-label="server" className={cx('block', DIR_TONE.server)} />
-    case 'opcode': return <span className={cx('block truncate', m.opcode === 'binary' ? 'text-orange-fg' : 'text-body')}>{m.opcode}</span>
+      ? <MoveRight size={rem(18)} strokeWidth={2.5} aria-label="client" className="block text-body" />
+      : <MoveLeft size={rem(18)} strokeWidth={2.5} aria-label="server" className="block text-body" />
+    case 'opcode': return <span className="block truncate text-body">{m.opcode}</span>
     case 'len': return <span className="text-muted">{formatBytes(num(m.payload?.size)) || '0B'}</span>
     case 'preview': return <span className="block truncate text-muted">{preview(m)}</span>
   }
@@ -77,21 +74,24 @@ function Payload({ session, message }: { session: string; message: WsMessage }) 
   return (
     <>
       <div className="flex items-center gap-2 mb-3">
-        <span className={cx('font-mono text-11 font-medium', message.fromClient ? DIR_TONE.client : DIR_TONE.server)}>{message.fromClient ? '→ client' : '← server'}</span>
+        <span className="font-mono text-11 font-medium text-ink">{message.fromClient ? '→ client' : '← server'}</span>
         <span className="px-1.5 rounded bg-sel font-mono text-11 text-ink">{message.opcode}</span>
         <span className="font-mono text-11 text-faint">{formatTime(num(message.tsUnixMicros))} · {formatBytes(num(body?.size)) || '0B'}</span>
-        <span className="flex-1" />
-        {hasRaw && <span className="inline-flex rounded bg-well border border-line p-px text-11">
-          {[false, true].map((v) => <button key={String(v)} type="button" onClick={() => setRaw(v)} className={cx('h-5 px-2 rounded-sm', raw === v ? 'bg-sel text-ink' : 'text-muted')}>{v ? 'raw' : 'payload'}</button>)}
-        </span>}
-        <Button size="xs" onClick={save} disabled={!bytes}>save</Button>
       </div>
       {message.metadata && Object.keys(message.metadata).length > 0 && (
         <div className="mb-3"><Card title="Metadata">
           <div style={nameColumn(Object.keys(message.metadata))}>{Object.entries(message.metadata).map(([k, v]) => <NameValue key={k} name={k} value={v} decode={false} />)}</div>
         </Card></div>
       )}
-      <Card title={raw ? 'Raw' : 'Payload'} meta={body?.contentType} actions={text ? <CopyButton text={text} label="Copy" /> : undefined}>
+      {/* The view switch and Save act on this card, so they sit on it rather than on the frame's header. */}
+      <Card title={raw ? 'Raw' : 'Payload'} meta={body?.contentType} actions={<>
+        {hasRaw && <span className="inline-flex rounded bg-well border border-line p-px text-11">
+          {[false, true].map((v) => <button key={String(v)} type="button" aria-pressed={raw === v} onClick={() => setRaw(v)} className={cx('h-5 px-2 rounded-sm', raw === v ? 'bg-sel text-ink' : 'text-muted')}>{v ? 'Raw' : 'Payload'}</button>)}
+        </span>}
+        {/* Disabled rather than hidden, so switching to a binary view doesn't move the switch. */}
+        <CopyButton text={text} label="Copy" disabled={!text} tooltip={bytes?.length && !textual ? 'Not text; Save takes it' : undefined} />
+        <Button size="xs" onClick={save} disabled={!bytes}>Save</Button>
+      </>}>
         <div className="px-3 pb-1.5">
           {error ? <p className="text-11 text-red-fg">{error}</p> : bytes === undefined ? <Spinner />
             : !bytes?.length ? <p className="text-11 text-faint">Empty.</p>
@@ -218,7 +218,7 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
       <FilterInput value={text} onChange={setText} onSubmit={() => setFilter(text)} terms={MESSAGE_TERMS} examples={MESSAGE_EXAMPLES} bareMatches="payload" extraHelp={metaHelp}
         placeholder={metaKeys[0] ? `~meta ${metaKeys[0]}=` : '~from client'} trailing={<span className="text-10 text-faint shrink-0">↵ to apply</span>} />
       <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={rem(13)} />} onClick={() => setFollow(!follow)}>Follow</Button>
-      <Button disabled={framePicks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-11">{framePicks.length}/2</span></Button>
+      <Button disabled={framePicks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-grey font-mono text-11">{framePicks.length}/2</span></Button>
       {framePicks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={rem(12)} /></IconButton>}
       <Popover label="Columns" icon={<Columns3 size={rem(14)} />}>
         {allColumns.map((c) => <Check key={c.id} label={c.label} checked={overrides[c.id] ?? true} onChange={(v) => setOverrides((o) => ({ ...o, [c.id]: v }))} />)}
@@ -230,14 +230,14 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
       <div className="flex flex-1 min-h-0">
         <div className="flex-1 min-w-0 flex flex-col">
           <div role="row" className="flex items-center h-8 px-3 shrink-0 bg-head border-b border-line text-11 font-medium text-muted">
-            <span className="w-6 shrink-0" />
+            <span className="w-5.5 shrink-0" />
             {columns.map((c) => <HeaderCell key={c.id} label={c.label} title={c.label} width={c.width} className={c.meta !== undefined ? 'text-purple-fg' : undefined} onResize={(w) => setWidth(c.id, w)} onReset={() => setWidth(c.id, null)} />)}
           </div>
           <div ref={list} className="flex-1 min-h-0 overflow-auto font-mono text-11">
             <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
               {virtual.getVirtualItems().map((v) => {
                 const m = rows[v.index]
-                const picked = framePicks.some((p) => p.id === m.id)
+                const at = picks.findIndex((p) => p.message && p.id === m.id)
                 const on = m.id === selected || selection.set.has(m.id)
                 const mark = m.markColor
                 return (
@@ -247,10 +247,7 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
                     style={{ position: 'absolute', top: 0, left: 0, right: 0, height: frameRow, transform: `translateY(${v.start}px)` }}
                     className={cx('relative flex items-center px-3 cursor-default', mark && `mark-${mark} tint [--a:10%]`, !mark && on && 'tone-blue tint [--a:12%]', !mark && !on && 'hover:bg-rowhover text-body')}>
                     {(mark || on) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
-                    <button type="button" role="checkbox" aria-checked={picked} aria-label="Pick for compare" onClick={(e) => { e.stopPropagation(); pick(m) }}
-                      className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
-                      {picked && <Tick size={rem(12)} strokeWidth={3} />}
-                    </button>
+                    <PickBox side={at < 0 ? null : SIDES[at]} onPick={() => pick(m)} />
                     {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><FrameCell c={c} m={m} /></div>)}
                   </div>
                 )

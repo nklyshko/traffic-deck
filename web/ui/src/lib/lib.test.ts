@@ -4,7 +4,7 @@ import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { packFlags } from './flags'
-import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
+import { durationTone, fitWidth, formatBytes, formatCount, formatDateTime, formatDuration, formatMatched, reasonPhrase, statusTone } from './format'
 import { bodyExt, cookiePairs, curlCommand, HEX_CAP, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
 import { classifyLogLine } from './logs'
 import { matchesTerms, matchRuns, plural, searchTerms } from './search'
@@ -225,6 +225,15 @@ describe('compare', () => {
 })
 
 describe('format', () => {
+  it('colours only success, warning and error', () => {
+    expect([101, 200, 304, 404, 502].map(statusTone)).toEqual(['grey', 'green', 'grey', 'amber', 'red'])
+    expect([0, 84_000, 640_000, 2_400_000].map(durationTone)).toEqual([null, 'grey', 'amber', 'red'])
+  })
+  it('formats dates in 24 h whatever the locale', () => {
+    expect(formatDateTime(0)).toBe('—')
+    expect(formatDateTime(new Date(2026, 9, 28, 14, 20, 3).getTime())).toBe('28 Oct 2026, 14:20:03')
+    expect(formatDateTime(new Date(2026, 0, 5, 0, 7, 9).getTime())).toBe('5 Jan 2026, 00:07:09')
+  })
   it('formats bytes and durations', () => {
     expect([formatBytes(0), formatBytes(10), formatBytes(2048), formatBytes(1572864)]).toEqual(['', '10B', '2K', '1.5M'])
     expect([formatDuration(0), formatDuration(1999), formatDuration(2_400_000), formatDuration(252_000_000)]).toEqual(['', '1ms', '2.4s', '4m12s'])

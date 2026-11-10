@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { matchesTerms, plural, searchTerms } from '../lib/search'
 import type { CaptureSourceInfo, Param, SourceDescriptor } from '../lib/types'
@@ -148,7 +148,8 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
   const footerNote = settingUp ? `waiting for ${source} to finish setting up`
     : hiddenStaged.length ? `Staged: ${hiddenStaged.join(', ')} — hidden by the filter. Nothing is sent until Set up.`
       : provisioning ? 'Selecting stages the answer — nothing is sent until Set up.'
-        : missing.length ? `needs ${missing.map((p) => p.label || p.key).join(', ')}` : ''
+        : !source ? 'needs Source'
+          : missing.length ? `needs ${missing.map((p) => p.label || p.key).join(', ')}` : ''
   return (
     <Modal title="New capture" width={560} onClose={onClose} footer={<>
       <span className={cx('mr-auto text-11', provisioning ? 'text-faint' : 'text-amber-fg')}>{footerNote}</span>
@@ -157,14 +158,8 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         ? <Button variant="primary" disabled={asked.some((p) => p.required && !staged[p.key])} onClick={setUp}>Set up</Button>
         : <Button variant="primary" disabled={!canStart} onClick={() => void start()}>{starting ? 'Starting…' : 'Start capture'}</Button>}
     </>}>
-      <div>
-        <div className="mb-1.5"><SectionLabel>Source</SectionLabel></div>
-        {sources === null ? <Spinner /> : (
-          <div className="flex flex-wrap gap-1.5">
-            {sources.map((s) => <Button key={s.name} size="sm" variant={source === s.name ? 'active' : 'default'} onClick={() => pick(s.name)}>{s.label || s.name}</Button>)}
-          </div>
-        )}
-      </div>
+      {sources === null ? <div><div className="mb-1.5"><SectionLabel>Source</SectionLabel></div><Spinner /></div>
+        : <SourcePicker sources={sources} value={source} onPick={pick} />}
       {error && <Banner onDismiss={() => setError('')}>{error}</Banner>}
       {source && !descriptor && describing && <p className="flex items-center gap-2 text-11 text-muted"><Spinner size={12} />Asking {source} what it needs…</p>}
       {descriptor?.message && (
@@ -187,6 +182,46 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         {shown.map((p) => <ParamField key={p.key} p={p} value={params[p.key] ?? ''} onChange={(v) => change(p.key, v)} />)}
       </>}
     </Modal>
+  )
+}
+
+// One switch while it fits on a line, else a choice list: a third-party source or a larger
+// text size can widen it, and a wrapped switch reads as two. Measured from a hidden copy, so
+// the choice doesn't depend on which one is showing.
+function SourcePicker({ sources, value, onPick }: { sources: CaptureSourceInfo[]; value: string; onPick: (name: string) => void }) {
+  const box = useRef<HTMLDivElement>(null)
+  const probe = useRef<HTMLDivElement>(null)
+  const [fits, setFits] = useState(true)
+  useLayoutEffect(() => {
+    const measure = () => { if (box.current && probe.current) setFits(probe.current.offsetWidth <= box.current.clientWidth) }
+    measure()
+    const ro = new ResizeObserver(measure)
+    if (box.current) ro.observe(box.current)
+    if (probe.current) ro.observe(probe.current)
+    return () => ro.disconnect()
+  }, [sources])
+  const label = (s: CaptureSourceInfo) => s.label || s.name
+  const segments = (live: boolean) => sources.map((s) => (
+    <button key={s.name} type="button" tabIndex={live ? undefined : -1} role={live ? 'radio' : undefined} aria-checked={live ? value === s.name : undefined}
+      onClick={live ? () => onPick(s.name) : undefined}
+      className={cx('h-6.5 px-3 rounded-[5px] text-12 whitespace-nowrap', value === s.name ? 'bg-sel text-ink font-medium' : 'text-muted hover:text-ink')}>{label(s)}</button>
+  ))
+  const switchClass = 'inline-flex gap-0.5 p-0.5 rounded-md bg-well border border-edge'
+  return (
+    <div ref={box} className="relative">
+      {/* A zero-height clip, so the copy's width can't scroll the dialog sideways. */}
+      <div aria-hidden className="absolute inset-x-0 top-0 h-0 overflow-hidden invisible">
+        <div ref={probe} className={cx(switchClass, 'w-max')}>{segments(false)}</div>
+      </div>
+      {fits ? <>
+        <div className="mb-1.5"><SectionLabel>Source</SectionLabel></div>
+        <div role="radiogroup" aria-label="Source" className={switchClass}>{segments(true)}</div>
+      </> : (
+        <Field label="Source" required>
+          <ChoiceSelect choices={sources.map((s) => ({ value: s.name, label: label(s) }))} value={value} onChange={onPick} optional={false} noun="sources" />
+        </Field>
+      )}
+    </div>
   )
 }
 

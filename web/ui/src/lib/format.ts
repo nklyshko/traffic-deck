@@ -24,7 +24,15 @@ export function formatTime(us: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
 }
 
-export const formatDateTime = (ms: number): string => (ms ? new Date(ms).toLocaleString() : '—')
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+// Local and 24 h whatever the browser's locale: a capture's times are compared across screens.
+export function formatDateTime(ms: number): string {
+  if (!ms) return '—'
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
 export const formatMatched = (n: number, capped?: boolean): string => `${n.toLocaleString('en-US')}${capped ? '+' : ''}`
 
 /** At most 4 characters, so it fits the messages chip: one decimal below 10, none from 10. */
@@ -57,15 +65,14 @@ export const reasonPhrase = (code: number): string => REASONS[code] ?? CLASSES[M
 
 export type Tone = 'green' | 'blue' | 'amber' | 'red' | 'purple' | 'cyan' | 'orange' | 'pink' | 'grey'
 
-export function methodTone(m?: string): Tone {
-  return ({ GET: 'green', POST: 'blue', PUT: 'orange', DELETE: 'red', PATCH: 'purple' } as Record<string, Tone>)[m ?? ''] ?? 'grey'
-}
+// Each hue means one thing (SPEC §8.3): a method, a 1xx or 3xx and a fast flow are read from
+// their words, so only success, warning and error take a colour.
 export function statusTone(code: number): Tone {
-  return (['grey', 'blue', 'green', 'blue', 'amber', 'red'] as Tone[])[Math.floor(code / 100)] ?? 'grey'
+  return (['grey', 'grey', 'green', 'grey', 'amber', 'red'] as Tone[])[Math.floor(code / 100)] ?? 'grey'
 }
 export function durationTone(us: number): Tone | null {
   if (!us) return null
-  if (us <= 500_000) return 'green'
+  if (us <= 500_000) return 'grey'
   return us <= 2_000_000 ? 'amber' : 'red'
 }
 export const shortMethod = (m?: string): string => ({ CONNECT: 'CONN', DELETE: 'DEL', OPTIONS: 'OPT' } as Record<string, string>)[m ?? ''] ?? (m ?? '')
