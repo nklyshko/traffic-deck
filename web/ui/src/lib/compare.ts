@@ -4,13 +4,22 @@ import type { Flow, Header, WsMessage } from './types'
 
 export const MISSING = '∅'
 
+export interface WordPart { kind: ' ' | '-' | '+'; text: string }
 export interface DiffRow { a: string | null; b: string | null; same: boolean }
 export interface PairRow { name: string; a: string; b: string; same: boolean }
+/** A row of a compare table. A null side is a place an ordered list leaves blank; a named
+ *  value that one side lacks is `∅`. full: never collapsed, as the request line's parts. */
+export interface CmpRow { name?: string; a: string | null; b: string | null; same: boolean; full?: boolean }
 export interface Section {
   title: string
   match: boolean
-  rows?: DiffRow[]
-  pairs?: PairRow[]
+  rows: CmpRow[]
+  /** Whether the rows carry names; an ordered list's don't, but keeps the column. */
+  named: boolean
+  /** The value a matching section folds to, shown once on its one line. */
+  fold: string
+  /** Each side's own place: rows split without being a difference, and there is no verdict. */
+  context?: boolean
 }
 
 // LCS alignment: equal lines pair, a run of changes pairs removed against added, and the
@@ -62,27 +71,112 @@ const named = (hs: Header[]) => hs.map((h) => ({ name: h.name ?? '', value: h.va
 
 function ordered(title: string, a: string[], b: string[]): Section {
   const rows = diffLines(a.length ? a : [MISSING], b.length ? b : [MISSING])
-  return { title, match: rows.every((r) => r.same), rows }
+  return { title, match: rows.every((r) => r.same), rows, named: false, fold: a.join(' · ') || MISSING }
 }
+
+export function namedSection(title: string, pairs: PairRow[], fold?: string): Section {
+  return {
+    title, match: pairs.every((r) => r.same), rows: pairs, named: true,
+    fold: fold ?? (pairs.map((r) => `${r.name} ${r.a}`).join(' · ') || MISSING),
+  }
+}
+
+const DEFAULT_PORT: Record<string, string> = { https: '443', http: '80' }
+
+// A default port spelled out and one left implied reach the same server, so they compare equal.
+export function plainAuthority(authority: string, scheme?: string): string {
+  const port = DEFAULT_PORT[scheme?.toLowerCase() ?? '']
+  return port && authority.endsWith(`:${port}`) ? authority.slice(0, -port.length - 1) : authority
+}
+
+const sharedEnds = (a: string, b: string): [number, number] => {
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let tail = 0
+  while (tail < a.length - start && tail < b.length - start && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
+  return [start, tail]
+}
+
+/** One-line diff of two strings: tokens are aligned, then a replaced run is narrowed to the
+ *  characters that differ, so `…/2026-11-23-21-33-13.chain` shows just the changed digits. */
+export function wordDiff(a: string, b: string): WordPart[] {
+  const tokens = (s: string) => s.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) ?? []
+  const ta = tokens(a), tb = tokens(b)
+  const rows = ta.length * tb.length > MAX_DIFF_CELLS ? [{ a, b, same: false }] : diffLines(ta, tb)
+  const out: WordPart[] = []
+  const push = (kind: WordPart['kind'], text: string) => {
+    if (!text) return
+    const last = out[out.length - 1]
+    if (last?.kind === kind) last.text += text
+    else out.push({ kind, text })
+  }
+  let del = '', ins = ''
+  const flush = () => {
+    const [start, tail] = sharedEnds(del, ins)
+    push(' ', del.slice(0, start))
+    push('-', del.slice(start, del.length - tail))
+    push('+', ins.slice(start, ins.length - tail))
+    push(' ', del.slice(del.length - tail))
+    del = ''
+    ins = ''
+  }
+  for (const r of rows) {
+    if (r.same) {
+      flush()
+      push(' ', r.a ?? '')
+    } else {
+      del += r.a ?? ''
+      ins += r.b ?? ''
+    }
+  }
+  flush()
+  return out
+}
+
+/** The marks for two values that differ, or null when they share under a third of the longer:
+ *  marking scattered separators of unrelated values is noise, and the tint already says it. */
+export function differingParts(a: string, b: string): WordPart[] | null {
+  const parts = wordDiff(a, b)
+  const shared = parts.reduce((n, p) => n + (p.kind === ' ' ? p.text.length : 0), 0)
+  return shared * 3 >= Math.max(a.length, b.length) ? parts : null
+}
+
+const REQUEST_PARTS: [string, (f: Flow) => string | undefined, boolean][] = [
+  ['method', (f) => f.method, false], ['scheme', (f) => f.scheme, false],
+  ['authority', (f) => f.authority && plainAuthority(f.authority, f.scheme), false],
+  ['path', (f) => f.path, true], ['query', (f) => f.query, true],
+]
+
+// Row by row, never diffed as lines, so each part always faces its counterpart.
+export function requestLine(a: Flow, b: Flow): Section {
+  const rows = REQUEST_PARTS.map(([name, get, full]): CmpRow => {
+    const va = get(a) || MISSING, vb = get(b) || MISSING
+    return { name, a: va, b: vb, same: va === vb, full }
+  })
+  const url = `${a.method || MISSING} ${a.scheme ? `${a.scheme}://` : ''}${rows[2].a === MISSING ? '' : rows[2].a}${a.path ?? ''}${a.query ? `?${a.query}` : ''}`
+  return { ...namedSection('Request line', []), match: rows.every((r) => r.same), rows, fold: url }
+}
+
+// Fixed names, so a fingerprint absent on one side still faces its counterpart.
+const fixed = (names: string[], a: (string | undefined)[], b: (string | undefined)[]): PairRow[] =>
+  names.map((name, i) => ({ name, a: a[i] || MISSING, b: b[i] || MISSING, same: (a[i] || MISSING) === (b[i] || MISSING) }))
 
 export function compareFlows(a: Flow, b: Flow): Section[] {
   const ah = rejoinCookies(a.requestHeaders ?? []), bh = rejoinCookies(b.requestHeaders ?? [])
   const ac = cookiePairs(a.requestHeaders ?? []), bc = cookiePairs(b.requestHeaders ?? [])
   const noCookie = (hs: Header[]) => regular(hs).filter((h) => h.name?.toLowerCase() !== 'cookie')
-  const paired = (title: string, rows: PairRow[]): Section => ({
-    title, match: rows.every((r) => r.same), pairs: rows,
-  })
-  const tls = (f: Flow) => [`client ${f.tlsClientName || MISSING}`, `ja3 ${f.ja3 || MISSING}`, `ja4 ${f.ja4 || MISSING}`]
+  const tls = (f: Flow) => [f.tlsClientName, f.ja3, f.ja4]
   return [
+    requestLine(a, b),
     ordered('HTTP version', [a.protocol ?? ''].filter(Boolean), [b.protocol ?? ''].filter(Boolean)),
     ordered('Pseudo-header order', pseudo(a.requestHeaders ?? []), pseudo(b.requestHeaders ?? [])),
     ordered('Header order', regular(ah).map((h) => h.name ?? ''), regular(bh).map((h) => h.name ?? '')),
     ordered('Cookie order', ac.map((c) => c.name), bc.map((c) => c.name)),
-    paired('Header values', pairValues(named(noCookie(ah)), named(noCookie(bh)))),
-    paired('Cookie values', pairValues(ac, bc)),
-    ordered('TLS fingerprint', tls(a), tls(b)),
+    namedSection('Header values', pairValues(named(noCookie(ah)), named(noCookie(bh)))),
+    namedSection('Cookie values', pairValues(ac, bc)),
+    namedSection('TLS fingerprint', fixed(['client', 'ja3', 'ja4'], tls(a), tls(b))),
     ordered('HTTP/2 fingerprint', [a.http2Fingerprint ?? ''].filter(Boolean), [b.http2Fingerprint ?? ''].filter(Boolean)),
-    // Section 9, the request body, needs the bytes: compareBodies.
+    // Section 10, the request body, needs the bytes: compareBodies.
   ]
 }
 
@@ -303,6 +397,15 @@ export function messagePosition(all: WsMessage[], id: string, openMicros: number
 }
 
 const seconds = (us: number) => `${(us / 1e6).toFixed(3)} s`
+const POSITION_NAMES = ['frame', 'since open', 'since prev']
+
+/** Each frame's place: context to orient by, never counted as a difference. */
+export function positionSection(a: Position | null, b: Position | null): Section {
+  const la = a ? positionLines(a) : [], lb = b ? positionLines(b) : []
+  const rows = POSITION_NAMES.map((name, i) => ({ name, a: la[i] ?? MISSING, b: lb[i] ?? MISSING, same: false }))
+  return { title: 'Position', match: true, rows, named: true, fold: '', context: true }
+}
+
 export const positionLines = (p: Position): string[] => [
   `#${p.index} of ${p.total.toLocaleString('en-US')} · ${p.dir} #${p.dirIndex}`,
   `t+${seconds(p.sinceOpen)}`,
@@ -313,11 +416,10 @@ export function compareMessages(a: WsMessage, b: WsMessage): Section[] {
   const line = (m: WsMessage) => `${m.fromClient ? '→ client' : '← server'} · ${m.opcode ?? MISSING}`
   const size = (m: WsMessage) => `${num(m.payload?.size).toLocaleString('en-US')} B`
   const meta = (m: WsMessage) => Object.entries(m.metadata ?? {}).map(([name, value]) => ({ name, value }))
-  const pairs = pairValues(meta(a), meta(b))
   return [
     ordered('Direction · opcode', [line(a)], [line(b)]),
     ordered('Payload size', [size(a)], [size(b)]),
-    { title: 'Metadata', match: pairs.every((r) => r.same), pairs },
+    namedSection('Metadata', pairValues(meta(a), meta(b))),
   ]
 }
 

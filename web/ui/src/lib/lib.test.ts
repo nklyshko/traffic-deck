@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessages, describeLayout, diffLines, diffParts, diffText, fitLines, formDecode, goSlice, messagePosition, MISSING, pairValues, positionLines, prettyJson, prettyPayload, prettyXml, renderBudget, splitRows, unifiedDiff } from './compare'
+import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessages, describeLayout, diffLines, diffParts, diffText, fitLines, formDecode, goSlice, messagePosition, MISSING, pairValues, plainAuthority, positionSection, requestLine, wordDiff, differingParts, positionLines, prettyJson, prettyPayload, prettyXml, renderBudget, splitRows, unifiedDiff } from './compare'
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
@@ -214,9 +214,45 @@ describe('compare', () => {
   it('compares two flows section by section', () => {
     const f: Flow = { id: 'a', protocol: 'HTTP/2', requestHeaders: [{ name: ':method', value: 'GET' }, { name: 'accept', value: '*/*' }] }
     const sections = compareFlows(f, { ...f, id: 'b', protocol: 'HTTP/1.1' })
-    expect(sections).toHaveLength(8)
-    expect(sections[0].match).toBe(false)
-    expect(sections[2].match).toBe(true)
+    expect(sections).toHaveLength(9)
+    expect(sections[0]).toMatchObject({ title: 'Request line', match: true })
+    expect(sections[1].match).toBe(false)
+    expect(sections[3].match).toBe(true)
+  })
+  it('compares the request line part by part', () => {
+    const f: Flow = { id: 'a', method: 'GET', scheme: 'https', authority: 'api.example.test', path: '/v1/cart', query: 'a=1&b=2' }
+    const line = requestLine(f, { ...f, id: 'b', method: 'POST', query: 'b=2&a=1' })
+    expect(line.match).toBe(false)
+    expect(line.rows.map((r) => [r.name, r.a, r.b, r.same])).toEqual([
+      ['method', 'GET', 'POST', false], ['scheme', 'https', 'https', true], ['authority', 'api.example.test', 'api.example.test', true],
+      ['path', '/v1/cart', '/v1/cart', true], ['query', 'a=1&b=2', 'b=2&a=1', false],
+    ])
+    expect(line.rows.filter((r) => r.full).map((r) => r.name)).toEqual(['path', 'query'])
+    expect(requestLine(f, f).fold).toBe('GET https://api.example.test/v1/cart?a=1&b=2')
+    expect(requestLine({ id: 'c' }, { id: 'd', path: '/x' }).rows.map((r) => [r.a, r.b])).toEqual([
+      ['∅', '∅'], ['∅', '∅'], ['∅', '∅'], ['∅', '/x'], ['∅', '∅'],
+    ])
+  })
+  it('narrows a word diff to the characters that differ', () => {
+    expect(wordDiff('/g/chains/2026-11-23-21-33-13.chain', '/g/chains/2026-11-23-21-35-13.chain')).toEqual([
+      { kind: ' ', text: '/g/chains/2026-11-23-21-3' }, { kind: '-', text: '3' }, { kind: '+', text: '5' }, { kind: ' ', text: '-13.chain' },
+    ])
+    expect(wordDiff('/v1/cart/items', '/v2/cart')).toEqual([
+      { kind: ' ', text: '/v' }, { kind: '-', text: '1' }, { kind: '+', text: '2' }, { kind: ' ', text: '/cart' }, { kind: '-', text: '/items' },
+    ])
+    expect(wordDiff('/same', '/same')).toEqual([{ kind: ' ', text: '/same' }])
+    expect(differingParts('GET', 'POST')).toBeNull()
+    expect(differingParts('firefox-settings.cdn.mozilla.net', 'mozilla-ohttp.fastly-edge.com')).toBeNull()
+    expect(differingParts('c-91d2', 'c-04ab')?.filter((p) => p.kind !== ' ')).toEqual([{ kind: '-', text: '91d2' }, { kind: '+', text: '04ab' }])
+    expect(differingParts('s-7f3a90c2e1d4', 's-7f3a90c2e1d5')?.filter((p) => p.kind !== ' ')).toEqual([{ kind: '-', text: '4' }, { kind: '+', text: '5' }])
+  })
+  it('drops only a default port for its scheme', () => {
+    expect(plainAuthority('api.example.test:443', 'https')).toBe('api.example.test')
+    expect(plainAuthority('api.example.test:80', 'HTTP')).toBe('api.example.test')
+    expect(plainAuthority('api.example.test:80', 'https')).toBe('api.example.test:80')
+    expect(plainAuthority('api.example.test:8443', 'https')).toBe('api.example.test:8443')
+    expect(plainAuthority('api.example.test:443', undefined)).toBe('api.example.test:443')
+    expect(plainAuthority('[::1]:443', 'https')).toBe('[::1]')
   })
   it('formats a Go slice', () => {
     expect(goSlice(['a"b', 'c\\'])).toBe('[]string{\n\t"a\\"b",\n\t"c\\\\",\n}')
@@ -590,7 +626,21 @@ describe('message compare', () => {
   it('compares direction, exact size and metadata by key', () => {
     const s = compareMessages(frame({ fromClient: true, opcode: 'text', payload: { size: '2100' }, metadata: { k: '1' } }), frame({ opcode: 'text', payload: { size: '2200' }, metadata: { k: '2', o: 'x' } }))
     expect(s.map((x) => [x.title, x.match])).toEqual([['Direction · opcode', false], ['Payload size', false], ['Metadata', false]])
-    expect(s[2].pairs?.map((p) => p.name)).toEqual(['k', 'o'])
+    expect(s[2].rows.map((p) => p.name)).toEqual(['k', 'o'])
+    expect(s[2].named && !s[0].named).toBe(true)
+  })
+  it('folds a matching section to its value once', () => {
+    const f: Flow = { id: 'a', protocol: 'HTTP/2', tlsClientName: 'chrome', requestHeaders: [{ name: 'cookie', value: 'sid=1; theme=dark' }] }
+    const s = compareFlows(f, { ...f, id: 'b' })
+    expect(s.find((x) => x.title === 'Cookie order')?.fold).toBe('sid · theme')
+    expect(s.find((x) => x.title === 'TLS fingerprint')?.rows.map((r) => r.name)).toEqual(['client', 'ja3', 'ja4'])
+    expect(s.find((x) => x.title === 'HTTP/2 fingerprint')?.fold).toBe('∅')
+  })
+  it('places both frames as context rows', () => {
+    const all = [frame({ id: '1', fromClient: true, tsUnixMicros: '1000000' }), frame({ id: '2', tsUnixMicros: '2000000' })]
+    const p = positionSection(messagePosition(all, '1', 0), null)
+    expect(p.context).toBe(true)
+    expect(p.rows.map((r) => [r.name, r.b])).toEqual([['frame', '∅'], ['since open', '∅'], ['since prev', '∅']])
   })
 })
 
