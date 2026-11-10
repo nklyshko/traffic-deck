@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Columns3, Eye, PanelRightClose, RefreshCw, Settings as Gear, Square, Star, X } from 'lucide-react'
+import { rem } from '../lib/scale'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { dropTerm, FLOW_EXAMPLES, halfTyped, FLOW_TERMS, parseFilter, readStatus, readTerm, STATUS_OPTIONS, termLabel, writeStatus, writeTerm } from '../lib/filter'
@@ -29,7 +30,7 @@ const TYPES: [string, string][] = [['JSON', 'json'], ['HTML', 'html'], ['JavaScr
 function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: [string, string][]; onChange: (v: string) => void }) {
   return (
     <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)}
-      className={cx('td-select h-8 pl-3 pr-6 rounded-md border text-xs', value ? 'tone-blue tint border-accent' : 'bg-raised border-edge text-body')}>
+      className={cx('td-select h-8 pl-3 pr-6 rounded-md border text-12', value ? 'tone-blue tint border-accent' : 'bg-raised border-edge text-body')}>
       <option value="">{label}</option>
       {options.map(([l, v]) => <option key={v} value={v}>{l}</option>)}
     </select>
@@ -187,31 +188,31 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
   const showDetails = !collapsed
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center gap-2.5 h-[52px] px-3 shrink-0 border-b border-line">
-        <IconButton label="Back to sessions" className="border border-edge" onClick={onBack}><ArrowLeft size={15} /></IconButton>
+      <div className="flex items-center gap-2.5 h-13 px-3 shrink-0 border-b border-line">
+        <IconButton label="Back to sessions" className="border border-edge" onClick={onBack}><ArrowLeft size={rem(15)} /></IconButton>
         {/* Sized by the id, which must stay whole: it is what the CLI and agent tools call the session. */}
-        <div className="shrink-0 max-w-[260px]">
-          <div className="text-[13px] font-semibold text-ink truncate">{session.label || id.slice(0, 8)}</div>
-          <button type="button" title="Copy session id" onClick={copyId} className="relative block font-mono text-[10px] text-faint hover:text-ink whitespace-nowrap">
+        <div className="shrink-0 max-w-65">
+          <div className="text-13 font-semibold text-ink truncate">{session.label || id.slice(0, 8)}</div>
+          <button type="button" title="Copy session id" onClick={copyId} className="relative block font-mono text-10 text-faint hover:text-ink whitespace-nowrap">
             {/* Stays in the layout, or the filter input would resize with the shorter text. */}
             <span className={cx(idCopied && 'invisible')}>{id}</span>
             {idCopied && <span className="absolute inset-0 text-left text-green-fg">✓ copied</span>}
           </button>
         </div>
         {live && <Pill tone="green" dot>Live</Pill>}
-        {live && <Button variant="danger" icon={<Square size={9} fill="currentColor" />} onClick={() => void stop()} title={stopError}>Stop</Button>}
+        {live && <Button variant="danger" icon={<Square size={rem(9)} fill="currentColor" />} onClick={() => void stop()} title={stopError}>Stop</Button>}
         <FilterInput value={text} onChange={setText} terms={FLOW_TERMS} examples={FLOW_EXAMPLES} placeholder="~d example.test !~t image" />
-        <span className="shrink-0 text-xs text-muted" data-tooltip="Capped by the gateway's scan cap when shown as N+"><span className="font-mono font-medium text-ink">{formatMatched(win.matched, win.capped)}</span> matching</span>
-        <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={13} />} onClick={toggleFollow}>Follow</Button>
-        <Button disabled={picks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-[11px]">{picks.length}/2</span></Button>
-        {picks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={12} /></IconButton>}
-        <IconButton label="Refetch" className="border border-edge" onClick={() => void refill(follow ? 'last' : 'first')}><RefreshCw size={14} /></IconButton>
+        <span className="shrink-0 text-12 text-muted" data-tooltip="Capped by the gateway's scan cap when shown as N+"><span className="font-mono font-medium text-ink">{formatMatched(win.matched, win.capped)}</span> matching</span>
+        <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={rem(13)} />} onClick={toggleFollow}>Follow</Button>
+        <Button disabled={picks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-11">{picks.length}/2</span></Button>
+        {picks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={rem(12)} /></IconButton>}
+        <IconButton label="Refetch" className="border border-edge" onClick={() => void refill(follow ? 'last' : 'first')}><RefreshCw size={rem(14)} /></IconButton>
         <Button onMouseDown={(e) => e.preventDefault()} onClick={() => onDecoder(getSelection()?.toString().slice(0, 20000))} className="font-mono" icon={<span>{'{ }'}</span>}><span className="font-sans">Decoder</span></Button>
-        <Popover label="Settings" icon={<Gear size={14} />}>
+        <Popover label="Settings" icon={<Gear size={rem(14)} />}>
           <Check label="Compact rows" checked={compact} onChange={setCompact} />
           <button type="button" data-closes-popover onClick={onManageCatalog} className="w-full pt-1.5 border-t border-line text-left text-muted hover:text-ink">Manage tags &amp; groups</button>
         </Popover>
-        <Popover label="Columns" icon={<Columns3 size={14} />}>
+        <Popover label="Columns" icon={<Columns3 size={rem(14)} />}>
           {allColumns.map((c) => <Check key={c.id} label={c.label} checked={visible(c)} onChange={(v) => setOverrides((o) => ({ ...o, [c.id]: v }))} />)}
           <ResetColumns onReset={() => { setOverrides({}); setWidths({}) }} />
         </Popover>
@@ -221,53 +222,53 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
         <FilterSelect label="Type" value={readTerm(text, '~t') ?? ''} options={TYPES} onChange={(v) => setText(writeTerm(text, '~t', v || null))} />
         <FilterSelect label="Mark" value={readTerm(text, '~mark') ?? ''} options={MARKS.map((m) => [m, m])} onChange={(v) => setText(writeTerm(text, '~mark', v || null))} />
         <FilterSelect label="Status" value={statusLabel} options={STATUS_OPTIONS.map((o) => [o.label, o.label])} onChange={(v) => setText(writeStatus(text, v))} />
-        <Button variant={readTerm(text, '~fav') !== null ? 'active' : 'default'} icon={<Star size={13} />} onClick={() => setText(writeTerm(text, '~fav', readTerm(text, '~fav') !== null ? null : ''))}>Favorites</Button>
-        <Button variant={showHidden ? 'active' : 'default'} aria-pressed={showHidden} icon={<Eye size={13} />} title="DNS lookups and connections nothing decoded" onClick={() => setShowHidden(!showHidden)}>
-          Hidden{win.hiddenMatched > 0 && <span className="font-mono text-[11px] text-faint">{formatMatched(win.hiddenMatched, win.capped)}</span>}
+        <Button variant={readTerm(text, '~fav') !== null ? 'active' : 'default'} icon={<Star size={rem(13)} />} onClick={() => setText(writeTerm(text, '~fav', readTerm(text, '~fav') !== null ? null : ''))}>Favorites</Button>
+        <Button variant={showHidden ? 'active' : 'default'} aria-pressed={showHidden} icon={<Eye size={rem(13)} />} title="DNS lookups and connections nothing decoded" onClick={() => setShowHidden(!showHidden)}>
+          Hidden{win.hiddenMatched > 0 && <span className="font-mono text-11 text-faint">{formatMatched(win.hiddenMatched, win.capped)}</span>}
         </Button>
         <Button variant="ghost" onClick={() => setText('')}>Reset</Button>
         <span className="flex-1" />
-        <span className="text-[11px] text-faint">Details</span>
+        <span className="text-11 text-faint">Details</span>
         <span className="inline-flex h-8 rounded-md border border-edge overflow-hidden">
           {[30, 40, 50].map((w) => (
-            <button key={w} type="button" onClick={() => { setDetailsWidth(w); setCollapsed(false) }} className={cx('px-3 font-mono text-[11px]', detailsWidth === w && !collapsed ? 'bg-sel text-ink' : 'text-muted')}>{w}%</button>
+            <button key={w} type="button" onClick={() => { setDetailsWidth(w); setCollapsed(false) }} className={cx('px-3 font-mono text-11', detailsWidth === w && !collapsed ? 'bg-sel text-ink' : 'text-muted')}>{w}%</button>
           ))}
         </span>
-        <IconButton label={collapsed ? 'Show details' : 'Collapse details'} className="border border-edge" onClick={() => setCollapsed(!collapsed)}><PanelRightClose size={14} /></IconButton>
+        <IconButton label={collapsed ? 'Show details' : 'Collapse details'} className="border border-edge" onClick={() => setCollapsed(!collapsed)}><PanelRightClose size={rem(14)} /></IconButton>
       </div>
       {terms.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 min-h-[34px] px-3 py-1 shrink-0 border-b border-line">
+        <div className="flex flex-wrap items-center gap-1.5 min-h-8.5 px-3 py-1 shrink-0 border-b border-line">
           {terms.map((t, i) => (
-            <span key={i} className="inline-flex items-center gap-1.5 h-6 pl-2.5 pr-1.5 rounded-full bg-raised border border-edge text-[11px] text-muted">
+            <span key={i} className="inline-flex items-center gap-1.5 h-6 pl-2.5 pr-1.5 rounded-full bg-raised border border-edge text-11 text-muted">
               <span className="font-mono text-body">{termLabel(t)}</span>
-              <button type="button" aria-label={`Remove ${termLabel(t)}`} onClick={() => setText(dropTerm(text, i))} className="hover:text-ink"><X size={11} /></button>
+              <button type="button" aria-label={`Remove ${termLabel(t)}`} onClick={() => setText(dropTerm(text, i))} className="hover:text-ink"><X size={rem(11)} /></button>
             </span>
           ))}
         </div>
       )}
       {progress && <div className="h-0.5 shrink-0 bg-line" title={progress.stage}><div className="h-full bg-accent" style={{ width: `${progress.percent ?? 0}%` }} /></div>}
-      {win.hints.map((h, i) => <div key={i} className="px-3 py-1 shrink-0 tint tone-amber text-[11px]">{h}</div>)}
-      {win.error && <div className="px-3 py-1 shrink-0 tint tone-red text-[11px]">{win.error}</div>}
-      {stopError && <div className="px-3 py-1 shrink-0 tint tone-red text-[11px]">Stop failed: {stopError}. Force close is on the Sessions screen.</div>}
+      {win.hints.map((h, i) => <div key={i} className="px-3 py-1 shrink-0 tint tone-amber text-11">{h}</div>)}
+      {win.error && <div className="px-3 py-1 shrink-0 tint tone-red text-11">{win.error}</div>}
+      {stopError && <div className="px-3 py-1 shrink-0 tint tone-red text-11">Stop failed: {stopError}. Force close is on the Sessions screen.</div>}
       <div ref={split} className="flex flex-1 min-h-0">
         <FlowTable rows={rows} columns={columns} selected={selected} multi={selection.set} picks={pickedHere} flashed={win.flashed} compact={compact} hasOlder={win.hasOlder} hasNewer={win.hasNewer}
           loading={win.loading} filtered={!!filter} follow={follow} active={active} scrollTo={win.scrollTo} onSelect={onSelect} onPick={togglePick} onOpenMessages={openMessages} onExtend={extend} onClearFilter={() => setText('')} onColumnWidth={setWidth} />
         {showDetails && <>
-          <div role="separator" aria-orientation="vertical" onMouseDown={startDrag} className="w-[5px] shrink-0 cursor-col-resize bg-head hover:bg-accent" />
+          <div role="separator" aria-orientation="vertical" onMouseDown={startDrag} className="w-1.25 shrink-0 cursor-col-resize bg-head hover:bg-accent" />
           <div className="shrink-0 min-w-0" style={{ width: `${detailsWidth}%` }}>
             {flow ? <DetailsPanel key={flow.id} session={id} summary={flow} targets={targets} onClose={() => setSelected(null)} onPatch={patchRows} onDecode={onDecoder} onOpenMessages={openMessages} />
               : <div className="flex items-center justify-center h-full bg-panel text-muted">Select a flow</div>}
           </div>
         </>}
       </div>
-      <div className="flex items-center gap-3 h-7 px-3 shrink-0 border-t border-line bg-chrome font-mono text-[11px] text-muted">
+      <div className="flex items-center gap-3 h-7 px-3 shrink-0 border-t border-line bg-chrome font-mono text-11 text-muted">
         <span>showing {rows.length.toLocaleString('en-US')} of {formatMatched(win.matched, win.capped)}</span>
         {follow && <span className="text-blue-fg">⇣ follow</span>}
         {selection.set.size > 1 && <span className="text-body">{selection.set.size.toLocaleString('en-US')} selected</span>}
-        {win.pending > 0 && <button type="button" onClick={jumpEnd} className="h-[18px] px-2 rounded-full bg-primary text-white font-sans font-semibold text-[10px]">{win.pending} new</button>}
+        {win.pending > 0 && <button type="button" onClick={jumpEnd} className="h-4.5 px-2 rounded-full bg-primary text-white font-sans font-semibold text-10">{win.pending} new</button>}
         <span className="flex-1" />
-        <button type="button" onClick={jumpStart} className="inline-flex items-center gap-1 hover:text-ink"><ArrowUp size={11} />first</button>
-        <button type="button" onClick={jumpEnd} className="inline-flex items-center gap-1 hover:text-ink"><ArrowDown size={11} />last</button>
+        <button type="button" onClick={jumpStart} className="inline-flex items-center gap-1 hover:text-ink"><ArrowUp size={rem(11)} />first</button>
+        <button type="button" onClick={jumpEnd} className="inline-flex items-center gap-1 hover:text-ink"><ArrowDown size={rem(11)} />last</button>
         <span className="text-faint">buffer {MAX_ROWS}</span>
       </div>
     </div>

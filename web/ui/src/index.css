@@ -5,6 +5,22 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* The type scale, named for its px at the default text size. In rem, so the browser's font
+   size and the Text size setting (§5.1) scale it with everything laid out in rem. 12 and up
+   keep the line heights of the Tailwind sizes they replace. */
+@theme {
+  --text-*: initial;
+  --text-10: 0.625rem;
+  --text-11: 0.6875rem;
+  --text-12: 0.75rem;
+  --text-12--line-height: calc(1 / 0.75);
+  --text-13: 0.8125rem;
+  --text-14: 0.875rem;
+  --text-14--line-height: calc(1.25 / 0.875);
+  --text-18: 1.125rem;
+  --text-18--line-height: calc(1.75 / 1.125);
+}
+
 @theme inline {
   --color-*: initial;
   --color-chrome: var(--chrome);
@@ -64,7 +80,7 @@ body {
   background: var(--app);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
@@ -108,13 +124,13 @@ select.td-select option { background: var(--raised); color: var(--text); }
   top: calc(100% + 6px);
   right: 0;
   width: max-content;
-  max-width: 280px;
-  padding: 4px 8px;
+  max-width: 17.5rem;
+  padding: 0.25rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--toast);
   color: var(--body);
-  font: 400 11px/1.4 var(--font-sans);
+  font: 400 0.6875rem/1.4 var(--font-sans);
   white-space: normal;
   pointer-events: none;
 }

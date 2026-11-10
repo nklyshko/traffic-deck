@@ -1,5 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { ArrowDown, ArrowLeft, ArrowRight, Check as Tick, Columns3, X } from 'lucide-react'
+import { ArrowDown, Check as Tick, Columns3, MoveLeft, MoveRight, X } from 'lucide-react'
+import { rem, useScale } from '../lib/scale'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as api from '../lib/api'
 import { MESSAGE_EXAMPLES, MESSAGE_TERMS, readsAnnotations } from '../lib/filter'
@@ -13,7 +14,7 @@ import { Check, columnStyle, HeaderCell, Popover, ResetColumns } from './Columns
 import { FilterInput } from './FilterInput'
 import { JsonTree } from './Json'
 import { AnnotationBar, NameValue, nameColumn, parseJson, type Annotated } from './Details'
-import { Flags } from './FlowTable'
+import { Flags, FLAGS_WIDTH } from './FlowTable'
 import type { Pick } from './Workspace'
 import { Banner, Button, Card, CopyButton, cx, IconButton, Modal, Pill, Spinner } from './ui'
 
@@ -28,9 +29,12 @@ function preview(m: WsMessage): string {
 interface FrameColumn { id: string; label: string; width: number | null; meta?: string }
 
 const FRAME_START: FrameColumn[] = [
-  { id: 'flags', label: 'Flags', width: 62 }, { id: 'time', label: 'Time', width: 90 }, { id: 'dir', label: 'Dir', width: 30 },
+  { id: 'flags', label: 'Flags', width: FLAGS_WIDTH }, { id: 'time', label: 'Time', width: 90 }, { id: 'dir', label: 'Dir', width: 30 },
   { id: 'opcode', label: 'Opcode', width: 56 }, { id: 'len', label: 'Len', width: 48 },
 ]
+// Blue against neutral reads apart under any colour-vision deficiency, which cyan against purple
+// did not, and leaves the warm hues to the binary opcode beside it.
+const DIR_TONE = { client: 'text-blue-fg', server: 'text-body' }
 const FRAME_END: FrameColumn = { id: 'preview', label: 'Preview', width: null }
 
 function FrameCell({ c, m }: { c: FrameColumn; m: WsMessage }) {
@@ -39,8 +43,8 @@ function FrameCell({ c, m }: { c: FrameColumn; m: WsMessage }) {
     case 'flags': return <Flags flow={m} />
     case 'time': return <span className="text-muted">{formatTime(num(m.tsUnixMicros))}</span>
     case 'dir': return m.fromClient
-      ? <ArrowRight size={16} strokeWidth={3} aria-label="client" className="block text-cyan-fg" />
-      : <ArrowLeft size={16} strokeWidth={3} aria-label="server" className="block text-purple-fg" />
+      ? <MoveRight size={rem(18)} strokeWidth={2.5} aria-label="client" className={cx('block', DIR_TONE.client)} />
+      : <MoveLeft size={rem(18)} strokeWidth={2.5} aria-label="server" className={cx('block', DIR_TONE.server)} />
     case 'opcode': return <span className={cx('block truncate', m.opcode === 'binary' ? 'text-orange-fg' : 'text-body')}>{m.opcode}</span>
     case 'len': return <span className="text-muted">{formatBytes(num(m.payload?.size)) || '0B'}</span>
     case 'preview': return <span className="block truncate text-muted">{preview(m)}</span>
@@ -73,11 +77,11 @@ function Payload({ session, message }: { session: string; message: WsMessage }) 
   return (
     <>
       <div className="flex items-center gap-2 mb-3">
-        <span className={cx('font-mono text-[11px] font-medium', message.fromClient ? 'text-cyan-fg' : 'text-purple-fg')}>{message.fromClient ? '→ client' : '← server'}</span>
-        <span className="px-1.5 rounded bg-sel font-mono text-[11px] text-ink">{message.opcode}</span>
-        <span className="font-mono text-[11px] text-faint">{formatTime(num(message.tsUnixMicros))} · {formatBytes(num(body?.size)) || '0B'}</span>
+        <span className={cx('font-mono text-11 font-medium', message.fromClient ? DIR_TONE.client : DIR_TONE.server)}>{message.fromClient ? '→ client' : '← server'}</span>
+        <span className="px-1.5 rounded bg-sel font-mono text-11 text-ink">{message.opcode}</span>
+        <span className="font-mono text-11 text-faint">{formatTime(num(message.tsUnixMicros))} · {formatBytes(num(body?.size)) || '0B'}</span>
         <span className="flex-1" />
-        {hasRaw && <span className="inline-flex rounded bg-well border border-line p-px text-[11px]">
+        {hasRaw && <span className="inline-flex rounded bg-well border border-line p-px text-11">
           {[false, true].map((v) => <button key={String(v)} type="button" onClick={() => setRaw(v)} className={cx('h-5 px-2 rounded-sm', raw === v ? 'bg-sel text-ink' : 'text-muted')}>{v ? 'raw' : 'payload'}</button>)}
         </span>}
         <Button size="xs" onClick={save} disabled={!bytes}>save</Button>
@@ -89,11 +93,11 @@ function Payload({ session, message }: { session: string; message: WsMessage }) 
       )}
       <Card title={raw ? 'Raw' : 'Payload'} meta={body?.contentType} actions={text ? <CopyButton text={text} label="Copy" /> : undefined}>
         <div className="px-3 pb-1.5">
-          {error ? <p className="text-[11px] text-red-fg">{error}</p> : bytes === undefined ? <Spinner />
-            : !bytes?.length ? <p className="text-[11px] text-faint">Empty.</p>
+          {error ? <p className="text-11 text-red-fg">{error}</p> : bytes === undefined ? <Spinner />
+            : !bytes?.length ? <p className="text-11 text-faint">Empty.</p>
               : json !== undefined ? <JsonTree value={json} />
-                : <pre className="font-mono text-[11px] leading-[18px] text-body whitespace-pre-wrap break-all">{textual ? text.slice(0, TEXT_CAP) : hexDump(bytes, HEX_CAP)}</pre>}
-          {capped > 0 && <button type="button" onClick={save} className="w-full h-7 mt-2 rounded border border-dashed border-edge-strong text-[11px] text-muted hover:text-ink">… {capped.toLocaleString('en-US')} more {textual ? 'characters' : 'bytes'} — save the whole payload as .{ext}</button>}
+                : <pre className="font-mono text-11 leading-4.5 text-body whitespace-pre-wrap break-all">{textual ? text.slice(0, TEXT_CAP) : hexDump(bytes, HEX_CAP)}</pre>}
+          {capped > 0 && <button type="button" onClick={save} className="w-full h-7 mt-2 rounded border border-dashed border-edge-strong text-11 text-muted hover:text-ink">… {capped.toLocaleString('en-US')} more {textual ? 'characters' : 'bytes'} — save the whole payload as .{ext}</button>}
         </div>
       </Card>
     </>
@@ -167,7 +171,8 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
 
   useEffect(() => {
     if (follow && list.current) list.current.scrollTop = list.current.scrollHeight
-  }, [rows, follow])
+    // On new frames only: an annotation patches a row in place and must not move the list.
+  }, [rows.length, follow])
 
   const metaKeys = useMemo(() => [...new Set(rows.flatMap((m) => Object.keys(m.metadata ?? {})))].sort(), [rows])
   const [overrides, setOverrides] = useSetting('frameColumnOverrides')
@@ -196,7 +201,10 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
     if (selected) patchRows([await api.getMessage(session, selected)])
   }, [filter, selected, session, patchRows])
   const ids = useMemo(() => rows.map((m) => m.id), [rows])
-  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => list.current, estimateSize: () => FRAME_ROW, overscan: 20 })
+  // Virtual rows are positioned in real px.
+  const frameRow = FRAME_ROW * useScale()
+  const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => list.current, estimateSize: () => frameRow, overscan: 20 })
+  useEffect(() => { virtual.measure() }, [frameRow, virtual])
   const framePicks = picks.filter((p) => p.message)
   const pick = (m: WsMessage) => onTogglePick({
     session, sessionLabel, id: m.id, label: `${flow.method ?? ''} ${flow.authority ?? ''} ${flow.path ?? ''}`.trim(),
@@ -204,28 +212,28 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
   })
   const metaHelp = `~meta key alone: the key is present${metaKeys.length ? ` · keys here: ${metaKeys.join(', ')}` : ''}`
   return (
-    <Modal flush title="Messages" width={1360} height="min(860px, 100%)" onClose={onClose} headerExtra={<>
-      <span className="font-mono text-[11px] text-muted truncate min-w-0 max-w-72">{flow.method} {flow.authority}{flow.path}</span>
+    <Modal flush title="Messages" width={1360} height={860} onClose={onClose} headerExtra={<>
+      <span className="font-mono text-11 text-muted truncate min-w-0 max-w-72">{flow.method} {flow.authority}{flow.path}</span>
       {live && <Pill tone="green" dot>live</Pill>}
       <FilterInput value={text} onChange={setText} onSubmit={() => setFilter(text)} terms={MESSAGE_TERMS} examples={MESSAGE_EXAMPLES} bareMatches="payload" extraHelp={metaHelp}
-        placeholder={metaKeys[0] ? `~meta ${metaKeys[0]}=` : '~from client'} trailing={<span className="text-[10px] text-faint shrink-0">↵ to apply</span>} />
-      <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={13} />} onClick={() => setFollow(!follow)}>Follow</Button>
-      <Button disabled={framePicks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-[11px]">{framePicks.length}/2</span></Button>
-      {framePicks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={12} /></IconButton>}
-      <Popover label="Columns" icon={<Columns3 size={14} />}>
+        placeholder={metaKeys[0] ? `~meta ${metaKeys[0]}=` : '~from client'} trailing={<span className="text-10 text-faint shrink-0">↵ to apply</span>} />
+      <Button variant={follow ? 'active' : 'default'} aria-pressed={follow} icon={<ArrowDown size={rem(13)} />} onClick={() => setFollow(!follow)}>Follow</Button>
+      <Button disabled={framePicks.length !== 2} onClick={onCompare}>Compare <span className="px-1.5 rounded tint tone-green font-mono text-11">{framePicks.length}/2</span></Button>
+      {framePicks.length > 0 && <IconButton label="Clear picks" size={22} onClick={onClearPicks}><X size={rem(12)} /></IconButton>}
+      <Popover label="Columns" icon={<Columns3 size={rem(14)} />}>
         {allColumns.map((c) => <Check key={c.id} label={c.label} checked={overrides[c.id] ?? true} onChange={(v) => setOverrides((o) => ({ ...o, [c.id]: v }))} />)}
         <ResetColumns onReset={() => { setOverrides({}); setWidths({}) }} />
       </Popover>
     </>}>
-      {hints.map((h, i) => <div key={i} className="px-3 py-1 tint tone-amber text-[11px]">{h}</div>)}
+      {hints.map((h, i) => <div key={i} className="px-3 py-1 tint tone-amber text-11">{h}</div>)}
       {lost && <div className="p-2"><Banner>stream lost — reopen the timeline to resync</Banner></div>}
       <div className="flex flex-1 min-h-0">
         <div className="flex-1 min-w-0 flex flex-col">
-          <div role="row" className="flex items-center h-8 px-3 shrink-0 bg-head border-b border-line text-[11px] font-medium text-muted">
+          <div role="row" className="flex items-center h-8 px-3 shrink-0 bg-head border-b border-line text-11 font-medium text-muted">
             <span className="w-6 shrink-0" />
             {columns.map((c) => <HeaderCell key={c.id} label={c.label} title={c.label} width={c.width} className={c.meta !== undefined ? 'text-purple-fg' : undefined} onResize={(w) => setWidth(c.id, w)} onReset={() => setWidth(c.id, null)} />)}
           </div>
-          <div ref={list} className="flex-1 min-h-0 overflow-auto font-mono text-[11px]">
+          <div ref={list} className="flex-1 min-h-0 overflow-auto font-mono text-11">
             <div style={{ height: virtual.getTotalSize(), position: 'relative' }}>
               {virtual.getVirtualItems().map((v) => {
                 const m = rows[v.index]
@@ -236,12 +244,12 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
                   <div key={m.id} role="row" aria-selected={on} onClick={(e) => setSelection((cur) => select(ids, cur, m.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey }))}
                     // Shift would otherwise drag a text selection across the rows.
                     onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
-                    style={{ position: 'absolute', top: 0, left: 0, right: 0, height: FRAME_ROW, transform: `translateY(${v.start}px)` }}
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, height: frameRow, transform: `translateY(${v.start}px)` }}
                     className={cx('relative flex items-center px-3 cursor-default', mark && `mark-${mark} tint [--a:10%]`, !mark && on && 'tone-blue tint [--a:12%]', !mark && !on && 'hover:bg-rowhover text-body')}>
                     {(mark || on) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
                     <button type="button" role="checkbox" aria-checked={picked} aria-label="Pick for compare" onClick={(e) => { e.stopPropagation(); pick(m) }}
                       className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
-                      {picked && <Tick size={12} strokeWidth={3} />}
+                      {picked && <Tick size={rem(12)} strokeWidth={3} />}
                     </button>
                     {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><FrameCell c={c} m={m} /></div>)}
                   </div>
@@ -257,7 +265,7 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
           {message && <AnnotationBar record={message} targets={targets} session={session} noun="frames" onChanged={() => void annotated().catch(() => {})} onPatch={patchRows} />}
         </div>
       </div>
-      <footer className="flex items-center gap-2 h-9 px-4 shrink-0 border-t border-line font-mono text-[11px] text-muted rounded-b-xl">
+      <footer className="flex items-center gap-2 h-9 px-4 shrink-0 border-t border-line font-mono text-11 text-muted rounded-b-xl">
         {rows.length.toLocaleString('en-US')} frames{live && <span className="text-green-fg">· live</span>}
       </footer>
     </Modal>

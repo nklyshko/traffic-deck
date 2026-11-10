@@ -24,6 +24,9 @@ along with its captures. An attached viewer leaves the gateway running.
 | `GATEWAY_ADDR` | `127.0.0.1:7331` | the gateway to talk to |
 | `NO_COLOR` | | no colour in the startup banner |
 
+Text too small on a 1× screen? **Aa** in the tab strip scales the whole page from Small to
+Larger. It's a percentage of the browser's font size, so Chrome's own font size setting works too.
+
 ## Filters
 
 The filter box takes [the same language](filters.md) as the TUI, and the gateway evaluates it.

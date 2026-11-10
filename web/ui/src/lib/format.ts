@@ -27,11 +27,12 @@ export function formatTime(us: number): string {
 export const formatDateTime = (ms: number): string => (ms ? new Date(ms).toLocaleString() : '—')
 export const formatMatched = (n: number, capped?: boolean): string => `${n.toLocaleString('en-US')}${capped ? '+' : ''}`
 
+/** At most 4 characters, so it fits the messages chip: one decimal below 10, none from 10. */
 export function formatCount(n: number): string {
   if (n < 1000) return String(n)
-  // Rounded before choosing the unit, or 999,950 would read 1000.0K.
-  const k = Math.round(n / 100) / 10
-  return k < 1000 ? `${k.toFixed(1)}K` : `${(n / 1e6).toFixed(1)}M`
+  // Rounded before choosing the unit or the decimal, or 9,950 would read 10.0K.
+  const unit = (v: number, u: string) => (Math.round(v * 10) < 100 ? `${(Math.round(v * 10) / 10).toFixed(1)}${u}` : `${Math.round(v)}${u}`)
+  return Math.round(n / 1000) < 1000 ? unit(n / 1000, 'K') : unit(n / 1e6, 'M')
 }
 
 const REASONS: Record<number, string> = {

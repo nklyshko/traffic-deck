@@ -1,4 +1,5 @@
 import { Trash2 } from 'lucide-react'
+import { rem } from '../lib/scale'
 import { useState } from 'react'
 import * as api from '../lib/api'
 import { FAVORITE_TAG, loadCatalog, useCatalog } from '../lib/catalog'
@@ -9,7 +10,7 @@ import { Banner, Button, IconButton, inputClass, Modal, SectionLabel, selectClas
 function Confirm({ name, onCancel, onDelete }: { name: string; onCancel: () => void; onDelete: () => void }) {
   return (
     <span className="inline-flex items-center gap-1.5 shrink-0">
-      <span className="text-[11px] text-red-fg">Delete {name}?</span>
+      <span className="text-11 text-red-fg">Delete {name}?</span>
       <Button size="xs" onClick={onCancel}>Cancel</Button>
       <Button size="xs" variant="destructive" onClick={onDelete}>Delete</Button>
     </span>
@@ -43,7 +44,7 @@ function GroupRow({ group, parents, confirming, onConfirm, onCancel, onSave, onD
         {parents.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
       </select>
       {confirming ? <Confirm name={group.name ?? ''} onCancel={onCancel} onDelete={onDelete} />
-        : <IconButton label={`Delete ${group.name}`} size={28} className="text-red-fg!" onClick={onConfirm}><Trash2 size={13} /></IconButton>}
+        : <IconButton label={`Delete ${group.name}`} size={28} className="text-red-fg!" onClick={onConfirm}><Trash2 size={rem(13)} /></IconButton>}
     </div>
   )
 }
@@ -75,10 +76,10 @@ export function CatalogModal({ onClose }: { onClose: () => void }) {
           return (
             <div key={t.id} className="flex items-center gap-2 h-7">
               <Swatch color={t.color} />
-              <span className="flex-1 min-w-0 truncate text-xs text-ink">{t.name}</span>
-              {favorite ? <span className="text-[11px] text-faint">built in</span>
+              <span className="flex-1 min-w-0 truncate text-12 text-ink">{t.name}</span>
+              {favorite ? <span className="text-11 text-faint">built in</span>
                 : confirming === t.id ? <Confirm name={t.name ?? ''} onCancel={() => setConfirming('')} onDelete={() => void run(() => api.deleteTag(t.id))} />
-                  : <IconButton label={`Delete ${t.name}`} size={28} className="text-red-fg!" onClick={() => setConfirming(t.id)}><Trash2 size={13} /></IconButton>}
+                  : <IconButton label={`Delete ${t.name}`} size={28} className="text-red-fg!" onClick={() => setConfirming(t.id)}><Trash2 size={rem(13)} /></IconButton>}
             </div>
           )
         })}

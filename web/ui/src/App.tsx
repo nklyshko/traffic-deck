@@ -1,6 +1,8 @@
-import { List, Moon, Sun, X } from 'lucide-react'
+import { ALargeSmall, List, Moon, Sun, X } from 'lucide-react'
+import { rem, setTextSize, TEXT_SIZES } from './lib/scale'
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import { CatalogModal } from './components/Catalog'
+import { Popover } from './components/Columns'
 import { CompareModal } from './components/Compare'
 import { DecoderModal } from './components/Decode'
 import { NewCaptureDialog } from './components/NewCapture'
@@ -87,27 +89,31 @@ export function App() {
   const current = (t: Session) => sessions.find((s) => s.id === t.id) ?? t
   return (
     <div className="flex flex-col h-full">
-      <nav role="tablist" className="flex items-center h-[38px] shrink-0 pl-2 pr-3 bg-chrome border-b border-line overflow-hidden">
-        <button type="button" role="tab" aria-selected={active === null} onClick={() => setActive(null)}
-          className={cx('flex items-center gap-2 h-full px-3 text-xs', active === null ? 'bg-app text-ink font-semibold' : 'text-muted hover:text-ink')}><List size={13} />Sessions</button>
-        {tabs.map((tab) => {
-          const t = current(tab)
-          const count = picks.filter((p) => p.session === t.id).length
-          return (
-            <div key={t.id} className={cx('flex items-center gap-2 h-full pl-3 pr-1.5 min-w-0 max-w-56 text-xs', active === t.id ? 'bg-app text-ink font-semibold' : 'text-muted')}>
-              <span aria-hidden className={cx('w-1.5 h-1.5 rounded-full shrink-0', isLive(t) && 'pulse')} style={{ background: isLive(t) ? 'var(--green)' : 'var(--dim)' }} />
-              <button type="button" role="tab" aria-selected={active === t.id} onClick={() => setActive(t.id)} className="truncate min-w-0 hover:text-ink">{t.label || t.id.slice(0, 8)}</button>
-              {count > 0 && <span title={`${count} compare pick${count > 1 ? 's' : ''}`} className="px-1.5 rounded tint tone-blue font-mono text-[10px]">{count}</span>}
-              <IconButton label="Close tab" size={20} onClick={() => close(t.id)}><X size={11} /></IconButton>
-            </div>
-          )
-        })}
+      <nav role="tablist" className="flex items-center h-9.5 shrink-0 pl-2 pr-3 bg-chrome border-b border-line">
+        {/* Only the tabs clip, so the menus on the right can open below the strip. */}
+        <div className="flex items-center h-full min-w-0 overflow-hidden">
+          <button type="button" role="tab" aria-selected={active === null} onClick={() => setActive(null)}
+            className={cx('flex items-center gap-2 h-full px-3 text-12', active === null ? 'bg-app text-ink font-semibold' : 'text-muted hover:text-ink')}><List size={rem(13)} />Sessions</button>
+          {tabs.map((tab) => {
+            const t = current(tab)
+            const count = picks.filter((p) => p.session === t.id).length
+            return (
+              <div key={t.id} className={cx('flex items-center gap-2 h-full pl-3 pr-1.5 min-w-0 max-w-56 text-12', active === t.id ? 'bg-app text-ink font-semibold' : 'text-muted')}>
+                <span aria-hidden className={cx('w-1.5 h-1.5 rounded-full shrink-0', isLive(t) && 'pulse')} style={{ background: isLive(t) ? 'var(--green)' : 'var(--dim)' }} />
+                <button type="button" role="tab" aria-selected={active === t.id} onClick={() => setActive(t.id)} className="truncate min-w-0 hover:text-ink">{t.label || t.id.slice(0, 8)}</button>
+                {count > 0 && <span title={`${count} compare pick${count > 1 ? 's' : ''}`} className="px-1.5 rounded tint tone-blue font-mono text-10">{count}</span>}
+                <IconButton label="Close tab" size={20} onClick={() => close(t.id)}><X size={rem(11)} /></IconButton>
+              </div>
+            )
+          })}
+        </div>
         <span className="flex-1" />
-        <span className="mr-3 flex items-center gap-1.5 text-xs text-ghost font-medium">
-          <img src="/favicon.svg" alt="" width={16} height={16} className="shrink-0" />
+        <span className="mr-3 flex items-center gap-1.5 text-12 text-ghost font-medium">
+          <img src="/favicon.svg" alt="" className="size-4 shrink-0" />
           TrafficDeck
         </span>
-        <IconButton label="Toggle theme" size={26} className="border border-edge" onClick={() => setDark(!dark)}>{dark ? <Moon size={13} /> : <Sun size={13} />}</IconButton>
+        <span className="mr-1.5"><TextSizeMenu /></span>
+        <IconButton label="Toggle theme" size={26} className="border border-edge" onClick={() => setDark(!dark)}>{dark ? <Moon size={rem(13)} /> : <Sun size={rem(13)} />}</IconButton>
       </nav>
       <main className="flex-1 min-h-0 relative">
         <div className="h-full" style={{ display: active === null ? undefined : 'none' }}>
@@ -138,5 +144,21 @@ export function App() {
         })
       }} />}
     </div>
+  )
+}
+
+function TextSizeMenu() {
+  const [size] = useSetting('textSize')
+  return (
+    <Popover small label="Text size" icon={<ALargeSmall size={rem(15)} />}>
+      <div className="text-11 text-faint">Text size</div>
+      {TEXT_SIZES.map((s) => (
+        <label key={s.id} className="flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="text-size" className="accent-[var(--accent)]" checked={size === s.id} onChange={() => setTextSize(s.id)} />
+          <span className="flex-1">{s.label}</span><span className="font-mono text-11 text-faint">{s.percent}%</span>
+        </label>
+      ))}
+      <p className="pt-1.5 border-t border-line text-11 text-faint">Of the browser's font size, which scales the whole page.</p>
+    </Popover>
   )
 }

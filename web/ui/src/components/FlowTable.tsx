@@ -1,7 +1,9 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Check } from 'lucide-react'
+import { rem, useScale } from '../lib/scale'
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useCatalog, userTags } from '../lib/catalog'
+import { packFlags } from '../lib/flags'
 import { durationTone, formatCount, formatMatched, formatTime, num, shortProto, type Tone } from '../lib/format'
 import type { Annotations, Flow, Tag, Group } from '../lib/types'
 import { EDGE_ROWS } from '../lib/window'
@@ -10,9 +12,11 @@ import { Button, cx, DurationBadge, MethodBadge, Spinner, StatusBadge } from './
 
 export interface SelectMods { shift: boolean; toggle: boolean }
 export interface Column { id: string; label: string; width: number | null; default: boolean; meta?: string }
+// Three 15 px slots, so a glyph lands at the same x in every row, and the cell's gutter.
+const SLOT = 15
+export const FLAGS_WIDTH = 3 * SLOT + 12
 export const COLUMNS: Column[] = [
-  // The messages chip and two more flags, the most the three slots can show.
-  { id: 'flags', label: 'Flags', width: 82, default: true }, { id: 'time', label: 'Time', width: 94, default: true },
+  { id: 'flags', label: 'Flags', width: FLAGS_WIDTH, default: true }, { id: 'time', label: 'Time', width: 94, default: true },
   { id: 'method', label: 'Method', width: 54, default: true }, { id: 'status', label: 'Status', width: 56, default: true },
   { id: 'duration', label: 'Dur', width: 60, default: true }, { id: 'protocol', label: 'Proto', width: 44, default: true },
   // 32 characters, which holds nearly 9 in 10 hosts in real captures; Path takes the rest.
@@ -38,7 +42,7 @@ type Flagged = Annotations & Pick<Flow, 'websocket' | 'messageCount' | 'redirect
 
 export function flagsOf(f: Flagged, tags: Map<string, Tag>, groups: Map<string, Group>): FlagItem[] {
   const out: FlagItem[] = []
-  if (f.websocket) out.push({ glyph: '⇅', title: `Open messages (${formatMatched(num(f.messageCount))})`, tone: 'text-blue-fg' })
+  if (f.websocket) out.push({ glyph: '⇅', title: `⇅ Open messages (${formatMatched(num(f.messageCount))})`, tone: 'text-blue-fg' })
   if (f.redirectLocation) out.push({ glyph: '↪', title: `Redirects to ${f.redirectLocation}`, tone: 'text-blue-fg' })
   else if (f.redirectedFromId) out.push({ glyph: '↪', title: 'Arrived here via a redirect', tone: 'text-blue-fg' })
   if (f.favorite) out.push({ glyph: '★', title: 'Favorite', tone: 'text-amber-fg' })
@@ -53,25 +57,29 @@ export function flagsOf(f: Flagged, tags: Map<string, Tag>, groups: Map<string, 
 
 export function Flags<T extends Flagged>({ flow, onOpenMessages }: { flow: T; onOpenMessages?: (f: T) => void }) {
   const { tags, groups } = useCatalog()
-  const items = flagsOf(flow, tags, groups)
-  const shown = items.length > 3 ? items.slice(0, 2) : items
-  const rest = items.length > 3 ? items.slice(2) : []
+  const { chip, others, shown, rest } = packFlags(flagsOf(flow, tags, groups))
+  const slot = (key: string, title: string, tone: string, glyph: string) => (
+    <span key={key} title={title} className={cx('inline-flex justify-center shrink-0', tone)} style={{ width: rem(SLOT) }}>{glyph}</span>
+  )
   return (
-    <span className="flex items-center gap-1.5 font-mono text-xs">
-      {shown.map((f) => (f.glyph === '⇅'
-        ? <button key={f.glyph} type="button" title={f.title} aria-label={f.title} onClick={(e) => { e.stopPropagation(); onOpenMessages?.(flow) }}
-            className="inline-flex items-center gap-[3px] h-5 pl-[5px] pr-1.5 rounded font-medium shrink-0 tone-blue tint [--a:10%] hover:[--a:20%] border border-transparent hover:border-[color-mix(in_srgb,var(--blue)_40%,transparent)]">
-            {f.glyph}<span className="text-[10px]">{formatCount(num(flow.messageCount))}</span>
-          </button>
-        : <span key={f.glyph} title={f.title} className={f.tone}>{f.glyph}</span>))}
-      {rest.length > 0 && <span className="text-muted" title={rest.map((f) => f.title).join('\n')}>⋯</span>}
+    <span className="flex items-center h-5 text-13 font-medium">
+      {chip && (
+        <button type="button" title={chip.title} aria-label={chip.title} onClick={(e) => { e.stopPropagation(); onOpenMessages?.(flow) }}
+          style={others.length ? { width: rem(2 * SLOT) } : undefined}
+          className={cx('inline-flex items-center justify-center gap-0.5 h-5 rounded font-mono text-12 font-medium shrink-0 tone-blue tint [--a:10%] hover:[--a:20%] border border-transparent hover:border-[color-mix(in_srgb,var(--blue)_40%,transparent)]',
+            others.length ? 'px-0.5' : 'px-1')}>
+          {!others.length && chip.glyph}<span className="text-10">{formatCount(num(flow.messageCount))}</span>
+        </button>
+      )}
+      {shown.map((f) => slot(f.glyph, f.title, cx(f.tone, f.glyph === '#' && 'font-mono'), f.glyph))}
+      {rest.length > 0 && slot('⋯', rest.map((f) => f.title).join('\n'), 'text-muted', '⋯')}
     </span>
   )
 }
 
 function Rail({ flow }: { flow: Flow }) {
   const tone: Tone | null = durationTone(num(flow.durationMicros))
-  return <span aria-hidden className="absolute right-0 top-[3px] bottom-[3px] w-0.5" style={{ background: `var(--${tone ?? 'grey'})` }} />
+  return <span aria-hidden className="absolute right-0 top-0.75 bottom-0.75 w-[2px]" style={{ background: `var(--${tone ?? 'grey'})` }} />
 }
 
 interface RowProps {
@@ -102,12 +110,12 @@ const Row = memo(function Row({ flow: f, columns, selected, picked, flash, zebra
     <div role="row" aria-selected={selected} onClick={(e) => onSelect(f.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
       // Shift would otherwise drag a text selection across the rows.
       onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
-      className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-xs cursor-default', flash && 'row-new', mark && `mark-${mark} tint [--a:10%]`,
+      className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-12 cursor-default', flash && 'row-new', mark && `mark-${mark} tint [--a:10%]`,
         !mark && selected && 'tone-blue tint [--a:12%]', !mark && !selected && (zebra ? 'bg-panel hover:bg-rowhover' : 'hover:bg-rowhover'))}>
       {(mark || selected) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
       <button type="button" role="checkbox" aria-checked={picked} aria-label="Pick for compare" onClick={(e) => { e.stopPropagation(); onPick(f) }}
         className={cx('flex items-center justify-center w-4 h-4 rounded border shrink-0 mr-2', picked ? 'bg-green border-green text-onsolid' : 'border-edge-check')}>
-        {picked && <Check size={12} strokeWidth={3} />}
+        {picked && <Check size={rem(12)} strokeWidth={3} />}
       </button>
       {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><Cell c={c} f={f} onOpenMessages={onOpenMessages} /></div>)}
       <Rail flow={f} />
@@ -127,7 +135,8 @@ interface Props {
 
 export function FlowTable({ rows, columns, selected, multi, picks, flashed, compact, hasOlder, hasNewer, loading, filtered, follow, active, scrollTo, onSelect, onPick, onOpenMessages, onExtend, onClearFilter, onColumnWidth }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
-  const rowHeight = compact ? 30 : 44
+  // Virtual rows are positioned in real px.
+  const rowHeight = (compact ? 30 : 44) * useScale()
   const virtual = useVirtualizer({ count: rows.length, getScrollElement: () => scroller.current, estimateSize: () => rowHeight, overscan: 12 })
   useEffect(() => { virtual.measure() }, [rowHeight, virtual])
 
@@ -173,7 +182,7 @@ export function FlowTable({ rows, columns, selected, multi, picks, flashed, comp
 
   return (
     <div className="flex flex-col flex-1 min-w-0 min-h-0" role="table" aria-label="Flows">
-      <div role="row" className="flex items-center h-8 pl-3 pr-3 shrink-0 bg-head border-b border-line text-[11px] font-medium text-muted">
+      <div role="row" className="flex items-center h-8 pl-3 pr-3 shrink-0 bg-head border-b border-line text-11 font-medium text-muted">
         <span className="w-6 shrink-0" />
         {columns.map((c) => <HeaderCell key={c.id} label={c.label} width={c.width} className={c.id === 'stream' ? 'text-right' : c.meta !== undefined ? 'text-purple-fg' : undefined} onResize={(w) => onColumnWidth(c.id, w)} onReset={() => onColumnWidth(c.id, null)} />)}
       </div>

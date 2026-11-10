@@ -3,11 +3,13 @@ import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessage
 import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
+import { packFlags } from './flags'
 import { fitWidth, formatBytes, formatCount, formatDuration, formatMatched, reasonPhrase } from './format'
 import { bodyExt, cookiePairs, curlCommand, HEX_CAP, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
 import { classifyLogLine } from './logs'
 import { matchesTerms, matchRuns, plural, searchTerms } from './search'
 import { select, NOTHING } from './selection'
+import { rem, TEXT_SIZES } from './scale'
 import { accepts } from './settings'
 import { unknownIds } from './catalog'
 import { declaredColumns, groupScope, inScope, resolveScope, SCOPE_ALL, SCOPE_UNGROUPED, sessionMatcher, sessionScopes } from './sessions'
@@ -232,9 +234,13 @@ describe('format', () => {
     expect(formatCount(0)).toBe('0')
     expect(formatCount(999)).toBe('999')
     expect(formatCount(1906)).toBe('1.9K')
-    expect(formatCount(999_949)).toBe('999.9K')
-    expect(formatCount(999_950)).toBe('1.0M')
+    expect(formatCount(9_949)).toBe('9.9K')
+    expect(formatCount(9_950)).toBe('10K')
+    expect(formatCount(12_345)).toBe('12K')
+    expect(formatCount(999_499)).toBe('999K')
+    expect(formatCount(999_500)).toBe('1.0M')
     expect(formatCount(2_500_000)).toBe('2.5M')
+    expect(formatCount(12_345_678)).toBe('12M')
     expect([reasonPhrase(404), reasonPhrase(599), reasonPhrase(299)]).toEqual(['Not Found', 'Server Error', 'Success'])
   })
 })
@@ -269,8 +275,8 @@ describe('session scopes', () => {
     { id: 'new', status: 'SESSION_STATUS_OPEN' }, { id: 'a', group: 'zeta', status: 'SESSION_STATUS_OPEN' },
     { id: 'b', group: 'Alpha' }, { id: 'c', group: 'zeta' }, { id: 'old' },
   ]
-  it('offers no scopes until a group exists', () => {
-    expect(sessionScopes([{ id: 'x' }, { id: 'y' }], live)).toEqual([])
+  it('offers only All until a group exists', () => {
+    expect(sessionScopes([{ id: 'x' }, { id: 'y' }], live)).toEqual([{ key: SCOPE_ALL, label: 'All sessions', count: 2, live: 0 }])
   })
   it('lists All and Ungrouped, then groups alphabetically with counts and live captures', () => {
     expect(sessionScopes(sessions, live)).toEqual([
@@ -340,6 +346,8 @@ describe('settings', () => {
     expect(accepts('detailsWidth', 55, 40)).toBe(true)
     expect(accepts('compact', 'yes', false)).toBe(false)
     expect(accepts('diffView', 'split', 'inline')).toBe(true)
+    expect(accepts('textSize', 'large', 'default')).toBe(true)
+    expect(accepts('textSize', 'huge', 'default')).toBe(false)
     expect(accepts('diffView', 'sideways', 'inline')).toBe(false)
   })
 })
@@ -639,5 +647,33 @@ describe('declared columns', () => {
     expect(declaredColumns(s('conn,stream'))).toEqual(['conn', 'stream'])
     expect(declaredColumns(s(' scrape_group , proxy_provider,,scrape_group'))).toEqual(['scrape_group', 'proxy_provider'])
     expect(declaredColumns(s())).toEqual([])
+  })
+})
+
+describe('flag slots', () => {
+  const pack = (glyphs: string) => {
+    const { chip, shown, rest } = packFlags([...glyphs].map((glyph) => ({ glyph })))
+    return [chip ? '⇅' : '', shown.map((f) => f.glyph).join(''), rest.map((f) => f.glyph).join('')]
+  }
+  it('shows up to three flags, and two and ⋯ beyond that', () => {
+    expect(pack('★#✎')).toEqual(['', '★#✎', ''])
+    expect(pack('★#✎⬡')).toEqual(['', '★#', '✎⬡'])
+  })
+  it('gives the chip two slots beside one flag, and ⋯ beside more', () => {
+    expect(pack('⇅')).toEqual(['⇅', '', ''])
+    expect(pack('⇅★')).toEqual(['⇅', '★', ''])
+    expect(pack('⇅★#')).toEqual(['⇅', '', '★#'])
+  })
+})
+
+describe('text size', () => {
+  it('writes layout px as rem of the browser default', () => {
+    expect(rem(16)).toBe('1rem')
+    expect(rem(11)).toBe('0.6875rem')
+    expect(rem(57)).toBe('3.5625rem')
+  })
+  it('offers Default at the browser size, the rest as percentages of it', () => {
+    expect(TEXT_SIZES.find((s) => s.id === 'default')?.percent).toBe(100)
+    expect(TEXT_SIZES.map((s) => s.percent)).toEqual([...TEXT_SIZES.map((s) => s.percent)].sort((a, b) => a - b))
   })
 })

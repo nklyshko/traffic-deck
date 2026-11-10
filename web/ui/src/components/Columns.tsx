@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { scaleNow, rem } from '../lib/scale'
 import { Button, cx } from './ui'
 
 const MIN_COLUMN = 36
 const MAX_COLUMN = 800
 const MIN_STRETCH = 80
 
-export const columnStyle = (width: number | null) => (width === null ? { flex: 1, minWidth: 0 } : { width, flexShrink: 0 })
+// Widths are layout px (lib/scale), so a saved width keeps its meaning at any text size.
+export const columnStyle = (width: number | null) => (width === null ? { flex: 1, minWidth: 0 } : { width: rem(width), flexShrink: 0 })
 
 export function HeaderCell({ label, title, width, className, onResize, onReset }: {
   label: string; title?: string; width: number | null; className?: string; onResize: (width: number) => void; onReset: () => void
@@ -15,11 +17,13 @@ export function HeaderCell({ label, title, width, className, onResize, onReset }
     const handle = e.currentTarget
     handle.setPointerCapture(e.pointerId)
     const startX = e.clientX
-    const startWidth = handle.parentElement!.offsetWidth
+    // The DOM measures in real px; widths are stored in layout px.
+    const scale = scaleNow()
+    const startWidth = handle.parentElement!.offsetWidth / scale
     // The stretching column pays for a wider one, and stops paying while it is still readable.
     const stretch = handle.closest('[role=row]')?.querySelector<HTMLElement>('[data-stretch]')
-    const max = stretch ? startWidth + Math.max(0, stretch.offsetWidth - MIN_STRETCH) : MAX_COLUMN
-    const move = (ev: PointerEvent) => onResize(Math.min(max, Math.max(MIN_COLUMN, Math.round(startWidth + ev.clientX - startX))))
+    const max = stretch ? startWidth + Math.max(0, stretch.offsetWidth / scale - MIN_STRETCH) : MAX_COLUMN
+    const move = (ev: PointerEvent) => onResize(Math.min(max, Math.max(MIN_COLUMN, Math.round(startWidth + (ev.clientX - startX) / scale))))
     const up = () => {
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', up)
@@ -42,7 +46,7 @@ export function HeaderCell({ label, title, width, className, onResize, onReset }
   )
 }
 
-export function Popover({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {
+export function Popover({ label, icon, small, children }: { label: string; icon: React.ReactNode; small?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -58,9 +62,9 @@ export function Popover({ label, icon, children }: { label: string; icon: React.
   }, [open])
   return (
     <div ref={root} className="relative">
-      <Button aria-label={label} aria-expanded={open} title={label} onClick={() => setOpen(!open)} className="px-2!">{icon}</Button>
+      <Button aria-label={label} aria-expanded={open} title={label} size={small ? 'sm' : 'md'} onClick={() => setOpen(!open)} className="px-2!">{icon}</Button>
       {/* A child that opens a dialog says so, or this stays open behind the scrim. */}
-      {open && <div onClick={(e) => { if ((e.target as Element).closest('[data-closes-popover]')) setOpen(false) }} className="absolute z-30 right-0 top-[calc(100%+6px)] w-48 max-h-96 overflow-auto p-2 rounded-lg border border-edge bg-toast text-xs text-body space-y-1.5" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>{children}</div>}
+      {open && <div onClick={(e) => { if ((e.target as Element).closest('[data-closes-popover]')) setOpen(false) }} className="absolute z-30 right-0 top-[calc(100%+6px)] w-48 max-h-96 overflow-auto p-2 rounded-lg border border-edge bg-toast text-12 text-body space-y-1.5" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>{children}</div>}
     </div>
   )
 }

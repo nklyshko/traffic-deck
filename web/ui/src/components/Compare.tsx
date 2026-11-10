@@ -24,7 +24,7 @@ function Value({ text, open, onToggle }: { text: string | null; open: boolean; o
 function Cell({ side, text, same, name, open, onToggle }: { side: 'a' | 'b'; text: string | null; same: boolean; name?: string; open: boolean; onToggle: () => void }) {
   const absent = text === null
   return (
-    <div className={cx('flex-1 min-w-0 min-h-[22px] flex gap-2 px-2 py-0.5 rounded font-mono text-[11px]', !same && !absent && (side === 'a' ? 'tint tone-red' : 'tint tone-green'), same && 'text-body')}>
+    <div className={cx('flex-1 min-w-0 min-h-5.5 flex gap-2 px-2 py-0.5 rounded font-mono text-11', !same && !absent && (side === 'a' ? 'tint tone-red' : 'tint tone-green'), same && 'text-body')}>
       <span className="w-2.5 shrink-0">{same || absent ? '' : side === 'a' ? '-' : '+'}</span>
       {name !== undefined && !absent && <span className="text-muted shrink-0">{name}</span>}
       <Value text={text} open={open} onToggle={onToggle} />
@@ -40,7 +40,7 @@ function Row({ a, b, same, name }: { a: string | null; b: string | null; same: b
 
 function EqualCookie({ name, value }: { name: string; value: string }) {
   const [open, setOpen] = useState(false)
-  return <div className="flex gap-2 px-2 py-0.5 font-mono text-[11px] text-body"><span className="w-2.5" /><span className="text-muted shrink-0">{name}</span><Value text={value} open={open} onToggle={() => setOpen(!open)} /></div>
+  return <div className="flex gap-2 px-2 py-0.5 font-mono text-11 text-body"><span className="w-2.5" /><span className="text-muted shrink-0">{name}</span><Value text={value} open={open} onToggle={() => setOpen(!open)} /></div>
 }
 
 const VERDICTS: Record<BodyVerdict, [string, string]> = {
@@ -48,14 +48,14 @@ const VERDICTS: Record<BodyVerdict, [string, string]> = {
 }
 const Verdict = ({ match, body }: { match?: boolean; body?: BodyVerdict }) => {
   const [label, tone] = VERDICTS[body ?? (match ? 'match' : 'differ')]
-  return <span className={cx('inline-flex items-center h-5 px-2 shrink-0 rounded-full tint text-[10px] whitespace-nowrap', tone)}>{label}</span>
+  return <span className={cx('inline-flex items-center h-5 px-2 shrink-0 rounded-full tint text-10 whitespace-nowrap', tone)}>{label}</span>
 }
 
 function SectionCard({ s, n }: { s: Section; n: number }) {
   return (
     <section className="rounded-lg border border-edge-card bg-panel p-3 space-y-1">
       <header className="flex items-center gap-2">
-        <h3 className="text-xs font-medium text-ink">{n} {s.title}</h3>
+        <h3 className="text-12 font-medium text-ink">{n} {s.title}</h3>
         <span className="flex-1" />
         <Verdict match={s.match} />
       </header>
@@ -64,7 +64,7 @@ function SectionCard({ s, n }: { s: Section; n: number }) {
       {s.pairs?.map((r, i) => (s.title === 'Cookie values' && r.same
         ? <EqualCookie key={i} name={r.name} value={r.a} />
         : <Row key={i} a={r.a} b={r.b} same={r.same} name={r.name} />))}
-      {s.pairs?.length === 0 && <p className="px-2 font-mono text-[11px] text-faint">{MISSING}</p>}
+      {s.pairs?.length === 0 && <p className="px-2 font-mono text-11 text-faint">{MISSING}</p>}
     </section>
   )
 }
@@ -75,7 +75,7 @@ function Banners({ picks, lines }: { picks: Pick[]; lines?: string[] }) {
       {picks.map((p, i) => (
         <div key={p.id} className={cx('flex-1 min-w-0 flex items-center gap-3 p-2.5 rounded-lg border tint [--a:8%]', i === 0 ? 'tone-cyan' : 'tone-pink')} style={{ borderColor: 'color-mix(in srgb, var(--t) 30%, transparent)' }}>
           <span className="flex items-center justify-center w-7 h-7 rounded-md font-semibold text-onsolid" style={{ background: 'var(--t)' }}>{i === 0 ? 'A' : 'B'}</span>
-          <span className="min-w-0"><span className="block text-xs font-medium text-ink truncate">{p.sessionLabel}</span><span className="block font-mono text-[11px] text-muted truncate">{lines?.[i] ?? p.label}</span></span>
+          <span className="min-w-0"><span className="block text-12 font-medium text-ink truncate">{p.sessionLabel}</span><span className="block font-mono text-11 text-muted truncate">{lines?.[i] ?? p.label}</span></span>
         </div>
       ))}
     </div>
@@ -99,10 +99,10 @@ function FlowCompare({ picks, onClose, onClear }: Props) {
   const sections = useMemo(() => (flows ? compareFlows(flows[0], flows[1]) : []), [flows])
   const chosen = flows?.[side]
   return (
-    <Modal flush title="A/B compare" width={1200} height="min(880px, 100%)" onClose={onClose} headerExtra={<>
-      <span className="text-[11px] text-faint">order-sensitive · nothing sorted or normalised</span>
+    <Modal flush title="A/B compare" width={1200} height={880} onClose={onClose} headerExtra={<>
+      <span className="text-11 text-faint">order-sensitive · nothing sorted or normalised</span>
     </>}>
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b border-line text-[11px] text-muted">
+      <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b border-line text-11 text-muted">
         <span>Copy as Go slice</span>
         <span className="inline-flex rounded bg-well border border-line p-px">
           {(['A', 'B'] as const).map((l, i) => <button key={l} type="button" onClick={() => setSide(i as 0 | 1)} className={cx('w-6 h-5 rounded-sm font-mono', side === i ? 'bg-sel text-ink' : 'text-muted')}>{l}</button>)}
@@ -143,7 +143,7 @@ function DiffViewSwitch() {
   return (
     <span className="inline-flex shrink-0 rounded-md bg-well border border-line p-px" role="group" aria-label="Diff view">
       {([['inline', 'Inline'], ['split', 'Side by side']] as const).map(([v, label]) => (
-        <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)} className={cx('h-5 px-2 rounded-sm text-[11px]', view === v ? 'bg-sel text-ink' : 'text-muted hover:text-ink')}>{label}</button>
+        <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)} className={cx('h-5 px-2 rounded-sm text-11', view === v ? 'bg-sel text-ink' : 'text-muted hover:text-ink')}>{label}</button>
       ))}
     </span>
   )
@@ -172,8 +172,8 @@ function DiffGap({ gap, onReveal }: { gap: Extract<DiffPart, { kind: 'gap' }>; o
   const n = gap.to - gap.from
   const link = 'px-1.5 rounded text-blue-fg hover:bg-hover'
   return (
-    <div className="flex items-center gap-2 h-[22px] px-2 rounded-sm bg-well font-sans text-[11px] text-faint">
-      <span className="w-[100px] shrink-0 text-center select-none">⋯</span>
+    <div className="flex items-center gap-2 h-5.5 px-2 rounded-sm bg-well font-sans text-11 text-faint">
+      <span className="w-25 shrink-0 text-center select-none">⋯</span>
       {n <= REVEAL_STEP
         ? <button type="button" className={link} onClick={() => onReveal(gap.from, gap.to)}>Show {n} unchanged {n === 1 ? 'line' : 'lines'}</button>
         : <>
@@ -188,7 +188,7 @@ function DiffGap({ gap, onReveal }: { gap: Extract<DiffPart, { kind: 'gap' }>; o
 
 // The cut note for a list that stopped at the render budget; Copy has the rest.
 function Cut({ binary, copy }: { binary: boolean; copy: string }) {
-  return <p className="px-2 py-1 font-sans text-[11px] text-faint">Shown up to {binary ? `${HEX_CAP / 1024} KiB of hex` : `${TEXT_CAP.toLocaleString('en-US')} characters`}; {copy} takes all of it.</p>
+  return <p className="px-2 py-1 font-sans text-11 text-faint">Shown up to {binary ? `${HEX_CAP / 1024} KiB of hex` : `${TEXT_CAP.toLocaleString('en-US')} characters`}; {copy} takes all of it.</p>
 }
 
 function DiffHunks({ diff, binary, copy }: { diff: UnifiedDiff; binary: boolean; copy: string }) {
@@ -220,7 +220,7 @@ function DiffHunks({ diff, binary, copy }: { diff: UnifiedDiff; binary: boolean;
     return { out, cut: false }
   }, [parts, diff, binary])
   return (
-    <div className="font-mono text-[11px] leading-[18px] space-y-px">
+    <div className="font-mono text-11 leading-4.5 space-y-px">
       {shown.out.map(({ part: p, lines }) => {
         if (p.kind === 'gap') return <DiffGap key={`g${p.from}`} gap={p} onReveal={reveal} />
         return (
@@ -251,13 +251,13 @@ function PayloadDiff({ diff, binary, n }: { diff: UnifiedDiff; binary: boolean; 
   return (
     <section className="rounded-lg border border-edge-card bg-panel p-3 space-y-1">
       <header className="flex items-center gap-2">
-        <h3 className="text-xs font-medium text-ink">{n} Payload</h3>
-        {!same && <span className="font-mono text-[11px]"><span className="text-red-fg">−{diff.removed}</span> <span className="text-green-fg">+{diff.added}</span></span>}
+        <h3 className="text-12 font-medium text-ink">{n} Payload</h3>
+        {!same && <span className="font-mono text-11"><span className="text-red-fg">−{diff.removed}</span> <span className="text-green-fg">+{diff.added}</span></span>}
         <span className="flex-1" />
         {!same && <DiffViewSwitch />}
         <Verdict match={same} />
       </header>
-      {same ? <p className="px-2 font-mono text-[11px] text-faint">Identical.</p> : <DiffHunks diff={diff} binary={binary} copy="Copy diff" />}
+      {same ? <p className="px-2 font-mono text-11 text-faint">Identical.</p> : <DiffHunks diff={diff} binary={binary} copy="Copy diff" />}
     </section>
   )
 }
@@ -267,7 +267,7 @@ function PayloadDiff({ diff, binary, n }: { diff: UnifiedDiff; binary: boolean; 
 export interface Bodies { c: BodyComparison; a: Uint8Array | null; b: Uint8Array | null }
 
 const sideTone = (side: 'a' | 'b') => (side === 'a' ? 'text-cyan-fg' : 'text-pink-fg')
-const Letter = ({ side }: { side: 'a' | 'b' }) => <span className={cx('text-[10px] font-semibold', sideTone(side))}>{side.toUpperCase()}</span>
+const Letter = ({ side }: { side: 'a' | 'b' }) => <span className={cx('text-10 font-semibold', sideTone(side))}>{side.toUpperCase()}</span>
 
 // What the prepared comparison below cannot say: whether the bytes were the same, and for
 // JSON and XML how each side was laid out. Boxed apart so it never reads as a row.
@@ -282,8 +282,8 @@ function AsSent({ c, a, b }: Bodies) {
     return (
       <div className="flex-1 min-w-0 p-2.5 space-y-1.5 rounded-md border border-edge-card bg-raised">
         <div className="flex items-center"><Letter side={side} /><span className="flex-1" />{text && <CopyButton text={text} label={`Copy ${side.toUpperCase()}`} />}</div>
-        {text ? <pre className="max-h-72 overflow-auto font-mono text-[11px] text-body whitespace-pre-wrap break-all">{shown}{rest > 0 && <span className="text-faint">{`\n… ${rest.toLocaleString('en-US')} more ${binary ? 'bytes' : 'characters'}; Copy takes all of it`}</span>}</pre>
-          : <p className="text-[11px] text-faint">No body.</p>}
+        {text ? <pre className="max-h-72 overflow-auto font-mono text-11 text-body whitespace-pre-wrap break-all">{shown}{rest > 0 && <span className="text-faint">{`\n… ${rest.toLocaleString('en-US')} more ${binary ? 'bytes' : 'characters'}; Copy takes all of it`}</span>}</pre>
+          : <p className="text-11 text-faint">No body.</p>}
       </div>
     )
   }
@@ -291,13 +291,13 @@ function AsSent({ c, a, b }: Bodies) {
     <div className="p-1.5 pl-2.5 space-y-2 rounded-md border border-edge-card bg-app">
       <div className="flex items-center gap-2.5 flex-wrap min-h-7">
         <SectionLabel>As sent</SectionLabel>
-        <span className={cx('inline-flex items-center h-5 px-2 rounded-full tint text-[10px]', c.identical ? 'tone-green' : 'tone-red')}>{c.identical ? '= byte-identical' : '≠ not byte-identical'}</span>
-        <span className="font-mono text-[10px] text-faint">{size(c.sizes[0])} │ {size(c.sizes[1])}</span>
+        <span className={cx('inline-flex items-center h-5 px-2 rounded-full tint text-10', c.identical ? 'tone-green' : 'tone-red')}>{c.identical ? '= byte-identical' : '≠ not byte-identical'}</span>
+        <span className="font-mono text-10 text-faint">{size(c.sizes[0])} │ {size(c.sizes[1])}</span>
         {c.layout && <>
           <span className="w-px h-3.5 bg-edge" />
-          <span className="flex items-center gap-1.5"><Letter side="a" /><span className="font-mono text-[11px] text-body">{c.layout[0]}</span></span>
-          <span className="flex items-center gap-1.5"><Letter side="b" /><span className="font-mono text-[11px] text-body">{c.layout[1]}</span></span>
-          {c.layout[0] !== c.layout[1] && <span className="inline-flex items-center h-[18px] px-1.5 rounded tint tone-amber text-[10px]">≈ layout differs</span>}
+          <span className="flex items-center gap-1.5"><Letter side="a" /><span className="font-mono text-11 text-body">{c.layout[0]}</span></span>
+          <span className="flex items-center gap-1.5"><Letter side="b" /><span className="font-mono text-11 text-body">{c.layout[1]}</span></span>
+          {c.layout[0] !== c.layout[1] && <span className="inline-flex items-center h-4.5 px-1.5 rounded tint tone-amber text-10">≈ layout differs</span>}
         </>}
         <span className="flex-1" />
         {(a?.length || b?.length) ? <Button size="sm" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Hide original ▴' : 'Show original ▾'}</Button> : null}
@@ -308,9 +308,9 @@ function AsSent({ c, a, b }: Bodies) {
 }
 
 function FormValue({ side, name, value, tone, open, onToggle, span }: { side?: 'a' | 'b'; name: string; value: string | null; tone: 'same' | 'a' | 'b'; open: boolean; onToggle: () => void; span?: boolean }) {
-  if (value === null) return <div className="min-w-0 pl-[26px] py-0.5 font-mono text-[11px] text-faint">{MISSING}</div>
+  if (value === null) return <div className="min-w-0 pl-6.5 py-0.5 font-mono text-11 text-faint">{MISSING}</div>
   return (
-    <div className={cx('min-w-0 flex items-start gap-2 px-2 py-0.5 rounded font-mono text-[11px]', span && 'col-span-2', tone === 'a' && 'tint tone-red', tone === 'b' && 'tint tone-green', tone === 'same' && 'text-body')}>
+    <div className={cx('min-w-0 flex items-start gap-2 px-2 py-0.5 rounded font-mono text-11', span && 'col-span-2', tone === 'a' && 'tint tone-red', tone === 'b' && 'tint tone-green', tone === 'same' && 'text-body')}>
       <span className="w-2.5 shrink-0">{tone === 'a' ? '-' : tone === 'b' ? '+' : ''}</span>
       <span className="min-w-0 break-all">{value}</span>
       {value && <span className="shrink-0" data-side={side}><DecodeAffordance value={value} name={name} open={open} onToggle={onToggle} /></span>}
@@ -327,7 +327,7 @@ function FormField({ r }: { r: FormRow }) {
   return (
     <div className="group">
       <div className={FORM_GRID}>
-        <span title={r.name} className="py-0.5 font-mono text-[11px] text-muted truncate">{r.name}</span>
+        <span title={r.name} className="py-0.5 font-mono text-11 text-muted truncate">{r.name}</span>
         {/* An equal value renders once, across both columns. */}
         {r.same ? <FormValue name={r.name} value={r.a} tone="same" span open={open === 'a'} onToggle={() => toggle('a')} />
           : <>
@@ -335,7 +335,7 @@ function FormField({ r }: { r: FormRow }) {
             <FormValue side="b" name={r.name} value={r.b} tone="b" open={open === 'b'} onToggle={() => toggle('b')} />
           </>}
         <span className="flex justify-center py-0.5">
-          {r.sameDecoded && <span data-tooltip="Decoded values are the same" aria-label="Decoded values are the same" className="font-mono text-[13px] font-medium leading-4 text-amber-fg">≈</span>}
+          {r.sameDecoded && <span data-tooltip="Decoded values are the same" aria-label="Decoded values are the same" className="font-mono text-13 font-medium leading-4 text-amber-fg">≈</span>}
         </span>
       </div>
       {shown !== null && (
@@ -353,14 +353,14 @@ function FormTable({ form }: { form: NonNullable<BodyComparison['form']> }) {
   return (
     <div className="space-y-1">
       <div className={FORM_GRID}>
-        <span className="py-0.5 font-mono text-[11px] text-muted">order</span>
+        <span className="py-0.5 font-mono text-11 text-muted">order</span>
         {a === b ? <FormValue name="" value={a} tone="same" span open={false} onToggle={() => {}} />
-          : <><div className="min-w-0 flex gap-2 px-2 py-0.5 rounded font-mono text-[11px] tint tone-red"><span className="w-2.5">-</span><span className="break-all">{a || MISSING}</span></div>
-            <div className="min-w-0 flex gap-2 px-2 py-0.5 rounded font-mono text-[11px] tint tone-green"><span className="w-2.5">+</span><span className="break-all">{b || MISSING}</span></div></>}
+          : <><div className="min-w-0 flex gap-2 px-2 py-0.5 rounded font-mono text-11 tint tone-red"><span className="w-2.5">-</span><span className="break-all">{a || MISSING}</span></div>
+            <div className="min-w-0 flex gap-2 px-2 py-0.5 rounded font-mono text-11 tint tone-green"><span className="w-2.5">+</span><span className="break-all">{b || MISSING}</span></div></>}
       </div>
       <div className="h-px bg-edge-card" />
-      <div className={cx(FORM_GRID, 'text-[10px] font-semibold')}>
-        <span className="text-faint">FIELD</span><span className="pl-[26px] text-cyan-fg">A&nbsp;&nbsp;VALUE</span><span className="pl-[26px] text-pink-fg">B&nbsp;&nbsp;VALUE</span>
+      <div className={cx(FORM_GRID, 'text-10 font-semibold')}>
+        <span className="text-faint">FIELD</span><span className="pl-6.5 text-cyan-fg">A&nbsp;&nbsp;VALUE</span><span className="pl-6.5 text-pink-fg">B&nbsp;&nbsp;VALUE</span>
       </div>
       {form.rows.map((r, i) => <FormField key={i} r={r} />)}
     </div>
@@ -379,7 +379,7 @@ function AloneBody({ lines, binary }: { lines: string[]; binary: boolean }) {
   const { count } = fitLines(lines, renderBudget(binary))
   return (
     <div className="max-h-96 overflow-auto">
-      <pre className="px-2 font-mono text-[11px] text-body whitespace-pre-wrap break-all">{lines.slice(0, count).join('\n')}</pre>
+      <pre className="px-2 font-mono text-11 text-body whitespace-pre-wrap break-all">{lines.slice(0, count).join('\n')}</pre>
       {count < lines.length && <Cut binary={binary} copy="Copy body diff" />}
     </div>
   )
@@ -391,8 +391,8 @@ function BodySection({ n, bodies, error }: { n: number; bodies: Bodies | null; e
   return (
     <section className="rounded-lg border border-edge-card bg-panel p-3 space-y-1.5">
       <header className="flex items-center gap-2.5">
-        <h3 className="text-xs font-medium text-ink shrink-0">{n} Request body</h3>
-        <span className="flex-1 min-w-0 truncate font-mono text-[10px] text-faint">{c && bodyMeta(c)}</span>
+        <h3 className="text-12 font-medium text-ink shrink-0">{n} Request body</h3>
+        <span className="flex-1 min-w-0 truncate font-mono text-10 text-faint">{c && bodyMeta(c)}</span>
         {diffShown && <DiffViewSwitch />}
         {c && <Verdict body={c.verdict} />}
       </header>
@@ -400,13 +400,13 @@ function BodySection({ n, bodies, error }: { n: number; bodies: Bodies | null; e
       {!bodies && !error && <Spinner />}
       {bodies && c && <>
         <AsSent {...bodies} />
-        {c.bytesOnly && <p className="px-2 text-[11px] text-faint">A body is over 1 MiB or the diff is too large to lay out, so the bodies were compared byte for byte only.</p>}
+        {c.bytesOnly && <p className="px-2 text-11 text-faint">A body is over 1 MiB or the diff is too large to lay out, so the bodies were compared byte for byte only.</p>}
         {c.alone && <>
-          <p className="px-2 text-[11px] text-faint">Only {c.alone.side.toUpperCase()} has a body.</p>
+          <p className="px-2 text-11 text-faint">Only {c.alone.side.toUpperCase()} has a body.</p>
           <AloneBody lines={c.alone.lines} binary={c.kind === 'binary'} />
         </>}
         {c.form && <FormTable form={c.form} />}
-        {c.diff && c.verdict === 'layout' && <p className="px-2 text-[11px] text-faint">Pretty-printed, the bodies are the same.</p>}
+        {c.diff && c.verdict === 'layout' && <p className="px-2 text-11 text-faint">Pretty-printed, the bodies are the same.</p>}
         {diffShown && <DiffHunks diff={c.diff!} binary={c.kind === 'binary'} copy="Copy body diff" />}
       </>}
     </section>
@@ -436,10 +436,10 @@ function MessageCompare({ picks, onClose, onClear }: Props) {
     return `${p.message!.frame.fromClient ? '→' : '←'} ${at ? `#${at.index} · ` : ''}${p.label}`
   }
   return (
-    <Modal flush title="A/B compare" width={1200} height="min(880px, 100%)" onClose={onClose} headerExtra={<>
-      <span className="text-[11px] text-faint">order-sensitive · position is context, not compared</span>
+    <Modal flush title="A/B compare" width={1200} height={880} onClose={onClose} headerExtra={<>
+      <span className="text-11 text-faint">order-sensitive · position is context, not compared</span>
     </>}>
-      <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b border-line text-[11px] text-muted">
+      <div className="flex items-center gap-2 px-4 py-2 shrink-0 border-b border-line text-11 text-muted">
         {loaded && <CopyChip label="Copy diff" text={diffText(loaded.diff)} />}
         <span className="flex-1" />
         <Button size="xs" variant="ghost" className="text-red-fg!" onClick={onClear}>Clear picks</Button>
@@ -450,9 +450,9 @@ function MessageCompare({ picks, onClose, onClear }: Props) {
         {!loaded && !error && <Spinner />}
         {loaded && (
           <section className="rounded-lg border border-edge-card bg-panel p-3 space-y-1">
-            <h3 className="text-xs font-medium text-ink">Position</h3>
+            <h3 className="text-12 font-medium text-ink">Position</h3>
             <div className="flex gap-2">
-              {loaded.positions.map((p, i) => <div key={i} className="flex-1 min-w-0 px-2 font-mono text-[11px] text-body">{p ? positionLines(p).map((l) => <div key={l}>{l}</div>) : MISSING}</div>)}
+              {loaded.positions.map((p, i) => <div key={i} className="flex-1 min-w-0 px-2 font-mono text-11 text-body">{p ? positionLines(p).map((l) => <div key={l}>{l}</div>) : MISSING}</div>)}
             </div>
           </section>
         )}

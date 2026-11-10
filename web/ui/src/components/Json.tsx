@@ -18,7 +18,7 @@ const Node = memo(function Node({ value, depth, name, comma }: { value: unknown;
   const array = Array.isArray(value)
   const entries = array ? (value as unknown[]).map((v, i) => [String(i), v] as const) : Object.entries(value as object)
   const [l, r] = array ? '[]' : '{}'
-  const toggle = <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="absolute select-none text-faint hover:text-ink" style={{ marginLeft: -14 }}>{open ? '▼' : '▶'}</button>
+  const toggle = <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="absolute select-none text-faint hover:text-ink" style={{ marginLeft: '-0.875rem' }}>{open ? '▼' : '▶'}</button>
   if (entries.length === 0) return <div className="relative">{pad}{key}<span className="text-faint">{l}{r}</span>{comma && <span className="text-faint">,</span>}</div>
   if (!open) {
     return (
@@ -40,5 +40,5 @@ const Node = memo(function Node({ value, depth, name, comma }: { value: unknown;
 })
 
 export function JsonTree({ value }: { value: unknown }) {
-  return <div className="font-mono text-[11px] leading-[18px] whitespace-pre-wrap break-all pl-4 text-body"><Node value={value} depth={0} comma={false} /></div>
+  return <div className="font-mono text-11 leading-4.5 whitespace-pre-wrap break-all pl-4 text-body"><Node value={value} depth={0} comma={false} /></div>
 }

@@ -15,13 +15,14 @@ export interface Settings {
   annotationsOpen: boolean
   sessionScope: string
   diffView: 'inline' | 'split'
+  textSize: 'small' | 'default' | 'large' | 'larger'
   'updates.checkedAt': number
   'updates.dismissed': string
 }
 
 const systemDark = () => typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
 const DEFAULTS = (): Settings => ({
-  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all', diffView: 'inline', 'updates.checkedAt': 0, 'updates.dismissed': '',
+  dark: systemDark(), compact: false, showHidden: false, columnOverrides: {}, columnWidths: {}, frameColumnOverrides: {}, frameColumnWidths: {}, detailsWidth: 40, detailsCollapsed: false, annotationsOpen: false, sessionScope: 'all', diffView: 'inline', textSize: 'default', 'updates.checkedAt': 0, 'updates.dismissed': '',
 })
 
 // typeof alone would let null and arrays through, and those crash whoever indexes them.
@@ -29,6 +30,7 @@ export function accepts(key: string, v: unknown, dflt: unknown): boolean {
   if (typeof v !== typeof dflt) return false
   if (key === 'detailsWidth') return (v as number) >= 20 && (v as number) <= 80
   if (key === 'diffView') return v === 'inline' || v === 'split'
+  if (key === 'textSize') return ['small', 'default', 'large', 'larger'].includes(v as string)
   return typeof dflt !== 'object' || (v !== null && !Array.isArray(v))
 }
 
@@ -60,12 +62,12 @@ export function update<K extends keyof Settings>(key: K, value: Settings[K] | ((
   listeners.forEach((l) => l())
 }
 
-const subscribe = (l: () => void) => {
+export const subscribeSetting = (l: () => void) => {
   listeners.add(l)
   return () => { listeners.delete(l) }
 }
 
 export function useSetting<K extends keyof Settings>(key: K): [Settings[K], (v: Settings[K] | ((c: Settings[K]) => Settings[K])) => void] {
-  const value = useSyncExternalStore(subscribe, () => state[key])
+  const value = useSyncExternalStore(subscribeSetting, () => state[key])
   return [value, useCallback((v) => update(key, v), [key])]
 }

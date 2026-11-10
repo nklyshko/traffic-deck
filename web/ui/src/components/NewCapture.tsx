@@ -14,7 +14,7 @@ function ParamField({ p, value, onChange }: { p: Param; value: string; onChange:
   const label = p.label || p.key
   switch (p.type) {
     case 'PARAM_TYPE_BOOL':
-      return <label className="flex items-center gap-2 text-xs text-body"><input type="checkbox" className="accent-[var(--accent)]" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />{label}{p.required && <span className="text-red-fg">*</span>}</label>
+      return <label className="flex items-center gap-2 text-12 text-body"><input type="checkbox" className="accent-[var(--accent)]" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />{label}{p.required && <span className="text-red-fg">*</span>}</label>
     case 'PARAM_TYPE_CHOICE':
       return (
         <Field label={label} required={p.required}>
@@ -151,7 +151,7 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         : missing.length ? `needs ${missing.map((p) => p.label || p.key).join(', ')}` : ''
   return (
     <Modal title="New capture" width={560} onClose={onClose} footer={<>
-      <span className={cx('mr-auto text-[11px]', provisioning ? 'text-faint' : 'text-amber-fg')}>{footerNote}</span>
+      <span className={cx('mr-auto text-11', provisioning ? 'text-faint' : 'text-amber-fg')}>{footerNote}</span>
       <Button onClick={onClose}>Cancel</Button>
       {provisioning && !settingUp
         ? <Button variant="primary" disabled={asked.some((p) => p.required && !staged[p.key])} onClick={setUp}>Set up</Button>
@@ -166,16 +166,16 @@ export function NewCaptureDialog({ onClose, onStarted }: { onClose: () => void; 
         )}
       </div>
       {error && <Banner onDismiss={() => setError('')}>{error}</Banner>}
-      {source && !descriptor && describing && <p className="flex items-center gap-2 text-[11px] text-muted"><Spinner size={12} />Asking {source} what it needs…</p>}
+      {source && !descriptor && describing && <p className="flex items-center gap-2 text-11 text-muted"><Spinner size={12} />Asking {source} what it needs…</p>}
       {descriptor?.message && (
-        <div className={cx('flex items-center gap-2 px-2.5 py-2 rounded-md border text-[11px]', provisioning ? 'tint tone-amber [--a:8%]' : 'border-edge-card bg-panel text-muted')}>
+        <div className={cx('flex items-center gap-2 px-2.5 py-2 rounded-md border text-11', provisioning ? 'tint tone-amber [--a:8%]' : 'border-edge-card bg-panel text-muted')}>
           {settingUp && <Spinner size={12} />}{descriptor.message}
         </div>
       )}
-      {crumbs.length > 0 && <div className="flex flex-wrap gap-1.5">{crumbs.map(([k, v]) => <span key={k} className="px-1.5 h-5 inline-flex items-center rounded border border-edge font-mono text-[10px] text-muted">{k}: {v}</span>)}</div>}
+      {crumbs.length > 0 && <div className="flex flex-wrap gap-1.5">{crumbs.map(([k, v]) => <span key={k} className="px-1.5 h-5 inline-flex items-center rounded border border-edge font-mono text-10 text-muted">{k}: {v}</span>)}</div>}
       {provisioning && asked.map((p) => (
         <div key={p.key}>
-          <span className="block mb-1.5 text-xs text-body">{p.label || p.key}{p.required && <span className="text-red-fg"> *</span>}</span>
+          <span className="block mb-1.5 text-12 text-body">{p.label || p.key}{p.required && <span className="text-red-fg"> *</span>}</span>
           {p.type === 'PARAM_TYPE_CHOICE' ? (
             <SetupChoices p={p} staged={staged[p.key]} query={setupQuery[p.key] ?? ''} onQuery={(q) => setSetupQuery({ ...setupQuery, [p.key]: q })}
               onStage={(v) => setStaged({ ...staged, [p.key]: v })} />
@@ -202,12 +202,12 @@ function SetupChoices({ p, staged, query, onQuery, onStage }: { p: Param; staged
       <div role="radiogroup" aria-label={label} className="space-y-1">
         {shown.map((c) => (
           <button key={c.value} type="button" role="radio" aria-checked={staged === c.value} onClick={() => onStage(c.value)}
-            className={cx('flex items-center gap-2.5 w-full min-h-10 px-3 py-1.5 rounded-md border text-left text-xs', staged === c.value ? 'tone-blue tint border-accent' : 'bg-well border-edge text-body')}>
+            className={cx('flex items-center gap-2.5 w-full min-h-10 px-3 py-1.5 rounded-md border text-left text-12', staged === c.value ? 'tone-blue tint border-accent' : 'bg-well border-edge text-body')}>
             <span className={cx('w-3 h-3 rounded-full border shrink-0', staged === c.value ? 'border-accent bg-accent' : 'border-edge-check')} />
             <Highlight text={c.label} terms={terms} />
           </button>
         ))}
-        {!shown.length && <p className="px-1 py-2 text-xs text-muted">No {plural(label)} match “{query.trim()}”. <span className="text-[11px] text-faint">Search reads labels and values.</span></p>}
+        {!shown.length && <p className="px-1 py-2 text-12 text-muted">No {plural(label)} match “{query.trim()}”. <span className="text-11 text-faint">Search reads labels and values.</span></p>}
       </div>
     </div>
   )

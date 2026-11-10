@@ -1,4 +1,5 @@
 import { Check, Copy, X } from 'lucide-react'
+import { rem } from '../lib/scale'
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { formatDuration, durationTone, methodTone, num, preciseDuration, reasonPhrase, shortMethod, statusTone, type Tone } from '../lib/format'
@@ -16,7 +17,7 @@ const VARIANTS: Record<Variant, string> = {
   destructive: 'bg-red border border-transparent text-white font-semibold',
   ghost: 'border border-transparent text-muted hover:text-ink hover:bg-hover',
 }
-const SIZES = { md: 'h-8 px-3 text-xs rounded-md gap-1.5', sm: 'h-[26px] px-2.5 text-[11px] rounded-md gap-1.5', xs: 'h-[22px] px-2 text-[11px] rounded-[5px] gap-1' }
+const SIZES = { md: 'h-8 px-3 text-12 rounded-md gap-1.5', sm: 'h-6.5 px-2.5 text-11 rounded-md gap-1.5', xs: 'h-5.5 px-2 text-11 rounded-[5px] gap-1' }
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant
@@ -35,14 +36,14 @@ export function Button({ variant = 'default', size = 'md', icon, tooltip, classN
 
 export function IconButton({ label, className, size = 32, children, ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label'> & { label: string; size?: number }) {
   return (
-    <button type="button" title={label} aria-label={label} style={{ width: size, height: size }} {...rest}
+    <button type="button" title={label} aria-label={label} style={{ width: rem(size), height: rem(size) }} {...rest}
       className={cx('inline-flex items-center justify-center shrink-0 rounded-md text-muted hover:text-ink hover:bg-hover disabled:opacity-30', className)}>
       {children}
     </button>
   )
 }
 
-const BADGE = { sm: 'h-[18px] text-[10px] px-1.5', md: 'h-5 text-[11px] px-1.5', lg: 'h-[22px] text-xs px-[7px]' }
+const BADGE = { sm: 'h-4.5 text-10 px-1.5', md: 'h-5 text-11 px-1.5', lg: 'h-5.5 text-12 px-1.75' }
 export function Badge({ tone = 'grey', size = 'md', title, children }: { tone?: Tone; size?: keyof typeof BADGE; title?: string; children: ReactNode }) {
   return <span title={title} className={cx('inline-flex items-center gap-1 rounded font-mono font-medium tint shrink-0', `tone-${tone}`, BADGE[size])}>{children}</span>
 }
@@ -68,7 +69,7 @@ export function DurationBadge({ micros }: { micros?: string }) {
 
 export function Pill({ tone = 'grey', dot, children }: { tone?: Tone; dot?: boolean; children: ReactNode }) {
   return (
-    <span className={cx('inline-flex items-center gap-1.5 h-[22px] px-2.5 rounded-[11px] tint text-[11px] font-medium shrink-0', `tone-${tone}`)}>
+    <span className={cx('inline-flex items-center gap-1.5 h-5.5 px-2.5 rounded-[11px] tint text-11 font-medium shrink-0', `tone-${tone}`)}>
       {dot && <span className="w-1.5 h-1.5 rounded-full pulse" style={{ background: 'var(--t)' }} />}{children}
     </span>
   )
@@ -76,33 +77,33 @@ export function Pill({ tone = 'grey', dot, children }: { tone?: Tone; dot?: bool
 
 export function Banner({ tone = 'red', onDismiss, children }: { tone?: Tone; onDismiss?: () => void; children: ReactNode }) {
   return (
-    <div role="alert" className={cx('flex items-start gap-2 px-3 py-2 rounded-lg tint [--a:8%] border text-xs', `tone-${tone}`)} style={{ borderColor: 'color-mix(in srgb, var(--t) 30%, transparent)' }}>
+    <div role="alert" className={cx('flex items-start gap-2 px-3 py-2 rounded-lg tint [--a:8%] border text-12', `tone-${tone}`)} style={{ borderColor: 'color-mix(in srgb, var(--t) 30%, transparent)' }}>
       <span className="font-bold">!</span>
       <span className="flex-1 min-w-0 break-words">{children}</span>
-      {onDismiss && <button type="button" aria-label="Dismiss" onClick={onDismiss} className="opacity-70 hover:opacity-100"><X size={13} /></button>}
+      {onDismiss && <button type="button" aria-label="Dismiss" onClick={onDismiss} className="opacity-70 hover:opacity-100"><X size={rem(13)} /></button>}
     </div>
   )
 }
 
 export function Spinner({ size = 14 }: { size?: number }) {
-  return <span aria-label="Loading" className="inline-block rounded-full border-2 border-edge-strong border-t-accent spin" style={{ width: size, height: size }} />
+  return <span aria-label="Loading" className="inline-block rounded-full border-2 border-edge-strong border-t-accent spin" style={{ width: rem(size), height: rem(size) }} />
 }
 
 export function Field({ label, required, help, children }: { label: string; required?: boolean; help?: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="block mb-1.5 text-xs text-body">{label}{required && <span className="text-red-fg"> *</span>}</span>
+      <span className="block mb-1.5 text-12 text-body">{label}{required && <span className="text-red-fg"> *</span>}</span>
       {children}
-      {help && <span className="block mt-1 text-[11px] text-faint">{help}</span>}
+      {help && <span className="block mt-1 text-11 text-faint">{help}</span>}
     </label>
   )
 }
 
-export const inputClass = 'w-full h-8 px-2.5 rounded-md bg-well border border-edge-input text-ink font-mono text-xs placeholder:text-dim disabled:opacity-50'
+export const inputClass = 'w-full h-8 px-2.5 rounded-md bg-well border border-edge-input text-ink font-mono text-12 placeholder:text-dim disabled:opacity-50'
 export const selectClass = cx(inputClass, 'td-select pr-6')
 
 export function SectionLabel({ children, count }: { children: ReactNode; count?: number }) {
-  return <span className="text-[10px] font-medium tracking-wide uppercase text-faint">{children}{count ? <span className="ml-1.5 text-dim normal-case">{count}</span> : null}</span>
+  return <span className="text-10 font-medium tracking-wide uppercase text-faint">{children}{count ? <span className="ml-1.5 text-dim normal-case">{count}</span> : null}</span>
 }
 
 export function Card({ title, count, meta, actions, children, tone }: { title?: ReactNode; count?: number; meta?: ReactNode; actions?: ReactNode; children?: ReactNode; tone?: Tone }) {
@@ -111,7 +112,7 @@ export function Card({ title, count, meta, actions, children, tone }: { title?: 
       {(title || actions) && (
         <header className="flex items-center gap-2 h-8 px-3">
           <SectionLabel count={count}>{title}</SectionLabel>
-          {meta && <span className="text-[11px] text-faint truncate min-w-0">{meta}</span>}
+          {meta && <span className="text-11 text-faint truncate min-w-0">{meta}</span>}
           <span className="flex-1" />
           {actions}
         </header>
@@ -131,15 +132,16 @@ export function CopyButton({ text, label, size = 13 }: { text: string | (() => s
     clearTimeout(timer.current)
     timer.current = setTimeout(() => setDone(false), 1200)
   }
-  if (label) return <button type="button" onClick={copy} className="text-[11px] text-muted hover:text-ink">{done ? '✓ Copied' : label}</button>
+  if (label) return <button type="button" onClick={copy} className="text-11 text-muted hover:text-ink">{done ? '✓ Copied' : label}</button>
   return <IconButton label="Copy" size={26} onClick={copy}>{done ? <Check size={size} className="text-green-fg" /> : <Copy size={size} />}</IconButton>
 }
 
+// Width and height are layout px; the height shrinks to fit a short window.
 // Escape closes the topmost modal only; capture phase, so it can't also clear the flow
 // selection underneath.
 const stack: symbol[] = []
 export function Modal({ title, width, height, headerExtra, footer, onClose, children, flush }: {
-  title: ReactNode; width: number; height?: number | string; headerExtra?: ReactNode; footer?: ReactNode
+  title: ReactNode; width: number; height?: number; headerExtra?: ReactNode; footer?: ReactNode
   onClose: () => void; children: ReactNode; flush?: boolean
 }) {
   const closeRef = useRef(onClose)
@@ -163,12 +165,12 @@ export function Modal({ title, width, height, headerExtra, footer, onClose, chil
   }, [])
   return createPortal(
     <div className="fixed inset-0 z-40 flex items-center justify-center p-6" style={{ background: 'color-mix(in srgb, var(--scrim) 80%, transparent)' }}>
-      <div role="dialog" aria-modal="true" className="flex flex-col max-w-full max-h-full rounded-xl border border-edge bg-raised" style={{ width, height, boxShadow: '0 16px 40px var(--shadow)' }}>
-        <header className="flex items-center gap-3 h-[52px] px-4 shrink-0 border-b border-line">
-          <h2 className="text-sm font-semibold text-ink whitespace-nowrap">{title}</h2>
+      <div role="dialog" aria-modal="true" className="flex flex-col max-w-full max-h-full rounded-xl border border-edge bg-raised" style={{ width: rem(width), height: height === undefined ? undefined : `min(${rem(height)}, 100%)`, boxShadow: '0 16px 40px var(--shadow)' }}>
+        <header className="flex items-center gap-3 h-13 px-4 shrink-0 border-b border-line">
+          <h2 className="text-14 font-semibold text-ink whitespace-nowrap">{title}</h2>
           {headerExtra}
           <span className="flex-1" />
-          <IconButton label="Close" size={24} onClick={onClose}><X size={14} /></IconButton>
+          <IconButton label="Close" size={24} onClick={onClose}><X size={rem(14)} /></IconButton>
         </header>
         <div className={cx('flex-1 min-h-0', flush ? 'flex flex-col' : 'overflow-auto p-4 space-y-3.5')}>{children}</div>
         {footer && <footer className="flex items-center justify-end gap-2 px-4 py-3 shrink-0 border-t border-line bg-head rounded-b-xl">{footer}</footer>}

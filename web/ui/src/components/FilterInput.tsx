@@ -1,4 +1,5 @@
 import { Search } from 'lucide-react'
+import { rem } from '../lib/scale'
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { opAtCaret, wordAtCaret, type HelpTerm } from '../lib/filter'
 import { cx } from './ui'
@@ -15,19 +16,19 @@ function Highlight({ text }: { text: string }) {
 function TermRow({ term, active, onPick }: { term: HelpTerm; active?: boolean; onPick: () => void }) {
   return (
     <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={onPick}
-      className={cx('flex items-center w-full h-5 px-2 rounded text-left text-[11px]', active ? 'bg-sel' : 'hover:bg-hover')}>
-      <span className="w-[92px] font-mono shrink-0"><span className="text-purple-fg">{term.op}</span>{term.arg && <span className="text-dim"> {term.arg}</span>}</span>
+      className={cx('flex items-center w-full h-5 px-2 rounded text-left text-11', active ? 'bg-sel' : 'hover:bg-hover')}>
+      <span className="w-23 font-mono shrink-0"><span className="text-purple-fg">{term.op}</span>{term.arg && <span className="text-dim"> {term.arg}</span>}</span>
       <span className="text-muted truncate">{term.meaning}</span>
-      {active && <kbd className="ml-auto px-1 rounded bg-well text-faint font-mono text-[10px]">⇥</kbd>}
+      {active && <kbd className="ml-auto px-1 rounded bg-well text-faint font-mono text-10">⇥</kbd>}
     </button>
   )
 }
 
-const Key = ({ children }: { children: ReactNode }) => <kbd className="px-1 mx-0.5 rounded border border-edge bg-well font-mono text-[10px] text-muted">{children}</kbd>
+const Key = ({ children }: { children: ReactNode }) => <kbd className="px-1 mx-0.5 rounded border border-edge bg-well font-mono text-10 text-muted">{children}</kbd>
 
 function Legend({ bareMatches }: { bareMatches: string }) {
   return (
-    <div className="px-3 py-2 border-t border-line text-[11px] text-faint">
+    <div className="px-3 py-2 border-t border-line text-11 text-faint">
       <div>space = AND · ! negates</div>
       <div>arguments are unanchored RE2 regexes · a bare word matches the {bareMatches}</div>
       <div className="flex items-center mt-1.5"><Key>↑↓</Key>move<span className="w-2" /><Key>⇥</Key>insert<span className="w-2" /><Key>Esc</Key>close<span className="flex-1" /><Key>Ctrl Space</Key>reopen</div>
@@ -115,15 +116,15 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
   }
 
   return (
-    <div className="relative flex-1 min-w-[180px]">
+    <div className="relative flex-1 min-w-45">
       <div className="flex items-center gap-2 h-8 px-2.5 rounded-md bg-well border border-edge-input focus-within:border-accent focus-within:shadow-[0_0_0_1px_var(--accent)]">
-        <Search size={13} className="text-faint shrink-0" />
-        <div className="relative flex-1 min-w-0 h-full font-mono text-xs">
+        <Search size={rem(13)} className="text-faint shrink-0" />
+        <div className="relative flex-1 min-w-0 h-full font-mono text-12">
           <div ref={mirror} aria-hidden className="absolute inset-0 flex items-center overflow-hidden whitespace-pre pointer-events-none">
             {value ? <span><Highlight text={value} /></span> : <span className="text-dim">{placeholder}</span>}
           </div>
           <input ref={input} value={value} aria-label="Filter expression" spellCheck={false} autoComplete="off" data-owns-escape={mode ? '' : undefined}
-            className="absolute inset-0 w-full bg-transparent text-transparent caret-[var(--text)] outline-none! border-0! shadow-none! font-mono text-xs"
+            className="absolute inset-0 w-full bg-transparent text-transparent caret-[var(--text)] outline-none! border-0! shadow-none! font-mono text-12"
             onChange={(e) => change(e.target.value, e.target.selectionStart ?? 0)}
             onFocus={() => { setActive(0); setOpen(!value.trim()) }} onBlur={() => setOpen(false)}
             onSelect={(e) => {
@@ -141,13 +142,13 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
         {trailing}
       </div>
       {mode === 'all' && (
-        <div className="absolute z-30 top-[calc(100%+6px)] left-0 w-[640px] max-w-[85vw] rounded-lg border border-edge bg-toast" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>
+        <div className="absolute z-30 top-[calc(100%+6px)] left-0 w-160 max-w-[85vw] rounded-lg border border-edge bg-toast" style={{ boxShadow: '0 8px 24px var(--shadow)' }}>
           <div className="px-3 py-2.5 border-b border-line">
-            <div className="mb-1.5 text-[10px] uppercase tracking-wide text-faint">Examples</div>
+            <div className="mb-1.5 text-10 uppercase tracking-wide text-faint">Examples</div>
             <div className="flex flex-wrap gap-1.5">
               {examples.map(([label, expr]) => (
                 <button key={label} type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => { onChange(expr); setOpen(false) }}
-                  className="inline-flex items-center gap-1.5 h-6 px-2 rounded-full bg-well border border-edge text-[11px] text-body hover:border-edge-strong">
+                  className="inline-flex items-center gap-1.5 h-6 px-2 rounded-full bg-well border border-edge text-11 text-body hover:border-edge-strong">
                   {label} <span className="font-mono text-purple-fg">{expr}</span>
                 </button>
               ))}
@@ -156,19 +157,19 @@ export function FilterInput({ value, onChange, onSubmit, terms, examples, placeh
           <div className="columns-2 gap-3 px-1.5 py-2">
             {groups.map((g) => (
               <div key={g} className="break-inside-avoid mb-2">
-                <div className="px-2 mb-0.5 text-[10px] uppercase tracking-wide text-faint">{g}</div>
+                <div className="px-2 mb-0.5 text-10 uppercase tracking-wide text-faint">{g}</div>
                 {terms.filter((t) => t.group === g).map((t) => <TermRow key={t.op} term={t} active={flat[current] === t} onPick={() => insert(t)} />)}
               </div>
             ))}
           </div>
-          {extraHelp && <div className="px-3 pb-2 text-[11px] text-faint">{extraHelp}</div>}
+          {extraHelp && <div className="px-3 pb-2 text-11 text-faint">{extraHelp}</div>}
           <Legend bareMatches={bareMatches} />
         </div>
       )}
       {mode === 'narrow' && typing && (
         // Mono at the input's size, so `ch` here is one character of the expression above.
-        <div className="absolute z-30 top-[calc(100%+6px)] w-[440px] max-w-[85vw] rounded-lg border border-edge bg-toast font-mono text-xs"
-          style={{ left: `max(0px, min(calc(32px + ${typing.start}ch - ${scroll}px), calc(100% - 440px)))`, boxShadow: '0 8px 24px var(--shadow)' }}>
+        <div className="absolute z-30 top-[calc(100%+6px)] w-110 max-w-[85vw] rounded-lg border border-edge bg-toast font-mono text-12"
+          style={{ left: `max(0px, min(calc(2rem + ${typing.start}ch - ${scroll}px), calc(100% - 27.5rem)))`, boxShadow: '0 8px 24px var(--shadow)' }}>
           <div className="p-1.5 font-sans">{matches.map((t, i) => <TermRow key={t.op} term={t} active={i === current} onPick={() => insert(t)} />)}</div>
           <div className="font-sans"><Legend bareMatches={bareMatches} /></div>
         </div>

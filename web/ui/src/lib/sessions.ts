@@ -13,7 +13,6 @@ export interface Scope { key: string; label: string; count: number; live: number
  *  rail keeps its shape as the query changes. */
 export function sessionScopes(sessions: Session[], isLive: (s: Session) => boolean, match: (s: Session) => boolean = () => true): Scope[] {
   const names = [...new Set(sessions.flatMap((s) => (s.group ? [s.group] : [])))]
-  if (!names.length) return []
   const scope = (key: string, label: string, members: Session[]): Scope => {
     const hits = members.filter(match)
     return { key, label, count: hits.length, live: hits.filter(isLive).length }
@@ -21,7 +20,8 @@ export function sessionScopes(sessions: Session[], isLive: (s: Session) => boole
   const ungrouped = sessions.filter((s) => !s.group)
   return [
     scope(SCOPE_ALL, 'All sessions', sessions),
-    ...(ungrouped.length ? [scope(SCOPE_UNGROUPED, 'Ungrouped', ungrouped)] : []),
+    // Without groups, Ungrouped would repeat All.
+    ...(names.length && ungrouped.length ? [scope(SCOPE_UNGROUPED, 'Ungrouped', ungrouped)] : []),
     // Alphabetical, as in the TUI and MCP: a group holds its place while captures land in it.
     ...names.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).map((g) => scope(groupScope(g), g, sessions.filter((s) => s.group === g))),
   ]

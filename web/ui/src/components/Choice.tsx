@@ -1,4 +1,5 @@
 import { Check, ChevronDown, ChevronUp, Search, X } from 'lucide-react'
+import { rem, scaleNow } from '../lib/scale'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { matchesTerms, matchRuns, searchTerms } from '../lib/search'
@@ -22,19 +23,19 @@ export function SearchBox({ query, onQuery, shown, total, label, placeholder = '
   return (
     // On its own, Esc clears a query before the dialog gets it; in a choice list the list owns it.
     <div data-owns-escape={(!onKeyDown && query) || undefined} className={cx('flex items-center gap-2 pl-2 pr-1 rounded-md bg-well border border-edge-input focus-within:border-accent', tall ? 'h-8' : 'h-7')}>
-      <Search size={13} className="text-faint shrink-0" />
+      <Search size={rem(13)} className="text-faint shrink-0" />
       <input ref={inputRef} type="search" aria-label={label} spellCheck={false} value={query} placeholder={placeholder}
         onChange={(e) => onQuery(e.target.value)} onKeyDown={onKeyDown ?? ((e) => { if (e.key === 'Escape' && query) onQuery('') })}
-        className="flex-1 min-w-0 h-full bg-transparent text-xs text-ink placeholder:text-dim outline-none! border-0! shadow-none! [&::-webkit-search-cancel-button]:hidden" />
+        className="flex-1 min-w-0 h-full bg-transparent text-12 text-ink placeholder:text-dim outline-none! border-0! shadow-none! [&::-webkit-search-cancel-button]:hidden" />
       {query && <>
-        <span className="shrink-0 text-[11px] text-faint">{shown} of {total}</span>
-        <IconButton label="Clear search" size={20} onClick={() => { onQuery(''); inputRef?.current?.focus() }}><X size={13} /></IconButton>
+        <span className="shrink-0 text-11 text-faint">{shown} of {total}</span>
+        <IconButton label="Clear search" size={20} onClick={() => { onQuery(''); inputRef?.current?.focus() }}><X size={rem(13)} /></IconButton>
       </>}
     </div>
   )
 }
 
-const Key = ({ children }: { children: ReactNode }) => <kbd className="px-1 rounded border border-edge bg-well font-mono text-[10px] text-muted">{children}</kbd>
+const Key = ({ children }: { children: ReactNode }) => <kbd className="px-1 rounded border border-edge bg-well font-mono text-10 text-muted">{children}</kbd>
 
 // A select that opens a list, searchable once it is long (SPEC §5.3). The list is portalled,
 // as the dialog's body scrolls and would clip it.
@@ -51,7 +52,7 @@ export function ChoiceSelect({ choices, value, onChange, optional, noun }: {
         onClick={() => setOpen(!open)} onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true) } }}
         className={cx(inputClass, 'flex items-center gap-2 text-left', open && 'border-accent')}>
         <span className={cx('flex-1 truncate', !value && 'text-dim')}>{value ? (current?.label || value) : '—'}</span>
-        {open ? <ChevronUp size={14} className="text-muted shrink-0" /> : <ChevronDown size={14} className="text-muted shrink-0" />}
+        {open ? <ChevronUp size={rem(14)} className="text-muted shrink-0" /> : <ChevronDown size={rem(14)} className="text-muted shrink-0" />}
       </button>
       {open && trigger.current && (
         <ChoiceList anchor={trigger.current} choices={choices} value={value} optional={optional} noun={noun}
@@ -106,7 +107,7 @@ function ChoiceList({ anchor, choices, value, optional, noun, onPick, onClose }:
   useEffect(() => { list.current?.querySelector(`[data-row="${active}"]`)?.scrollIntoView({ block: 'nearest' }) }, [active])
   const measure = () => {
     const l = list.current
-    if (l) setBelow(Math.max(0, rows.length - Math.ceil((l.scrollTop + l.clientHeight) / (ROW + 1))))
+    if (l) setBelow(Math.max(0, rows.length - Math.ceil((l.scrollTop + l.clientHeight) / (ROW * scaleNow() + 1))))
   }
   useLayoutEffect(measure, [rows.length])
 
@@ -138,25 +139,25 @@ function ChoiceList({ anchor, choices, value, optional, noun, onPick, onClose }:
         </div>
       )}
       {rows.length ? (
-        <div ref={list} role="listbox" onScroll={measure} className="p-1 space-y-px overflow-y-auto" style={{ maxHeight: VISIBLE_ROWS * (ROW + 1) + 8 }}>
+        <div ref={list} role="listbox" onScroll={measure} className="p-1 space-y-px overflow-y-auto" style={{ maxHeight: `calc(${rem(VISIBLE_ROWS * ROW + 8)} + ${VISIBLE_ROWS}px)` }}>
           {rows.map((c, i) => (
             <div key={c.value} data-row={i} role="option" aria-selected={c.value === value} onMouseMove={() => setActive(i)} onClick={() => onPick(c.value)}
-              className={cx('flex items-center gap-1.5 h-7 pl-1.5 pr-2 rounded text-xs text-ink cursor-default', i === active && 'tint tone-blue [--a:14%]')}>
-              <span className="w-3.5 shrink-0 flex justify-center text-accent">{c.value === value && <Check size={12} strokeWidth={3} />}</span>
+              className={cx('flex items-center gap-1.5 h-7 pl-1.5 pr-2 rounded text-12 text-ink cursor-default', i === active && 'tint tone-blue [--a:14%]')}>
+              <span className="w-3.5 shrink-0 flex justify-center text-accent">{c.value === value && <Check size={rem(12)} strokeWidth={3} />}</span>
               <Highlight text={c.label} terms={terms} className={cx('truncate text-ink', !c.value && 'text-dim', c.value === value && 'font-medium')} />
               <span className="flex-1" />
-              {c.value && c.value !== c.label && <Highlight text={c.value} terms={terms} className="truncate max-w-[50%] font-mono text-[11px] text-faint" />}
+              {c.value && c.value !== c.label && <Highlight text={c.value} terms={terms} className="truncate max-w-[50%] font-mono text-11 text-faint" />}
             </div>
           ))}
         </div>
       ) : (
         <div className="px-3.5 py-3 space-y-1">
-          <p className="text-xs text-muted">No {noun} match “{query.trim()}”.</p>
-          <p className="text-[11px] text-faint">Search reads labels and values.</p>
+          <p className="text-12 text-muted">No {noun} match “{query.trim()}”.</p>
+          <p className="text-11 text-faint">Search reads labels and values.</p>
         </div>
       )}
-      {below > 0 && <p className="pl-[30px] pr-2 h-6 flex items-center text-[11px] text-faint">{below} more — scroll{searchable ? ' or type to narrow' : ''}</p>}
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-t border-edge bg-head text-[11px] text-faint">
+      {below > 0 && <p className="pl-7.5 pr-2 h-6 flex items-center text-11 text-faint">{below} more — scroll{searchable ? ' or type to narrow' : ''}</p>}
+      <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-t border-edge bg-head text-11 text-faint">
         <Key>↑↓</Key>move <Key>↵</Key>choose <Key>Esc</Key>close
       </div>
     </div>,
