@@ -23,7 +23,8 @@ func TestParseClientHelloJA3JA4(t *testing.T) {
 	supVers := tlsExt(43, vec8(append(u16b(0x0304), u16b(0x0a0a)...)))
 	groups := tlsExt(10, vec16(append(u16b(0x001d), u16b(0x0017)...)))
 	alpn := tlsExt(16, vec16(append(vec8([]byte("h2")), vec8([]byte("http/1.1"))...)))
-	sigAlgs := tlsExt(13, vec16(append(u16b(0x0403), u16b(0x0804)...)))
+	// signature_algorithms led by a GREASE value, as Chrome Canary sends (must be dropped).
+	sigAlgs := tlsExt(13, vec16(concat(u16b(0x2a2a), u16b(0x0403), u16b(0x0804))))
 	pointFmts := tlsExt(11, vec8([]byte{0x00}))
 	exts := vec16(concat(sni, supVers, groups, alpn, sigAlgs, pointFmts))
 
@@ -75,6 +76,13 @@ func TestParseClientHelloJA3JA4(t *testing.T) {
 	wantJA4 := "t13d0206h2_" + sha12("1301,1302") + "_" + sha12("000a,000b,000d,002b_0403,0804")
 	if ci.JA4 != wantJA4 {
 		t.Errorf("JA4 = %q, want %q", ci.JA4, wantJA4)
+	}
+
+	// No signature algorithms: the extensions alone, without a trailing "_".
+	noSigs := parseClientHelloInfo(concat(u16b(0x0303), make([]byte, 32), vec8(nil), ciphers, vec8([]byte{0x00}),
+		vec16(concat(sni, supVers, groups, alpn, pointFmts))))
+	if want := "t13d0205h2_" + sha12("1301,1302") + "_" + sha12("000a,000b,002b"); noSigs.JA4 != want {
+		t.Errorf("JA4 without sig algs = %q, want %q", noSigs.JA4, want)
 	}
 }
 

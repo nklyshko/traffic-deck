@@ -157,9 +157,15 @@ func (ci *ClientHelloInfo) ja4() string {
 		}
 	}
 	sort.Slice(extForHash, func(i, j int) bool { return extForHash[i] < extForHash[j] })
-	ja4c := sha12(hexCSV(extForHash) + "_" + hexCSV(ci.SigAlgs))
+	// GREASE is dropped here too: Chrome puts a fresh one in signature_algorithms on every
+	// connection, which would make one browser's JA4 differ per connection. Without
+	// signature algorithms there is no "_", as in FoxIO's reference implementations.
+	ja4c := hexCSV(extForHash)
+	if sigs := dropGREASE(ci.SigAlgs); len(sigs) > 0 {
+		ja4c += "_" + hexCSV(sigs)
+	}
 
-	return ja4a + "_" + ja4b + "_" + ja4c
+	return ja4a + "_" + ja4b + "_" + sha12(ja4c)
 }
 
 func be16(b []byte, p int) uint16 { return uint16(b[p])<<8 | uint16(b[p+1]) }
@@ -242,7 +248,7 @@ func hex4(v uint16) string {
 // sha12 returns the first 12 hex chars of SHA256(s), or 12 zeros for an empty input (the
 // JA4 spec uses "000000000000" when the list is empty).
 func sha12(s string) string {
-	if s == "" || s == "_" {
+	if s == "" {
 		return "000000000000"
 	}
 	sum := sha256.Sum256([]byte(s))
