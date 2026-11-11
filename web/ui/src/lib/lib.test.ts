@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessages, describeLayout, diffLines, diffParts, diffText, fitLines, formDecode, goSlice, messagePosition, MISSING, pairValues, plainAuthority, positionSection, requestLine, wordDiff, differingParts, positionLines, prettyJson, prettyPayload, prettyXml, renderBudget, splitRows, unifiedDiff } from './compare'
-import { canDecode, decodeAs, guessKind, stripWrappers } from './decoder'
+import { canDecode, decodeAs, guessKind, readable, stripWrappers } from './decoder'
+import { idnDecoded, punycodeDecode, unicodeHost } from './idn'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { packFlags } from './flags'
@@ -135,7 +136,48 @@ describe('cookies and exports', () => {
   })
 })
 
+describe('idn', () => {
+  it('decodes RFC 3492 sample labels', () => {
+    expect(punycodeDecode('80aairftm')).toBe('магазин')
+    expect(punycodeDecode('bcher-kva')).toBe('bücher')
+    expect(punycodeDecode('ihqwcrb4cv8a8dqg056pqjye')).toBe('他们为什么不说中文')
+    expect(punycodeDecode('bcher-k!a')).toBeNull()
+  })
+  it('converts only hosts with a valid xn-- label', () => {
+    expect(unicodeHost('xn--80aairftm.example.test')).toBe('магазин.example.test')
+    expect(unicodeHost('XN--80AAIRFTM.example.test')).toBe('магазин.example.test')
+    expect(unicodeHost('api.example.test')).toBeNull()
+    expect(unicodeHost('xn--a.example.test')).toBeNull()
+    expect(unicodeHost('xn--zz-1.example')).toBeNull()
+  })
+  it('keeps the port, and in a URL converts only the host', () => {
+    expect(idnDecoded('xn--80aairftm.example.test:8443')).toBe('магазин.example.test:8443')
+    expect(idnDecoded('https://xn--80aairftm.example.test/xn--80aairftm?q=1')).toBe('https://магазин.example.test/xn--80aairftm?q=1')
+    expect(idnDecoded('see xn--80aairftm')).toBeNull()
+  })
+})
+
 describe('decoder', () => {
+  it('guesses idn before url, and chains a URL with both through idn → url', () => {
+    const url = 'https://xn--80aairftm.example.test/%D0%BA%D0%BD%D0%B8%D0%B3%D0%B8'
+    expect(guessKind('xn--80aairftm.example.test')).toBe('idn')
+    expect(guessKind(url)).toBe('idn')
+    const d = decodeAs(url, 'idn')!
+    expect(d.steps).toEqual(['idn', 'url'])
+    expect(d.output.text).toBe('https://магазин.example.test/книги')
+    expect(decodeAs(url, 'url', 0, false)!.output.text).toBe('https://xn--80aairftm.example.test/книги')
+  })
+  it('leaves escaped delimiters encoded on a full URL, not on a plain value', () => {
+    expect(decodeAs('https://x.test/a%20b?q=a%26b%3Dc', 'url')!.output.text).toBe('https://x.test/a b?q=a%26b%3Dc')
+    expect(decodeAs('q=a%26b%20c', 'url')!.output.text).toBe('q=a&b c')
+    expect(canDecode('https://x.test/a%2Fb', 'url')).toBe(false)
+  })
+  it('reads a host or path with both encodings undone', () => {
+    expect(readable('xn--80aairftm.example.test')).toBe('магазин.example.test')
+    expect(readable('/%d0%ba')).toBe('/к')
+    expect(readable('/plain')).toBe('/plain')
+  })
+
   const jwt = `${b64url('{"alg":"HS256"}')}.${b64url('{"sub":"demo","exp":1000000000}')}.sig`
   it('strips wrappers', () => {
     expect(stripWrappers('  Bearer abc ')).toBe('abc')
@@ -231,6 +273,16 @@ describe('compare', () => {
     expect(requestLine(f, f).fold).toBe('GET https://api.example.test/v1/cart?a=1&b=2')
     expect(requestLine({ id: 'c' }, { id: 'd', path: '/x' }).rows.map((r) => [r.a, r.b])).toEqual([
       ['∅', '∅'], ['∅', '∅'], ['∅', '∅'], ['∅', '/x'], ['∅', '∅'],
+    ])
+  })
+  it('compares a host and path as sent, ≈ when they decode the same', () => {
+    const f: Flow = { id: 'a', method: 'GET', scheme: 'https', authority: 'xn--80aairftm.example.test', path: '/%D0%BA%D0%BD' }
+    const line = requestLine(f, { ...f, id: 'b', authority: 'магазин.example.test', path: '/%d0%ba%d0%bd' })
+    expect(line.match).toBe(false)
+    expect(line.rows.filter((r) => r.decode).map((r) => [r.name, r.same, r.sameDecoded])).toEqual([['authority', false, true], ['path', false, true]])
+    expect(requestLine(f, { ...f, id: 'b', path: '/other' }).rows[3].sameDecoded).toBe(false)
+    expect(wordDiff('xn--80aairftm.example.test', 'магазин.example.test')).toEqual([
+      { kind: '-', text: 'xn--80aairftm' }, { kind: '+', text: 'магазин' }, { kind: ' ', text: '.example.test' },
     ])
   })
   it('narrows a word diff to the characters that differ', () => {

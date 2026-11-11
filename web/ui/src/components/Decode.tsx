@@ -1,7 +1,7 @@
 import { ScanSearch } from 'lucide-react'
 import { rem } from '../lib/scale'
 import { useEffect, useMemo, useState } from 'react'
-import { canDecode, decodeAs, guessKind, KINDS, pickKind, type Kind, type Output } from '../lib/decoder'
+import { canDecode, chainsAfter, decodeAs, guessKind, KINDS, pickKind, type Kind, type Output } from '../lib/decoder'
 import { alpn, serverName, toBase64, toHex, toRecords, type ClientHello } from '../lib/tlshello'
 import { JsonTree } from './Json'
 import { Badge, Card, CopyButton, cx, Field, Modal } from './ui'
@@ -82,7 +82,7 @@ function OutputView({ o }: { o: Output }) {
 export function Decoded({ value, name = '' }: { value: string; name?: string }) {
   const [override, setOverride] = useState<Kind | null>(null)
   const kind = pickKind(value, name, override)
-  const result = useMemo(() => (kind ? decodeAs(value, kind) : null), [value, kind])
+  const result = useMemo(() => (kind ? decodeAs(value, kind, Date.now(), chainsAfter(override)) : null), [value, kind, override])
   return (
     <div className="space-y-2.5">
       {result && result.steps.length > 1 && (
@@ -123,7 +123,7 @@ export function DecoderModal({ initial, onClose }: { initial: string; onClose: (
     <Modal title="Decoder" width={760} height={760} onClose={onClose}
       headerExtra={<span className="inline-flex items-center gap-1.5 h-5 px-2 rounded-full tint tone-green text-10">runs in your browser — nothing is sent anywhere</span>}>
       {/* A permanent label, not a placeholder that typing removes. */}
-      <Field label="Value" help="A JWT, base64, URL-encoded, hex or timestamp value, or a TLS ClientHello as hex, a hex dump or base64.">
+      <Field label="Value" help="A JWT, base64, URL-encoded, hex or timestamp value, a punycode host, or a TLS ClientHello as hex, a hex dump or base64.">
         <textarea autoFocus spellCheck={false} value={text} onChange={(e) => setText(e.target.value)}
           className="w-full h-24 p-2.5 rounded-lg bg-well border border-edge-input font-mono text-12 text-ink resize-y" />
       </Field>

@@ -8,6 +8,7 @@ import { formatBytes, num, preciseDuration, reasonPhrase } from '../lib/format'
 import { useSetting } from '../lib/settings'
 import { toHex } from '../lib/tlshello'
 import type { Annotations, Body, Comment, Flow, Header } from '../lib/types'
+import { canDecode } from '../lib/decoder'
 import { DecodeAffordance, Decoded } from './Decode'
 import { JsonTree } from './Json'
 import { Badge, Button, Card, cx, DurationBadge, IconButton, inputClass, MethodBadge, Spinner, StatusBadge } from './ui'
@@ -65,6 +66,19 @@ export function NameValue({ name, value, decode = true, decodeFrom }: { name: st
       </div>}
     </div>
   )
+}
+
+// As sent, with one decoder chip when the URL holds a punycode host or escapes (§7.5).
+function UrlValue({ url }: { url: string }) {
+  const [open, setOpen] = useState(false)
+  const decodable = useMemo(() => canDecode(url, 'idn') || canDecode(url, 'url'), [url])
+  return <>
+    <div className={cx('flex items-start gap-3 px-3 py-0.5', open && 'bg-accent/5')}>
+      <p className="flex-1 min-w-0 font-mono text-11 text-body break-all">{url}</p>
+      {decodable && <DecodeAffordance value={url} name="url" open={open} onToggle={() => setOpen(!open)} />}
+    </div>
+    {open && <div className="mx-3 my-1 p-3 rounded-lg border border-edge-input bg-well"><Decoded value={url} name="url" /></div>}
+  </>
 }
 
 function Headers({ headers }: { headers: Header[] }) {
@@ -399,7 +413,7 @@ export function DetailsPanel({ session, summary, targets, onClose, onPatch, onDe
         {error && <p className="text-11 text-red-fg">{error}</p>}
         {!full && !error && <Spinner />}
         {tab === 'Request' && <>
-          <Card title="URL"><p className="px-3 font-mono text-11 text-body break-all">{flowUrl(f)}</p></Card>
+          <Card title="URL"><UrlValue url={flowUrl(f)} /></Card>
           {query.length > 0 && <Card title="Query" count={query.length}><div style={nameColumn(query.map((q) => q.name))}>{query.map((q, i) => <NameValue key={i} name={q.name} value={q.value} />)}</div></Card>}
           {full && <>
             <Headers headers={request} />

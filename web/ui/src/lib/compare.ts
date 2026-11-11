@@ -1,4 +1,5 @@
 import { cookiePairs, HEX_CAP, hexDump, looksTextual, rejoinCookies, TEXT_CAP } from './http'
+import { readable } from './decoder'
 import { num } from './format'
 import type { Flow, Header, WsMessage } from './types'
 
@@ -9,7 +10,8 @@ export interface DiffRow { a: string | null; b: string | null; same: boolean }
 export interface PairRow { name: string; a: string; b: string; same: boolean }
 /** A row of a compare table. A null side is a place an ordered list leaves blank; a named
  *  value that one side lacks is `∅`. full: never collapsed, as the request line's parts. */
-export interface CmpRow { name?: string; a: string | null; b: string | null; same: boolean; full?: boolean }
+/** decode: each side gets a decoder chip; sameDecoded: the pair differs only in its encoding (≈). */
+export interface CmpRow { name?: string; a: string | null; b: string | null; same: boolean; full?: boolean; decode?: boolean; sameDecoded?: boolean }
 export interface Section {
   title: string
   match: boolean
@@ -100,7 +102,7 @@ const sharedEnds = (a: string, b: string): [number, number] => {
 /** One-line diff of two strings: tokens are aligned, then a replaced run is narrowed to the
  *  characters that differ, so `…/2026-11-23-21-33-13.chain` shows just the changed digits. */
 export function wordDiff(a: string, b: string): WordPart[] {
-  const tokens = (s: string) => s.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) ?? []
+  const tokens = (s: string) => s.match(/[\p{L}\p{N}]+|[^\p{L}\p{N}]/gu) ?? []
   const ta = tokens(a), tb = tokens(b)
   const rows = ta.length * tb.length > MAX_DIFF_CELLS ? [{ a, b, same: false }] : diffLines(ta, tb)
   const out: WordPart[] = []
@@ -141,17 +143,21 @@ export function differingParts(a: string, b: string): WordPart[] | null {
   return shared * 3 >= Math.max(a.length, b.length) ? parts : null
 }
 
-const REQUEST_PARTS: [string, (f: Flow) => string | undefined, boolean][] = [
-  ['method', (f) => f.method, false], ['scheme', (f) => f.scheme, false],
-  ['authority', (f) => f.authority && plainAuthority(f.authority, f.scheme), false],
-  ['path', (f) => f.path, true], ['query', (f) => f.query, true],
+// [name, value, never collapsed, decodable]: a host and a path are compared as sent, each with
+// its own decoder chip (§7.5).
+const REQUEST_PARTS: [string, (f: Flow) => string | undefined, boolean, boolean][] = [
+  ['method', (f) => f.method, false, false], ['scheme', (f) => f.scheme, false, false],
+  ['authority', (f) => f.authority && plainAuthority(f.authority, f.scheme), false, true],
+  ['path', (f) => f.path, true, true], ['query', (f) => f.query, true, false],
 ]
 
 // Row by row, never diffed as lines, so each part always faces its counterpart.
 export function requestLine(a: Flow, b: Flow): Section {
-  const rows = REQUEST_PARTS.map(([name, get, full]): CmpRow => {
+  const rows = REQUEST_PARTS.map(([name, get, full, decode]): CmpRow => {
     const va = get(a) || MISSING, vb = get(b) || MISSING
-    return { name, a: va, b: vb, same: va === vb, full }
+    const same = va === vb
+    const sameDecoded = decode && !same && va !== MISSING && vb !== MISSING && readable(va) === readable(vb)
+    return { name, a: va, b: vb, same, full, decode, sameDecoded }
   })
   const url = `${a.method || MISSING} ${a.scheme ? `${a.scheme}://` : ''}${rows[2].a === MISSING ? '' : rows[2].a}${a.path ?? ''}${a.query ? `?${a.query}` : ''}`
   return { ...namedSection('Request line', []), match: rows.every((r) => r.same), rows, fold: url }

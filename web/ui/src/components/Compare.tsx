@@ -99,7 +99,7 @@ function SectionCard({ s, n }: { s: Section; n: number | string }) {
         <span className="flex-1" />
         {!s.context && <Verdict match={s.match} />}
       </header>
-      {s.rows.map((r, i) => <CmpLine key={i} row={r} context={s.context} />)}
+      {s.rows.map((r, i) => (r.decode ? <DecodeLine key={i} row={r} /> : <CmpLine key={i} row={r} context={s.context} />))}
     </section>
   )
 }
@@ -346,27 +346,32 @@ function AsSent({ c, a, b }: Bodies) {
   )
 }
 
-function FormField({ r }: { r: FormRow }) {
+/** A row whose values each get a decoder chip; one side's decoder opens under the row at a time. */
+function DecodeLine({ row: r }: { row: CmpRow }) {
   const [open, setOpen] = useState<Side | null>(null)
-  const shown = open === 'a' ? r.a : open === 'b' ? r.b : null
+  const name = r.name ?? ''
+  const shown = open ? r[open] : null
   const chip = (s: Side) => {
     const v = r[s]
-    return v ? <span className="shrink-0" data-side={s}><DecodeAffordance value={v} name={r.name} open={open === s} onToggle={() => setOpen(open === s ? null : s)} /></span> : null
+    return present(v) ? <span className="shrink-0" data-side={s}><DecodeAffordance value={v} name={name} open={open === s} onToggle={() => setOpen(open === s ? null : s)} /></span> : null
   }
   return (
     <div className="group">
-      <CmpLine row={{ name: r.name, a: r.a ?? MISSING, b: r.b ?? MISSING, same: r.same }} tails={[chip('a'), chip('b')]}
+      <CmpLine row={r} tails={[chip('a'), chip('b')]}
         note={r.sameDecoded && <span data-tooltip="Decoded values are the same" aria-label="Decoded values are the same" className="font-mono text-13 font-medium leading-4 text-amber-fg">≈</span>}>
-        {shown !== null && (
+        {present(shown) && (
           <div className={GRID}>
             <span />
-            <div className="col-span-2 my-1 p-3 rounded-lg border border-edge-input bg-well"><Decoded value={shown} name={r.name} /></div>
+            <div className="col-span-2 my-1 p-3 rounded-lg border border-edge-input bg-well"><Decoded value={shown} name={name} /></div>
           </div>
         )}
       </CmpLine>
     </div>
   )
 }
+
+const FormField = ({ r }: { r: FormRow }) =>
+  <DecodeLine row={{ name: r.name, a: r.a ?? MISSING, b: r.b ?? MISSING, same: r.same, sameDecoded: r.sameDecoded }} />
 
 function FormTable({ form }: { form: NonNullable<BodyComparison['form']> }) {
   const [a, b] = form.order.map((o) => o.join(' · ') || MISSING)

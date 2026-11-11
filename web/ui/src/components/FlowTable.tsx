@@ -5,6 +5,7 @@ import { useCatalog, userTags } from '../lib/catalog'
 import { packFlags } from '../lib/flags'
 import { durationTone, formatCount, formatMatched, formatTime, num, shortProto } from '../lib/format'
 import type { Annotations, Flow, Tag, Group } from '../lib/types'
+import { idnDecoded } from '../lib/idn'
 import { EDGE_ROWS } from '../lib/window'
 import { columnStyle, HeaderCell } from './Columns'
 import { Button, cx, DurationBadge, MethodBadge, PickBox, Spinner, StatusBadge, type Side } from './ui'
@@ -99,7 +100,8 @@ function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f
     case 'status': return <StatusBadge status={f.status} error={f.error} />
     case 'duration': return <DurationBadge micros={f.durationMicros} />
     case 'protocol': return <span title={f.protocol} className={cx('block truncate', f.protocol?.startsWith('HTTP') ? 'text-muted' : 'text-purple-fg')}>{shortProto(f.protocol)}</span>
-    case 'authority': return <span title={f.authority} className="block truncate text-body">{f.authority}</span>
+    // Scanned, not read: the one place a host shows decoded, its wire form in the tooltip (§7.5).
+    case 'authority': return <span title={f.authority} className="block truncate text-body">{(f.authority && idnDecoded(f.authority)) || f.authority}</span>
     case 'path': return <span title={`${f.path ?? ''}${f.query ? `?${f.query}` : ''}`} className="block truncate text-ink">{f.path}{f.query && <span className="text-faint">?{f.query}</span>}</span>
     case 'conn': return <span title={f.connectionId} className="block truncate text-muted">{f.connectionId}</span>
     case 'stream': return <span className="block text-right text-muted">{f.streamId}</span>

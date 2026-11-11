@@ -1,9 +1,10 @@
 // Pure value decoding: runs in the browser, nothing is sent anywhere.
 import { hexDump } from './http'
+import { idnDecoded } from './idn'
 import { bytesFromText, describe as describeHello, looksLikeClientHello, parseClientHello, type ClientHello } from './tlshello'
 
-export type Kind = 'jwt' | 'b64' | 'url' | 'hex' | 'ts' | 'tls'
-export const KINDS: Kind[] = ['jwt', 'b64', 'url', 'hex', 'ts', 'tls']
+export type Kind = 'jwt' | 'b64' | 'url' | 'idn' | 'hex' | 'ts' | 'tls'
+export const KINDS: Kind[] = ['jwt', 'b64', 'url', 'idn', 'hex', 'ts', 'tls']
 
 export interface Claim { name: string; when: string; expired: boolean }
 export interface Output {
@@ -70,11 +71,22 @@ function jwtParts(s: string) {
   return { header, payload }
 }
 
+const FULL_URL = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i
+const DELIMITER = /(%2F|%3F|%23|%26|%3D)/i
+
+// On a full URL only the path, query and fragment decode, and escaped delimiters stay encoded,
+// as an address bar does: `?q=a%26b` must not read as `?q=a&b`.
+function percentDecoded(s: string): string {
+  const head = FULL_URL.exec(s)?.[0]
+  if (head === undefined) return decodeURIComponent(s)
+  return head + s.slice(head.length).split(DELIMITER).map((p, i) => (i % 2 ? p : decodeURIComponent(p))).join('')
+}
+
 function urlDecoded(s: string): string | null {
   if (!/%[0-9A-Fa-f]{2}/.test(s)) return null
   try {
-    let out = decodeURIComponent(s)
-    if (/%[0-9A-Fa-f]{2}/.test(out)) out = decodeURIComponent(out)
+    let out = percentDecoded(s)
+    if (/%[0-9A-Fa-f]{2}/.test(out)) out = percentDecoded(out)
     return out === s ? null : out
   } catch {
     return null
@@ -124,6 +136,7 @@ export function guessKind(rawValue: string, name = ''): Kind | null {
     if (sec >= 1_100_000_000 && sec <= 1_900_000_000) return 'ts'
   }
   if (clientHello(s)) return 'tls'
+  if (idnDecoded(s) !== null) return 'idn'
   if (urlDecoded(s) !== null) return 'url'
   if (b64Strict(s)) return 'b64'
   if (hexStrict(s)) return 'hex'
@@ -136,6 +149,7 @@ export function canDecode(rawValue: string, kind: Kind): boolean {
     case 'jwt': return !!jwtParts(s)
     case 'b64': return !!b64Bytes(s)
     case 'url': return urlDecoded(s) !== null
+    case 'idn': return idnDecoded(s) !== null
     case 'hex': return !!hexBytes(s)
     case 'ts': return timestampMs(s) !== null
     case 'tls': return !!clientHello(s)
@@ -197,6 +211,10 @@ function decodeOnce(rawValue: string, kind: Kind, now: number): Output | null {
       const t = urlDecoded(s)
       return t === null ? null : textOutput(kind, t)
     }
+    case 'idn': {
+      const t = idnDecoded(s)
+      return t === null ? null : { kind, text: t }
+    }
     case 'ts': {
       const ms = timestampMs(s)
       return ms === null ? null : { kind, time: formatWhen(ms, now) }
@@ -209,12 +227,12 @@ function decodeOnce(rawValue: string, kind: Kind, now: number): Output | null {
 }
 
 // Decodes as `kind`, then keeps guessing while the result is still plain text, so
-// url → base64 → JSON takes one click. Binary output stops the chain.
-export function decodeAs(value: string, kind: Kind, now = Date.now()): Decoded | null {
+// url → base64 → JSON takes one click. Binary output stops the chain, and so does `chain` false.
+export function decodeAs(value: string, kind: Kind, now = Date.now(), chain = true): Decoded | null {
   let output = decodeOnce(value, kind, now)
   if (!output) return null
   const steps = [kind]
-  while (steps.length < 3 && output.text !== undefined && !output.isJson) {
+  while (chain && steps.length < 3 && output.text !== undefined && !output.isJson) {
     const next = guessKind(output.text)
     if (!next) break
     const o = decodeOnce(output.text, next, now)
@@ -225,7 +243,17 @@ export function decodeAs(value: string, kind: Kind, now = Date.now()): Decoded |
   return { steps, output }
 }
 
+/** idn and url undo the two encodings of one address (§7.5): picked from the switch, each
+ *  shows its own alone; guessed, they chain so a URL with both reads in one click. */
+export const chainsAfter = (override: Kind | null): boolean => override !== 'idn' && override !== 'url'
+
 export function pickKind(value: string, name: string, override: Kind | null): Kind | null {
   if (override && canDecode(value, override)) return override
   return guessKind(value, name) ?? KINDS.find((k) => canDecode(value, k)) ?? null
+}
+
+/** A host, path or URL as it reads: its punycode host in Unicode, its escapes undone. */
+export function readable(value: string): string {
+  const host = idnDecoded(value) ?? value
+  return urlDecoded(host) ?? host
 }
