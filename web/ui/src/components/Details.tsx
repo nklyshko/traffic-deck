@@ -9,7 +9,9 @@ import { useSetting } from '../lib/settings'
 import { toHex } from '../lib/tlshello'
 import type { Annotations, Body, Comment, Flow, Header } from '../lib/types'
 import { canDecode } from '../lib/decoder'
+import { IMAGE_MIME, sentAs as sentAsType, sniffImage } from '../lib/image'
 import { DecodeAffordance, Decoded } from './Decode'
+import { Caption, ImageView } from './ImageBody'
 import { JsonTree } from './Json'
 import { Badge, Button, Card, cx, DurationBadge, IconButton, inputClass, MethodBadge, Spinner, StatusBadge } from './ui'
 
@@ -96,7 +98,8 @@ export function BodyCard({ title, body, load, filename, onDecode }: {
   const size = num(body?.size)
   const [bytes, setBytes] = useState<Uint8Array | null | undefined>(body?.inline ? base64Bytes(body.inline) : undefined)
   const [error, setError] = useState('')
-  const [view, setView] = useState<'text' | 'hex'>('text')
+  const [chosen, setView] = useState<BodyView | null>(null)
+  const [broken, setBroken] = useState(false)
   useEffect(() => {
     if (body?.inline || !size) return
     load().then(setBytes, (e: Error) => setError(e.message))
@@ -106,41 +109,61 @@ export function BodyCard({ title, body, load, filename, onDecode }: {
   const text = useMemo(() => (textual && bytes ? new TextDecoder().decode(bytes) : ''), [bytes, textual])
   // Over the cap the tree would put the whole body in the DOM, so it falls back to capped text.
   const json = useMemo(() => (text.length > TEXT_CAP ? undefined : parseJson(text)), [text])
+  // The magic bytes decide what a body is, never its Content-Type (§5.7.1).
+  const image = useMemo(() => (bytes ? sniffImage(bytes, textual ? text : undefined) : null), [bytes, textual, text])
+  const sentAs = bytes ? sentAsType(image, body?.contentType) : undefined
+  const views: BodyView[] = image && !broken ? (image.format === 'svg' ? ['image', 'text', 'hex'] : ['image', 'hex']) : textual ? ['text', 'hex'] : []
+  const view = chosen && views.includes(chosen) ? chosen : (views[0] ?? 'hex')
 
   if (!size) return <Card title={title}><p className="px-3 text-11 text-faint">No body.</p></Card>
-  const ext = bodyExt(body?.contentType)
+  const ext = bodyExt(image ? IMAGE_MIME[image.format] : body?.contentType)
   const save = () => bytes && saveBlob(`${filename}.${ext}`, bytes.slice())
   const meta = [formatBytes(size), body?.contentType, body?.contentEncoding].filter(Boolean).join(' · ')
-  const hex = !textual || view === 'hex'
-  const capped = bytes ? (hex ? bytes.length - HEX_CAP : text.length - TEXT_CAP) : 0
+  const hex = view === 'hex'
+  const capped = bytes && view !== 'image' ? (hex ? bytes.length - HEX_CAP : text.length - TEXT_CAP) : 0
+  const saveWhole = (more: string) => (
+    <button type="button" onClick={save} className="w-full h-7 mt-2 rounded border border-dashed border-edge-strong text-11 text-muted hover:text-ink">
+      … {more}save the whole body as .{ext}
+    </button>
+  )
   return (
     <Card title={title} meta={meta} actions={bytes && (
       <span className="flex items-center gap-2.5 text-11">
-        {textual && (
+        {views.length > 1 && (
           <span className="inline-flex rounded bg-well border border-line p-px">
-            {(['text', 'hex'] as const).map((v) => <button key={v} type="button" onClick={() => setView(v)} className={cx('h-5 px-2 rounded-sm capitalize', view === v ? 'bg-sel text-ink' : 'text-muted')}>{v}</button>)}
+            {views.map((v) => <button key={v} type="button" onClick={() => setView(v)} className={cx('h-5 px-2 rounded-sm capitalize', view === v ? 'bg-sel text-ink' : 'text-muted')}>{v}</button>)}
           </span>
         )}
-        <button type="button" className="text-muted hover:text-ink" onClick={() => void navigator.clipboard.writeText(textual && !hex ? text : hexDump(bytes, bytes.length))}>Copy</button>
+        <button type="button" className="text-muted hover:text-ink" onClick={() => void navigator.clipboard.writeText(view === 'text' ? text : hexDump(bytes, bytes.length))}>Copy</button>
         <button type="button" className="text-muted hover:text-ink" onClick={save}>Save</button>
         {/* preventDefault keeps the selection until click, which the keyboard can also reach. */}
-        <button type="button" className="text-muted hover:text-ink" onMouseDown={(e) => e.preventDefault()} onClick={() => onDecode((getSelection()?.toString() || (hex ? hexDump(bytes, HEX_CAP) : text)).slice(0, DECODE_CAP))}>Decode</button>
+        <button type="button" className="text-muted hover:text-ink" onMouseDown={(e) => e.preventDefault()} onClick={() => onDecode((getSelection()?.toString() || (view === 'text' ? text : hexDump(bytes, HEX_CAP))).slice(0, DECODE_CAP))}>Decode</button>
       </span>
     )}>
       <div className="px-3 pb-1.5 max-h-105 overflow-auto">
         {error ? <p className="text-11 text-red-fg">{error}</p>
           : bytes === undefined ? <Spinner />
             : bytes === null ? <p className="text-11 text-faint">No body.</p>
-              : !hex && json !== undefined ? <JsonTree value={json} />
-                : <pre className="font-mono text-11 leading-4.5 text-body whitespace-pre-wrap break-all">{hex ? hexDump(bytes, HEX_CAP) : text.slice(0, TEXT_CAP)}</pre>}
-        {capped > 0 && (
-          <button type="button" onClick={save} className="w-full h-7 mt-2 rounded border border-dashed border-edge-strong text-11 text-muted hover:text-ink">
-            … {capped.toLocaleString('en-US')} more {hex ? 'bytes' : 'characters'} — save the whole body as .{ext}
-          </button>
-        )}
+              : view === 'image' && image ? <ImageView bytes={bytes} info={image} sentAs={sentAs} onBroken={() => setBroken(true)} saveButton={saveWhole('')} />
+                : <>
+                  {broken && image ? <Caption text={`not a valid ${image.format}`} />
+                    : sentAs && <Caption text={textual ? `${textKind(text, json)} · the bytes are text` : 'binary · the bytes are not an image'} sentAs={sentAs} />}
+                  {!hex && json !== undefined ? <JsonTree value={json} />
+                    : <pre className="font-mono text-11 leading-4.5 text-body whitespace-pre-wrap break-all">{hex ? hexDump(bytes, HEX_CAP) : text.slice(0, TEXT_CAP)}</pre>}
+                </>}
+        {capped > 0 && saveWhole(`${capped.toLocaleString('en-US')} more ${hex ? 'bytes' : 'characters'} — `)}
       </div>
     </Card>
   )
+}
+
+type BodyView = 'image' | 'text' | 'hex'
+
+function textKind(text: string, json: unknown): string {
+  if (json !== undefined) return 'json'
+  const head = text.trimStart().slice(0, 256).toLowerCase()
+  if (head.startsWith('<!doctype html') || head.startsWith('<html')) return 'html'
+  return head.startsWith('<') ? 'xml' : 'text'
 }
 
 export function parseJson(text: string): unknown {

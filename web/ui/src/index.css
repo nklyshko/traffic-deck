@@ -145,3 +145,10 @@ select.td-select option { background: var(--raised); color: var(--text); }
 @keyframes td-spin { to { transform: rotate(360deg); } }
 .spin { animation: td-spin 0.9s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .row-new, .pulse, .spin { animation: none; } }
+
+/* Behind a transparent image, so its empty pixels read as empty (SPEC §5.7.1). */
+.checker {
+  background-color: var(--line);
+  background-image: conic-gradient(var(--ghost) 25%, transparent 0 50%, var(--ghost) 0 75%, transparent 0);
+  background-size: 16px 16px;
+}

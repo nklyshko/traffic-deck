@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { bodyDiffText, compareBodies, compareFlows, compareForms, compareMessages, describeLayout, diffLines, diffParts, diffText, fitLines, formDecode, goSlice, messagePosition, MISSING, pairValues, plainAuthority, positionSection, requestLine, wordDiff, differingParts, positionLines, prettyJson, prettyPayload, prettyXml, renderBudget, splitRows, unifiedDiff } from './compare'
 import { canDecode, decodeAs, guessKind, readable, stripWrappers } from './decoder'
+import { sentAs, sniffImage, svgInfo, tooLarge } from './image'
 import { idnDecoded, punycodeDecode, unicodeHost } from './idn'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
@@ -786,5 +787,44 @@ describe('text size', () => {
   it('offers Default at the browser size, the rest as percentages of it', () => {
     expect(TEXT_SIZES.find((s) => s.id === 'default')?.percent).toBe(100)
     expect(TEXT_SIZES.map((s) => s.percent)).toEqual([...TEXT_SIZES.map((s) => s.percent)].sort((a, b) => a - b))
+  })
+})
+
+describe('image', () => {
+  const bytes = (...parts: (number[] | string)[]) => Uint8Array.from(parts.flatMap((p) => (typeof p === 'string' ? [...p].map((c) => c.charCodeAt(0)) : p)))
+  const u32 = (v: number) => [v >>> 24, (v >> 16) & 255, (v >> 8) & 255, v & 255]
+  it('reads a transparent 1×1 GIF', () => {
+    const gif = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), (c) => c.charCodeAt(0))
+    expect(sniffImage(gif)).toEqual({ format: 'gif', width: 1, height: 1, transparent: true })
+  })
+  it('reads PNG, JPEG, WebP, BMP and ICO headers', () => {
+    const png = bytes([0x89], 'PNG', [13, 10, 26, 10], u32(13), 'IHDR', u32(128), u32(96), [8, 6, 0, 0, 0])
+    expect(sniffImage(png)).toEqual({ format: 'png', width: 128, height: 96, transparent: true })
+    const opaque = bytes([0x89], 'PNG', [13, 10, 26, 10], u32(13), 'IHDR', u32(4), u32(4), [8, 2, 0, 0, 0], [0, 0, 0, 0], u32(0), 'IDAT')
+    expect(sniffImage(opaque)?.transparent).toBe(false)
+    const jpeg = bytes([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 1, 104, 2, 128, 3])
+    expect(sniffImage(jpeg)).toEqual({ format: 'jpeg', width: 640, height: 360, transparent: false })
+    const webp = bytes('RIFF', [0, 0, 0, 0], 'WEBPVP8X', [10, 0, 0, 0, 0x10, 0, 0, 0], [199, 0, 0, 99, 0, 0])
+    expect(sniffImage(webp)).toEqual({ format: 'webp', width: 200, height: 100, transparent: true })
+    const bmp = bytes('BM', [30, 0, 0, 0], new Array(12).fill(0), [16, 0, 0, 0, 0xf0, 0xff, 0xff, 0xff], [0, 0, 0, 0])
+    expect(sniffImage(bmp)).toMatchObject({ format: 'bmp', width: 16, height: 16 })
+    expect(sniffImage(bytes([0, 0, 1, 0, 1, 0, 0, 32], new Array(8).fill(0)))).toMatchObject({ format: 'ico', width: 256, height: 32 })
+  })
+  it('takes no Content-Type for an image, and text that is no SVG for none', () => {
+    expect(sniffImage(bytes('<!doctype html><title>x</title>'), '<!doctype html><title>x</title>')).toBeNull()
+    expect(svgInfo('{"svg": 1}')).toBeNull()
+  })
+  it('notes a Content-Type naming another type', () => {
+    const jpeg = { format: 'jpeg' as const }
+    expect(sentAs(jpeg, 'image/png')).toBe('image/png')
+    expect(sentAs(jpeg, 'image/jpg; q=1')).toBeUndefined()
+    expect(sentAs(null, 'image/png')).toBe('image/png')
+    expect(sentAs(null, 'text/html')).toBeUndefined()
+    expect(sentAs(jpeg, undefined)).toBeUndefined()
+  })
+  it('refuses to draw past the caps', () => {
+    expect(tooLarge({ format: 'png', width: 100, height: 100 }, 6 * 1024 * 1024)).toBe('over 5 MiB')
+    expect(tooLarge({ format: 'png', width: 20000, height: 10 }, 100)).toMatch(/^20000 × 10 px/)
+    expect(tooLarge({ format: 'png', width: 100, height: 100 }, 100)).toBeNull()
   })
 })
