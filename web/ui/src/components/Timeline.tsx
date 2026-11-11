@@ -245,8 +245,8 @@ export function TimelineModal({ session, sessionLabel, flow, picks, onTogglePick
                     // Shift would otherwise drag a text selection across the rows.
                     onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
                     style={{ position: 'absolute', top: 0, left: 0, right: 0, height: frameRow, transform: `translateY(${v.start}px)` }}
-                    className={cx('relative flex items-center px-3 cursor-default', mark && `mark-${mark} tint [--a:10%]`, !mark && on && 'tone-blue tint [--a:12%]', !mark && !on && 'hover:bg-rowhover text-body')}>
-                    {(mark || on) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
+                    className={cx('relative flex items-center px-3 cursor-default', on ? 'bg-sel text-ink' : mark ? `mark-${mark} tint [--a:10%] text-body` : 'hover:bg-rowhover text-body')}>
+                    {mark && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
                     <PickBox side={at < 0 ? null : SIDES[at]} onPick={() => pick(m)} />
                     {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><FrameCell c={c} m={m} /></div>)}
                   </div>

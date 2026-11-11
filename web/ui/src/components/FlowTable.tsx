@@ -115,9 +115,9 @@ const Row = memo(function Row({ flow: f, columns, selected, picked, flash, onSel
     <div role="row" aria-selected={selected} onClick={(e) => onSelect(f.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
       // Shift would otherwise drag a text selection across the rows.
       onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
-      className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-12 cursor-default', flash && 'row-new', mark && `mark-${mark} tint [--a:10%]`,
-        !mark && selected && 'tone-blue tint [--a:12%]', !mark && !selected && 'hover:bg-rowhover')}>
-      {(mark || selected) && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
+      className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-12 cursor-default', flash && 'row-new', // Selection is neutral: a blue tint would read as the blue mark (§5.6.4).
+        selected ? 'bg-sel' : mark ? `mark-${mark} tint [--a:10%]` : 'hover:bg-rowhover')}>
+      {mark && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
       <PickBox side={picked} onPick={() => onPick(f)} />
       {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><Cell c={c} f={f} onOpenMessages={onOpenMessages} /></div>)}
       <Rail flow={f} />
