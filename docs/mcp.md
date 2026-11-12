@@ -75,6 +75,10 @@ registered at all, so they never appear in the tool list.
   `tls_rejected` / `no_request` / `udp_undecoded` outcome); `null` for a flow listed by
   default. The gateway sets it from the same rule it filters by, so it is present only on
   flows fetched with `include_hidden` or by id.
+- A session's `flow_count` (`list_sessions`) is every flow recorded, hidden ones
+  included, so it can exceed what `filter_flows` lists by default. `session_overview`
+  gives one session's hidden count and what went undecoded, counted when asked;
+  `list_sessions` carries no undecoded counts.
 - `message_count` is a flow's WebSocket frames or decoder messages.
 - `metadata` is every key the capture source recorded on the flow, unfiltered
   ([metadata-keys.md](metadata-keys.md) lists them). `hostname.source` says where the

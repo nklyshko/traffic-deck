@@ -9,6 +9,7 @@ import (
 
 	trafficv1 "github.com/nklyshko/traffic-deck/gateway/gen/traffic/v1"
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
+	"github.com/nklyshko/traffic-deck/gateway/internal/store"
 )
 
 // connBytesCap bounds how much of one direction a GetConnectionBytes read reassembles: a
@@ -51,7 +52,7 @@ func (v *Viewer) ListUndecodedConnections(ctx context.Context, req *trafficv1.Li
 	}
 	// A session that recorded the index carries its counts; one that did not cannot say
 	// "nothing went undecoded", only "not looked".
-	_, indexed := sess.GetMetadata()["undecoded."+decode.UndecodedNoKey]
+	indexed := store.UndecodedIndexed(sess.GetMetadata())
 	out := &trafficv1.UndecodedList{ByReason: map[string]uint64{},
 		Indexed: indexed || len(conns) > 0 || v.hub.get(sid) != nil}
 	host := strings.ToLower(req.GetHost())

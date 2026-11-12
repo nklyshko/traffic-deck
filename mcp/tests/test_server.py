@@ -1705,7 +1705,7 @@ def test_session_overview_names_what_went_undecoded(monkeypatch):
     _undecoded_tools(monkeypatch)
     out = asyncio.run(S.session_overview("s1"))
     assert out["flows"] == 12
-    assert out["session"]["undecoded"] == {"no_key": 1, "udp": 1}  # zero counts left out
+    assert "undecoded" not in out["session"]  # counted from the index, below, not stored
     und = out["undecoded"]
     assert und["total"] == 3
     top = und["top_hosts"][0]

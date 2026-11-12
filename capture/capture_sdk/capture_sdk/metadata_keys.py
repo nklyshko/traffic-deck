@@ -67,7 +67,3 @@ DNS_RCODE = "dns.rcode"
 #: Which bodies were cut at a size cap, comma-separated: request, response (on a flow) or
 #: payload (on a message). The kept bytes are the body's beginning; its size is the cut size.
 BODY_TRUNCATED = "body.truncated"
-#: Prefix of the per-outcome undecoded-connection counts on a session ("conn.undecoded.<o>").
-#: The gateway's own native decoder writes these under "undecoded." instead; readers accept
-#: both.
-CONN_UNDECODED_PREFIX = "conn.undecoded."

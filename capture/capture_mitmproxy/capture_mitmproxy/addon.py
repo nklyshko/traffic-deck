@@ -21,7 +21,6 @@ import os
 import time
 import uuid
 import zlib
-from collections import Counter
 
 import grpc
 from mitmproxy import connection, ctx, dns, http, tcp, udp
@@ -452,15 +451,6 @@ def _extra_metadata(raw: str) -> dict[str, str]:
         return {}
 
 
-def outcome_counts(outcomes: Counter[str]) -> dict[str, str]:
-    """Session metadata saying how many connections the capture saw but could not decode,
-    by reason — so "nothing else happened" can be told from "a lot went undecoded" without
-    listing them. Every reason is present, 0 included: an absent key would read as "not
-    counted"."""
-    return {f"{mk.CONN_UNDECODED_PREFIX}{o}": str(outcomes.get(o, 0))
-            for o in (TLS_REJECTED, NO_REQUEST, UDP_UNDECODED)}
-
-
 class GatewayPusher:
     """Pushes completed flows to the gateway; opens the session on startup."""
 
@@ -485,8 +475,6 @@ class GatewayPusher:
         # Client connections that produced a flow of any kind; one that closes without
         # becoming one is recorded as no_request.
         self._used: set[str] = set()
-        # Undecoded connections by conn.outcome, reported at close.
-        self.outcomes: Counter[str] = Counter()
         # A regular proxy's CONNECT target per client: where a tunnel that then carried
         # nothing (or failed TLS) was going.
         self._targets: dict[str, tuple[str, int]] = {}
@@ -577,14 +565,13 @@ class GatewayPusher:
 
     async def _push_conn(self, client: connection.Client, outcome: str, error: str,
                          target=None) -> None:
-        self.outcomes[outcome] += 1
         target = target or self._targets.get(client.id)
         await self._send(flows=[build_conn_flow(client, outcome, error, self.names, target)])
 
     # --- UDP that is neither DNS nor HTTP/3 ----------------------------------------------
 
     async def udp_start(self, flow: udp.UDPFlow) -> None:
-        await self._start_stream(flow, UDP_UNDECODED)
+        await self._start_stream(flow)
 
     async def udp_message(self, flow: udp.UDPFlow) -> None:
         await self._stream_message(flow)
@@ -595,12 +582,8 @@ class GatewayPusher:
     async def udp_error(self, flow: udp.UDPFlow) -> None:
         await self._close_tcp_flow(flow)
 
-    async def _start_stream(self, flow, outcome: str) -> None:
+    async def _start_stream(self, flow) -> None:
         self._used.add(flow.client_conn.id)
-        if outcome != TCP_PASSTHROUGH:
-            # A raw TCP stream is not counted: the gateway may yet decode it (MAX), which
-            # only it knows. Its flows say which, by protocol.
-            self.outcomes[outcome] += 1
         self._tcp_started[flow.id] = flow.timestamp_start or 0
         await self._send(flows=[build_stream_flow(flow, self.names)])
 
@@ -622,7 +605,7 @@ class GatewayPusher:
         # Raw (non-HTTP) TCP connection: push the synthetic connection flow up front so its
         # byte-stream messages have a parent. The gateway decodes it if a custom decoder
         # (MAX) claims it; otherwise it stays a tcp_passthrough stream.
-        await self._start_stream(flow, TCP_PASSTHROUGH)
+        await self._start_stream(flow)
 
     async def tcp_message(self, flow: tcp.TCPFlow) -> None:
         await self._stream_message(flow)
@@ -702,8 +685,7 @@ class GatewayPusher:
         try:
             with grpc.insecure_channel(self.addr) as ch:
                 ig.IngestServiceStub(ch).CloseSession(
-                    ip.CloseSessionRequest(session_id=self.session_id,
-                                           metadata=outcome_counts(self.outcomes)), timeout=10
+                    ip.CloseSessionRequest(session_id=self.session_id), timeout=10
                 )
         except Exception:  # noqa: BLE001
             pass

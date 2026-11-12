@@ -14,7 +14,6 @@ import json
 import os
 import re
 import time
-from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, TypedDict
 
@@ -51,11 +50,10 @@ class SessionInfo(TypedDict):
     status: str              # open | decoding | closed | error | unspecified
     created_at_unix_ms: int
     closed_at_unix_ms: int | None
-    flow_count: int
+    flow_count: int          # every flow recorded, hidden ones included
     pcap_bytes: int
     keylog_bytes: int
     metadata: dict[str, str] | None   # see docs/metadata-keys.md
-    undecoded: dict[str, int] | None  # reason -> count, nonzero only
 
 
 class FlowSummary(Annotations):
@@ -225,23 +223,7 @@ def _session_dict(s: common_pb2.Session) -> SessionInfo:
         # the viewer hints — whatever the source declared. Omitted when a session has none,
         # which is every session recorded before the sources reported their options.
         "metadata": dict(s.metadata) or None,
-        # What the capture saw but could not decode, when it counted: undecoded.<reason>
-        # from a packet capture, conn.undecoded.<reason> from mitmproxy. Only the nonzero
-        # reasons; `session_overview` and `list_undecoded_connections` say more.
-        "undecoded": _undecoded_counts(s.metadata),
     }
-
-
-def _undecoded_counts(session_metadata: Mapping[str, str]) -> dict[str, int] | None:
-    """Per-reason counts of connections that produced no flow. The gateway's native decoder
-    writes them as `undecoded.<reason>`, the mitmproxy source as `conn.undecoded.<outcome>`
-    (docs/metadata-keys.md); both are read."""
-    counts = {}
-    for k, v in session_metadata.items():
-        for prefix in ("undecoded.", "conn.undecoded."):
-            if k.startswith(prefix) and v.isdigit() and int(v):
-                counts[k[len(prefix):]] = int(v)
-    return counts or None
 
 
 def _annotations(rec: common_pb2.Flow | common_pb2.Message, tagnames: dict[str, str],
@@ -757,7 +739,11 @@ async def gateway_status() -> dict:
 
 @mcp.tool()
 async def list_sessions() -> list[dict]:
-    """List all recorded capture sessions (id, label, group, status, flow count, sizes)."""
+    """List all recorded capture sessions (id, label, group, status, flow count, sizes).
+
+    `flow_count` is every flow recorded, hidden ones included (DNS lookups, proxy tunnels,
+    connections nothing decoded), so a session's filter_flows `total` can be smaller.
+    `session_overview` gives one session's hidden count and what went undecoded."""
     return [_session_dict(s) for s in await client().list_sessions()]
 
 

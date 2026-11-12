@@ -15,7 +15,7 @@ from mitmproxy.proxy.mode_specs import ProxyMode
 from mitmproxy.test import tflow, tutils
 
 from capture_mitmproxy.addon import (DnsNames, GatewayPusher, build_dns_flow, build_flow,
-                                     build_stream_flow, outcome_counts)
+                                     build_stream_flow)
 
 
 def _lookup(name: str, *ips: str, at: float = 100.0, rcode=dns.response_codes.NOERROR) -> dns.DNSFlow:
@@ -138,7 +138,6 @@ def test_a_rejected_certificate_is_recorded_with_why():
     # Its disconnect is not a second, no_request record.
     asyncio.run(p.client_disconnected(client))
     assert len(_pushed(p)) == 1
-    assert p.outcomes["tls_rejected"] == 1
 
 
 def test_a_connection_closed_before_any_request_is_recorded():
@@ -167,13 +166,6 @@ def test_a_lookup_counts_as_its_connection_being_used_and_names_later_flows():
     asyncio.run(p.request(_nameless_http("203.0.113.5", opened=300)))
     protos = [(pf.protocol, pf.authority) for pf in _pushed(p)]
     assert protos == [("DNS", "api.example"), ("HTTP/1.1", "api.example")]
-
-
-def test_close_reports_every_reason_even_zero():
-    from collections import Counter
-    assert outcome_counts(Counter({"tls_rejected": 2})) == {
-        "conn.undecoded.tls_rejected": "2", "conn.undecoded.no_request": "0",
-        "conn.undecoded.udp_undecoded": "0"}
 
 
 def test_a_regular_proxy_tunnel_that_carried_nothing_names_its_connect_target():

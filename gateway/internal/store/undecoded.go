@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 
 	"github.com/nklyshko/traffic-deck/gateway/internal/decode"
 )
@@ -74,27 +73,27 @@ func scanUndecoded(rows *sql.Rows) (*decode.UndecodedConn, error) {
 	return &c, err
 }
 
-// RecordUndecoded stores a capture's undecoded-connection index and summarises it in the
-// session's metadata — undecoded.<reason> counts, every reason present, 0 included, since
-// an absent key would read as "not counted" — so a session list can say how much went
-// undecoded without opening the bundle.
+// UndecodedIndexedKey marks a session whose capture recorded the undecoded-connection
+// index, so an empty index reads as "nothing went undecoded", not "never looked". The
+// counts are not stored: ListUndecodedConnections takes them from the index when asked.
+const UndecodedIndexedKey = "undecoded.indexed"
+
+// legacyIndexedKey is the first of the per-reason counts sessions stored before the
+// marker; its presence says the same.
+const legacyIndexedKey = "undecoded." + decode.UndecodedNoKey
+
+// UndecodedIndexed reports whether a session's metadata says its index was recorded.
+func UndecodedIndexed(md map[string]string) bool {
+	_, marked := md[UndecodedIndexedKey]
+	_, legacy := md[legacyIndexedKey]
+	return marked || legacy
+}
+
+// RecordUndecoded stores a capture's undecoded-connection index and marks the session as
+// indexed.
 func (s *Store) RecordUndecoded(ctx context.Context, sessionID string, conns []*decode.UndecodedConn) error {
 	if err := s.InsertUndecoded(ctx, sessionID, conns); err != nil {
 		return err
 	}
-	return s.SetSessionMetadata(ctx, sessionID, UndecodedCounts(conns))
-}
-
-// UndecodedCounts is the undecoded.<reason> summary of an index.
-func UndecodedCounts(conns []*decode.UndecodedConn) map[string]string {
-	n := map[string]int{}
-	for _, c := range conns {
-		n[c.Reason]++
-	}
-	md := map[string]string{}
-	for _, r := range []string{decode.UndecodedNoKey, decode.UndecodedHandshake,
-		decode.UndecodedUnsupported, decode.UndecodedUnparsed, decode.UndecodedNotQUIC} {
-		md["undecoded."+r] = strconv.Itoa(n[r])
-	}
-	return md
+	return s.SetSessionMetadata(ctx, sessionID, map[string]string{UndecodedIndexedKey: "true"})
 }

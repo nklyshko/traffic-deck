@@ -93,8 +93,9 @@ func TestUndecodedConnectionsAreListedAndReadBack(t *testing.T) {
 		t.Fatalf("connection = %+v", c)
 	}
 	sess, _ := st.GetSession(ctx, sid)
-	if sess.GetMetadata()["undecoded.no_key"] != "1" || sess.GetMetadata()["undecoded.udp"] != "0" {
-		t.Fatalf("session metadata = %v", sess.GetMetadata())
+	// One marker, no counts: the list above takes them from the index.
+	if md := sess.GetMetadata(); md["undecoded.indexed"] != "true" || md["undecoded.no_key"] != "" {
+		t.Fatalf("session metadata = %v", md)
 	}
 	if l, _ := v.ListUndecodedConnections(ctx, &trafficv1.ListUndecodedRequest{SessionId: sid, Host: "other"}); l.GetTotal() != 0 {
 		t.Fatalf("host filter kept %d", l.GetTotal())
