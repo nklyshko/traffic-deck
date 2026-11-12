@@ -783,6 +783,7 @@ func resolveRedirect(f *decode.Flow) string {
 	return base.ResolveReference(ref).String()
 }
 
+// attachMetadata also fills each flow's hidden_reason, which reads conn.outcome from it.
 func (s *Store) attachMetadata(ctx context.Context, db *sql.DB, flows map[string]*trafficv1.Flow) error {
 	if len(flows) == 0 {
 		return nil
@@ -806,7 +807,13 @@ func (s *Store) attachMetadata(ctx context.Context, db *sql.DB, flows map[string
 		}
 		f.Metadata[k] = v
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, f := range flows {
+		f.HiddenReason = filter.HiddenReason(f.GetProtocol(), f.GetMethod(), f.GetMetadata()[filter.ConnOutcomeKey])
+	}
+	return nil
 }
 
 // CountFlows returns the number of flows stored in a session's bundle. Used to

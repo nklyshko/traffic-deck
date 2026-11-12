@@ -700,8 +700,14 @@ type Flow struct {
 	// (msg_type + length + body), in wire order — for export/replay. There is more than one
 	// entry only when the server sent a HelloRetryRequest (tls_hrr), which makes the client
 	// resend a second ClientHello. Empty for plaintext / pushed-proxy flows.
-	ClientHellos  [][]byte `protobuf:"bytes,44,rep,name=client_hellos,json=clientHellos,proto3" json:"client_hellos,omitempty"`
-	TlsHrr        bool     `protobuf:"varint,45,opt,name=tls_hrr,json=tlsHrr,proto3" json:"tls_hrr,omitempty"`
+	ClientHellos [][]byte `protobuf:"bytes,44,rep,name=client_hellos,json=clientHellos,proto3" json:"client_hellos,omitempty"`
+	TlsHrr       bool     `protobuf:"varint,45,opt,name=tls_hrr,json=tlsHrr,proto3" json:"tls_hrr,omitempty"`
+	// Why a view leaves this flow out unless asked for hidden flows (include_hidden), or
+	// empty when it does not: "dns" (a DNS lookup), "proxy_tunnel" (a CONNECT), or the
+	// conn.outcome of a connection nothing decoded ("tls_rejected", "no_request",
+	// "udp_undecoded"). The gateway alone decides it, so readers label rows from this
+	// rather than repeating the rule.
+	HiddenReason  string `protobuf:"bytes,47,opt,name=hidden_reason,json=hiddenReason,proto3" json:"hidden_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1056,6 +1062,13 @@ func (x *Flow) GetTlsHrr() bool {
 		return x.TlsHrr
 	}
 	return false
+}
+
+func (x *Flow) GetHiddenReason() string {
+	if x != nil {
+		return x.HiddenReason
+	}
+	return ""
 }
 
 // A proxy a connection was observed to go through, detected from the captured
@@ -1642,7 +1655,7 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"object_ref\x18\x04 \x01(\tH\x00R\tobjectRef\x12 \n" +
 	"\ttruncated\x18\x05 \x01(\bB\x02\x18\x01R\ttruncated\x12)\n" +
 	"\x10content_encoding\x18\x06 \x01(\tR\x0fcontentEncodingB\t\n" +
-	"\acontent\"\xb5\r\n" +
+	"\acontent\"\xda\r\n" +
 	"\x04Flow\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
 	"\n" +
@@ -1694,7 +1707,8 @@ const file_traffic_v1_common_proto_rawDesc = "" +
 	"\x11redirect_location\x18* \x01(\tR\x10redirectLocation\x12,\n" +
 	"\x12redirected_from_id\x18+ \x01(\tR\x10redirectedFromId\x12#\n" +
 	"\rclient_hellos\x18, \x03(\fR\fclientHellos\x12\x17\n" +
-	"\atls_hrr\x18- \x01(\bR\x06tlsHrr\x1a;\n" +
+	"\atls_hrr\x18- \x01(\bR\x06tlsHrr\x12#\n" +
+	"\rhidden_reason\x18/ \x01(\tR\fhiddenReason\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"g\n" +

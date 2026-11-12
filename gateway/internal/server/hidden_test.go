@@ -61,6 +61,18 @@ func TestHiddenFlowsAreCountedNotShown(t *testing.T) {
 	if got := pageIDs(page); len(got) != 6 || page.GetHiddenMatched() != 0 {
 		t.Fatalf("include_hidden page = %v (hidden %d), want all six and nothing hidden", got, page.GetHiddenMatched())
 	}
+	// Each flow says why it is hidden, from the bundle and the live tail alike, so a viewer
+	// labels the row without repeating the rule.
+	want := map[string]string{"http": "", "dns": "dns", "tunnel": "proxy_tunnel", "pinned": "tls_rejected",
+		"raw": "", "udp": "udp_undecoded"}
+	for _, f := range page.GetFlows() {
+		if got := f.GetHiddenReason(); got != want[f.GetId()] {
+			t.Errorf("%s: hidden_reason = %q, want %q", f.GetId(), got, want[f.GetId()])
+		}
+	}
+	if f, err := v.GetFlow(ctx, &trafficv1.GetFlowRequest{SessionId: sid, FlowId: "tunnel"}); err != nil || f.GetHiddenReason() != "proxy_tunnel" {
+		t.Errorf("GetFlow tunnel: hidden_reason = %q, err %v", f.GetHiddenReason(), err)
+	}
 
 	page, err = v.QueryFlows(ctx, &trafficv1.QueryFlowsRequest{SessionId: sid, Limit: 10,
 		IncludeHidden: true, Filter: "!~proto ^DNS$"})

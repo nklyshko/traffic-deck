@@ -29,6 +29,7 @@ export interface Flow extends Annotations {
   requestBody?: Body; responseBody?: Body; websocket?: boolean; messageCount?: number; proxy?: Proxy
   metadata?: Record<string, string>; error?: string; durationMicros?: Str64
   redirectLocation?: string; redirectedFromId?: string
+  hiddenReason?: string // why the gateway hides it by default; empty when it does not
   http2Fingerprint?: string; ja3?: string; ja4?: string; tlsClientHello?: string; tlsClientName?: string
   clientHellos?: string[] // base64; only from GetFlow, never in a page or the stream
   tlsHrr?: boolean

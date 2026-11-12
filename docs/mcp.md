@@ -71,6 +71,10 @@ registered at all, so they never appear in the tool list.
   `no_request`, …) and `reason` on a `list_undecoded_connections` row (a packet capture's
   index: `no_key`, `unparsed`, …). The row drops the prefix because everything in that
   tool is undecoded; the two value sets differ because two different decoders assign them.
+- Why a flow is hidden by default is `hidden_reason` (`dns`, `proxy_tunnel`, or the
+  `tls_rejected` / `no_request` / `udp_undecoded` outcome); `null` for a flow listed by
+  default. The gateway sets it from the same rule it filters by, so it is present only on
+  flows fetched with `include_hidden` or by id.
 - `message_count` is a flow's WebSocket frames or decoder messages.
 - `metadata` is every key the capture source recorded on the flow, unfiltered
   ([metadata-keys.md](metadata-keys.md) lists them). `hostname.source` says where the

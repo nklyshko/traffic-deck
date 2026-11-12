@@ -830,12 +830,12 @@ describe('image', () => {
 })
 
 describe('hidden flows', () => {
-  it('names why the gateway hides a flow, and nothing for one it shows', () => {
-    expect(hiddenReason({ protocol: 'DNS', method: 'A' })).toBe('DNS lookup')
-    expect(hiddenReason({ protocol: 'HTTP/1.1', method: 'CONNECT' })).toBe('proxy tunnel')
-    expect(hiddenReason({ protocol: 'TCP', metadata: { 'conn.outcome': 'no_request' } })).toBe('connection closed before any request')
-    // A raw stream nothing claimed has its payload to read, so it is not hidden.
-    expect(hiddenReason({ protocol: 'TCP', metadata: { 'conn.outcome': 'tcp_passthrough' } })).toBeNull()
-    expect(hiddenReason({ protocol: 'HTTP/2', method: 'GET' })).toBeNull()
+  it('words the reason the gateway sends, and nothing for a flow it shows', () => {
+    expect(hiddenReason('dns')).toBe('DNS lookup')
+    expect(hiddenReason('proxy_tunnel')).toBe('proxy tunnel')
+    expect(hiddenReason('no_request')).toBe('connection closed before any request')
+    expect(hiddenReason('a_new_reason')).toBe('a_new_reason')
+    expect(hiddenReason('')).toBeNull()
+    expect(hiddenReason(undefined)).toBeNull()
   })
 })

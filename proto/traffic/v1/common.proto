@@ -203,6 +203,13 @@ message Flow {
   // resend a second ClientHello. Empty for plaintext / pushed-proxy flows.
   repeated bytes client_hellos = 44;
   bool tls_hrr = 45;
+
+  // Why a view leaves this flow out unless asked for hidden flows (include_hidden), or
+  // empty when it does not: "dns" (a DNS lookup), "proxy_tunnel" (a CONNECT), or the
+  // conn.outcome of a connection nothing decoded ("tls_rejected", "no_request",
+  // "udp_undecoded"). The gateway alone decides it, so readers label rows from this
+  // rather than repeating the rule.
+  string hidden_reason = 47;
 }
 
 // A proxy a connection was observed to go through, detected from the captured

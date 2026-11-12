@@ -1,5 +1,3 @@
-import type { Flow } from './types'
-
 // Protojson renders 64-bit numbers as strings and omits zeros.
 export const num = (v: string | number | undefined | null): number => Number(v ?? 0)
 
@@ -93,16 +91,14 @@ export function fitWidth(label: string, values: Iterable<string>): number {
   return Math.min(FIT_MAX, Math.max(FIT_MIN, Math.ceil(longest * FIT_CHAR_PX) + FIT_PADDING))
 }
 
-const UNDECODED: Record<string, string> = {
+const HIDDEN: Record<string, string> = {
+  dns: 'DNS lookup',
+  proxy_tunnel: 'proxy tunnel',
   tls_rejected: 'the client rejected the TLS handshake (certificate pinned?)',
   no_request: 'connection closed before any request',
   udp_undecoded: 'UDP no decoder reads',
 }
 
-/** Why the gateway hides this flow by default, or null when it does not. Mirrors the
- *  gateway's filter.Hidden, which decides; this only labels the rows it sends with Hidden on. */
-export function hiddenReason(f: Pick<Flow, 'protocol' | 'method' | 'metadata'>): string | null {
-  if (f.protocol === 'DNS') return 'DNS lookup'
-  if (f.method === 'CONNECT') return 'proxy tunnel'
-  return UNDECODED[f.metadata?.['conn.outcome'] ?? ''] ?? null
-}
+/** Why the gateway hides a flow by default, in words, or null when it does not. The gateway
+ *  decides (Flow.hidden_reason); a code this list doesn't know yet shows as itself. */
+export const hiddenReason = (code?: string): string | null => (code ? (HIDDEN[code] ?? code) : null)

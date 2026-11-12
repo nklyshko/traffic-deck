@@ -75,6 +75,7 @@ class FlowSummary(Annotations):
     message_count: int
     connection_id: str | None     # tcp stream number, or quic:<n> for HTTP/3
     undecoded_reason: str | None  # conn.outcome for an undecoded connection, else None
+    hidden_reason: str | None     # why the gateway hides it by default, else None
     metadata: dict[str, str] | None  # the source's flow metadata; see docs/metadata-keys.md
     http2_fingerprint: str | None
     ja3: str | None
@@ -260,7 +261,7 @@ def _annotations(rec: common_pb2.Flow | common_pb2.Message, tagnames: dict[str, 
 _HIDDEN_NOTE = ("matching flows left out as hidden by default — DNS lookups, proxy "
                 "tunnels (CONNECT) and connections nothing decoded: a client that rejected the TLS handshake (likely certificate "
                 "pinning), one closed before any request, UDP no decoder reads. Pass "
-                "include_hidden=true to see them; `undecoded_reason` on each says why")
+                "include_hidden=true to see them; `hidden_reason` on each says why")
 
 
 def _note_hidden(out: dict, hidden: int) -> None:
@@ -290,6 +291,10 @@ def _flow_summary(f: common_pb2.Flow, tagnames: dict[str, str],
         # certificate pinning —, no_request, udp_undecoded, tcp_passthrough); None for a
         # decoded flow. The same value is conn.outcome in `metadata`.
         "undecoded_reason": f.metadata.get("conn.outcome") or None,
+        # Why the gateway hides it by default (dns, proxy_tunnel, tls_rejected, no_request,
+        # udp_undecoded); None for a flow it shows. The gateway decides, from the rule it
+        # filters by.
+        "hidden_reason": f.hidden_reason or None,
         "metadata": dict(f.metadata) or None,
         **_annotations(f, tagnames, groupnames),
         "http2_fingerprint": f.http2_fingerprint or None,

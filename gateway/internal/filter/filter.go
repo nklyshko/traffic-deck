@@ -428,8 +428,22 @@ func resolve(ids []string, names map[string]string) []string {
 // traffic to read. A raw TCP stream nothing claimed (tcp_passthrough) is not hidden: its
 // payload is there.
 func Hidden(f *Flow) bool {
-	return f.Protocol == HiddenProtocol || f.Method == HiddenMethod ||
-		slices.Contains(HiddenOutcomes, f.Metadata[ConnOutcomeKey])
+	return HiddenReason(f.Protocol, f.Method, f.Metadata[ConnOutcomeKey]) != ""
+}
+
+// HiddenReason names why a flow is hidden by default, or "" when it is not: "dns",
+// "proxy_tunnel", or the conn.outcome of a connection nothing decoded. It is sent on every
+// flow (Flow.hidden_reason), so a viewer labels a hidden row without repeating this rule.
+func HiddenReason(protocol, method, outcome string) string {
+	switch {
+	case protocol == HiddenProtocol:
+		return "dns"
+	case method == HiddenMethod:
+		return "proxy_tunnel"
+	case slices.Contains(HiddenOutcomes, outcome):
+		return outcome
+	}
+	return ""
 }
 
 // HiddenProtocol, HiddenMethod and HiddenOutcomes are what Hidden tests, exported for the

@@ -111,7 +111,7 @@ function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f
 
 const Row = memo(function Row({ flow: f, columns, selected, picked, flash, onSelect, onPick, onOpenMessages }: RowProps) {
   const mark = f.markColor
-  const hidden = hiddenReason(f)
+  const hidden = hiddenReason(f.hiddenReason)
   // The cells dim, not the row, so a mark's rail and tint stay as strong as on any row (§5.6.4).
   const dim = hidden && !selected && 'opacity-50'
   return (

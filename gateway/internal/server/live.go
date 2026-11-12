@@ -514,6 +514,9 @@ func (ls *liveSession) subscribeMessages(flowID string) (snapshot []*trafficv1.M
 // Shared by the native live decode path (onFlow) and the PushFlows path. A flow id seen
 // before is an update even if isNew is set.
 func (ls *liveSession) publish(pf *trafficv1.Flow, isNew bool) {
+	// Set before any subscriber holds it: a flow pushed by a source never went through
+	// flowToProto.
+	pf.HiddenReason = filter.HiddenReason(pf.GetProtocol(), pf.GetMethod(), pf.GetMetadata()[filter.ConnOutcomeKey])
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if ls.closed {
@@ -607,7 +610,8 @@ func flowToProto(f *decode.Flow) *trafficv1.Flow {
 		TlsHrr:           f.TLSHRR,
 		// Shared, not copied: the decoder replaces a flow's Metadata map, never writes
 		// into one it has handed out (decode.noteBodyCut).
-		Metadata: f.Metadata,
+		Metadata:     f.Metadata,
+		HiddenReason: filter.HiddenReason(f.Protocol, f.Method, f.Metadata[filter.ConnOutcomeKey]),
 	}
 	if f.Proxy != nil {
 		pf.Proxy = &trafficv1.Proxy{

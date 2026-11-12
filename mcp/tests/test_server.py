@@ -731,10 +731,9 @@ class _SearchClient:
         key = lambda f: (f.ts_unix_micros, f.frame_number)
         if after is not None:
             rows = [f for f in rows if key(f) > (after.ts_micros, after.frame_number)]
-        # The gateway hides DNS lookups, proxy tunnels and undecoded connections unless
-        # asked, counting them instead.
-        is_hidden = lambda f: (f.protocol == "DNS" or f.method == "CONNECT" or f.metadata.get("conn.outcome")
-                               in ("tls_rejected", "no_request", "udp_undecoded"))
+        # The gateway hides a flow it gives a hidden_reason unless asked, counting it
+        # instead; fixtures set the reason as the gateway would.
+        is_hidden = lambda f: bool(f.hidden_reason)
         hidden = 0 if include_hidden else sum(1 for f in rows if is_hidden(f))
         if not include_hidden:
             rows = [f for f in rows if not is_hidden(f)]
@@ -1582,10 +1581,10 @@ def _hidden_session():
         _flow(id="h1", method="GET", authority="api.example.com", path="/a", protocol="HTTP/2",
               status=200, ts_unix_micros=1, frame_number=1),
         _flow(id="d1", method="A", authority="api.example.com", protocol="DNS",
-              ts_unix_micros=2, frame_number=2),
+              ts_unix_micros=2, frame_number=2, hidden_reason="dns"),
         _flow(id="p1", authority="api.example.com", protocol="TCP", ts_unix_micros=3,
               frame_number=3, error="client rejected the TLS handshake (certificate pinned?)",
-              metadata={"conn.outcome": "tls_rejected"}),
+              metadata={"conn.outcome": "tls_rejected"}, hidden_reason="tls_rejected"),
     ]
 
 
@@ -1610,6 +1609,7 @@ def test_include_hidden_returns_them_with_their_outcome(monkeypatch):
     assert [f["id"] for f in out["flows"]] == ["h1", "d1", "p1"]
     assert "hidden_matched" not in out
     assert out["flows"][2]["undecoded_reason"] == "tls_rejected"
+    assert [f["hidden_reason"] for f in out["flows"]] == [None, "dns", "tls_rejected"]
 
 
 def test_a_flow_carries_all_its_source_metadata(monkeypatch):
