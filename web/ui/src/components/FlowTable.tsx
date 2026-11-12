@@ -3,7 +3,7 @@ import { rem, useScale } from '../lib/scale'
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { useCatalog, userTags } from '../lib/catalog'
 import { packFlags } from '../lib/flags'
-import { durationTone, formatCount, formatMatched, formatTime, num, shortProto } from '../lib/format'
+import { durationTone, formatCount, formatMatched, formatTime, hiddenReason, num, shortProto } from '../lib/format'
 import type { Annotations, Flow, Tag, Group } from '../lib/types'
 import { idnDecoded } from '../lib/idn'
 import { EDGE_ROWS } from '../lib/window'
@@ -111,15 +111,18 @@ function Cell({ c, f, onOpenMessages }: { c: Column; f: Flow; onOpenMessages: (f
 
 const Row = memo(function Row({ flow: f, columns, selected, picked, flash, onSelect, onPick, onOpenMessages }: RowProps) {
   const mark = f.markColor
+  const hidden = hiddenReason(f)
+  // The cells dim, not the row, so a mark's rail and tint stay as strong as on any row (§5.6.4).
+  const dim = hidden && !selected && 'opacity-50'
   return (
-    <div role="row" aria-selected={selected} onClick={(e) => onSelect(f.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
+    <div role="row" aria-selected={selected} title={hidden ? `Hidden by default: ${hidden}` : undefined} onClick={(e) => onSelect(f.id, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
       // Shift would otherwise drag a text selection across the rows.
       onMouseDown={(e) => { if (e.shiftKey) e.preventDefault() }}
       className={cx('relative flex items-center h-full pl-3 pr-3 gap-0 font-mono text-12 cursor-default', flash && 'row-new', // Selection is neutral: a blue tint would read as the blue mark (§5.6.4).
         selected ? 'bg-sel' : mark ? `mark-${mark} tint [--a:10%]` : 'hover:bg-rowhover')}>
       {mark && <span aria-hidden className="absolute left-0 inset-y-0 w-1" style={{ background: 'var(--t)' }} />}
-      <PickBox side={picked} onPick={() => onPick(f)} />
-      {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className="pr-2 overflow-hidden"><Cell c={c} f={f} onOpenMessages={onOpenMessages} /></div>)}
+      <span className={cx('flex', dim)}><PickBox side={picked} onPick={() => onPick(f)} /></span>
+      {columns.map((c) => <div key={c.id} style={columnStyle(c.width)} className={cx('pr-2 overflow-hidden', dim)}><Cell c={c} f={f} onOpenMessages={onOpenMessages} /></div>)}
       <Rail flow={f} />
     </div>
   )

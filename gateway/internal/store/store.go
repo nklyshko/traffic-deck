@@ -827,12 +827,12 @@ func (s *Store) CountHiddenFlows(ctx context.Context, sessionID string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	args := []any{filter.HiddenProtocol, filter.ConnOutcomeKey}
+	args := []any{filter.HiddenProtocol, filter.HiddenMethod, filter.ConnOutcomeKey}
 	for _, o := range filter.HiddenOutcomes {
 		args = append(args, o)
 	}
 	var n int
-	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flows WHERE protocol = ? OR id IN (
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM flows WHERE protocol = ? OR method = ? OR id IN (
 		SELECT flow_id FROM flow_metadata WHERE key = ? AND value IN (?`+
 		strings.Repeat(", ?", len(filter.HiddenOutcomes)-1)+`))`, args...).Scan(&n)
 	return n, err

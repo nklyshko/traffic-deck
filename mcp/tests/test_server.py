@@ -731,9 +731,9 @@ class _SearchClient:
         key = lambda f: (f.ts_unix_micros, f.frame_number)
         if after is not None:
             rows = [f for f in rows if key(f) > (after.ts_micros, after.frame_number)]
-        # The gateway hides DNS lookups and undecoded connections unless asked, counting
-        # them instead.
-        is_hidden = lambda f: (f.protocol == "DNS" or f.metadata.get("conn.outcome")
+        # The gateway hides DNS lookups, proxy tunnels and undecoded connections unless
+        # asked, counting them instead.
+        is_hidden = lambda f: (f.protocol == "DNS" or f.method == "CONNECT" or f.metadata.get("conn.outcome")
                                in ("tls_rejected", "no_request", "udp_undecoded"))
         hidden = 0 if include_hidden else sum(1 for f in rows if is_hidden(f))
         if not include_hidden:

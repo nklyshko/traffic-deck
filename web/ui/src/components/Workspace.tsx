@@ -224,7 +224,7 @@ export function Workspace({ session, active, picks, onBack, onTogglePick, onComp
         <FilterSelect label="Mark" value={readTerm(text, '~mark') ?? ''} options={MARKS.map((m) => [m, m])} onChange={(v) => setText(writeTerm(text, '~mark', v || null))} />
         <FilterSelect label="Status" value={statusLabel} options={STATUS_OPTIONS.map((o) => [o.label, o.label])} onChange={(v) => setText(writeStatus(text, v))} />
         <Button variant={readTerm(text, '~fav') !== null ? 'active' : 'default'} icon={<Star size={rem(13)} />} onClick={() => setText(writeTerm(text, '~fav', readTerm(text, '~fav') !== null ? null : ''))}>Favorites</Button>
-        <Button variant={showHidden ? 'active' : 'default'} aria-pressed={showHidden} icon={<Eye size={rem(13)} />} title="DNS lookups and connections nothing decoded" onClick={() => setShowHidden(!showHidden)}>
+        <Button variant={showHidden ? 'active' : 'default'} aria-pressed={showHidden} icon={<Eye size={rem(13)} />} title="DNS lookups, proxy tunnels and connections nothing decoded" onClick={() => setShowHidden(!showHidden)}>
           Hidden{win.hiddenMatched > 0 && <span className="font-mono text-11 text-faint">{formatMatched(win.hiddenMatched, win.capped)}</span>}
         </Button>
         <Button variant="ghost" onClick={() => setText('')}>Reset</Button>

@@ -81,8 +81,8 @@ message QueryFlowsRequest {
   // clock and are sent absolute, so a filter means the same thing whenever it runs.
   int64 since_micros = 7;
   int64 until_micros = 8;
-  // Also return flows hidden by default: DNS lookups and connections nothing decoded
-  // (conn.outcome tls_rejected, no_request, udp_undecoded). Off, they are left out and
+  // Also return flows hidden by default: DNS lookups, proxy tunnels (CONNECT) and
+  // connections nothing decoded (conn.outcome tls_rejected, no_request, udp_undecoded). Off, they are left out and
   // counted in FlowPage.hidden_matched instead.
   bool include_hidden = 9;
 }

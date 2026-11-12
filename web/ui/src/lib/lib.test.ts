@@ -6,7 +6,7 @@ import { idnDecoded, punycodeDecode, unicodeHost } from './idn'
 import rfc8448 from './tlshello/testdata/rfc8448-1rtt.hex?raw'
 import { dropTerm, formatFilter, halfTyped, opAtCaret, parseFilter, readsAnnotations, readStatus, readTerm, termLabel, wordAtCaret, writeStatus, writeTerm } from './filter'
 import { packFlags } from './flags'
-import { durationTone, fitWidth, formatBytes, formatCount, formatDateTime, formatDuration, formatMatched, reasonPhrase, statusTone } from './format'
+import { durationTone, fitWidth, formatBytes, formatCount, formatDateTime, formatDuration, formatMatched, hiddenReason, reasonPhrase, statusTone } from './format'
 import { bodyExt, cookiePairs, curlCommand, HEX_CAP, hexDump, looksTextual, nameCut, queryPairs, rawExchange, rejoinCookies } from './http'
 import { classifyLogLine } from './logs'
 import { matchesTerms, matchRuns, plural, searchTerms } from './search'
@@ -826,5 +826,16 @@ describe('image', () => {
     expect(tooLarge({ format: 'png', width: 100, height: 100 }, 6 * 1024 * 1024)).toBe('over 5 MiB')
     expect(tooLarge({ format: 'png', width: 20000, height: 10 }, 100)).toMatch(/^20000 × 10 px/)
     expect(tooLarge({ format: 'png', width: 100, height: 100 }, 100)).toBeNull()
+  })
+})
+
+describe('hidden flows', () => {
+  it('names why the gateway hides a flow, and nothing for one it shows', () => {
+    expect(hiddenReason({ protocol: 'DNS', method: 'A' })).toBe('DNS lookup')
+    expect(hiddenReason({ protocol: 'HTTP/1.1', method: 'CONNECT' })).toBe('proxy tunnel')
+    expect(hiddenReason({ protocol: 'TCP', metadata: { 'conn.outcome': 'no_request' } })).toBe('connection closed before any request')
+    // A raw stream nothing claimed has its payload to read, so it is not hidden.
+    expect(hiddenReason({ protocol: 'TCP', metadata: { 'conn.outcome': 'tcp_passthrough' } })).toBeNull()
+    expect(hiddenReason({ protocol: 'HTTP/2', method: 'GET' })).toBeNull()
   })
 })

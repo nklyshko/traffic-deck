@@ -257,8 +257,8 @@ def _annotations(rec: common_pb2.Flow | common_pb2.Message, tagnames: dict[str, 
 
 
 # What the gateway hides unless asked, said once for every tool that reports a count of it.
-_HIDDEN_NOTE = ("matching flows left out as hidden by default — DNS lookups and connections "
-                "nothing decoded: a client that rejected the TLS handshake (likely certificate "
+_HIDDEN_NOTE = ("matching flows left out as hidden by default — DNS lookups, proxy "
+                "tunnels (CONNECT) and connections nothing decoded: a client that rejected the TLS handshake (likely certificate "
                 "pinning), one closed before any request, UDP no decoder reads. Pass "
                 "include_hidden=true to see them; `undecoded_reason` on each says why")
 
@@ -950,7 +950,8 @@ async def network_timeline(session_id: str, limit: int = 200, cursor: str = "",
     it to start at the beginning. `total` is the session's flow count. (t_ms is relative to
     the first request *on the current page*, since earlier pages are not fetched.)
 
-    DNS lookups and connections nothing decoded are left out unless `include_hidden`;
+    DNS lookups, proxy tunnels and connections nothing decoded are left out unless
+    `include_hidden`;
     `hidden_matched` says how many there are.
     """
     sid = await _resolve_session(session_id)
@@ -992,7 +993,8 @@ async def wait_for_flows(session_id: str, filter: str = "", count: int = 1,
     that endpoint to answer. An expression the gateway rejects comes back with the syntax
     reference.
 
-    DNS lookups and connections nothing decoded do not count unless `include_hidden`.
+    DNS lookups, proxy tunnels and connections nothing decoded do not count unless
+    `include_hidden`.
 
     `session_closed` means the capture ended (before or during the wait) and nothing more
     will arrive. `missed_events` means the gateway had to drop events to keep up and the
@@ -1106,7 +1108,8 @@ async def search(session_id: str = "", domain: str = "", method: str = "",
     substring criteria — so you can see *why* it matched without a get_flow. A body hit
     also carries `<field>_byte_offset`, where the match is, for get_body(byte_offset=…).
 
-    DNS lookups and connections nothing decoded (rejected TLS — likely pinning —, no
+    DNS lookups, proxy tunnels (CONNECT) and connections nothing decoded (rejected TLS —
+    likely pinning —, no
     request, undecoded UDP) are left out unless `include_hidden`; `hidden_matched` counts
     the ones the criteria matched.
 
@@ -1272,12 +1275,15 @@ async def filter_flows(session_id: str, filter: str = "", limit: int = 100,
     suspicious in the expression is reported in `hints` whether or not it matched.
     For status sets, time windows and header content prefer the structured `search` tool.
 
-    HIDDEN BY DEFAULT: DNS lookups and connections a capture saw but nothing decoded — a
+    HIDDEN BY DEFAULT: DNS lookups, proxy tunnels (CONNECT, a browser capture's record of
+    the tunnel its requests went through), and connections a capture saw but nothing
+    decoded — a
     client that rejected the TLS handshake (likely certificate pinning), one closed before
     any request, UDP no decoder reads. They are left out unless `include_hidden`, and
     `hidden_matched` counts the ones the filter matched, so an empty result can be told
     from "the app talked, but nothing could be read". With include_hidden, find them by
-    `~meta conn.outcome=tls_rejected` (or no_request, udp_undecoded) or `~proto DNS`.
+    `~meta conn.outcome=tls_rejected` (or no_request, udp_undecoded), `~proto DNS` or
+    `~m CONNECT`.
     """
     limit = max(1, min(limit, _LIMIT_MAX))
     sid = await _resolve_session(session_id)
@@ -1434,7 +1440,8 @@ async def session_overview(session_id: str) -> dict:
     call before concluding a request is "not in the capture".
 
     Returns the session row, how many flows it holds, how many are hidden by default (DNS
-    lookups and undecoded connections from a mitmproxy capture), and — for a packet
+    lookups and undecoded connections from a mitmproxy capture, proxy tunnels from a
+    browser one), and — for a packet
     capture — an `undecoded` section: counts by reason and the top hosts by bytes, with a
     note on what they may be. Drill in with list_undecoded_connections /
     get_connection_bytes, or filter_flows include_hidden=true for a mitmproxy capture."""

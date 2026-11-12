@@ -1219,7 +1219,7 @@ class SessionPane(AnnotatableTable, Vertical):
         self._order: list[str] = []         # window ids, in timeline order
         self._window = _page_size()
         self._filter = ""                   # expression as typed; the gateway compiles it
-        # DNS lookups and connections nothing decoded are hidden unless asked for; the
+        # DNS lookups, proxy tunnels and connections nothing decoded are hidden unless asked for; the
         # choice is remembered between runs, and the count the gateway left out is shown.
         self._show_hidden = bool(prefs.get("show_hidden", False))
         self._hidden = 0                    # matching flows left out as hidden
@@ -1638,13 +1638,13 @@ class SessionPane(AnnotatableTable, Vertical):
         self._update_subtitle()
 
     def action_toggle_hidden(self) -> None:
-        """Show or hide what is hidden by default — DNS lookups and connections nothing
-        decoded (a pinned app's rejected handshake, a connection with no request, UDP no
-        decoder reads). Remembered for every pane and the next run."""
+        """Show or hide what is hidden by default — DNS lookups, proxy tunnels (CONNECT) and
+        connections nothing decoded (a pinned app's rejected handshake, a connection with no
+        request, UDP no decoder reads). Remembered for every pane and the next run."""
         self._show_hidden = not self._show_hidden
         prefs.set("show_hidden", self._show_hidden)
-        self.notify("showing DNS and undecoded connections" if self._show_hidden
-                    else "hiding DNS and undecoded connections")
+        self.notify("showing DNS, proxy tunnels and undecoded connections" if self._show_hidden
+                    else "hiding DNS, proxy tunnels and undecoded connections")
         if self.query_one("#flows", NavDataTable).follow:
             self._load_page(cursor="bottom", last=True)
         else:

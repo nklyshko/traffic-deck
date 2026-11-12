@@ -421,17 +421,23 @@ func resolve(ids []string, names map[string]string) []string {
 }
 
 // Hidden reports whether a flow is left out of a view unless the caller asks for it: a
-// DNS lookup, or a connection a capture source recorded because nothing decoded it —
-// rejected TLS (a pinned app), closed before any request, UDP with no decoder. They are
-// kept so a reader can learn the capture saw them, but they are not traffic to read.
-// A raw TCP stream nothing claimed (tcp_passthrough) is not hidden: its payload is there.
+// DNS lookup, a proxy tunnel (a CONNECT, which a browser source records before the
+// requests it carries), or a connection a capture source recorded because nothing
+// decoded it — rejected TLS (a pinned app), closed before any request, UDP with no
+// decoder. They are kept so a reader can learn the capture saw them, but they are not
+// traffic to read. A raw TCP stream nothing claimed (tcp_passthrough) is not hidden: its
+// payload is there.
 func Hidden(f *Flow) bool {
-	return f.Protocol == HiddenProtocol || slices.Contains(HiddenOutcomes, f.Metadata[ConnOutcomeKey])
+	return f.Protocol == HiddenProtocol || f.Method == HiddenMethod ||
+		slices.Contains(HiddenOutcomes, f.Metadata[ConnOutcomeKey])
 }
 
-// HiddenProtocol and HiddenOutcomes are what Hidden tests, exported for the store's exact
-// count of a session's hidden flows — which has to say the same thing in SQL.
-const HiddenProtocol = "DNS"
+// HiddenProtocol, HiddenMethod and HiddenOutcomes are what Hidden tests, exported for the
+// store's exact count of a session's hidden flows — which has to say the same thing in SQL.
+const (
+	HiddenProtocol = "DNS"
+	HiddenMethod   = "CONNECT"
+)
 
 var HiddenOutcomes = []string{"tls_rejected", "no_request", "udp_undecoded"}
 

@@ -53,8 +53,8 @@ body read. Narrowing terms in the same expression are what keep ~b/~h cheap.
 Terms taking NO argument:
   ~s   has a response      ~q   has no response      ~fav   favorited
 
-DNS lookups and connections nothing decoded (~meta conn.outcome=tls_rejected,
-no_request, udp_undecoded) are hidden unless the tool is called with
+DNS lookups, proxy tunnels (~m CONNECT) and connections nothing decoded
+(~meta conn.outcome=tls_rejected, no_request, udp_undecoded) are hidden unless the tool is called with
 include_hidden=true; results count them in hidden_matched.
 
 A bare regex with no ~term matches the URL, so `200` on its own matches URLs

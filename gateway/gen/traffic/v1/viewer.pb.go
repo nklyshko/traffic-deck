@@ -191,8 +191,8 @@ type QueryFlowsRequest struct {
 	// clock and are sent absolute, so a filter means the same thing whenever it runs.
 	SinceMicros int64 `protobuf:"varint,7,opt,name=since_micros,json=sinceMicros,proto3" json:"since_micros,omitempty"`
 	UntilMicros int64 `protobuf:"varint,8,opt,name=until_micros,json=untilMicros,proto3" json:"until_micros,omitempty"`
-	// Also return flows hidden by default: DNS lookups and connections nothing decoded
-	// (conn.outcome tls_rejected, no_request, udp_undecoded). Off, they are left out and
+	// Also return flows hidden by default: DNS lookups, proxy tunnels (CONNECT) and
+	// connections nothing decoded (conn.outcome tls_rejected, no_request, udp_undecoded). Off, they are left out and
 	// counted in FlowPage.hidden_matched instead.
 	IncludeHidden bool `protobuf:"varint,9,opt,name=include_hidden,json=includeHidden,proto3" json:"include_hidden,omitempty"`
 	unknownFields protoimpl.UnknownFields
